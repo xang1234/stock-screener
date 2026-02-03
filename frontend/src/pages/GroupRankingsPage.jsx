@@ -90,7 +90,7 @@ const HistoricalRankCell = ({ currentRank, rankChange }) => {
 };
 
 // Movers card component
-const MoversCard = ({ title, groups, isGainers }) => {
+const MoversCard = ({ title, groups, isGainers, period }) => {
   const color = isGainers ? 'success' : 'error';
   const Icon = isGainers ? TrendingUpIcon : TrendingDownIcon;
 
@@ -106,7 +106,7 @@ const MoversCard = ({ title, groups, isGainers }) => {
         {groups && groups.length > 0 ? (
           <Box>
             {groups.slice(0, 5).map((group, index) => {
-              const changeKey = Object.keys(group).find(k => k.startsWith('rank_change_'));
+              const changeKey = period ? `rank_change_${period}` : null;
               const change = changeKey ? group[changeKey] : null;
 
               return (
@@ -127,10 +127,10 @@ const MoversCard = ({ title, groups, isGainers }) => {
                       RS: {group.avg_rs_rating?.toFixed(1)}
                     </Box>
                   </Box>
-                  <RankChangeCell value={change} />
-                </Box>
-              );
-            })}
+                      <RankChangeCell value={change} />
+                    </Box>
+                  );
+                })}
           </Box>
         ) : (
           <Box sx={{ fontSize: '11px', color: 'text.secondary' }}>
@@ -592,6 +592,7 @@ function GroupRankingsPage() {
                       title="Top Rank Gainers"
                       groups={movers?.gainers}
                       isGainers={true}
+                      period={selectedPeriod}
                     />
                   </Grid>
                   <Grid item>
@@ -599,6 +600,7 @@ function GroupRankingsPage() {
                       title="Top Rank Losers"
                       groups={movers?.losers}
                       isGainers={false}
+                      period={selectedPeriod}
                     />
                   </Grid>
                 </Grid>

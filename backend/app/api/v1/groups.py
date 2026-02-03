@@ -378,7 +378,7 @@ async def trigger_gapfill(
     Returns:
         Task information for tracking progress
     """
-    from ..tasks.group_rank_tasks import gapfill_group_rankings
+    from ...tasks.group_rank_tasks import gapfill_group_rankings
 
     try:
         # Dispatch as Celery task

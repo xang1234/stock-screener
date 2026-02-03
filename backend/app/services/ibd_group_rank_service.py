@@ -358,18 +358,24 @@ class IBDGroupRankService:
         target_date = current_date - timedelta(days=days_back)
 
         # Find closest record to target date (within 7-day window)
-        record = db.query(IBDGroupRank).filter(
+        records = db.query(IBDGroupRank).filter(
             and_(
                 IBDGroupRank.industry_group == industry_group,
                 IBDGroupRank.date >= target_date - timedelta(days=7),
                 IBDGroupRank.date <= target_date + timedelta(days=7)
             )
-        ).order_by(
-            # Order by distance from target date
-            IBDGroupRank.date.desc()
-        ).first()
+        ).all()
 
-        return record.rank if record else None
+        if not records:
+            return None
+
+        # Pick the closest date to target (prefer earlier date if tied)
+        def _distance_key(record):
+            delta = record.date - target_date
+            return (abs(delta.days), delta.days > 0)
+
+        closest = min(records, key=_distance_key)
+        return closest.rank
 
     def get_group_history(
         self,
