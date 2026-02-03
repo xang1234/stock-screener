@@ -38,6 +38,25 @@ Edit `.env` and add your Alpha Vantage API key (optional, for detailed fundament
 ALPHA_VANTAGE_API_KEY=your_key_here
 ```
 
+If you want to use the config endpoints (`/api/v1/config/*`), set an admin key:
+
+```
+ADMIN_API_KEY=your_admin_key
+```
+
+Optional safety and ops settings:
+
+```
+# Limit how much data read_url can download
+RESEARCH_READ_URL_MAX_BYTES=5000000
+
+# Max time to wait for the data fetch lock
+DATA_FETCH_LOCK_WAIT_SECONDS=7200
+
+# Enable one-time cleanup for legacy scan universes
+INVALID_UNIVERSE_CLEANUP_ENABLED=false
+```
+
 ### 4. Initialize Database
 
 The database will be created automatically on first run, or you can initialize it manually:

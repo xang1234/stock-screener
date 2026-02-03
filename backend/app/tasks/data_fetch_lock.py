@@ -6,6 +6,7 @@ from yfinance, finviz, and other external data sources.
 """
 import redis
 import logging
+import time
 from functools import wraps
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -185,7 +186,23 @@ def serialized_data_fetch(task_name: str):
                 task_id = args[0].request.id or 'unknown'
 
             # Acquire lock (for visibility - queue handles actual serialization)
-            lock.acquire(task_name, task_id)
+            acquired = lock.acquire(task_name, task_id)
+            if not acquired:
+                wait_seconds = getattr(settings, "data_fetch_lock_wait_seconds", lock.lock_timeout)
+                poll_interval = 5
+                start_time = datetime.now()
+                logger.info(
+                    f"Waiting for data fetch lock (task={task_name}, task_id={task_id}) "
+                    f"up to {wait_seconds}s"
+                )
+                while not acquired:
+                    time.sleep(poll_interval)
+                    acquired = lock.acquire(task_name, task_id)
+                    if (datetime.now() - start_time).total_seconds() > wait_seconds:
+                        logger.error(
+                            f"Timed out waiting for data fetch lock (task={task_name}, task_id={task_id})"
+                        )
+                        raise RuntimeError("Timed out waiting for data fetch lock")
 
             try:
                 logger.info(f"Starting data fetch task: {task_name} (task_id={task_id})")
@@ -201,7 +218,8 @@ def serialized_data_fetch(task_name: str):
                 logger.error(f"Error in data fetch task {task_name}: {e}", exc_info=True)
                 raise
             finally:
-                lock.release(task_id)
+                if acquired:
+                    lock.release(task_id)
 
         return wrapper
     return decorator

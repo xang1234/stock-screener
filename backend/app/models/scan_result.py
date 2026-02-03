@@ -14,7 +14,7 @@ class Scan(Base):
 
     # Scan configuration
     criteria = Column(JSON)  # Scan criteria configuration
-    universe = Column(String(50))  # e.g., "nyse", "nasdaq", "sp500"
+    universe = Column(String(50))  # e.g., "test", "all", "custom"
 
     # Multi-screener configuration
     screener_types = Column(JSON, default=lambda: ["minervini"])  # List of screener names

@@ -131,7 +131,8 @@ class ResearchUnit:
         self.web_search = WebSearchTool()
         self.read_url_tool = ReadUrlTool(
             timeout=research_settings.read_url_timeout,
-            max_chars=research_settings.read_url_max_chars
+            max_chars=research_settings.read_url_max_chars,
+            max_bytes=research_settings.read_url_max_bytes
         )
 
     async def execute(self) -> AsyncGenerator[Dict[str, Any], None]:

@@ -2,11 +2,12 @@
 Read URL Tool - Fetches and extracts text content from URLs.
 Supports HTML pages and PDF documents.
 """
-import asyncio
 import logging
 import re
+import socket
 from typing import Dict, Any, Optional
-from urllib.parse import urlparse
+from ipaddress import ip_address
+from urllib.parse import urlparse, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -19,15 +20,19 @@ class ReadUrlTool:
 
     DEFAULT_TIMEOUT = 30
     DEFAULT_MAX_CHARS = 100000
+    DEFAULT_MAX_BYTES = 5_000_000
+    MAX_REDIRECTS = 5
     USER_AGENT = "Mozilla/5.0 (compatible; StockResearchBot/1.0)"
 
     def __init__(
         self,
         timeout: int = DEFAULT_TIMEOUT,
-        max_chars: int = DEFAULT_MAX_CHARS
+        max_chars: int = DEFAULT_MAX_CHARS,
+        max_bytes: int = DEFAULT_MAX_BYTES
     ):
         self.timeout = timeout
         self.max_chars = max_chars
+        self.max_bytes = max_bytes
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -35,7 +40,7 @@ class ReadUrlTool:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
-                follow_redirects=True,
+                follow_redirects=False,
                 headers={
                     "User-Agent": self.USER_AGENT,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -43,6 +48,115 @@ class ReadUrlTool:
                 }
             )
         return self._client
+
+    def _is_blocked_host(self, hostname: str) -> bool:
+        """Block private, loopback, or otherwise reserved hosts."""
+        if not hostname:
+            return True
+        normalized = hostname.strip().lower().rstrip(".")
+        if normalized in {"localhost"}:
+            return True
+        try:
+            ip = ip_address(normalized)
+            return (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            )
+        except ValueError:
+            # Resolve hostname and block if any IP is private/reserved
+            try:
+                infos = socket.getaddrinfo(normalized, None)
+            except Exception:
+                return True
+            for info in infos:
+                ip_str = info[4][0]
+                try:
+                    ip = ip_address(ip_str)
+                    if (
+                        ip.is_private
+                        or ip.is_loopback
+                        or ip.is_link_local
+                        or ip.is_multicast
+                        or ip.is_reserved
+                        or ip.is_unspecified
+                    ):
+                        return True
+                except ValueError:
+                    continue
+        return False
+
+    def _validate_url(self, url: str) -> Optional[str]:
+        """Validate URL format and block unsafe hosts."""
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return "Unsupported URL scheme"
+        if not parsed.netloc or not parsed.hostname:
+            return "Invalid URL format"
+        if self._is_blocked_host(parsed.hostname):
+            return "Blocked host"
+        return None
+
+    async def _read_limited(self, response: httpx.Response) -> tuple[bytes, bool]:
+        """Read response body with a hard byte limit."""
+        chunks = []
+        total = 0
+        truncated = False
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > self.max_bytes:
+                allowed = self.max_bytes - (total - len(chunk))
+                if allowed > 0:
+                    chunks.append(chunk[:allowed])
+                truncated = True
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), truncated
+
+    async def _fetch_url(self, url: str) -> Dict[str, Any]:
+        """Fetch URL with validation, redirect checks, and size limits."""
+        client = await self._get_client()
+        current_url = url
+        redirects = 0
+
+        while True:
+            error = self._validate_url(current_url)
+            if error:
+                return {"success": False, "error": error, "url": current_url}
+
+            async with client.stream("GET", current_url) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        return {"success": False, "error": "Redirect with no Location header", "url": current_url}
+                    redirects += 1
+                    if redirects > self.MAX_REDIRECTS:
+                        return {"success": False, "error": "Too many redirects", "url": current_url}
+                    current_url = urljoin(current_url, location)
+                    continue
+
+                response.raise_for_status()
+
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > self.max_bytes:
+                            return {"success": False, "error": "Content too large", "url": current_url}
+                    except ValueError:
+                        pass
+
+                content_bytes, truncated = await self._read_limited(response)
+                return {
+                    "success": True,
+                    "url": current_url,
+                    "content_bytes": content_bytes,
+                    "content_type": response.headers.get("content-type", "").lower(),
+                    "encoding": response.encoding,
+                    "truncated_bytes": truncated,
+                }
 
     async def read_url(
         self,
@@ -60,49 +174,47 @@ class ReadUrlTool:
             Dict with extracted content and metadata
         """
         try:
-            # Validate URL
-            parsed = urlparse(url)
-            if not parsed.scheme or not parsed.netloc:
-                return {
-                    "success": False,
-                    "error": "Invalid URL format",
-                    "url": url
-                }
+            fetch_result = await self._fetch_url(url)
+            if not fetch_result.get("success"):
+                return fetch_result
 
-            client = await self._get_client()
-
-            # Fetch content
-            response = await client.get(url)
-            response.raise_for_status()
-
-            content_type = response.headers.get("content-type", "").lower()
+            final_url = fetch_result["url"]
+            content_type = fetch_result.get("content_type", "")
+            content_bytes = fetch_result.get("content_bytes", b"")
+            encoding = fetch_result.get("encoding")
+            truncated_bytes = fetch_result.get("truncated_bytes", False)
 
             # Determine extraction method
             if extract_type == "auto":
-                if "pdf" in content_type or url.lower().endswith(".pdf"):
+                if "pdf" in content_type or final_url.lower().endswith(".pdf"):
                     extract_type = "pdf"
                 else:
                     extract_type = "html"
 
             # Extract text based on type
             if extract_type == "pdf":
-                text = await self._extract_pdf(response.content)
+                if truncated_bytes:
+                    return {
+                        "success": False,
+                        "error": "PDF exceeds maximum size",
+                        "url": final_url
+                    }
+                text = await self._extract_pdf(content_bytes)
+                title = final_url
             else:
-                text = self._extract_html(response.text)
+                html_text = self._decode_html(content_bytes, encoding)
+                text = self._extract_html(html_text)
+                title = self._extract_title(html_text)
 
             # Truncate if too long
+            truncated = truncated_bytes
             if len(text) > self.max_chars:
                 text = text[:self.max_chars] + "\n\n[Content truncated...]"
                 truncated = True
-            else:
-                truncated = False
-
-            # Extract title
-            title = self._extract_title(response.text) if extract_type == "html" else url
 
             return {
                 "success": True,
-                "url": url,
+                "url": final_url,
                 "title": title,
                 "content": text,
                 "content_type": extract_type,
@@ -131,6 +243,18 @@ class ReadUrlTool:
                 "error": str(e),
                 "url": url
             }
+
+    def _decode_html(self, content_bytes: bytes, encoding: Optional[str]) -> str:
+        """Decode HTML bytes with a safe fallback."""
+        if encoding:
+            try:
+                return content_bytes.decode(encoding, errors="replace")
+            except Exception:
+                pass
+        try:
+            return content_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            return content_bytes.decode("latin-1", errors="replace")
 
     def _extract_html(self, html: str) -> str:
         """Extract readable text from HTML."""

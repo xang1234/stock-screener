@@ -45,12 +45,15 @@ class Settings(BaseSettings):
     api_port: int = 8000
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    # Admin API key (required for config endpoints)
+    admin_api_key: str = ""
+
     # Rate Limiting
     yfinance_rate_limit: int = 1  # requests per second
     alphavantage_rate_limit: int = 25  # requests per day
 
     # Scanning
-    default_universe: str = "nyse"
+    default_universe: str = "all"
     scan_batch_size: int = 20
     cache_ttl_hours: int = 24
 
@@ -129,7 +132,11 @@ class Settings(BaseSettings):
     # Data Fetch Queue Configuration (prevents API rate limiting)
     data_fetch_queue_name: str = "data_fetch"  # Queue name for serialized data fetching
     data_fetch_lock_timeout: int = 7200  # 2 hours max lock time for long-running tasks
+    data_fetch_lock_wait_seconds: int = 7200  # Max wait for lock before failing
     data_fetch_startup_delay: int = 5  # Seconds to wait before startup task
+
+    # One-time cleanup flags
+    invalid_universe_cleanup_enabled: bool = False  # Disabled by default to avoid destructive startup
 
     # SEC EDGAR Configuration
     sec_user_agent: str = "StockScanner/1.0 (contact@example.com)"

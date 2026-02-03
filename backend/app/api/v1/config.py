@@ -4,13 +4,14 @@ import os
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models.app_settings import AppSetting
 from ...services.llm.config import AVAILABLE_MODELS, get_model_by_id
+from ...config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,28 @@ class LLMConfigResponse(BaseModel):
     ollama_status: str
     ollama_api_base: str
     available_models: list
+
+
+def require_admin(
+    x_admin_key: str = Header(default=None, alias="X-Admin-Key"),
+    authorization: str = Header(default=None),
+):
+    """Simple admin guard for configuration endpoints."""
+    admin_key = settings.admin_api_key
+    if not admin_key:
+        logger.error("ADMIN_API_KEY not configured; config endpoints disabled")
+        raise HTTPException(status_code=503, detail="Admin API key not configured")
+
+    provided = None
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization.split(" ", 1)[1].strip()
+    if not provided:
+        provided = x_admin_key
+
+    if not provided or provided != admin_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    return True
 
 
 def get_setting(db: Session, key: str, default: str = None) -> Optional[str]:
@@ -77,7 +100,10 @@ async def check_ollama_status(api_base: str) -> str:
 
 
 @router.get("/config/llm", response_model=LLMConfigResponse)
-async def get_llm_config(db: Session = Depends(get_db)):
+async def get_llm_config(
+    db: Session = Depends(get_db),
+    _auth: bool = Depends(require_admin),
+):
     """
     Get current LLM configuration.
 
@@ -120,7 +146,11 @@ async def get_llm_config(db: Session = Depends(get_db)):
 
 
 @router.post("/config/llm")
-async def update_llm_model(request: LLMModelUpdate, db: Session = Depends(get_db)):
+async def update_llm_model(
+    request: LLMModelUpdate,
+    db: Session = Depends(get_db),
+    _auth: bool = Depends(require_admin),
+):
     """
     Update LLM model selection.
 
@@ -153,7 +183,11 @@ async def update_llm_model(request: LLMModelUpdate, db: Session = Depends(get_db
 
 
 @router.post("/config/ollama")
-async def update_ollama_settings(request: OllamaSettings, db: Session = Depends(get_db)):
+async def update_ollama_settings(
+    request: OllamaSettings,
+    db: Session = Depends(get_db),
+    _auth: bool = Depends(require_admin),
+):
     """
     Update Ollama API base URL.
 
@@ -165,6 +199,9 @@ async def update_ollama_settings(request: OllamaSettings, db: Session = Depends(
     """
     # Validate URL format
     api_base = request.api_base.rstrip("/")
+    # Basic URL validation
+    if not api_base.startswith("http://") and not api_base.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Ollama API base must be http:// or https://")
 
     # Test connection
     status = await check_ollama_status(api_base)
@@ -183,7 +220,10 @@ async def update_ollama_settings(request: OllamaSettings, db: Session = Depends(
 
 
 @router.get("/config/ollama/models")
-async def get_ollama_models(db: Session = Depends(get_db)):
+async def get_ollama_models(
+    db: Session = Depends(get_db),
+    _auth: bool = Depends(require_admin),
+):
     """
     Get list of available Ollama models.
 

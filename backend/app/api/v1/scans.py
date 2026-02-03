@@ -273,7 +273,10 @@ async def create_scan(
         if request.universe not in ("test", "all", "custom"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid universe '{request.universe}'. Only 'test' and 'all' are supported."
+                detail=(
+                    f"Invalid universe '{request.universe}'. "
+                    "Only 'test', 'all', and 'custom' are supported."
+                )
             )
 
         # Get symbol list based on universe
@@ -303,10 +306,7 @@ async def create_scan(
 
         logger.info(f"Creating scan {scan_id} for {len(symbols)} stocks")
 
-        # Dispatch Celery task first to get task ID
-        task = run_bulk_scan.delay(scan_id, symbols, request.criteria or {})
-
-        # Create scan record with task_id for real-time progress tracking
+        # Create scan record first to avoid races with Celery workers
         scan = Scan(
             scan_id=scan_id,
             criteria=request.criteria or {},
@@ -316,9 +316,23 @@ async def create_scan(
             total_stocks=len(symbols),
             passed_stocks=0,
             status="queued",
-            task_id=task.id  # Store Celery task ID for progress polling
+            task_id=None  # Set after task dispatch
         )
         db.add(scan)
+        db.commit()
+        db.refresh(scan)
+
+        # Dispatch Celery task after commit to ensure scan config is persisted
+        try:
+            task = run_bulk_scan.delay(scan_id, symbols, request.criteria or {})
+        except Exception as dispatch_error:
+            logger.error(f"Failed to dispatch scan task {scan_id}: {dispatch_error}", exc_info=True)
+            scan.status = "failed"
+            db.commit()
+            raise HTTPException(status_code=500, detail="Failed to queue scan task")
+
+        # Store Celery task ID for real-time progress polling
+        scan.task_id = task.id
         db.commit()
 
         logger.info(f"Scan {scan_id} queued with task ID: {task.id}")

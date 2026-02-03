@@ -277,6 +277,9 @@ DATABASE_URL=sqlite:////Users/yourusername/StockScreenClaude/data/stockscanner.d
 REDIS_HOST=localhost
 CELERY_BROKER_URL=redis://localhost:6379/0
 
+# Admin API key (required for /api/v1/config/* endpoints)
+ADMIN_API_KEY=your_key
+
 # LLM Providers (at least one required for chatbot)
 GROQ_API_KEY=your_key
 GEMINI_API_KEY=your_key
@@ -287,6 +290,15 @@ OPENROUTER_API_KEY=your_key    # 100+ models
 # Web Search (optional, for research mode)
 TAVILY_API_KEY=your_key
 SERPER_API_KEY=your_key
+
+# Deep research safety limits
+RESEARCH_READ_URL_MAX_BYTES=5000000
+
+# Data fetch lock (seconds to wait before failing)
+DATA_FETCH_LOCK_WAIT_SECONDS=7200
+
+# Optional one-time cleanup for legacy scan universes
+INVALID_UNIVERSE_CLEANUP_ENABLED=false
 
 # Data Sources
 ALPHA_VANTAGE_API_KEY=your_key

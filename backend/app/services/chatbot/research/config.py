@@ -27,6 +27,7 @@ class ResearchSettings(BaseSettings):
     # URL reading configuration
     read_url_timeout: int = 30
     read_url_max_chars: int = 100000
+    read_url_max_bytes: int = 5000000
     read_url_user_agent: str = "Mozilla/5.0 (compatible; StockResearchBot/1.0)"
 
     # Research planner settings

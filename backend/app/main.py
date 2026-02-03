@@ -14,7 +14,7 @@ def cleanup_invalid_universe_scans():
     One-time cleanup of scans with invalid universes.
 
     Removes scans with universes that are no longer supported
-    (nyse, nasdaq, sp500). Only "test" and "all" universes are allowed.
+    (nyse, nasdaq, sp500). Only "test", "all", and "custom" universes are allowed.
     """
     from .database import SessionLocal
     from .models.scan_result import Scan, ScanResult
@@ -97,8 +97,9 @@ async def lifespan(app: FastAPI):
     init_db()
     print("Database initialized")
 
-    # Cleanup scans with invalid universes (one-time migration)
-    cleanup_invalid_universe_scans()
+    # Cleanup scans with invalid universes (optional one-time migration)
+    if getattr(settings, "invalid_universe_cleanup_enabled", False):
+        cleanup_invalid_universe_scans()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
