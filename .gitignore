@@ -48,3 +48,6 @@ celerybeat-schedule
 
 # Playwright MCP
 .playwright-mcp/
+
+# bv (beads viewer) local config and caches
+.bv/
