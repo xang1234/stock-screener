@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit: int = 1  # requests per second
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
-    yfinance_batch_rate_limit_interval: float = 2.0  # seconds between yfinance batch downloads
+    yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
 
     # Scanning
     default_universe: str = "all"
@@ -159,7 +159,7 @@ class Settings(BaseSettings):
 
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()
-    price_cache_yfinance_rate_limit: float = 2.0  # Seconds to wait between batches
+    price_cache_yfinance_rate_limit: float = 5.0  # Seconds to wait between batches
 
     # Deep Research Configuration
     deep_research_enabled: bool = True  # Enable deep research mode in chatbot
