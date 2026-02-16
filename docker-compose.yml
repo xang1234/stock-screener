@@ -64,6 +64,8 @@ services:
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
+      - TZ=${CELERY_TIMEZONE:-America/New_York}
+      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
       - DATABASE_URL=sqlite:////app/data/stockscanner.db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -101,6 +103,8 @@ services:
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
+      - TZ=${CELERY_TIMEZONE:-America/New_York}
+      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
       - DATABASE_URL=sqlite:////app/data/stockscanner.db
       - REDIS_HOST=redis
       - REDIS_PORT=6379

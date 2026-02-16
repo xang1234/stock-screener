@@ -6,7 +6,6 @@ from yfinance, finviz, and other external data sources.
 """
 import redis
 import logging
-import time
 from functools import wraps
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
@@ -276,21 +275,14 @@ def serialized_data_fetch(task_name: str):
             # Acquire lock (for visibility - queue handles actual serialization)
             acquired, is_reentrant = lock.acquire(task_name, task_id)
             if not acquired:
-                wait_seconds = getattr(settings, "data_fetch_lock_wait_seconds", lock.lock_timeout)
-                poll_interval = 5
-                start_time = datetime.now()
-                logger.info(
-                    f"Waiting for data fetch lock (task={task_name}, task_id={task_id}) "
-                    f"up to {wait_seconds}s"
+                current = lock.get_current_holder()
+                logger.warning(
+                    "Data fetch lock held by %s (task_id=%s) — proceeding anyway. "
+                    "Queue serialization (concurrency=1) ensures ordering. "
+                    "This may indicate a stale lock or misconfigured workers.",
+                    current.get('task_name', 'unknown') if current else 'unknown',
+                    current.get('task_id', 'unknown') if current else 'unknown',
                 )
-                while not acquired:
-                    time.sleep(poll_interval)
-                    acquired, is_reentrant = lock.acquire(task_name, task_id)
-                    if (datetime.now() - start_time).total_seconds() > wait_seconds:
-                        logger.error(
-                            f"Timed out waiting for data fetch lock (task={task_name}, task_id={task_id})"
-                        )
-                        raise RuntimeError("Timed out waiting for data fetch lock")
 
             try:
                 logger.info(f"Starting data fetch task: {task_name} (task_id={task_id})")

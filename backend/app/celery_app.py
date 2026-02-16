@@ -18,7 +18,14 @@ os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_ready
 from .config import settings
+
+
+def _offset_schedule(hour: int, minute: int, offset_minutes: int) -> tuple[int, int]:
+    """Compute (hour, minute) with proper carry when offset pushes minute past 59."""
+    total_minutes = minute + offset_minutes
+    return (hour + total_minutes // 60) % 24, total_minutes % 60
 
 # Import scanners to trigger registration
 # This ensures all screeners are registered with the registry before tasks run
@@ -60,6 +67,38 @@ _logger = logging.getLogger(__name__)
 @celery_app.on_after_configure.connect
 def _log_timezone(sender, **kwargs):
     _logger.info("Celery timezone: %s (enable_utc=%s)", settings.celery_timezone, True)
+
+
+@worker_ready.connect
+def _clear_stale_data_fetch_lock(sender, **kwargs):
+    """Clear stale data fetch lock when the datafetch worker starts.
+
+    When containers restart, Python finally blocks don't execute,
+    leaving the Redis lock key with its 2-hour TTL. This blocks all
+    new data_fetch tasks until the TTL expires.
+    """
+    # Only clear for the datafetch worker — the general worker must
+    # NOT clear a lock that the datafetch worker may legitimately hold
+    hostname = getattr(sender, 'hostname', '') or ''
+    if not hostname.startswith('datafetch'):
+        return
+
+    try:
+        from .tasks.data_fetch_lock import DataFetchLock
+        lock = DataFetchLock.get_instance()
+        holder = lock.get_current_holder()
+        if holder:
+            _logger.warning(
+                "Clearing stale data fetch lock on worker startup "
+                "(was held by %s, task_id=%s)",
+                holder.get('task_name', 'unknown'),
+                holder.get('task_id', 'unknown'),
+            )
+            lock.force_release()
+        else:
+            _logger.info("No stale data fetch lock found on startup")
+    except Exception as e:
+        _logger.warning("Failed to check/clear stale lock on startup: %s", e)
 
 
 # Task routing: Route all data-fetching tasks to serialized queue
@@ -132,8 +171,8 @@ if settings.cache_warmup_enabled:
         'daily-breadth-calculation': {
             'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
             'schedule': crontab(
-                hour=settings.cache_warm_hour,
-                minute=settings.cache_warm_minute + 5,  # 5 minutes after cache warmup
+                hour=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 5)[0],
+                minute=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 5)[1],
                 day_of_week='1-5'  # Monday-Friday only
             ),
             'options': {'queue': 'data_fetch'}
@@ -154,8 +193,8 @@ if settings.cache_warmup_enabled:
         'daily-group-ranking-calculation': {
             'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
             'schedule': crontab(
-                hour=settings.cache_warm_hour,
-                minute=settings.cache_warm_minute + 10,  # 10 minutes after cache warmup
+                hour=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 10)[0],
+                minute=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 10)[1],
                 day_of_week='1-5'  # Monday-Friday only
             ),
             'options': {'queue': 'data_fetch'}

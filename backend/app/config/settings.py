@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit: int = 1  # requests per second
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
-    yfinance_batch_rate_limit_interval: float = 1.0  # seconds between yfinance batch downloads
+    yfinance_batch_rate_limit_interval: float = 2.0  # seconds between yfinance batch downloads
 
     # Scanning
     default_universe: str = "all"
@@ -136,7 +136,6 @@ class Settings(BaseSettings):
     # Data Fetch Queue Configuration (prevents API rate limiting)
     data_fetch_queue_name: str = "data_fetch"  # Queue name for serialized data fetching
     data_fetch_lock_timeout: int = 7200  # 2 hours max lock time for long-running tasks
-    data_fetch_lock_wait_seconds: int = 7200  # Max wait for lock before failing
     data_fetch_startup_delay: int = 5  # Seconds to wait before startup task
 
     # SEC EDGAR Configuration
@@ -160,7 +159,7 @@ class Settings(BaseSettings):
 
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()
-    price_cache_yfinance_rate_limit: float = 1.0  # Seconds to wait between batches
+    price_cache_yfinance_rate_limit: float = 2.0  # Seconds to wait between batches
 
     # Deep Research Configuration
     deep_research_enabled: bool = True  # Enable deep research mode in chatbot
@@ -172,6 +171,20 @@ class Settings(BaseSettings):
     deep_research_report_max_tokens: int = 16000  # Max tokens for final report
     read_url_timeout: int = 30  # Timeout for URL fetching
     read_url_max_chars: int = 100000  # Max characters to extract from URLs
+
+    @field_validator('cache_warm_hour')
+    @classmethod
+    def validate_cache_warm_hour(cls, v: int) -> int:
+        if not 0 <= v <= 23:
+            raise ValueError(f"cache_warm_hour must be 0-23, got {v}")
+        return v
+
+    @field_validator('cache_warm_minute')
+    @classmethod
+    def validate_cache_warm_minute(cls, v: int) -> int:
+        if not 0 <= v <= 59:
+            raise ValueError(f"cache_warm_minute must be 0-59, got {v}")
+        return v
 
     @field_validator('celery_timezone')
     @classmethod

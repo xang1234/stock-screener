@@ -226,6 +226,43 @@ class TestSerializedDataFetchDecorator:
         assert result == "ok"
         mock_lock.release.assert_not_called()
 
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_proceeds_when_lock_held(self, mock_settings, mock_get_instance):
+        """When acquire fails, the decorated function still executes (no polling)."""
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (False, False)
+        mock_lock.get_current_holder.return_value = {
+            'task_name': 'stale_task', 'task_id': 'stale-id',
+        }
+        mock_get_instance.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func():
+            return "executed"
+
+        result = my_func()
+
+        assert result == "executed"
+        mock_lock.acquire.assert_called_once()  # no retry loop
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_does_not_release_unacquired_lock(self, mock_settings, mock_get_instance):
+        """When lock was never acquired, release() is NOT called."""
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (False, False)
+        mock_lock.get_current_holder.return_value = None
+        mock_get_instance.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func():
+            return "done"
+
+        my_func()
+
+        mock_lock.release.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _impl Function Tests
@@ -336,3 +373,74 @@ class TestForceRefreshStaleIntradayImpl:
         assert result['refreshed'] == 1
         assert result['failed'] == 1
         assert result['total'] == 2
+
+
+# ---------------------------------------------------------------------------
+# Worker Startup Signal Tests
+# ---------------------------------------------------------------------------
+
+class TestClearStaleLockOnStartup:
+    """Tests for the @worker_ready signal handler in celery_app.py."""
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    def test_clears_stale_lock_for_datafetch_worker(self, mock_get_instance):
+        """Datafetch worker clears an existing stale lock on startup."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        mock_lock = MagicMock()
+        mock_lock.get_current_holder.return_value = {
+            'task_name': 'calculate_daily_group_rankings',
+            'task_id': 'dead-task-id',
+            'started_at': '2026-01-01T00:00:00',
+            'ttl_seconds': 5400,
+        }
+        mock_get_instance.return_value = mock_lock
+
+        sender = MagicMock()
+        sender.hostname = 'datafetch@abc123'
+
+        _clear_stale_data_fetch_lock(sender=sender)
+
+        mock_lock.force_release.assert_called_once()
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    def test_no_op_when_no_lock_exists(self, mock_get_instance):
+        """Datafetch worker does nothing when no lock is held."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        mock_lock = MagicMock()
+        mock_lock.get_current_holder.return_value = None
+        mock_get_instance.return_value = mock_lock
+
+        sender = MagicMock()
+        sender.hostname = 'datafetch@abc123'
+
+        _clear_stale_data_fetch_lock(sender=sender)
+
+        mock_lock.force_release.assert_not_called()
+
+    def test_general_worker_does_not_clear_lock(self):
+        """General worker must NOT clear the datafetch lock."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        sender = MagicMock()
+        sender.hostname = 'general@abc123'
+
+        # If DataFetchLock were instantiated, the test would fail
+        # because we don't mock it — the early return prevents that
+        with patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance") as mock_gi:
+            _clear_stale_data_fetch_lock(sender=sender)
+            mock_gi.assert_not_called()
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    def test_handles_redis_connection_error(self, mock_get_instance):
+        """Signal handler catches exceptions and doesn't crash the worker."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        mock_get_instance.side_effect = ConnectionError("Redis unavailable")
+
+        sender = MagicMock()
+        sender.hostname = 'datafetch@abc123'
+
+        # Should not raise — the handler catches all exceptions
+        _clear_stale_data_fetch_lock(sender=sender)
