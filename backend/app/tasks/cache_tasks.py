@@ -307,19 +307,19 @@ def get_cache_stats():
         }
 
 
-@celery_app.task(name='app.tasks.cache_tasks.prewarm_scan_cache', bind=True)
-@serialized_data_fetch('prewarm_scan_cache')
-def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
+def _prewarm_scan_cache_impl(task, symbol_list: List[str], priority: str = 'normal', db=None) -> dict:
     """
-    Pre-warm cache for upcoming scan.
+    Core implementation of cache pre-warming.
 
-    Fetches data in background at controlled rate, so cache is ready
-    before scan starts. This allows scans to run from cache without
-    hitting API rate limits.
+    Extracted so it can be called from both the Celery task (with lock)
+    and from parent tasks like prewarm_all_active_symbols (without
+    re-acquiring the lock).
 
     Args:
-        symbol_list: List of symbols to warm
+        task: Celery task instance (for update_state), or None
+        symbol_list: Symbols to warm
         priority: Priority level ('low', 'normal', 'high')
+        db: Optional SQLAlchemy session (avoids double-open when called from another task)
 
     Returns:
         Dict with warming statistics
@@ -332,7 +332,9 @@ def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
     logger.info(f"Market status: {format_market_status()}")
     logger.info("=" * 80)
 
-    db = SessionLocal()
+    owns_db = db is None
+    if owns_db:
+        db = SessionLocal()
     warmed = 0
     failed = 0
     cached = 0
@@ -360,17 +362,18 @@ def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
             progress = (completed / total) * 100
 
             # Update Celery task state for progress tracking
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'current': completed,
-                    'total': total,
-                    'percent': progress,
-                    'warmed': warmed,
-                    'failed': failed,
-                    'cached': cached
-                }
-            )
+            if task is not None:
+                task.update_state(
+                    state='PROGRESS',
+                    meta={
+                        'current': completed,
+                        'total': total,
+                        'percent': progress,
+                        'warmed': warmed,
+                        'failed': failed,
+                        'cached': cached
+                    }
+                )
 
             # Progress logging
             elapsed = (datetime.now() - chunk_start).total_seconds()
@@ -393,7 +396,7 @@ def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
         }
 
     except Exception as e:
-        logger.error(f"Error in prewarm_scan_cache task: {e}", exc_info=True)
+        logger.error(f"Error in prewarm_scan_cache: {e}", exc_info=True)
         return {
             'error': str(e),
             'warmed': warmed,
@@ -403,7 +406,28 @@ def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
         }
 
     finally:
-        db.close()
+        if owns_db:
+            db.close()
+
+
+@celery_app.task(name='app.tasks.cache_tasks.prewarm_scan_cache', bind=True)
+@serialized_data_fetch('prewarm_scan_cache')
+def prewarm_scan_cache(self, symbol_list: List[str], priority: str = 'normal'):
+    """
+    Pre-warm cache for upcoming scan.
+
+    Fetches data in background at controlled rate, so cache is ready
+    before scan starts. This allows scans to run from cache without
+    hitting API rate limits.
+
+    Args:
+        symbol_list: List of symbols to warm
+        priority: Priority level ('low', 'normal', 'high')
+
+    Returns:
+        Dict with warming statistics
+    """
+    return _prewarm_scan_cache_impl(self, symbol_list, priority)
 
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.prewarm_all_active_symbols')
@@ -449,8 +473,8 @@ def prewarm_all_active_symbols(self):
                 'timestamp': datetime.now().isoformat()
             }
 
-        # Use prewarm_scan_cache task to do the actual warming
-        result = prewarm_scan_cache(symbols, priority='low')
+        # Call impl directly to avoid re-acquiring the serialized_data_fetch lock
+        result = _prewarm_scan_cache_impl(self, symbols, priority='low', db=db)
 
         logger.info("=" * 80)
         logger.info("✓ Nightly cache warming completed")
@@ -526,22 +550,17 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
     return {}
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.force_refresh_stale_intraday')
-@serialized_data_fetch('force_refresh_stale_intraday')
-def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
+def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None) -> dict:
     """
-    Force refresh symbols with stale intraday data.
+    Core implementation of stale intraday data refresh.
 
-    This task refreshes price data for symbols that were fetched during
-    market hours and are now stale (market has closed). The "today" bar
-    that was incomplete during market hours is replaced with actual
-    closing data.
-
-    Uses yfinance.Tickers() for efficient batch fetching.
+    Extracted so it can be called from both the Celery task (with lock)
+    and from parent tasks like auto_refresh_after_close (without
+    re-acquiring the lock).
 
     Args:
-        symbols: List of symbols to refresh. If None, auto-detects
-                 all symbols with stale intraday data.
+        task: Celery task instance (for update_state), or None
+        symbols: Symbols to refresh, or None for auto-detect
 
     Returns:
         Dict with refresh statistics
@@ -623,16 +642,17 @@ def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
 
             # Update task state for progress tracking
             progress = min((batch_start + batch_size), total)
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'current': progress,
-                    'total': total,
-                    'percent': (progress / total) * 100,
-                    'refreshed': refreshed,
-                    'failed': failed
-                }
-            )
+            if task is not None:
+                task.update_state(
+                    state='PROGRESS',
+                    meta={
+                        'current': progress,
+                        'total': total,
+                        'percent': (progress / total) * 100,
+                        'refreshed': refreshed,
+                        'failed': failed
+                    }
+                )
 
             # Rate limit between batches
             if batch_start + batch_size < total:
@@ -655,11 +675,34 @@ def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
         }
 
     except Exception as e:
-        logger.error(f"Error in force_refresh_stale_intraday task: {e}", exc_info=True)
+        logger.error(f"Error in force_refresh_stale_intraday: {e}", exc_info=True)
         return {
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }
+
+
+@celery_app.task(bind=True, name='app.tasks.cache_tasks.force_refresh_stale_intraday')
+@serialized_data_fetch('force_refresh_stale_intraday')
+def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
+    """
+    Force refresh symbols with stale intraday data.
+
+    This task refreshes price data for symbols that were fetched during
+    market hours and are now stale (market has closed). The "today" bar
+    that was incomplete during market hours is replaced with actual
+    closing data.
+
+    Uses yfinance.Tickers() for efficient batch fetching.
+
+    Args:
+        symbols: List of symbols to refresh. If None, auto-detects
+                 all symbols with stale intraday data.
+
+    Returns:
+        Dict with refresh statistics
+    """
+    return _force_refresh_stale_intraday_impl(self, symbols)
 
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.auto_refresh_after_close')
@@ -692,8 +735,8 @@ def auto_refresh_after_close(self):
             'timestamp': datetime.now().isoformat()
         }
 
-    # Delegate to force_refresh_stale_intraday
-    result = force_refresh_stale_intraday(symbols=None)
+    # Call impl directly to avoid re-acquiring the serialized_data_fetch lock
+    result = _force_refresh_stale_intraday_impl(self, symbols=None)
 
     result['job_type'] = 'auto_refresh_after_close'
     return result

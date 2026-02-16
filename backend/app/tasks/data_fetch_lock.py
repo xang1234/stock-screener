@@ -9,13 +9,48 @@ import logging
 import time
 from functools import wraps
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 LOCK_KEY = "data_fetch_job_lock"
+
+# Lua script for atomic release: only deletes if the task_id field matches.
+# Prevents TOCTOU race where lock TTL expires between GET and DEL.
+_RELEASE_LUA = """
+local val = redis.call('get', KEYS[1])
+if val and string.find(val, ARGV[1], 1, true) then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+# Lua script for atomic extend: only extends TTL if the task_id field matches.
+_EXTEND_LUA = """
+local val = redis.call('get', KEYS[1])
+if val and string.find(val, ARGV[1], 1, true) then
+    local ttl = redis.call('ttl', KEYS[1])
+    if ttl > 0 then
+        local new_ttl = ttl + tonumber(ARGV[2])
+        redis.call('expire', KEYS[1], new_ttl)
+        return new_ttl
+    end
+end
+return -1
+"""
+
+
+def _parse_lock_task_id(lock_value: bytes) -> Optional[str]:
+    """Extract the task_id field from a lock value string (task_name:task_id:timestamp)."""
+    try:
+        parts = lock_value.decode().split(":", 2)
+        if len(parts) >= 2:
+            return parts[1]
+    except Exception:
+        pass
+    return None
 
 
 class DataFetchLock:
@@ -36,6 +71,8 @@ class DataFetchLock:
             db=settings.redis_db
         )
         self.lock_timeout = getattr(settings, 'data_fetch_lock_timeout', 7200)
+        self._release_script = self.redis.register_script(_RELEASE_LUA)
+        self._extend_script = self.redis.register_script(_EXTEND_LUA)
 
     @classmethod
     def get_instance(cls) -> 'DataFetchLock':
@@ -44,7 +81,7 @@ class DataFetchLock:
             cls._instance = cls()
         return cls._instance
 
-    def acquire(self, task_name: str, task_id: str) -> bool:
+    def acquire(self, task_name: str, task_id: str) -> Tuple[bool, bool]:
         """
         Try to acquire the lock.
 
@@ -53,8 +90,19 @@ class DataFetchLock:
             task_id: Celery task ID
 
         Returns:
-            True if lock was acquired, False if already held by another task
+            (success, is_reentrant) — success=True if lock acquired or re-entrant,
+            is_reentrant=True if the lock was already held by the same task_id.
         """
+        # Re-entrant check: if we already hold the lock, allow through
+        if task_id != 'unknown':
+            current = self.redis.get(LOCK_KEY)
+            if current:
+                holder_task_id = _parse_lock_task_id(current)
+                if holder_task_id and holder_task_id == task_id:
+                    logger.info(f"Re-entrant lock acquire by {task_name} (task_id={task_id})")
+                    return (True, True)
+
+        # Normal acquire
         lock_value = f"{task_name}:{task_id}:{datetime.now().isoformat()}"
         acquired = self.redis.set(
             LOCK_KEY,
@@ -64,18 +112,22 @@ class DataFetchLock:
         )
         if acquired:
             logger.info(f"Data fetch lock acquired by {task_name} (task_id={task_id})")
+            return (True, False)
         else:
-            current = self.get_current_holder()
+            current = self.get_current_holder() or {}
             logger.info(
                 f"Data fetch lock already held by {current.get('task_name', 'unknown')} "
                 f"(task_id={current.get('task_id', 'unknown')}). "
                 f"Task {task_name} will wait in queue."
             )
-        return bool(acquired)
+            return (False, False)
 
     def release(self, task_id: str) -> bool:
         """
-        Release the lock if we own it.
+        Atomically release the lock if we own it.
+
+        Uses a Lua script to check ownership and delete in one atomic
+        operation, preventing TOCTOU races.
 
         Args:
             task_id: Celery task ID that should own the lock
@@ -83,9 +135,10 @@ class DataFetchLock:
         Returns:
             True if lock was released, False if we didn't own it
         """
-        current = self.redis.get(LOCK_KEY)
-        if current and task_id in current.decode():
-            self.redis.delete(LOCK_KEY)
+        # Lua script matches ":task_id:" to ensure exact field match
+        match_pattern = f":{task_id}:"
+        result = self._release_script(keys=[LOCK_KEY], args=[match_pattern])
+        if result:
             logger.info(f"Data fetch lock released by task_id={task_id}")
             return True
         return False
@@ -165,7 +218,10 @@ class DataFetchLock:
 
     def extend_lock(self, task_id: str, additional_seconds: int = 3600) -> bool:
         """
-        Extend the lock timeout if we own it.
+        Atomically extend the lock timeout if we own it.
+
+        Uses a Lua script to check ownership and extend TTL in one
+        atomic operation.
 
         Args:
             task_id: Celery task ID that should own the lock
@@ -174,14 +230,13 @@ class DataFetchLock:
         Returns:
             True if lock was extended, False if we didn't own it
         """
-        current = self.redis.get(LOCK_KEY)
-        if current and task_id in current.decode():
-            current_ttl = self.redis.ttl(LOCK_KEY)
-            if current_ttl > 0:
-                new_ttl = current_ttl + additional_seconds
-                self.redis.expire(LOCK_KEY, new_ttl)
-                logger.info(f"Data fetch lock extended by {additional_seconds}s (new TTL: {new_ttl}s)")
-                return True
+        match_pattern = f":{task_id}:"
+        new_ttl = self._extend_script(
+            keys=[LOCK_KEY], args=[match_pattern, additional_seconds]
+        )
+        if new_ttl > 0:
+            logger.info(f"Data fetch lock extended by {additional_seconds}s (new TTL: {new_ttl}s)")
+            return True
         return False
 
 
@@ -195,6 +250,9 @@ def serialized_data_fetch(task_name: str):
 
     The lock provides visibility into which task is currently running,
     while the queue handles actual serialization.
+
+    Supports re-entrant calls: if the same task_id already holds the lock,
+    the decorator allows through without blocking and skips release on exit.
 
     Args:
         task_name: Human-readable name for the task (for logging/status)
@@ -216,7 +274,7 @@ def serialized_data_fetch(task_name: str):
                 task_id = args[0].request.id or 'unknown'
 
             # Acquire lock (for visibility - queue handles actual serialization)
-            acquired = lock.acquire(task_name, task_id)
+            acquired, is_reentrant = lock.acquire(task_name, task_id)
             if not acquired:
                 wait_seconds = getattr(settings, "data_fetch_lock_wait_seconds", lock.lock_timeout)
                 poll_interval = 5
@@ -227,7 +285,7 @@ def serialized_data_fetch(task_name: str):
                 )
                 while not acquired:
                     time.sleep(poll_interval)
-                    acquired = lock.acquire(task_name, task_id)
+                    acquired, is_reentrant = lock.acquire(task_name, task_id)
                     if (datetime.now() - start_time).total_seconds() > wait_seconds:
                         logger.error(
                             f"Timed out waiting for data fetch lock (task={task_name}, task_id={task_id})"
@@ -248,7 +306,8 @@ def serialized_data_fetch(task_name: str):
                 logger.error(f"Error in data fetch task {task_name}: {e}", exc_info=True)
                 raise
             finally:
-                if acquired:
+                # Only release if we actually acquired (not re-entrant)
+                if acquired and not is_reentrant:
                     lock.release(task_id)
 
         return wrapper
