@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from .yfinance_service import yfinance_service
 from .alphavantage_service import alphavantage_service
-from ..utils.rate_limiter import yfinance_limiter, alphavantage_limiter, alphavantage_quota
+from .rate_limiter import rate_limiter
+from ..utils.rate_limiter import alphavantage_limiter, alphavantage_quota
 from ..models.stock import StockFundamental, StockTechnical, StockIndustry, StockPrice
 from ..config import settings
 
@@ -91,7 +92,7 @@ class DataFetcher:
 
         # Fallback to yfinance
         logger.info(f"Fetching fundamentals from yfinance for {symbol}")
-        yfinance_limiter.wait_if_needed()
+        rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 
         data = yfinance_service.get_fundamentals(symbol)
 
@@ -124,7 +125,7 @@ class DataFetcher:
 
         # Fetch from yfinance
         logger.info(f"Calculating technicals for {symbol}")
-        yfinance_limiter.wait_if_needed()
+        rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 
         # Get price range
         price_range = yfinance_service.get_price_range(symbol)
@@ -132,13 +133,13 @@ class DataFetcher:
             return None
 
         # Get moving averages
-        yfinance_limiter.wait_if_needed()
+        rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
         mas = yfinance_service.calculate_moving_averages(symbol)
         if not mas:
             return None
 
         # Get volume data
-        yfinance_limiter.wait_if_needed()
+        rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
         volume = yfinance_service.get_volume_data(symbol)
 
         # Combine data
@@ -178,7 +179,7 @@ class DataFetcher:
                 return cached
 
         # Fetch from yfinance
-        yfinance_limiter.wait_if_needed()
+        rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
         info = yfinance_service.get_stock_info(symbol)
 
         if not info:

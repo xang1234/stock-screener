@@ -488,7 +488,8 @@ class BulkDataFetcher:
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
-                        time.sleep(delay_per_ticker)
+                        from .rate_limiter import rate_limiter
+                        rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
 
             except Exception as e:
                 logger.error(f"Batch error: {e}")
@@ -497,7 +498,8 @@ class BulkDataFetcher:
 
             # Rate limit between batches
             if batch_num < total_batches - 1:
-                time.sleep(delay_between_batches)
+                from .rate_limiter import rate_limiter
+                rate_limiter.wait("yfinance:batch", min_interval_s=delay_between_batches)
 
         success_count = len([r for r in all_results.values() if not r.get('has_error', False)])
         logger.info(f"Batch fundamentals complete: {success_count}/{len(symbols)} successful")
@@ -569,7 +571,8 @@ class BulkDataFetcher:
 
                     # Rate limit between individual ticker fetches
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
-                        time.sleep(delay_per_ticker)
+                        from .rate_limiter import rate_limiter
+                        rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
 
             except Exception as e:
                 logger.warning(f"Batch error: {e}")

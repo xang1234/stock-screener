@@ -28,6 +28,10 @@ class YFinanceService:
             Dict with stock info or None if error
         """
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             logger.info(f"Fetching stock info for {symbol}")
             ticker = yf.Ticker(symbol)
             info = ticker.info
@@ -108,6 +112,10 @@ class YFinanceService:
 
         # Direct fetch from yfinance (either cache disabled or cache failed)
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
             data = ticker.history(period=period, interval=interval)
 
@@ -156,6 +164,10 @@ class YFinanceService:
             Dict with fundamental data including EPS rating fields
         """
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
             info = ticker.info
 

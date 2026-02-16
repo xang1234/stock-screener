@@ -135,6 +135,9 @@ class DataSourceService:
         try:
             import yfinance as yf
             from .eps_rating_service import eps_rating_service
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 
             ticker = yf.Ticker(symbol)
 

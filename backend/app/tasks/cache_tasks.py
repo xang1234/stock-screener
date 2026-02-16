@@ -603,7 +603,6 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
 
         # Process symbols in batches using yfinance.Tickers()
         batch_size = 100  # Reduced from 200 to avoid rate limiting
-        rate_limit_delay = 2.0  # seconds between batches (increased for rate limit safety)
 
         for batch_start in range(0, total, batch_size):
             batch_symbols = symbols[batch_start:batch_start + batch_size]
@@ -654,9 +653,10 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
                     }
                 )
 
-            # Rate limit between batches
+            # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:
-                time.sleep(rate_limit_delay)
+                from ..services.rate_limiter import rate_limiter
+                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
 
         logger.info("=" * 80)
         logger.info(f"✓ Force refresh completed:")
@@ -838,7 +838,6 @@ def smart_refresh_cache(self, mode: str = "auto"):
         logger.info(f"[3/3] Fetching {total} symbols...")
 
         batch_size = 100
-        rate_limit_delay = 2.0  # seconds between batches
 
         for batch_start in range(0, total, batch_size):
             batch_symbols = symbols[batch_start:batch_start + batch_size]
@@ -889,9 +888,10 @@ def smart_refresh_cache(self, mode: str = "auto"):
             # Update heartbeat for stuck detection
             price_cache.update_warmup_heartbeat(progress, total, percent)
 
-            # Rate limit between batches
+            # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:
-                time.sleep(rate_limit_delay)
+                from ..services.rate_limiter import rate_limiter
+                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
 
         # Save final warmup metadata
         status = "completed" if failed == 0 else "partial"

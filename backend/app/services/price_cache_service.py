@@ -1341,9 +1341,10 @@ class PriceCacheService:
                                 cached_data[symbol] = None
                                 yfinance_failed += 1
 
-                        # Rate limit between batches (1 second delay)
+                        # Rate limit between batches (Redis-backed distributed limiter)
                         if batch_start + batch_size < len(yfinance_needed):
-                            time.sleep(rate_limit)
+                            from .rate_limiter import rate_limiter
+                            rate_limiter.wait("yfinance:batch", min_interval_s=rate_limit)
 
                     logger.info(f"yfinance batch fetch complete: {yfinance_success} success, {yfinance_failed} failed")
 

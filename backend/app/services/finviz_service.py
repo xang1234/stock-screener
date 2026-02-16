@@ -5,7 +5,6 @@ Wrapper for finvizfinance library with rate limiting and error handling.
 """
 import logging
 import time
-import threading
 from typing import Dict, Optional
 from finvizfinance.quote import finvizfinance
 
@@ -18,17 +17,12 @@ logger = logging.getLogger(__name__)
 class FinvizService:
     """Service for fetching and parsing finvizfinance data"""
 
-    # Rate limiting configuration
-    _MIN_DELAY = 0.5  # Minimum seconds between API calls (0.5s = 2 req/sec)
-    _last_call_time = 0
-    _lock = threading.Lock()
-
     def __init__(self, rate_limit_delay: float = 0.5):
         """
         Initialize FinvizService.
 
         Args:
-            rate_limit_delay: Minimum seconds between API calls (default: 2.0)
+            rate_limit_delay: Minimum seconds between API calls (default: 0.5)
         """
         self.rate_limit_delay = rate_limit_delay
         self.parser = FinvizParser()
@@ -36,7 +30,7 @@ class FinvizService:
 
     def _rate_limited_call(self, func, *args, **kwargs):
         """
-        Execute a function with rate limiting.
+        Execute a function with rate limiting via Redis-backed distributed limiter.
 
         Args:
             func: Function to execute
@@ -45,19 +39,10 @@ class FinvizService:
         Returns:
             Result from function
         """
-        with self._lock:
-            current_time = time.time()
-            time_since_last_call = current_time - FinvizService._last_call_time
-
-            if time_since_last_call < self.rate_limit_delay:
-                sleep_time = self.rate_limit_delay - time_since_last_call
-                logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f}s")
-                time.sleep(sleep_time)
-
-            result = func(*args, **kwargs)
-            FinvizService._last_call_time = time.time()
-
-            return result
+        from .rate_limiter import rate_limiter
+        from ..config import settings
+        rate_limiter.wait("finviz", min_interval_s=settings.finviz_rate_limit_interval)
+        return func(*args, **kwargs)
 
     def get_fundamentals(self, symbol: str) -> Optional[Dict]:
         """

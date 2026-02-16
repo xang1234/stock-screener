@@ -197,7 +197,11 @@ class DailyQuotaTracker:
 # Global rate limiter instances
 rate_limiters = ServiceRateLimiters()
 
-# Configure limiters for known services
-yfinance_limiter = rate_limiters.get_limiter("yfinance", rate=1, per=1.0)  # 1 req/sec
+# DEPRECATED: Use app.services.rate_limiter.rate_limiter instead.
+# These in-process limiters are kept only for backward compatibility with
+# alphavantage_limiter (still used by data_fetcher.py for Alpha Vantage).
+# yfinance_limiter is no longer used — all yfinance rate limiting goes through
+# the Redis-backed distributed limiter in app.services.rate_limiter.
+yfinance_limiter = rate_limiters.get_limiter("yfinance", rate=1, per=1.0)  # DEPRECATED
 alphavantage_limiter = rate_limiters.get_limiter("alphavantage", rate=5, per=60.0)  # 5 req/min
 alphavantage_quota = DailyQuotaTracker(daily_limit=25)  # 25 req/day

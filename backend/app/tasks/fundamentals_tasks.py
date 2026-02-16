@@ -114,9 +114,9 @@ def refresh_all_fundamentals(self):
                         task_id=self.request.id if self.request else None,
                     )
 
-                # Rate limiting: 0.5 seconds between API calls
-                if i < total_stocks - 1:  # Don't sleep after last stock
-                    time.sleep(0.5)
+                # Rate limiting handled internally by cache.get_fundamentals()
+                # → DataSourceService → finviz_service / yfinance_service
+                # (each uses Redis-backed distributed rate limiter)
 
             except Exception as e:
                 stats['failed'] += 1
@@ -318,9 +318,9 @@ def populate_initial_cache(self, limit: Optional[int] = None):
                         task_id=self.request.id if self.request else None,
                     )
 
-                # Rate limiting: 0.5 seconds between API calls
-                if i < total_stocks - 1:  # Don't sleep after last stock
-                    time.sleep(0.5)
+                # Rate limiting handled internally by cache.get_fundamentals()
+                # → DataSourceService → finviz_service / yfinance_service
+                # (each uses Redis-backed distributed rate limiter)
 
             except Exception as e:
                 stats['failed'] += 1

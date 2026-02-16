@@ -8,8 +8,6 @@ performance when running multiple screeners on the same stock.
 import logging
 from typing import List, Dict, Optional
 import pandas as pd
-import time
-import threading
 
 from .base_screener import DataRequirements, StockData
 from ..services.yfinance_service import yfinance_service
@@ -17,41 +15,6 @@ from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 
 logger = logging.getLogger(__name__)
-
-# Global rate limiter for yfinance API calls
-_yfinance_lock = threading.Lock()
-_last_yfinance_call_time = 0
-_YFINANCE_MIN_DELAY = 2.0  # 2 seconds between API calls to avoid rate limiting
-
-
-def _rate_limited_api_call(func, *args, **kwargs):
-    """
-    Wrapper to enforce rate limiting on yfinance API calls.
-
-    Ensures minimum delay between consecutive API calls to avoid
-    Yahoo Finance rate limiting.
-    """
-    global _last_yfinance_call_time
-
-    with _yfinance_lock:
-        # Calculate time since last call
-        current_time = time.time()
-        time_since_last_call = current_time - _last_yfinance_call_time
-
-        # If not enough time has passed, sleep
-        if time_since_last_call < _YFINANCE_MIN_DELAY:
-            sleep_time = _YFINANCE_MIN_DELAY - time_since_last_call
-            logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before API call")
-            time.sleep(sleep_time)
-
-        # Make the API call
-        try:
-            result = func(*args, **kwargs)
-            _last_yfinance_call_time = time.time()
-            return result
-        except Exception as e:
-            _last_yfinance_call_time = time.time()
-            raise e
 
 
 class DataPreparationLayer:
@@ -121,10 +84,10 @@ class DataPreparationLayer:
             price_data = price_cache.get_historical_data(symbol, period=requirements.price_period)
 
             if price_data is None or price_data.empty:
-                # Cache miss or insufficient - fetch with rate limiting
-                logger.debug(f"Cache MISS for {symbol} - fetching with rate limit")
-                price_data = _rate_limited_api_call(
-                    yfinance_service.get_historical_data,
+                # Cache miss or insufficient - fetch directly
+                # (yfinance_service has its own rate limiter)
+                logger.debug(f"Cache MISS for {symbol} - fetching from yfinance")
+                price_data = yfinance_service.get_historical_data(
                     symbol,
                     period=requirements.price_period,
                     use_cache=False  # Already checked cache
@@ -252,10 +215,10 @@ class DataPreparationLayer:
             price_data = cached_prices.get(symbol)
 
             if price_data is None or price_data.empty:
-                # Cache miss or insufficient - fetch with rate limiting
+                # Cache miss or insufficient - fetch directly
+                # (yfinance_service has its own rate limiter)
                 try:
-                    price_data = _rate_limited_api_call(
-                        yfinance_service.get_historical_data,
+                    price_data = yfinance_service.get_historical_data(
                         symbol,
                         period=requirements.price_period
                     )
@@ -317,6 +280,10 @@ class DataPreparationLayer:
         """
         try:
             import yfinance as yf
+            from ..services.rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
             info = ticker.info
 

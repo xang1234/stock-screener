@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # Rate Limiting
     yfinance_rate_limit: int = 1  # requests per second
     alphavantage_rate_limit: int = 25  # requests per day
+    finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
+    yfinance_batch_rate_limit_interval: float = 1.0  # seconds between yfinance batch downloads
 
     # Scanning
     default_universe: str = "all"
