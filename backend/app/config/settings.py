@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     doc_chunk_max_tokens: int = 4000  # Maximum tokens per chunk
     doc_chunk_overlap_tokens: int = 200  # Overlap between chunks
 
+    # Redis Bulk Pipeline Configuration (for large multi-symbol fetches)
+    redis_bulk_socket_timeout: int = 30  # Timeout for bulk pipeline operations (seconds)
+    redis_pipeline_chunk_size: int = 500  # Symbols per Redis pipeline chunk
+
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()
     price_cache_yfinance_rate_limit: float = 1.0  # Seconds to wait between batches

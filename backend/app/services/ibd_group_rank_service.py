@@ -759,7 +759,8 @@ class IBDGroupRankService:
         # 5. Fetch market caps for weighting
         market_caps = self._get_market_caps_for_symbols(db, list(symbols_to_fetch))
 
-        logger.info(f"Pre-fetched prices for {len(all_prices)} symbols")
+        valid_count = sum(1 for v in all_prices.values() if v is not None)
+        logger.info(f"Pre-fetched prices: {valid_count}/{len(all_prices)} symbols have data")
 
         return spy_data, all_prices, active_symbols, market_caps
 

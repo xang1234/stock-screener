@@ -23,7 +23,7 @@ from ..utils.market_hours import (
     is_market_open, get_eastern_now, EASTERN, MARKET_CLOSE_TIME,
     is_trading_day, get_last_trading_day
 )
-from .redis_pool import get_redis_client
+from .redis_pool import get_redis_client, get_bulk_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -1221,61 +1221,79 @@ class PriceCacheService:
                     for symbol in symbols}
 
         try:
-            # Build pipeline for bulk fetch from Redis
-            pipeline = self._redis_client.pipeline()
-
-            # Queue all get operations
-            for symbol in symbols:
-                redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
-                pipeline.get(redis_key)
-
-            # Execute all gets in single network call
-            results = pipeline.execute()
+            # Use bulk Redis client with longer timeout for large pipeline operations
+            bulk_client = get_bulk_redis_client() or self._redis_client
+            chunk_size = getattr(settings, 'redis_pipeline_chunk_size', 500)
 
             # Parse results
             cached_data = {}
             redis_hits = []
             redis_misses = []
             insufficient_data = []
-
             stale_data = []
 
-            for symbol, raw_data in zip(symbols, results):
-                if raw_data:
-                    try:
-                        df = pickle.loads(raw_data)
+            # Chunked pipeline: process symbols in batches to avoid timeout on huge responses
+            total_chunks = (len(symbols) + chunk_size - 1) // chunk_size
+            for chunk_idx in range(0, len(symbols), chunk_size):
+                chunk_symbols = symbols[chunk_idx:chunk_idx + chunk_size]
+                chunk_num = (chunk_idx // chunk_size) + 1
 
-                        # Check if Redis data is sufficient for requested period
-                        # Redis stores last 5 years (1825 days), but verify we have at least 200 days minimum
-                        if len(df) >= 200:
-                            # Check freshness - get last date from DataFrame index
-                            last_date = df.index[-1]
-                            if hasattr(last_date, 'date'):
-                                last_date = last_date.date()
-
-                            if self._is_data_fresh(last_date):
-                                # Fresh and sufficient data
-                                cached_data[symbol] = df
-                                redis_hits.append(symbol)
-                                logger.debug(f"Bulk cache HIT for {symbol} (Redis, {len(df)} days, fresh)")
-                            else:
-                                # Stale data - need refresh
-                                cached_data[symbol] = None
-                                stale_data.append(symbol)
-                                logger.debug(f"Bulk cache HIT but STALE for {symbol} (Redis, last: {last_date})")
-                        else:
-                            # Insufficient data - need database fallback
-                            cached_data[symbol] = None  # Will be filled from database
-                            insufficient_data.append(symbol)
-                            logger.debug(f"Bulk cache HIT but INSUFFICIENT for {symbol} (Redis has {len(df)} days, need 200+)")
-                    except Exception as e:
-                        logger.warning(f"Error deserializing {symbol}: {e}")
+                try:
+                    pipeline = bulk_client.pipeline()
+                    for symbol in chunk_symbols:
+                        redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
+                        pipeline.get(redis_key)
+                    chunk_results = pipeline.execute()
+                except (redis.exceptions.TimeoutError, redis.exceptions.ConnectionError, OSError) as pipe_err:
+                    logger.warning(
+                        f"Redis pipeline chunk {chunk_num}/{total_chunks} failed ({len(chunk_symbols)} symbols): {pipe_err}"
+                    )
+                    # Mark all chunk symbols as cache miss — they'll flow into DB fallback
+                    for symbol in chunk_symbols:
                         cached_data[symbol] = None
                         redis_misses.append(symbol)
-                else:
-                    cached_data[symbol] = None
-                    redis_misses.append(symbol)
-                    logger.debug(f"Bulk cache MISS for {symbol} (Redis)")
+                    continue
+
+                chunk_hits = 0
+                for symbol, raw_data in zip(chunk_symbols, chunk_results):
+                    if raw_data:
+                        try:
+                            df = pickle.loads(raw_data)
+
+                            # Check if Redis data is sufficient for requested period
+                            # Redis stores last 5 years (1825 days), but verify we have at least 200 days minimum
+                            if len(df) >= 200:
+                                # Check freshness - get last date from DataFrame index
+                                last_date = df.index[-1]
+                                if hasattr(last_date, 'date'):
+                                    last_date = last_date.date()
+
+                                if self._is_data_fresh(last_date):
+                                    cached_data[symbol] = df
+                                    redis_hits.append(symbol)
+                                    chunk_hits += 1
+                                    logger.debug(f"Bulk cache HIT for {symbol} (Redis, {len(df)} days, fresh)")
+                                else:
+                                    cached_data[symbol] = None
+                                    stale_data.append(symbol)
+                                    logger.debug(f"Bulk cache HIT but STALE for {symbol} (Redis, last: {last_date})")
+                            else:
+                                cached_data[symbol] = None
+                                insufficient_data.append(symbol)
+                                logger.debug(f"Bulk cache HIT but INSUFFICIENT for {symbol} (Redis has {len(df)} days, need 200+)")
+                        except Exception as e:
+                            logger.warning(f"Error deserializing {symbol}: {e}")
+                            cached_data[symbol] = None
+                            redis_misses.append(symbol)
+                    else:
+                        cached_data[symbol] = None
+                        redis_misses.append(symbol)
+                        logger.debug(f"Bulk cache MISS for {symbol} (Redis)")
+
+                logger.info(
+                    f"Redis pipeline chunk {chunk_num}/{total_chunks}: "
+                    f"{chunk_hits} hits, {len(chunk_symbols) - chunk_hits} misses"
+                )
 
             # Fallback to database for misses, insufficient data, and stale data
             needs_db_fallback = redis_misses + insufficient_data + stale_data
