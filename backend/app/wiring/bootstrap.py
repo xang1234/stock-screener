@@ -6,13 +6,15 @@ the abstractions returned by these factories.
 
 Example usage in a router::
 
-    from app.wiring.bootstrap import get_uow
+    from app.wiring.bootstrap import get_uow, get_create_scan_use_case
 
     @router.post("/scans")
-    async def create_scan(uow: SqlUnitOfWork = Depends(get_uow)):
-        with uow:
-            uow.scans.create(scan_id=..., ...)
-            uow.commit()
+    async def create_scan(
+        request: ScanCreateRequest,
+        uow: SqlUnitOfWork = Depends(get_uow),
+        use_case: CreateScanUseCase = Depends(get_create_scan_use_case),
+    ):
+        result = use_case.execute(uow, command)
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ from __future__ import annotations
 from typing import Iterator
 
 from app.database import SessionLocal
-from app.domain.scanning.ports import StockDataProvider
+from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
 from app.infra.db.uow import SqlUnitOfWork
 from app.infra.providers.stock_data import DataPrepStockDataProvider
+from app.infra.tasks.dispatcher import CeleryTaskDispatcher
+from app.use_cases.scanning.create_scan import CreateScanUseCase
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -37,6 +41,27 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
     """
     uow = SqlUnitOfWork(SessionLocal)
     yield uow
+
+
+# ── Task Dispatchers ────────────────────────────────────────────────────
+
+_task_dispatcher: CeleryTaskDispatcher | None = None
+
+
+def get_task_dispatcher() -> TaskDispatcher:
+    """Return a singleton CeleryTaskDispatcher."""
+    global _task_dispatcher
+    if _task_dispatcher is None:
+        _task_dispatcher = CeleryTaskDispatcher()
+    return _task_dispatcher
+
+
+# ── Use Cases ────────────────────────────────────────────────────────────
+
+
+def get_create_scan_use_case() -> CreateScanUseCase:
+    """Build a CreateScanUseCase wired with infrastructure adapters."""
+    return CreateScanUseCase(dispatcher=get_task_dispatcher())
 
 
 # ── Providers ────────────────────────────────────────────────────────────

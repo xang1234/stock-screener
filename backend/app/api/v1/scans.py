@@ -25,6 +25,10 @@ from ...services.stock_universe_service import stock_universe_service
 from ...services import universe_resolver
 from ...tasks.scan_tasks import run_bulk_scan
 from ...celery_app import celery_app
+from ...wiring.bootstrap import get_uow, get_create_scan_use_case
+from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
+from ...infra.db.uow import SqlUnitOfWork
+from ...domain.common.errors import ValidationError as DomainValidationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -94,6 +98,13 @@ class ScanCreateRequest(BaseModel):
     composite_method: str = Field(
         default="weighted_average",
         description="How to combine scores: weighted_average, maximum, minimum"
+    )
+
+    # Idempotency
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="Optional idempotency key. Repeated POSTs with the same key return the existing scan."
     )
 
 
@@ -267,98 +278,45 @@ async def list_scans(
 @router.post("", response_model=ScanCreateResponse)
 async def create_scan(
     request: ScanCreateRequest,
-    db: Session = Depends(get_db)
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: CreateScanUseCase = Depends(get_create_scan_use_case),
 ):
-    """
-    Create a new bulk scan.
-
-    Initiates a background task to scan multiple stocks.
-
-    Args:
-        request: Scan creation request
-        db: Database session
-
-    Returns:
-        Scan ID and status
-    """
+    """Create a new bulk scan via CreateScanUseCase."""
+    universe_def = _build_universe_def(request)
+    cmd = CreateScanCommand(
+        universe_def=universe_def,
+        universe_label=universe_def.label(),
+        universe_key=universe_def.key(),
+        universe_type=universe_def.type.value,
+        universe_exchange=universe_def.exchange.value if universe_def.exchange else None,
+        universe_index=universe_def.index.value if universe_def.index else None,
+        universe_symbols=universe_def.symbols,
+        screeners=request.screeners,
+        composite_method=request.composite_method,
+        criteria=request.criteria,
+        idempotency_key=request.idempotency_key,
+    )
     try:
-        # DEBUG: Log the incoming request
-        import json
-        logger.warning(f"📥 SCAN REQUEST: {json.dumps({'screeners': request.screeners, 'composite_method': request.composite_method, 'universe': request.universe, 'criteria': request.criteria})}")
+        result = use_case.execute(uow, cmd)
+    except DomainValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-        # Generate unique scan ID
-        scan_id = str(uuid.uuid4())
+    return ScanCreateResponse(
+        scan_id=result.scan_id,
+        status=result.status,
+        total_stocks=result.total_stocks,
+        message=f"Scan queued for {result.total_stocks} stocks",
+    )
 
-        # Build typed universe definition
-        if request.universe_def is not None:
-            universe_def = request.universe_def
-        else:
-            try:
-                universe_def = UniverseDefinition.from_legacy(
-                    request.universe, request.symbols
-                )
-            except (ValueError, ValidationError) as e:
-                raise HTTPException(status_code=400, detail=str(e))
 
-        # Resolve symbols via centralized resolver
-        symbols = universe_resolver.resolve_symbols(db, universe_def)
-
-        if not symbols:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No symbols found for universe '{request.universe}'. Try refreshing the universe."
-            )
-
-        logger.info(f"Creating scan {scan_id} for {len(symbols)} stocks")
-
-        # Create scan record first to avoid races with Celery workers
-        scan = Scan(
-            scan_id=scan_id,
-            criteria=request.criteria or {},
-            universe=universe_def.label(),  # Human-readable for backward compat
-            universe_key=universe_def.key(),
-            universe_type=universe_def.type.value,
-            universe_exchange=universe_def.exchange.value if universe_def.exchange else None,
-            universe_index=universe_def.index.value if universe_def.index else None,
-            universe_symbols=universe_def.symbols,
-            screener_types=request.screeners,
-            composite_method=request.composite_method,
-            total_stocks=len(symbols),
-            passed_stocks=0,
-            status="queued",
-            task_id=None  # Set after task dispatch
-        )
-        db.add(scan)
-        db.commit()
-        db.refresh(scan)
-
-        # Dispatch Celery task after commit to ensure scan config is persisted
-        try:
-            task = run_bulk_scan.delay(scan_id, symbols, request.criteria or {})
-        except Exception as dispatch_error:
-            logger.error(f"Failed to dispatch scan task {scan_id}: {dispatch_error}", exc_info=True)
-            scan.status = "failed"
-            db.commit()
-            raise HTTPException(status_code=500, detail="Failed to queue scan task")
-
-        # Store Celery task ID for real-time progress polling
-        scan.task_id = task.id
-        db.commit()
-
-        logger.info(f"Scan {scan_id} queued with task ID: {task.id}")
-
-        return ScanCreateResponse(
-            scan_id=scan_id,
-            status="queued",
-            total_stocks=len(symbols),
-            message=f"Scan queued for {len(symbols)} stocks"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating scan: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error creating scan: {str(e)}")
+def _build_universe_def(request: ScanCreateRequest) -> UniverseDefinition:
+    """Convert request fields into a typed UniverseDefinition."""
+    if request.universe_def is not None:
+        return request.universe_def
+    try:
+        return UniverseDefinition.from_legacy(request.universe, request.symbols)
+    except (ValueError, ValidationError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)

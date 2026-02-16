@@ -24,6 +24,11 @@ class ScanRepository(abc.ABC):
     def get_by_scan_id(self, scan_id: str) -> object | None:
         ...
 
+    @abc.abstractmethod
+    def get_by_idempotency_key(self, key: str) -> object | None:
+        """Return an existing scan matching the idempotency key, or None."""
+        ...
+
 
 class ScanResultRepository(abc.ABC):
     """Persist and retrieve individual scan results."""
@@ -38,6 +43,17 @@ class UniverseRepository(abc.ABC):
 
     @abc.abstractmethod
     def resolve_symbols(self, universe_def: object) -> list[str]:
+        ...
+
+
+class TaskDispatcher(abc.ABC):
+    """Dispatch background tasks (e.g. Celery) for scan execution."""
+
+    @abc.abstractmethod
+    def dispatch_scan(
+        self, scan_id: str, symbols: list[str], criteria: dict
+    ) -> str:
+        """Queue a bulk-scan task. Returns the task ID."""
         ...
 
 

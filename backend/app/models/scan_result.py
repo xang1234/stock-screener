@@ -38,6 +38,9 @@ class Scan(Base):
     status = Column(String(20), default="running")  # running, completed, failed
     task_id = Column(String(100), nullable=True)  # Celery task ID for real-time progress
 
+    # Idempotency
+    idempotency_key = Column(String(64), nullable=True, unique=True, index=True)
+
     # Timestamps
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))

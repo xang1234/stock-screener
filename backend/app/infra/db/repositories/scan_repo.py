@@ -26,3 +26,10 @@ class SqlScanRepository(ScanRepository):
             .filter(Scan.scan_id == scan_id)
             .first()
         )
+
+    def get_by_idempotency_key(self, key: str) -> Scan | None:
+        return (
+            self._session.query(Scan)
+            .filter(Scan.idempotency_key == key)
+            .first()
+        )
