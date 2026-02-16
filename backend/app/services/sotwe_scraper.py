@@ -4,16 +4,13 @@ Sotwe Scraper - Fetches tweets from sotwe.com
 Sotwe renders Twitter profiles via SSR and embeds tweet data in
 window.__NUXT__. This scraper fetches the page with curl_cffi
 (to bypass Cloudflare), extracts the NUXT payload, evaluates it
-with Node.js, and parses the resulting JSON.
+with QuickJS, and parses the resulting JSON.
 
-Requires: curl_cffi, Node.js available on PATH.
+Requires: curl_cffi, quickjs.
 """
 import json
 import logging
-import os
 import re
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -101,41 +98,29 @@ class SotweScraper:
         if not match:
             raise SotweScraperError("Could not find __NUXT__ payload in page HTML")
         nuxt_js = match.group(1)
-        return self._evaluate_nuxt_with_node(nuxt_js)
+        return self._evaluate_nuxt_js(nuxt_js)
 
-    def _evaluate_nuxt_with_node(self, nuxt_code: str) -> dict[str, Any]:
-        """Evaluate minified NUXT JS via a temp file + Node.js subprocess."""
-        fd, tmp_path = tempfile.mkstemp(suffix=".js")
+    def _evaluate_nuxt_js(self, nuxt_code: str) -> dict[str, Any]:
+        """Evaluate minified NUXT JS payload using QuickJS engine."""
+        import quickjs
+
         try:
-            with os.fdopen(fd, "w") as f:
-                f.write(f"console.log(JSON.stringify({nuxt_code}))")
-
-            result = subprocess.run(
-                ["node", tmp_path],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-
-            if result.returncode != 0:
+            ctx = quickjs.Context()
+            ctx.set_time_limit(10)
+            result = ctx.eval(f"JSON.stringify({nuxt_code})")
+            if not isinstance(result, str):
                 raise SotweScraperError(
-                    f"Node.js evaluation failed (rc={result.returncode}): "
-                    f"{result.stderr[:500]}"
+                    "NUXT payload did not evaluate to a JSON-serializable value"
                 )
-
-            return json.loads(result.stdout)
-
-        except subprocess.TimeoutExpired as exc:
-            raise SotweScraperError("Node.js evaluation timed out") from exc
+            return json.loads(result)
+        except quickjs.JSException as exc:
+            raise SotweScraperError(
+                f"QuickJS evaluation failed: {exc}"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise SotweScraperError(
-                f"Failed to parse Node.js output as JSON: {exc}"
+                f"Failed to parse JS output as JSON: {exc}"
             ) from exc
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
     def _parse_tweets(
         self, nuxt_data: dict[str, Any], username: str
