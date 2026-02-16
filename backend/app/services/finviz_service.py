@@ -17,14 +17,8 @@ logger = logging.getLogger(__name__)
 class FinvizService:
     """Service for fetching and parsing finvizfinance data"""
 
-    def __init__(self, rate_limit_delay: float = 0.5):
-        """
-        Initialize FinvizService.
-
-        Args:
-            rate_limit_delay: Minimum seconds between API calls (default: 0.5)
-        """
-        self.rate_limit_delay = rate_limit_delay
+    def __init__(self):
+        """Initialize FinvizService."""
         self.parser = FinvizParser()
         self.validator = FinvizValidator()
 
@@ -336,7 +330,6 @@ class FinvizService:
         self,
         symbols: list,
         max_workers: int = 1,
-        delay_between_calls: float = 2.0
     ) -> Dict[str, Optional[Dict]]:
         """
         Fetch finviz-only fields for multiple symbols.
@@ -347,7 +340,6 @@ class FinvizService:
         Args:
             symbols: List of ticker symbols
             max_workers: Number of concurrent workers (default 1 for safety)
-            delay_between_calls: Seconds between API calls
 
         Returns:
             Dict mapping symbols to their finviz-only data

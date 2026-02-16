@@ -133,6 +133,7 @@ class TestRedisRateLimiterFallback:
         limiter._get_redis_client = lambda: None
         limiter.wait("yfinance", min_interval_s=0.1)
         assert limiter._using_fallback is True
+        assert limiter._fallback_warned is True
 
         # Now make Redis available
         mock_client = MagicMock()
@@ -143,6 +144,7 @@ class TestRedisRateLimiterFallback:
         # Next call should recover
         limiter.wait("yfinance", min_interval_s=0.1)
         assert limiter._using_fallback is False
+        assert limiter._fallback_warned is False  # Reset so next outage logs warning
 
 
 class TestRedisRateLimiterConcurrency:

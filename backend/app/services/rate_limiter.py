@@ -67,9 +67,6 @@ class RedisRateLimiter:
         self._jitter_ms = jitter_ms
         self._redis_retry_interval = redis_retry_interval
 
-        # Lua script SHA (cached after first EVAL)
-        self._lua_sha: Optional[str] = None
-
         # Fallback state
         self._fallback_lock = threading.Lock()
         self._last_call_times: Dict[str, float] = {}
@@ -117,6 +114,7 @@ class RedisRateLimiter:
             # If we were in fallback, we've recovered
             if self._using_fallback:
                 self._using_fallback = False
+                self._fallback_warned = False
                 logger.info("Rate limiter: recovered Redis connection, switching back from fallback")
 
             # result is bytes from Redis

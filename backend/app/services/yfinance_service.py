@@ -140,6 +140,10 @@ class YFinanceService:
             Dict with 52-week range data
         """
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
             info = ticker.info
 
@@ -262,6 +266,10 @@ class YFinanceService:
             DataFrame with earnings history
         """
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
             earnings = ticker.earnings_history
 
@@ -307,6 +315,10 @@ class YFinanceService:
             }
         """
         try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
             ticker = yf.Ticker(symbol)
 
             result = {

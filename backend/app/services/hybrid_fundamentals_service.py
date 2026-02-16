@@ -76,7 +76,7 @@ class HybridFundamentalsService:
 
         self.bulk_fetcher = BulkDataFetcher()
         self.technical_calc = TechnicalCalculatorService()
-        self.finviz_service = FinvizService(rate_limit_delay=finviz_rate_limit)
+        self.finviz_service = FinvizService()
         self.price_cache = PriceCacheService.get_instance()
 
     def fetch_fundamentals(
@@ -352,7 +352,7 @@ class HybridFundamentalsService:
             """Fetch finviz data for a chunk of symbols."""
             chunk_results = {}
             # Create a separate FinvizService instance for thread safety
-            finviz = FinvizService(rate_limit_delay=self.finviz_rate_limit)
+            finviz = FinvizService()
             for symbol in chunk_symbols:
                 data = finviz.get_finviz_only_fields(symbol)
                 chunk_results[symbol] = data or {}
