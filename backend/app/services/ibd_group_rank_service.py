@@ -498,10 +498,11 @@ class IBDGroupRankService:
         period_days = {'1w': 5, '1m': 21, '3m': 63, '6m': 126}
         rank_changes = {}
 
-        for period_name, day_count in period_days.items():
-            historical_rank = self._get_historical_rank(
-                db, industry_group, current.date, day_count
-            )
+        historical_ranks = self._get_historical_ranks_batch(
+            db, [industry_group], current.date, period_days
+        )
+        for period_name in period_days:
+            historical_rank = historical_ranks.get((industry_group, period_name))
             if historical_rank is not None:
                 rank_changes[f'rank_change_{period_name}'] = historical_rank - current.rank
             else:
