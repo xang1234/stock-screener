@@ -136,6 +136,8 @@ services:
       dockerfile: Dockerfile
     command: celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule
     environment:
+      - TZ=${CELERY_TIMEZONE:-America/New_York}
+      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
       - DATABASE_URL=sqlite:////app/data/stockscanner.db
       - REDIS_HOST=redis
       - REDIS_PORT=6379

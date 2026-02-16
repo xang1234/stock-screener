@@ -3,6 +3,7 @@ Celery configuration for background task processing.
 
 Handles async bulk scanning of stocks and cache warming.
 """
+import logging
 import os
 
 # Disable MPS/Metal before any PyTorch imports to avoid fork() issues on macOS
@@ -44,7 +45,7 @@ celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],
     result_serializer='json',
-    timezone='UTC',
+    timezone=settings.celery_timezone,
     enable_utc=True,
     task_track_started=True,  # Track when tasks start
     task_time_limit=86400,  # 24 hours max per task (for very large scans like 9650 stocks)
@@ -52,6 +53,14 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # Don't prefetch tasks
     broker_connection_retry_on_startup=True,  # Retry connecting to broker on startup
 )
+
+_logger = logging.getLogger(__name__)
+
+
+@celery_app.on_after_configure.connect
+def _log_timezone(sender, **kwargs):
+    _logger.info("Celery timezone: %s (enable_utc=%s)", settings.celery_timezone, True)
+
 
 # Task routing: Route all data-fetching tasks to serialized queue
 # Run worker with: celery -A app.celery_app worker -Q celery,data_fetch -c 1
@@ -169,7 +178,7 @@ if settings.cache_warmup_enabled:
         'auto-refresh-after-close': {
             'task': 'app.tasks.cache_tasks.auto_refresh_after_close',
             'schedule': crontab(
-                hour=16,  # 4 PM ET (UTC-5 = 21 UTC, but Celery runs in local time)
+                hour=16,  # 4:45 PM ET (after market close at 4 PM)
                 minute=45,
                 day_of_week='1-5'  # Monday-Friday only
             ),
