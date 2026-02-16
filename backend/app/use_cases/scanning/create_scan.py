@@ -77,7 +77,7 @@ class CreateScanUseCase:
         """
         with uow:
             # ── Idempotency check ────────────────────────────────────
-            if cmd.idempotency_key:
+            if cmd.idempotency_key is not None:
                 existing = uow.scans.get_by_idempotency_key(cmd.idempotency_key)
                 if existing is not None:
                     return CreateScanResult(

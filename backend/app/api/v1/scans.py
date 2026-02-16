@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import logging
-import uuid
 import csv
 import io
 
@@ -21,10 +20,6 @@ from ...models.scan_result import Scan, ScanResult
 from ...models.stock_universe import StockUniverse
 from pydantic import ValidationError
 from ...schemas.universe import UniverseDefinition
-from ...services.stock_universe_service import stock_universe_service
-from ...services import universe_resolver
-from ...tasks.scan_tasks import run_bulk_scan
-from ...celery_app import celery_app
 from ...wiring.bootstrap import get_uow, get_create_scan_use_case
 from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
 from ...infra.db.uow import SqlUnitOfWork
@@ -300,6 +295,9 @@ async def create_scan(
         result = use_case.execute(uow, cmd)
     except DomainValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create scan: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to queue scan task")
 
     return ScanCreateResponse(
         scan_id=result.scan_id,

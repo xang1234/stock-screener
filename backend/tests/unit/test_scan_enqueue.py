@@ -5,8 +5,6 @@ is tested in test_create_scan_use_case.py.  These tests focus on the
 router layer: request → command translation and universe parsing.
 """
 
-import types
-
 import pytest
 
 from app.api.v1.scans import ScanCreateRequest, _build_universe_def
