@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from typing import Any
 
 from ..common.errors import InvalidTransitionError
 
@@ -123,6 +124,59 @@ class SnapshotRef:
 
 
 # ---------------------------------------------------------------------------
+# Feature Row Types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FeatureRowWrite:
+    """Input for upserting a single snapshot row.
+
+    Used by the use case to pass scored data into the repository
+    without coupling to ORM models.
+    """
+
+    symbol: str
+    as_of_date: date
+    composite_score: float | None
+    overall_rating: int | None
+    passes_count: int | None
+    details: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class FeatureRow:
+    """Output from feature store queries — a single scored row.
+
+    Includes the run_id so callers know which run produced this data.
+    """
+
+    run_id: int
+    symbol: str
+    as_of_date: date
+    composite_score: float | None
+    overall_rating: int | None
+    passes_count: int | None
+    details: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class FeaturePage:
+    """Paginated query results from the feature store."""
+
+    items: tuple[FeatureRow, ...]
+    total: int
+    page: int
+    per_page: int
+
+    @property
+    def total_pages(self) -> int:
+        if self.total == 0:
+            return 0
+        return (self.total + self.per_page - 1) // self.per_page
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -134,4 +188,7 @@ __all__ = [
     "RunStats",
     "FeatureRunDomain",
     "SnapshotRef",
+    "FeatureRowWrite",
+    "FeatureRow",
+    "FeaturePage",
 ]

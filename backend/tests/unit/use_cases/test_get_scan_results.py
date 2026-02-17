@@ -9,7 +9,7 @@ from app.domain.scanning.filter_spec import (
     SortOrder,
     SortSpec,
 )
-from app.domain.scanning.models import ResultPage, ScanResultItemDomain
+from app.domain.scanning.models import ResultPage
 from app.use_cases.scanning.get_scan_results import (
     GetScanResultsQuery,
     GetScanResultsResult,

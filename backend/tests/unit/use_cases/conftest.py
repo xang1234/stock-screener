@@ -18,7 +18,21 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from app.domain.common.errors import EntityNotFoundError
+from app.domain.common.query import FilterSpec, PageSpec, SortSpec
 from app.domain.common.uow import UnitOfWork
+from app.domain.feature_store.models import (
+    FeaturePage,
+    FeatureRow,
+    FeatureRowWrite,
+    FeatureRunDomain,
+    RunStats,
+    RunStatus,
+    RunType,
+    validate_transition,
+)
+from app.domain.feature_store.ports import FeatureRunRepository, FeatureStoreRepository
+from app.domain.feature_store.quality import DQResult
 from app.domain.scanning.models import (
     FilterOptions,
     ProgressEvent,
@@ -334,6 +348,137 @@ class FakeCancellationToken(CancellationToken):
 
 
 # ---------------------------------------------------------------------------
+# Feature store fake repositories
+# ---------------------------------------------------------------------------
+
+
+class FakeFeatureRunRepository(FeatureRunRepository):
+    """In-memory feature run repository for use case tests."""
+
+    def __init__(self) -> None:
+        self._runs: dict[int, FeatureRunDomain] = {}
+        self._next_id = 1
+        self._pointer_run_id: int | None = None
+
+    def start_run(self, as_of_date, run_type, code_version=None,
+                  universe_hash=None, input_hash=None,
+                  correlation_id=None) -> FeatureRunDomain:
+        run = FeatureRunDomain(
+            id=self._next_id,
+            as_of_date=as_of_date,
+            run_type=run_type if isinstance(run_type, RunType) else RunType(run_type),
+            status=RunStatus.RUNNING,
+            created_at=datetime.now(),
+            completed_at=None,
+            correlation_id=correlation_id,
+            code_version=code_version,
+            universe_hash=universe_hash,
+            input_hash=input_hash,
+        )
+        self._runs[self._next_id] = run
+        self._next_id += 1
+        return run
+
+    def mark_completed(self, run_id, stats, warnings=()) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        validate_transition(run.status, RunStatus.COMPLETED)
+        updated = FeatureRunDomain(
+            id=run.id, as_of_date=run.as_of_date, run_type=run.run_type,
+            status=RunStatus.COMPLETED, created_at=run.created_at,
+            completed_at=datetime.now(), correlation_id=run.correlation_id,
+            code_version=run.code_version, universe_hash=run.universe_hash,
+            input_hash=run.input_hash, stats=stats, warnings=tuple(warnings),
+        )
+        self._runs[run_id] = updated
+        return updated
+
+    def mark_quarantined(self, run_id, dq_results) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        validate_transition(run.status, RunStatus.QUARANTINED)
+        updated = FeatureRunDomain(
+            id=run.id, as_of_date=run.as_of_date, run_type=run.run_type,
+            status=RunStatus.QUARANTINED, created_at=run.created_at,
+            completed_at=run.completed_at, correlation_id=run.correlation_id,
+            code_version=run.code_version, universe_hash=run.universe_hash,
+            input_hash=run.input_hash, stats=run.stats,
+            warnings=tuple(r.message for r in dq_results),
+        )
+        self._runs[run_id] = updated
+        return updated
+
+    def publish_atomically(self, run_id) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        validate_transition(run.status, RunStatus.PUBLISHED)
+        updated = FeatureRunDomain(
+            id=run.id, as_of_date=run.as_of_date, run_type=run.run_type,
+            status=RunStatus.PUBLISHED, created_at=run.created_at,
+            completed_at=run.completed_at, correlation_id=run.correlation_id,
+            code_version=run.code_version, universe_hash=run.universe_hash,
+            input_hash=run.input_hash, stats=run.stats, warnings=run.warnings,
+        )
+        self._runs[run_id] = updated
+        self._pointer_run_id = run_id
+        return updated
+
+    def get_latest_published(self) -> FeatureRunDomain | None:
+        if self._pointer_run_id is None:
+            return None
+        return self._runs.get(self._pointer_run_id)
+
+    def get_run(self, run_id) -> FeatureRunDomain:
+        return self._get_or_raise(run_id)
+
+    def _get_or_raise(self, run_id: int) -> FeatureRunDomain:
+        run = self._runs.get(run_id)
+        if run is None:
+            raise EntityNotFoundError("FeatureRun", run_id)
+        return run
+
+
+class FakeFeatureStoreRepository(FeatureStoreRepository):
+    """In-memory feature store repository for use case tests."""
+
+    def __init__(self) -> None:
+        self._rows: dict[int, list[FeatureRow]] = {}  # run_id -> rows
+        self._universe: dict[int, list[str]] = {}
+        self._pointer_run_id: int | None = None
+
+    def upsert_snapshot_rows(self, run_id, rows) -> int:
+        existing = {r.symbol: r for r in self._rows.get(run_id, [])}
+        for row in rows:
+            fr = FeatureRow(
+                run_id=run_id, symbol=row.symbol, as_of_date=row.as_of_date,
+                composite_score=row.composite_score, overall_rating=row.overall_rating,
+                passes_count=row.passes_count, details=row.details,
+            )
+            existing[row.symbol] = fr
+        self._rows[run_id] = list(existing.values())
+        return len(rows)
+
+    def save_run_universe_symbols(self, run_id, symbols) -> None:
+        self._universe[run_id] = list(symbols)
+
+    def count_by_run_id(self, run_id) -> int:
+        return len(self._rows.get(run_id, []))
+
+    def query_latest(self, filters=None, sort=None, page=None) -> FeaturePage:
+        if self._pointer_run_id is None:
+            return FeaturePage(items=(), total=0, page=1, per_page=50)
+        return self._build_page(self._pointer_run_id, page)
+
+    def query_run(self, run_id, filters=None, sort=None, page=None) -> FeaturePage:
+        if run_id not in self._rows:
+            raise EntityNotFoundError("FeatureRun", run_id)
+        return self._build_page(run_id, page)
+
+    def _build_page(self, run_id: int, page: PageSpec | None) -> FeaturePage:
+        p = page or PageSpec()
+        all_rows = self._rows.get(run_id, [])
+        items = tuple(all_rows[p.offset : p.offset + p.limit])
+        return FeaturePage(items=items, total=len(all_rows), page=p.page, per_page=p.per_page)
+
+
+# ---------------------------------------------------------------------------
 # Fake unit of work
 # ---------------------------------------------------------------------------
 
@@ -350,10 +495,14 @@ class FakeUnitOfWork(UnitOfWork):
         scans: ScanRepository | None = None,
         scan_results: ScanResultRepository | None = None,
         universe: UniverseRepository | None = None,
+        feature_runs: FeatureRunRepository | None = None,
+        feature_store: FeatureStoreRepository | None = None,
     ) -> None:
         self.scans = scans or FakeScanRepository()
         self.scan_results = scan_results or FakeScanResultRepository()
         self.universe = universe or FakeUniverseRepository()
+        self.feature_runs = feature_runs or FakeFeatureRunRepository()
+        self.feature_store = feature_store or FakeFeatureStoreRepository()
         self.committed = 0
         self.rolled_back = 0
 
