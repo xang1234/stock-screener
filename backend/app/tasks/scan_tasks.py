@@ -19,7 +19,9 @@ from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..models.scan_result import Scan, ScanResult
 # MinerviniScanner removed - use MinerviniScannerV2 via orchestrator instead
-from ..scanners.scan_orchestrator import ScanOrchestrator
+# NOTE: get_scan_orchestrator and get_stock_data_provider are imported lazily
+# inside functions to avoid a circular import through wiring.bootstrap →
+# infra.tasks.dispatcher → scan_tasks → wiring.bootstrap.
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
 
@@ -683,17 +685,17 @@ def _scan_stock_batch_internal(
         # This reduces Redis round trips from N*3 calls to just 3 pipeline calls
         logger.info(f"Batch {batch_num}: Phase 3 - Pre-fetching cache data using Redis pipelines")
 
-        from ..scanners.data_preparation import DataPreparationLayer
         from ..scanners.base_screener import DataRequirements
         from ..scanners.screener_registry import screener_registry
+        from ..wiring.bootstrap import get_stock_data_provider, get_scan_orchestrator
 
-        # Create data preparation layer
-        data_prep = DataPreparationLayer()
+        # Get provider via wiring bootstrap
+        provider = get_stock_data_provider()
 
         # Get screeners from registry and merge their data requirements
         # This ensures we only fetch what's actually needed
         screeners = screener_registry.get_multiple(screener_types)
-        requirements = data_prep.merge_requirements([
+        requirements = DataRequirements.merge_all([
             screener.get_data_requirements(criteria)
             for screener in screeners.values()
         ])
@@ -708,7 +710,7 @@ def _scan_stock_batch_internal(
         # Bulk cache pre-fetch using Redis pipelines
         # This makes 3 pipeline calls (price, fundamentals, quarterly) instead of N*3 individual calls
         # For a 50-stock batch: 3 calls instead of 150 calls = 50x reduction!
-        bulk_stock_data = data_prep.prepare_data_bulk(symbols, requirements)
+        bulk_stock_data = provider.prepare_data_bulk(symbols, requirements)
 
         logger.info(
             f"Batch {batch_num}: Phase 3 bulk cache fetch completed - "
@@ -718,7 +720,7 @@ def _scan_stock_batch_internal(
         # Now proceed with normal scanning (will use pre-populated cache)
 
         # Always use orchestrator (it handles all screeners including minervini)
-        orchestrator = ScanOrchestrator()
+        orchestrator = get_scan_orchestrator()
 
         # Rate limiting state (adaptive)
         rate_limiter = Semaphore(settings.scan_parallel_workers)
@@ -961,7 +963,8 @@ def run_bulk_scan(self, scan_id: str, symbol_list: List[str], criteria: dict = N
 
         # Always use orchestrator for consistency
         # MinerviniScannerV2 is registered and will be used by orchestrator
-        orchestrator = ScanOrchestrator()
+        from ..wiring.bootstrap import get_scan_orchestrator
+        orchestrator = get_scan_orchestrator()
 
         criteria = criteria or {}
         include_vcp = criteria.get('include_vcp', False)  # Default False for speed

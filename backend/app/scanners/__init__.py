@@ -7,7 +7,7 @@ from .base_screener import (
     ScreenerResult,
     StockData
 )
-from .screener_registry import screener_registry, register_screener
+from .screener_registry import ScreenerRegistry, screener_registry, register_screener
 from .data_preparation import DataPreparationLayer
 from .scan_orchestrator import ScanOrchestrator
 
@@ -26,6 +26,7 @@ __all__ = [
     'ScreenerResult',
     'StockData',
     # Registry
+    'ScreenerRegistry',
     'screener_registry',
     'register_screener',
     # Infrastructure

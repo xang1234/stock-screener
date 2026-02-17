@@ -420,7 +420,7 @@ FORBIDDEN_IMPORTS = re.compile(
 
 class TestNoIOLeakage:
     @pytest.mark.parametrize(
-        "filename", ["models.py", "filter_spec.py"],
+        "filename", ["models.py", "filter_spec.py", "scoring.py", "ports.py"],
     )
     def test_no_forbidden_imports(self, filename: str):
         source = (DOMAIN_DIR / filename).read_text()
@@ -438,3 +438,8 @@ class TestNoIOLeakage:
         from app.domain.scanning import filter_spec
         assert hasattr(filter_spec, "__all__")
         assert len(filter_spec.__all__) > 0
+
+    def test_scoring_module_has_all(self):
+        from app.domain.scanning import scoring
+        assert hasattr(scoring, "__all__")
+        assert len(scoring.__all__) > 0

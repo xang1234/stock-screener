@@ -26,6 +26,8 @@ from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
 from app.infra.db.uow import SqlUnitOfWork
 from app.infra.providers.stock_data import DataPrepStockDataProvider
 from app.infra.tasks.dispatcher import CeleryTaskDispatcher
+from app.scanners.scan_orchestrator import ScanOrchestrator
+from app.scanners.screener_registry import screener_registry
 from app.use_cases.scanning.create_scan import CreateScanUseCase
 
 
@@ -75,3 +77,19 @@ def get_stock_data_provider() -> StockDataProvider:
     if _stock_data_provider is None:
         _stock_data_provider = DataPrepStockDataProvider()
     return _stock_data_provider
+
+
+# ── Orchestrator ────────────────────────────────────────────────────
+
+_scan_orchestrator: ScanOrchestrator | None = None
+
+
+def get_scan_orchestrator() -> ScanOrchestrator:
+    """Return a singleton ScanOrchestrator wired with production dependencies."""
+    global _scan_orchestrator
+    if _scan_orchestrator is None:
+        _scan_orchestrator = ScanOrchestrator(
+            data_provider=get_stock_data_provider(),
+            registry=screener_registry,
+        )
+    return _scan_orchestrator

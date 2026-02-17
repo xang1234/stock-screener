@@ -6,7 +6,7 @@ from typing import Optional
 import logging
 import numpy as np
 
-from ...scanners.scan_orchestrator import ScanOrchestrator
+from ...wiring.bootstrap import get_scan_orchestrator
 from ...services.yfinance_service import yfinance_service
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ async def scan_minervini(
     """
     try:
         logger.info(f"Minervini scan request for {symbol}, include_vcp={include_vcp}")
-        orchestrator = ScanOrchestrator()
+        orchestrator = get_scan_orchestrator()
         result = orchestrator.scan_stock_multi(
             symbol=symbol.upper(),
             screener_names=["minervini"],

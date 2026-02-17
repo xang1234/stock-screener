@@ -7,21 +7,28 @@ calculates composite scores.
 """
 import logging
 from typing import Dict, List, Optional
-from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .base_screener import BaseStockScreener, ScreenerResult, StockData, DataRequirements
-from .screener_registry import screener_registry
-from .data_preparation import DataPreparationLayer
+from .screener_registry import ScreenerRegistry
+
+from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
+from app.domain.scanning.scoring import calculate_composite_score, calculate_overall_rating
+from app.domain.scanning.ports import StockDataProvider
 
 logger = logging.getLogger(__name__)
 
 
-class CompositeMethod(str, Enum):
-    """Methods for combining multiple screener scores."""
-    WEIGHTED_AVERAGE = "weighted_average"
-    MAXIMUM = "maximum"
-    MINIMUM = "minimum"
+def _to_domain_output(name: str, result: ScreenerResult) -> ScreenerOutputDomain:
+    """Map an infrastructure ScreenerResult to a domain ScreenerOutputDomain."""
+    return ScreenerOutputDomain(
+        screener_name=name,
+        score=result.score,
+        passes=result.passes,
+        rating=result.rating,
+        breakdown=result.breakdown,
+        details=result.details,
+    )
 
 
 class ScanOrchestrator:
@@ -36,9 +43,15 @@ class ScanOrchestrator:
     5. Combining results
     """
 
-    def __init__(self):
-        """Initialize orchestrator."""
-        self.data_layer = DataPreparationLayer()
+    def __init__(self, data_provider: StockDataProvider, registry: ScreenerRegistry):
+        """Initialize orchestrator with injected dependencies.
+
+        Args:
+            data_provider: Port for fetching stock data
+            registry: Registry of available screeners
+        """
+        self._data_provider = data_provider
+        self._registry = registry
 
     def scan_stock_multi(
         self,
@@ -64,9 +77,16 @@ class ScanOrchestrator:
             Dict with combined results from all screeners
         """
         try:
+            # Parse composite_method string defensively
+            try:
+                method_enum = CompositeMethod(composite_method)
+            except ValueError:
+                logger.warning("Unknown composite method '%s', defaulting to weighted_average", composite_method)
+                method_enum = CompositeMethod.WEIGHTED_AVERAGE
+
             # 1. Get screener instances from registry
             try:
-                screeners = screener_registry.get_multiple(screener_names)
+                screeners = self._registry.get_multiple(screener_names)
             except ValueError as e:
                 logger.error(f"Error getting screeners: {e}")
                 return self._error_result(symbol, str(e))
@@ -82,17 +102,17 @@ class ScanOrchestrator:
                     requirements = pre_merged_requirements
                     logger.debug(f"Using pre-merged requirements for {symbol}")
                 else:
-                    requirements = self.data_layer.merge_requirements([
+                    requirements = DataRequirements.merge_all([
                         screener.get_data_requirements(criteria)
                         for screener in screeners.values()
                     ])
                     logger.info(f"Merged data requirements for {symbol}: {requirements}")
 
                 # Fetch data ONCE
-                stock_data = self.data_layer.prepare_data(symbol, requirements)
+                stock_data = self._data_provider.prepare_data(symbol, requirements)
 
             # 4. Validate data
-            if not self.data_layer.validate_data(stock_data):
+            if not stock_data.has_sufficient_data():
                 return self._insufficient_data_result(
                     symbol,
                     stock_data.get_error_summary() or "Insufficient data"
@@ -131,17 +151,13 @@ class ScanOrchestrator:
             if not screener_results:
                 return self._error_result(symbol, "All screeners failed")
 
-            # 6. Calculate composite score
-            composite_score = self._calculate_composite_score(
-                screener_results,
-                composite_method
-            )
+            # 6. Calculate composite score using domain functions
+            domain_outputs = {name: _to_domain_output(name, r) for name, r in screener_results.items()}
+            composite_score = calculate_composite_score(domain_outputs, method_enum)
 
             # 7. Determine overall rating
-            overall_rating = self._calculate_overall_rating(
-                composite_score,
-                screener_results
-            )
+            rating_category = calculate_overall_rating(composite_score, domain_outputs)
+            overall_rating = rating_category.value
 
             # 8. Combine results
             combined_result = self._combine_results(
@@ -158,78 +174,6 @@ class ScanOrchestrator:
         except Exception as e:
             logger.error(f"Error orchestrating scan for {symbol}: {e}")
             return self._error_result(symbol, str(e))
-
-    def _calculate_composite_score(
-        self,
-        screener_results: Dict[str, ScreenerResult],
-        method: str
-    ) -> float:
-        """
-        Calculate composite score from multiple screener results.
-
-        Args:
-            screener_results: Dict mapping screener name to result
-            method: Composite method (weighted_average, maximum, minimum)
-
-        Returns:
-            Composite score (0-100)
-        """
-        if not screener_results:
-            return 0.0
-
-        scores = [result.score for result in screener_results.values()]
-
-        if method == CompositeMethod.MAXIMUM:
-            return max(scores)
-        elif method == CompositeMethod.MINIMUM:
-            return min(scores)
-        else:  # weighted_average (default)
-            # For now, use simple average (equal weights)
-            # TODO: Could make weights configurable per screener
-            return sum(scores) / len(scores)
-
-    def _calculate_overall_rating(
-        self,
-        composite_score: float,
-        screener_results: Dict[str, ScreenerResult]
-    ) -> str:
-        """
-        Calculate overall rating based on composite score and individual results.
-
-        Args:
-            composite_score: Composite score
-            screener_results: Individual screener results
-
-        Returns:
-            Overall rating string
-        """
-        # Count how many screeners passed
-        pass_count = sum(1 for r in screener_results.values() if r.passes)
-        total_count = len(screener_results)
-
-        # Use composite score as primary factor
-        if composite_score >= 80:
-            base_rating = "Strong Buy"
-        elif composite_score >= 70:
-            base_rating = "Buy"
-        elif composite_score >= 60:
-            base_rating = "Watch"
-        else:
-            base_rating = "Pass"
-
-        # Adjust based on pass rate
-        if pass_count == 0:
-            return "Pass"  # If no screeners passed, always "Pass"
-        elif pass_count < total_count / 2:
-            # Less than half passed - downgrade
-            if base_rating == "Strong Buy":
-                return "Buy"
-            elif base_rating == "Buy":
-                return "Watch"
-            else:
-                return base_rating
-        else:
-            return base_rating
 
     def _combine_results(
         self,

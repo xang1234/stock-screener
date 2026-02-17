@@ -116,3 +116,12 @@ def calculate_overall_rating(
         return _DOWNGRADE[base]
 
     return base
+
+
+__all__ = [
+    "STRONG_BUY_THRESHOLD",
+    "BUY_THRESHOLD",
+    "WATCH_THRESHOLD",
+    "calculate_composite_score",
+    "calculate_overall_rating",
+]

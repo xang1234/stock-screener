@@ -51,6 +51,23 @@ class DataRequirements:
             needs_earnings_history=self.needs_earnings_history or other.needs_earnings_history
         )
 
+    @classmethod
+    def merge_all(cls, requirements_list: list['DataRequirements']) -> 'DataRequirements':
+        """Merge a list of data requirements into one, taking the union of needs.
+
+        Args:
+            requirements_list: List of DataRequirements to merge
+
+        Returns:
+            Single DataRequirements with all needs merged
+        """
+        if not requirements_list:
+            return cls()
+        result = requirements_list[0]
+        for req in requirements_list[1:]:
+            result = result.merge(req)
+        return result
+
 
 @dataclass
 class ScreenerResult:
