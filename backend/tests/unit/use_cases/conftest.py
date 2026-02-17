@@ -463,12 +463,14 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
 
     def query_latest(self, filters=None, sort=None, page=None) -> FeaturePage:
         if self._pointer_run_id is None:
-            return FeaturePage(items=(), total=0, page=1, per_page=50)
+            p = page or PageSpec()
+            return FeaturePage(items=(), total=0, page=p.page, per_page=p.per_page)
         return self._build_page(self._pointer_run_id, page)
 
     def query_run(self, run_id, filters=None, sort=None, page=None) -> FeaturePage:
-        if run_id not in self._rows:
-            raise EntityNotFoundError("FeatureRun", run_id)
+        # Note: real impl validates via FeatureRun table lookup. This fake
+        # is lenient — returns empty page for unknown run_ids (like scanning
+        # fakes).  Use the real repo + in-memory SQLite for not-found tests.
         return self._build_page(run_id, page)
 
     def _build_page(self, run_id: int, page: PageSpec | None) -> FeaturePage:

@@ -100,19 +100,20 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         sort=None,
         page=None,
     ) -> FeaturePage:
+        p = page or PageSpec()
         pointer = (
             self._session.query(FeatureRunPointer)
             .filter(FeatureRunPointer.key == "latest_published")
             .first()
         )
         if pointer is None:
-            return FeaturePage(items=(), total=0, page=1, per_page=50)
+            return FeaturePage(items=(), total=0, page=p.page, per_page=p.per_page)
 
         return self._query_features(
             pointer.run_id,
             filters or FilterSpec(),
             sort or SortSpec(),
-            page or PageSpec(),
+            p,
         )
 
     def query_run(
