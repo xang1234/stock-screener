@@ -11,9 +11,6 @@ Verifies:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
-from unittest.mock import MagicMock
-
 import pandas as pd
 import pytest
 
@@ -191,7 +188,7 @@ class TestScanOrchestratorRating:
         assert result["rating"] == "Strong Buy"
 
     def test_rating_downgrade_low_pass_rate(self):
-        """Score >= 80 but < half pass → downgraded from Strong Buy to Buy."""
+        """Score in Buy range (70-80) but < half pass → downgraded to Watch."""
         orch, _, _ = _build_orchestrator([
             ("alpha", 95.0, True),
             ("beta", 70.0, False),
