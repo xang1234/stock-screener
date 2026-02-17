@@ -31,6 +31,9 @@ from .prompt_preset import PromptPreset
 from .document_cache import DocumentCache, DocumentChunk
 from .institutional_ownership import InstitutionalOwnershipHistory
 from .app_settings import AppSetting
+from app.infra.db.models.feature_store import (
+    FeatureRun, FeatureRunUniverseSymbol, StockFeatureDaily, FeatureRunPointer,
+)
 
 __all__ = [
     "StockPrice",
@@ -90,4 +93,9 @@ __all__ = [
     "InstitutionalOwnershipHistory",
     # App Settings
     "AppSetting",
+    # Feature Store
+    "FeatureRun",
+    "FeatureRunUniverseSymbol",
+    "StockFeatureDaily",
+    "FeatureRunPointer",
 ]

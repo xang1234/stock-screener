@@ -30,6 +30,21 @@ def run_universe_migration():
         print(f"Warning: Universe migration failed (non-fatal): {e}")
 
 
+def run_feature_store_migration():
+    """
+    Run idempotent Feature Store schema migration on startup.
+
+    Creates the 4 Feature Store tables (feature_runs, feature_run_universe_symbols,
+    stock_feature_daily, feature_run_pointers) if they don't already exist.
+    """
+    from .db_migrations.feature_store_migration import migrate_feature_store_tables
+
+    try:
+        migrate_feature_store_tables(engine)
+    except Exception as e:
+        print(f"Warning: Feature Store migration failed (non-fatal): {e}")
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -79,8 +94,9 @@ async def lifespan(app: FastAPI):
     init_db()
     print("Database initialized")
 
-    # Run universe schema migration (idempotent — safe on every startup)
+    # Run schema migrations (idempotent — safe on every startup)
     run_universe_migration()
+    run_feature_store_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
