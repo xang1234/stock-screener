@@ -6,6 +6,7 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.0
 yfinance==0.2.66
 pandas==2.2.0
+pandas-market-calendars>=4.5.0
 numpy==1.26.3
 requests==2.31.0
 apscheduler==3.10.4

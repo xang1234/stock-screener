@@ -35,6 +35,9 @@ from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
 from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
 from app.use_cases.scanning.export_scan_results import ExportScanResultsUseCase
 from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
+from app.use_cases.feature_store.build_daily_snapshot import (
+    BuildDailyFeatureSnapshotUseCase,
+)
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -100,6 +103,11 @@ def get_export_scan_results_use_case() -> ExportScanResultsUseCase:
 def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:
     """Build a RunBulkScanUseCase wired with the scan orchestrator."""
     return RunBulkScanUseCase(scanner=get_scan_orchestrator())
+
+
+def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
+    """Build a BuildDailyFeatureSnapshotUseCase wired with the scan orchestrator."""
+    return BuildDailyFeatureSnapshotUseCase(scanner=get_scan_orchestrator())
 
 
 # ── Providers ────────────────────────────────────────────────────────────
