@@ -8,15 +8,11 @@ _JSON_FIELD_MAP, and _PYTHON_SORT_FIELDS constants and helper functions.
 import pytest
 
 from app.domain.scanning.filter_spec import (
-    BooleanFilter,
-    CategoricalFilter,
     FilterMode,
     FilterSpec,
     PageSpec,
-    RangeFilter,
     SortOrder,
     SortSpec,
-    TextSearchFilter,
 )
 from app.infra.query.scan_result_query import (
     _COLUMN_MAP,

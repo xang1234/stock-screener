@@ -227,7 +227,6 @@ def _map_row_to_domain(
         "sales_growth_yy": result.sales_growth_yy,
         "peg_ratio": result.peg_ratio,
         "eps_rating": result.eps_rating,
-        "screeners_run": details.get("screeners_run"),
         "ibd_industry_group": result.ibd_industry_group,
         "ibd_group_rank": result.ibd_group_rank,
         "gics_sector": result.gics_sector,
@@ -256,9 +255,13 @@ def _map_row_to_domain(
         "week_52_low_distance": result.week_52_low_distance,
     }
 
+    # Clamp score to 0-100 to satisfy domain invariant; legacy data may exceed.
+    raw_score = result.composite_score or 0
+    clamped_score = max(0.0, min(100.0, float(raw_score)))
+
     return ScanResultItemDomain(
         symbol=result.symbol,
-        composite_score=result.composite_score or 0,
+        composite_score=clamped_score,
         rating=result.rating or "Pass",
         current_price=result.price,
         screener_outputs={},  # not populated for list queries
