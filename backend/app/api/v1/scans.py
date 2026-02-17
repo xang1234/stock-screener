@@ -25,10 +25,9 @@ from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCa
 from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
 from ...use_cases.scanning.get_peers import GetPeersQuery, GetPeersUseCase
 from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
-from ...domain.scanning.models import PeerType
 from ...infra.db.uow import SqlUnitOfWork
 from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
-from ...domain.scanning.models import ScanResultItemDomain
+from ...domain.scanning.models import PeerType, ScanResultItemDomain
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1422,6 +1421,9 @@ async def get_industry_peers(
         result = use_case.execute(uow, query)
     except EntityNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting peers: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting peers: {str(e)}")
 
     logger.info(
         f"Found {len(result.peers)} peers for {symbol} "

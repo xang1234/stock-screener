@@ -30,8 +30,8 @@ from app.scanners.scan_orchestrator import ScanOrchestrator
 from app.scanners.screener_registry import screener_registry
 from app.use_cases.scanning.create_scan import CreateScanUseCase
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
-from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
 from app.use_cases.scanning.get_peers import GetPeersUseCase
+from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
 from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
 from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
 
