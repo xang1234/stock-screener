@@ -110,6 +110,50 @@ class ScreenerOutputDomain:
 
 
 @dataclass(frozen=True)
+class CriterionResult:
+    """One criterion's contribution within a screener.
+
+    ``score`` is the raw points earned (from the screener's breakdown dict).
+    ``max_score`` is the maximum possible points (0.0 if unknown).
+    ``passed`` is True when score > 0 (contributed positively to the total).
+    """
+
+    name: str
+    score: float
+    max_score: float
+    passed: bool
+
+
+@dataclass(frozen=True)
+class ScreenerExplanation:
+    """Full explanation for one screener's evaluation of a stock.
+
+    Note: criteria scores are raw points that may not directly sum to
+    ``score`` due to screener-specific normalization.
+    """
+
+    screener_name: str
+    score: float  # 0-100 (normalized)
+    passes: bool
+    rating: str
+    criteria: tuple[CriterionResult, ...]
+
+
+@dataclass(frozen=True)
+class StockExplanation:
+    """Complete explanation of why a stock received its composite score/rating."""
+
+    symbol: str
+    composite_score: float
+    rating: str
+    composite_method: str
+    screeners_passed: int
+    screeners_total: int
+    screener_explanations: tuple[ScreenerExplanation, ...]
+    rating_thresholds: dict[str, float]
+
+
+@dataclass(frozen=True)
 class ScanResultItemDomain:
     """One stock's composite result from a multi-screener scan.
 
@@ -225,6 +269,9 @@ __all__ = [
     "ExportFormat",
     "UniverseSpec",
     "ScreenerOutputDomain",
+    "CriterionResult",
+    "ScreenerExplanation",
+    "StockExplanation",
     "ScanResultItemDomain",
     "ScanConfig",
     "FilterOptions",
