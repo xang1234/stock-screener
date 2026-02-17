@@ -6,7 +6,6 @@ from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.ports import (
     ScanRepository,
-    ScanResultRepository,
     TaskDispatcher,
     UniverseRepository,
 )
@@ -16,19 +15,19 @@ from app.use_cases.scanning.create_scan import (
     CreateScanUseCase,
 )
 
-
-# ── Fakes ────────────────────────────────────────────────────────────────
-
-
-class _ScanRecord:
-    """Minimal in-memory scan record."""
-
-    def __init__(self, **fields):
-        for k, v in fields.items():
-            setattr(self, k, v)
+from tests.unit.scanning_fakes import (
+    _ScanRecord,
+    FakeScanResultRepository,
+    FakeUnitOfWork as _BaseFakeUnitOfWork,
+)
 
 
-class FakeScanRepository(ScanRepository):
+# ── Specialised fakes ───────────────────────────────────────────────────
+
+
+class IdempotentScanRepository(ScanRepository):
+    """Scan repository that supports idempotency key lookups."""
+
     def __init__(self):
         self.rows: list[_ScanRecord] = []
 
@@ -52,28 +51,9 @@ class FakeScanRepository(ScanRepository):
             rec.status = status
 
 
-class FakeScanResultRepository(ScanResultRepository):
-    def bulk_insert(self, rows: list[dict]) -> int:
-        return len(rows)
+class SymbolUniverseRepository(UniverseRepository):
+    """Universe repository that returns a configurable symbol list."""
 
-    def persist_orchestrator_results(
-        self, scan_id: str, results: list[tuple[str, dict]]
-    ) -> int:
-        return len(results)
-
-    def count_by_scan_id(self, scan_id: str) -> int:
-        return 0
-
-    def query(self, scan_id, spec, *, include_sparklines=True):
-        from app.domain.scanning.models import ResultPage
-        return ResultPage(items=(), total=0, page=1, per_page=50)
-
-    def get_filter_options(self, scan_id):
-        from app.domain.scanning.models import FilterOptions
-        return FilterOptions(ibd_industries=(), gics_sectors=(), ratings=())
-
-
-class FakeUniverseRepository(UniverseRepository):
     def __init__(self, symbols: list[str] | None = None):
         self._symbols = symbols or []
 
@@ -97,10 +77,12 @@ class FailingTaskDispatcher(TaskDispatcher):
 
 
 class FakeUnitOfWork(UnitOfWork):
+    """UoW with configurable symbols for universe resolution."""
+
     def __init__(self, symbols: list[str] | None = None):
-        self.scans = FakeScanRepository()
+        self.scans = IdempotentScanRepository()
         self.scan_results = FakeScanResultRepository()
-        self.universe = FakeUniverseRepository(symbols)
+        self.universe = SymbolUniverseRepository(symbols)
         self.committed = 0
         self.rolled_back = 0
 

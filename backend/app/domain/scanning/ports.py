@@ -14,7 +14,7 @@ import abc
 from typing import Protocol
 
 from .filter_spec import QuerySpec
-from .models import FilterOptions, ProgressEvent, ResultPage
+from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +101,19 @@ class ScanResultRepository(abc.ABC):
         Returns:
             A :class:`FilterOptions` with sorted, de-duplicated values
             for each categorical column.
+        """
+        ...
+
+    @abc.abstractmethod
+    def get_by_symbol(
+        self, scan_id: str, symbol: str
+    ) -> ScanResultItemDomain | None:
+        """Return a single result by scan_id + symbol, or None.
+
+        Args:
+            scan_id: Scan identifier (caller validates existence).
+            symbol: Stock symbol (expected to be already normalised to
+                uppercase).
         """
         ...
 

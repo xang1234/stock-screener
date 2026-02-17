@@ -102,6 +102,9 @@ class FakeScanResultRepository(ScanResultRepository):
         from app.domain.scanning.models import FilterOptions
         return FilterOptions(ibd_industries=(), gics_sectors=(), ratings=())
 
+    def get_by_symbol(self, scan_id, symbol):
+        return None
+
 
 class FakeUniverseRepository:
     def resolve_symbols(self, universe_def: object) -> list[str]:

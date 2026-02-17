@@ -20,11 +20,13 @@ from ...models.scan_result import Scan, ScanResult
 from ...models.stock_universe import StockUniverse
 from pydantic import ValidationError
 from ...schemas.universe import UniverseDefinition
-from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case
+from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case, get_get_single_result_use_case
 from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
 from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
+from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
 from ...infra.db.uow import SqlUnitOfWork
 from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
+from ...domain.scanning.models import ScanResultItemDomain
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1304,107 +1306,100 @@ async def get_filter_options(
     )
 
 
+def _domain_to_response(item: ScanResultItemDomain) -> ScanResultItem:
+    """Map a domain scan result to the HTTP response model.
+
+    This is the canonical domain-to-HTTP mapper.  All field unpacking
+    from ``extended_fields`` happens here so that endpoint handlers
+    stay thin and don't duplicate the 40+ field mapping.
+    """
+    ef = item.extended_fields
+    return ScanResultItem(
+        symbol=item.symbol,
+        company_name=ef.get("company_name"),
+        composite_score=item.composite_score,
+        rating=item.rating,
+        # Individual screener scores
+        minervini_score=ef.get("minervini_score"),
+        canslim_score=ef.get("canslim_score"),
+        ipo_score=ef.get("ipo_score"),
+        custom_score=ef.get("custom_score"),
+        volume_breakthrough_score=ef.get("volume_breakthrough_score"),
+        # Minervini fields
+        rs_rating=ef.get("rs_rating"),
+        rs_rating_1m=ef.get("rs_rating_1m"),
+        rs_rating_3m=ef.get("rs_rating_3m"),
+        rs_rating_12m=ef.get("rs_rating_12m"),
+        stage=ef.get("stage"),
+        stage_name=ef.get("stage_name"),
+        current_price=item.current_price,
+        volume=ef.get("volume"),
+        market_cap=ef.get("market_cap"),
+        ma_alignment=ef.get("ma_alignment"),
+        vcp_detected=ef.get("vcp_detected"),
+        vcp_score=ef.get("vcp_score"),
+        vcp_pivot=ef.get("vcp_pivot"),
+        vcp_ready_for_breakout=ef.get("vcp_ready_for_breakout"),
+        vcp_contraction_ratio=ef.get("vcp_contraction_ratio"),
+        vcp_atr_score=ef.get("vcp_atr_score"),
+        passes_template=ef.get("passes_template"),
+        # Growth fields
+        adr_percent=ef.get("adr_percent"),
+        eps_growth_qq=ef.get("eps_growth_qq"),
+        sales_growth_qq=ef.get("sales_growth_qq"),
+        eps_growth_yy=ef.get("eps_growth_yy"),
+        sales_growth_yy=ef.get("sales_growth_yy"),
+        # Valuation
+        peg_ratio=ef.get("peg_ratio"),
+        # EPS Rating
+        eps_rating=ef.get("eps_rating"),
+        # Industry classifications
+        ibd_industry_group=ef.get("ibd_industry_group"),
+        ibd_group_rank=ef.get("ibd_group_rank"),
+        gics_sector=ef.get("gics_sector"),
+        gics_industry=ef.get("gics_industry"),
+        # Sparklines
+        rs_sparkline_data=ef.get("rs_sparkline_data"),
+        rs_trend=ef.get("rs_trend"),
+        price_sparkline_data=ef.get("price_sparkline_data"),
+        price_change_1d=ef.get("price_change_1d"),
+        price_trend=ef.get("price_trend"),
+        # IPO date
+        ipo_date=ef.get("ipo_date"),
+        # Beta and Beta-Adjusted RS
+        beta=ef.get("beta"),
+        beta_adj_rs=ef.get("beta_adj_rs"),
+        beta_adj_rs_1m=ef.get("beta_adj_rs_1m"),
+        beta_adj_rs_3m=ef.get("beta_adj_rs_3m"),
+        beta_adj_rs_12m=ef.get("beta_adj_rs_12m"),
+        # Multi-screener metadata
+        screeners_run=item.screeners_run,
+    )
+
+
 @router.get("/{scan_id}/result/{symbol}", response_model=ScanResultItem)
 async def get_single_result(
     scan_id: str,
     symbol: str,
-    db: Session = Depends(get_db)
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: GetSingleResultUseCase = Depends(get_get_single_result_use_case),
 ):
     """
     Get a single stock result from a scan by symbol.
 
     This is an optimized endpoint for fetching a single stock's data
     instead of fetching all results and searching client-side.
-
-    Args:
-        scan_id: Scan UUID
-        symbol: Stock symbol to fetch
-        db: Database session
-
-    Returns:
-        Single scan result item
     """
     try:
-        # Verify scan exists
-        scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
-        if not scan:
-            raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found")
-
-        # Get single result with company name
-        result_tuple = db.query(ScanResult, StockUniverse.name).outerjoin(
-            StockUniverse, ScanResult.symbol == StockUniverse.symbol
-        ).filter(
-            ScanResult.scan_id == scan_id,
-            ScanResult.symbol == symbol.upper()
-        ).first()
-
-        if not result_tuple:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Stock {symbol} not found in scan {scan_id}"
-            )
-
-        result, company_name = result_tuple
-        details = result.details or {}
-
-        return ScanResultItem(
-            symbol=result.symbol,
-            company_name=company_name,
-            composite_score=result.composite_score or 0,
-            minervini_score=result.minervini_score,
-            canslim_score=result.canslim_score,
-            ipo_score=result.ipo_score,
-            custom_score=result.custom_score,
-            volume_breakthrough_score=result.volume_breakthrough_score,
-            rs_rating=result.rs_rating,
-            rs_rating_1m=result.rs_rating_1m,
-            rs_rating_3m=result.rs_rating_3m,
-            rs_rating_12m=result.rs_rating_12m,
-            stage=result.stage,
-            stage_name=details.get('stage_name'),
-            current_price=result.price,
-            volume=result.volume,
-            market_cap=result.market_cap,
-            ma_alignment=details.get('ma_alignment'),
-            vcp_detected=details.get('vcp_detected'),
-            vcp_score=details.get('vcp_score'),
-            vcp_pivot=details.get('vcp_pivot'),
-            vcp_ready_for_breakout=details.get('vcp_ready_for_breakout'),
-            vcp_contraction_ratio=details.get('vcp_contraction_ratio'),
-            vcp_atr_score=details.get('vcp_atr_score'),
-            passes_template=details.get('passes_template', False),
-            rating=result.rating or "Pass",
-            adr_percent=result.adr_percent,
-            eps_growth_qq=result.eps_growth_qq,
-            sales_growth_qq=result.sales_growth_qq,
-            eps_growth_yy=result.eps_growth_yy,
-            sales_growth_yy=result.sales_growth_yy,
-            peg_ratio=result.peg_ratio,
-            eps_rating=result.eps_rating,
-            screeners_run=details.get('screeners_run'),
-            ibd_industry_group=result.ibd_industry_group,
-            ibd_group_rank=result.ibd_group_rank,
-            gics_sector=result.gics_sector,
-            gics_industry=result.gics_industry,
-            rs_sparkline_data=result.rs_sparkline_data,
-            rs_trend=result.rs_trend,
-            price_sparkline_data=result.price_sparkline_data,
-            price_change_1d=result.price_change_1d,
-            price_trend=result.price_trend,
-            ipo_date=result.ipo_date,
-            # Beta and Beta-Adjusted RS metrics
-            beta=result.beta,
-            beta_adj_rs=result.beta_adj_rs,
-            beta_adj_rs_1m=result.beta_adj_rs_1m,
-            beta_adj_rs_3m=result.beta_adj_rs_3m,
-            beta_adj_rs_12m=result.beta_adj_rs_12m,
+        result = use_case.execute(
+            uow, GetSingleResultQuery(scan_id=scan_id, symbol=symbol)
         )
-
-    except HTTPException:
-        raise
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting single result: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error getting single result: {str(e)}")
+    return _domain_to_response(result.item)
 
 
 @router.get("/{scan_id}/peers/{symbol}", response_model=List[ScanResultItem])

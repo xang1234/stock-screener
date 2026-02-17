@@ -3,7 +3,6 @@
 import pytest
 
 from app.domain.common.errors import EntityNotFoundError
-from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.filter_spec import (
     FilterMode,
     FilterSpec,
@@ -13,77 +12,30 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
 )
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
-from app.domain.scanning.ports import (
-    ScanRepository,
-    ScanResultRepository,
-    UniverseRepository,
-)
+from app.domain.scanning.ports import ScanResultRepository
 from app.use_cases.scanning.get_scan_results import (
     GetScanResultsQuery,
     GetScanResultsResult,
     GetScanResultsUseCase,
 )
 
-
-# ── Fakes ────────────────────────────────────────────────────────────────
-
-
-class _ScanRecord:
-    """Minimal in-memory scan record."""
-
-    def __init__(self, **fields):
-        for k, v in fields.items():
-            setattr(self, k, v)
+from tests.unit.scanning_fakes import (
+    FakeScanResultRepository,
+    FakeUnitOfWork,
+    make_domain_item,
+    setup_scan,
+)
 
 
-class FakeScanRepository(ScanRepository):
-    def __init__(self):
-        self.rows: list[_ScanRecord] = []
-
-    def create(self, *, scan_id: str, **fields) -> _ScanRecord:
-        rec = _ScanRecord(scan_id=scan_id, **fields)
-        self.rows.append(rec)
-        return rec
-
-    def get_by_scan_id(self, scan_id: str) -> _ScanRecord | None:
-        return next((r for r in self.rows if r.scan_id == scan_id), None)
-
-    def get_by_idempotency_key(self, key: str) -> _ScanRecord | None:
-        return None
-
-    def update_status(self, scan_id: str, status: str, **fields) -> None:
-        pass
+# ── Specialised fake ────────────────────────────────────────────────────
 
 
-def _make_domain_item(symbol: str = "AAPL", score: float = 85.0) -> ScanResultItemDomain:
-    return ScanResultItemDomain(
-        symbol=symbol,
-        composite_score=score,
-        rating="Buy",
-        current_price=150.0,
-        screener_outputs={},
-        screeners_run=["minervini"],
-        composite_method="weighted_average",
-        screeners_passed=1,
-        screeners_total=1,
-        extended_fields={"company_name": f"{symbol} Inc"},
-    )
-
-
-class FakeScanResultRepository(ScanResultRepository):
-    """In-memory scan result repo that returns canned data from query()."""
+class QueryableScanResultRepo(FakeScanResultRepository):
+    """Fake that stores items and returns them from query()."""
 
     def __init__(self, items: list[ScanResultItemDomain] | None = None):
         self._items = items or []
         self.last_query_args: dict | None = None
-
-    def bulk_insert(self, rows: list[dict]) -> int:
-        return len(rows)
-
-    def persist_orchestrator_results(
-        self, scan_id: str, results: list[tuple[str, dict]]
-    ) -> int:
-        return len(results)
 
     def count_by_scan_id(self, scan_id: str) -> int:
         return len(self._items)
@@ -102,41 +54,6 @@ class FakeScanResultRepository(ScanResultRepository):
             per_page=spec.page.per_page,
         )
 
-    def get_filter_options(self, scan_id):
-        return FilterOptions(ibd_industries=(), gics_sectors=(), ratings=())
-
-
-class FakeUniverseRepository(UniverseRepository):
-    def resolve_symbols(self, universe_def: object) -> list[str]:
-        return []
-
-
-class FakeUnitOfWork(UnitOfWork):
-    def __init__(
-        self,
-        *,
-        scans: FakeScanRepository | None = None,
-        scan_results: FakeScanResultRepository | None = None,
-    ):
-        self.scans = scans or FakeScanRepository()
-        self.scan_results = scan_results or FakeScanResultRepository()
-        self.universe = FakeUniverseRepository()
-        self.committed = 0
-        self.rolled_back = 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self.rollback()
-
-    def commit(self):
-        self.committed += 1
-
-    def rollback(self):
-        self.rolled_back += 1
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -147,11 +64,6 @@ def _make_query(**overrides) -> GetScanResultsQuery:
     return GetScanResultsQuery(**defaults)
 
 
-def _setup_scan(uow: FakeUnitOfWork, scan_id: str = "scan-123") -> None:
-    """Pre-populate a scan record so the use case doesn't raise NotFound."""
-    uow.scans.create(scan_id=scan_id, status="completed")
-
-
 # ── Tests ────────────────────────────────────────────────────────────────
 
 
@@ -159,9 +71,9 @@ class TestHappyPath:
     """Core business logic for retrieving scan results."""
 
     def test_returns_result_page(self):
-        items = [_make_domain_item("AAPL"), _make_domain_item("MSFT")]
-        uow = FakeUnitOfWork(scan_results=FakeScanResultRepository(items))
-        _setup_scan(uow)
+        items = [make_domain_item("AAPL"), make_domain_item("MSFT")]
+        uow = FakeUnitOfWork(scan_results=QueryableScanResultRepo(items))
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         result = uc.execute(uow, _make_query())
@@ -174,9 +86,9 @@ class TestHappyPath:
         assert result.page.items[1].symbol == "MSFT"
 
     def test_passes_scan_id_to_repository(self):
-        repo = FakeScanResultRepository()
+        repo = QueryableScanResultRepo()
         uow = FakeUnitOfWork(scan_results=repo)
-        _setup_scan(uow, "scan-xyz")
+        setup_scan(uow, "scan-xyz")
         uc = GetScanResultsUseCase()
 
         uc.execute(uow, _make_query(scan_id="scan-xyz"))
@@ -184,9 +96,9 @@ class TestHappyPath:
         assert repo.last_query_args["scan_id"] == "scan-xyz"
 
     def test_passes_query_spec_to_repository(self):
-        repo = FakeScanResultRepository()
+        repo = QueryableScanResultRepo()
         uow = FakeUnitOfWork(scan_results=repo)
-        _setup_scan(uow)
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         spec = QuerySpec(
@@ -198,9 +110,9 @@ class TestHappyPath:
         assert repo.last_query_args["spec"] is spec
 
     def test_passes_include_sparklines_flag(self):
-        repo = FakeScanResultRepository()
+        repo = QueryableScanResultRepo()
         uow = FakeUnitOfWork(scan_results=repo)
-        _setup_scan(uow)
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         uc.execute(uow, _make_query(include_sparklines=False))
@@ -208,8 +120,8 @@ class TestHappyPath:
         assert repo.last_query_args["include_sparklines"] is False
 
     def test_empty_results_returns_empty_page(self):
-        uow = FakeUnitOfWork(scan_results=FakeScanResultRepository([]))
-        _setup_scan(uow)
+        uow = FakeUnitOfWork(scan_results=QueryableScanResultRepo([]))
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         result = uc.execute(uow, _make_query())
@@ -218,9 +130,9 @@ class TestHappyPath:
         assert len(result.page.items) == 0
 
     def test_pagination_metadata(self):
-        items = [_make_domain_item(f"SYM{i}") for i in range(75)]
-        uow = FakeUnitOfWork(scan_results=FakeScanResultRepository(items))
-        _setup_scan(uow)
+        items = [make_domain_item(f"SYM{i}") for i in range(75)]
+        uow = FakeUnitOfWork(scan_results=QueryableScanResultRepo(items))
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         spec = QuerySpec(page=PageSpec(page=2, per_page=25))
@@ -258,9 +170,9 @@ class TestDefaultQuerySpec:
     """Default query spec uses sensible defaults."""
 
     def test_default_query_spec_applied(self):
-        repo = FakeScanResultRepository()
+        repo = QueryableScanResultRepo()
         uow = FakeUnitOfWork(scan_results=repo)
-        _setup_scan(uow)
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         uc.execute(uow, _make_query())
@@ -272,9 +184,9 @@ class TestDefaultQuerySpec:
         assert spec.page.per_page == 50
 
     def test_default_include_sparklines_is_true(self):
-        repo = FakeScanResultRepository()
+        repo = QueryableScanResultRepo()
         uow = FakeUnitOfWork(scan_results=repo)
-        _setup_scan(uow)
+        setup_scan(uow)
         uc = GetScanResultsUseCase()
 
         uc.execute(uow, _make_query())

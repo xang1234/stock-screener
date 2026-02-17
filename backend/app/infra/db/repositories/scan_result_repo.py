@@ -188,6 +188,21 @@ class SqlScanResultRepository(ScanResultRepository):
             per_page=spec.page.per_page,
         )
 
+    def get_by_symbol(
+        self, scan_id: str, symbol: str
+    ) -> ScanResultItemDomain | None:
+        """Return a single result by scan_id + symbol, or None."""
+        row = (
+            self._session.query(ScanResult, StockUniverse.name)
+            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+            .filter(ScanResult.scan_id == scan_id, ScanResult.symbol == symbol)
+            .first()
+        )
+        if row is None:
+            return None
+        result, company_name = row
+        return _map_row_to_domain(result, company_name, include_sparklines=True)
+
     def get_filter_options(self, scan_id: str) -> FilterOptions:
         """Query distinct categorical values for filter dropdowns."""
 
