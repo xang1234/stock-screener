@@ -181,6 +181,48 @@ class TestRunBulkScanViaUseCase:
         assert captured_cmd.correlation_id == "celery-123"
 
 
+class TestStranglerGate:
+    """Verify the use-case path is the default."""
+
+    def test_use_new_scan_path_enabled_by_default(self):
+        """The feature flag should default to True (use-case path is primary)."""
+        from app.config.settings import Settings
+
+        s = Settings()
+        assert s.use_new_scan_path is True
+
+    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.settings")
+    def test_none_criteria_defaults_to_empty_dict(self, mock_settings, mock_pipeline):
+        """When criteria is None, the wrapper passes {} to the command."""
+        mock_settings.scan_usecase_chunk_size = 25
+
+        captured_cmd = None
+
+        def capture_execute(uow, cmd, progress, cancel):
+            nonlocal captured_cmd
+            captured_cmd = cmd
+            return _FakeResult()
+
+        mock_use_case = MagicMock()
+        mock_use_case.execute.side_effect = capture_execute
+
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken"),
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], None)
+
+        assert captured_cmd.criteria == {}
+
+
 class TestPostScanPipeline:
     """Test the extracted _run_post_scan_pipeline function."""
 

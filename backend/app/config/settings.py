@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     use_bulk_fetching: bool = True  # Use yfinance.Tickers() for batch fetching (ENABLED for performance)
 
     # Phase 3: Parallel Scanning Configuration
-    use_new_scan_path: bool = False  # Strangler: delegates to RunBulkScanUseCase
+    use_new_scan_path: bool = True  # Strangler: delegates to RunBulkScanUseCase
     scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
     use_parallel_scanning: bool = True  # Feature flag for Phase 3.1 rollout (ENABLED for performance)
     scan_parallel_workers: int = 4 # Conservative: 2 parallel workers per batch
