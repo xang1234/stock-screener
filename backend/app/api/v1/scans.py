@@ -20,14 +20,17 @@ from ...models.scan_result import Scan, ScanResult
 from ...models.stock_universe import StockUniverse
 from pydantic import ValidationError
 from ...schemas.universe import UniverseDefinition
-from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case, get_get_single_result_use_case, get_get_peers_use_case
+from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case, get_get_single_result_use_case, get_get_peers_use_case, get_export_scan_results_use_case
 from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
+from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery, ExportScanResultsUseCase
 from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
 from ...use_cases.scanning.get_peers import GetPeersQuery, GetPeersUseCase
 from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
 from ...infra.db.uow import SqlUnitOfWork
 from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
-from ...domain.scanning.models import PeerType, ScanResultItemDomain
+from ...domain.scanning.filter_spec import FilterSpec, SortSpec
+from ...domain.scanning.models import ExportFormat, PeerType, ScanResultItemDomain
+from .scan_filter_params import parse_scan_filters, parse_scan_sort
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1125,152 +1128,37 @@ async def delete_scan(
 @router.get("/{scan_id}/export")
 async def export_scan_results(
     scan_id: str,
-    format: str = Query(default="csv", regex="^(csv|excel)$"),
-    min_score: Optional[float] = Query(default=None, ge=0, le=100),
-    stage: Optional[int] = Query(default=None, ge=1, le=4),
-    passes_only: Optional[bool] = Query(default=None),
-    db: Session = Depends(get_db)
+    format: str = Query(default="csv", pattern="^(csv)$"),
+    passes_only: bool = Query(False, description="Show only stocks passing template"),
+    filters: FilterSpec = Depends(parse_scan_filters),
+    sort: SortSpec = Depends(parse_scan_sort),
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: ExportScanResultsUseCase = Depends(get_export_scan_results_use_case),
 ):
-    """
-    Export scan results to CSV or Excel format.
-
-    Args:
-        scan_id: Scan UUID
-        format: Export format (csv or excel)
-        min_score: Minimum Minervini score filter
-        stage: Stage filter (1-4)
-        passes_only: Filter for passing stocks only
-        db: Database session
-
-    Returns:
-        File download (CSV or Excel)
-    """
+    """Export scan results to CSV with full filter and sort support."""
     try:
-        # Verify scan exists
-        scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
-        if not scan:
-            raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found")
-
-        # Build query with filters
-        query = db.query(ScanResult).filter(ScanResult.scan_id == scan_id)
-
-        if min_score is not None:
-            query = query.filter(ScanResult.minervini_score >= min_score)
-
-        if stage is not None:
-            query = query.filter(ScanResult.details['stage'].astext.cast(db.Integer) == stage)
-
-        if passes_only:
-            query = query.filter(ScanResult.details['passes_template'].astext.cast(db.Boolean) == True)
-
-        # Order by composite score descending (fallback to minervini for old scans)
-        query = query.order_by(desc(ScanResult.composite_score))
-
-        results = query.all()
-
-        if format == "csv":
-            # Create CSV in memory
-            output = io.StringIO()
-            writer = csv.writer(output)
-
-            # Write header
-            writer.writerow([
-                'Symbol',
-                'Composite Score',
-                'Minervini Score',
-                'CANSLIM Score',
-                'IPO Score',
-                'Custom Score',
-                'Volume Breakthrough Score',
-                'RS Rating',
-                'RS Rating 1M',
-                'RS Rating 3M',
-                'RS Rating 12M',
-                'Stage',
-                'Stage Name',
-                'Current Price',
-                'MA Alignment',
-                'VCP Detected',
-                'VCP Score',
-                'VCP Pivot',
-                'VCP Ready',
-                'VCP Contraction',
-                'VCP ATR Score',
-                'Passes Template',
-                'Rating',
-                '52W Position',
-                'Volume Trend',
-                'ADR %',
-                'EPS Growth Q/Q %',
-                'Sales Growth Q/Q %'
-            ])
-
-            # Helper function to format percentage values
-            def format_pct(value):
-                """Format percentage or return N/A"""
-                if value is None:
-                    return 'N/A'
-                return f"{round(value, 2)}%"
-
-            # Write data rows
-            for result in results:
-                details = result.details or {}
-                writer.writerow([
-                    result.symbol,
-                    round(result.composite_score, 2) if result.composite_score else '',
-                    round(result.minervini_score, 2) if result.minervini_score else '',
-                    round(result.canslim_score, 2) if result.canslim_score else '',
-                    round(result.ipo_score, 2) if result.ipo_score else '',
-                    round(result.custom_score, 2) if result.custom_score else '',
-                    round(result.volume_breakthrough_score, 2) if result.volume_breakthrough_score else '',
-                    round(details.get('rs_rating', 0), 2) if details.get('rs_rating') else '',
-                    round(result.rs_rating_1m, 2) if result.rs_rating_1m else '',
-                    round(result.rs_rating_3m, 2) if result.rs_rating_3m else '',
-                    round(result.rs_rating_12m, 2) if result.rs_rating_12m else '',
-                    details.get('stage', ''),
-                    details.get('stage_name', ''),
-                    round(details.get('current_price', 0), 2) if details.get('current_price') else '',
-                    'Yes' if details.get('ma_alignment') else 'No',
-                    'Yes' if details.get('vcp_detected') else 'No',
-                    round(details.get('vcp_score', 0), 2) if details.get('vcp_score') else '',
-                    round(details.get('vcp_pivot', 0), 2) if details.get('vcp_pivot') else '',
-                    'Yes' if details.get('vcp_ready_for_breakout') else 'No',
-                    round(details.get('vcp_contraction_ratio', 0), 2) if details.get('vcp_contraction_ratio') else '',
-                    round(details.get('vcp_atr_score', 0), 2) if details.get('vcp_atr_score') else '',
-                    'Yes' if details.get('passes_template') else 'No',
-                    result.rating or '',
-                    round(details.get('position_52week', 0), 2) if details.get('position_52week') else '',
-                    details.get('volume_trend', ''),
-                    format_pct(result.adr_percent),
-                    format_pct(details.get('eps_growth_qq')),
-                    format_pct(details.get('sales_growth_qq')),
-                ])
-
-            # Prepare response
-            output.seek(0)
-            filename = f"scan_{scan_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-
-            return StreamingResponse(
-                iter([output.getvalue()]),
-                media_type="text/csv",
-                headers={
-                    "Content-Disposition": f'attachment; filename="{filename}"'
-                }
-            )
-
-        else:  # Excel format
-            # For now, return CSV with .xlsx extension
-            # To implement true Excel, would need to use openpyxl or xlsxwriter
-            raise HTTPException(
-                status_code=501,
-                detail="Excel export not yet implemented. Please use CSV format."
-            )
-
-    except HTTPException:
-        raise
+        query = ExportScanResultsQuery(
+            scan_id=scan_id,
+            filters=filters,
+            sort=sort,
+            export_format=ExportFormat(format),
+            passes_only=passes_only,
+        )
+        result = use_case.execute(uow, query)
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error exporting scan results: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error exporting scan results: {str(e)}")
+
+    return StreamingResponse(
+        iter([result.content]),
+        media_type=result.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.filename}"',
+            "Content-Length": str(len(result.content)),
+        },
+    )
 
 
 class FilterOptionsResponse(BaseModel):

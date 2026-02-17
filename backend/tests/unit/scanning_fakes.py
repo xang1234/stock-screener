@@ -85,6 +85,9 @@ class FakeScanResultRepository(ScanResultRepository):
     def query(self, scan_id, spec, *, include_sparklines=True):
         return ResultPage(items=(), total=0, page=1, per_page=50)
 
+    def query_all(self, scan_id, filters, sort, *, include_sparklines=False):
+        return ()
+
     def get_filter_options(self, scan_id):
         return FilterOptions(ibd_industries=(), gics_sectors=(), ratings=())
 

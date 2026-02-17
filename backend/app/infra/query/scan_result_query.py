@@ -151,6 +151,24 @@ def apply_sort_and_paginate(
     return rows, total, python_sorted
 
 
+def apply_sort_all(query: Query, sort: SortSpec) -> list:
+    """Apply sort and return ALL matching rows (no pagination).
+
+    Used by export-style queries that need every row.
+    """
+    if sort.field in _PYTHON_SORT_FIELDS:
+        rows = query.all()
+        return _sort_in_python(rows, sort)
+
+    col = _COLUMN_MAP.get(sort.field)
+    if col is not None:
+        order_fn = asc if sort.order == SortOrder.ASC else desc
+        query = query.order_by(order_fn(col))
+    else:
+        query = query.order_by(desc(ScanResult.composite_score))
+    return query.all()
+
+
 # ── Private helpers ─────────────────────────────────────────────────────
 
 

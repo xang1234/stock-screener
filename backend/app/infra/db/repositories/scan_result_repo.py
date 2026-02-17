@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 from app.domain.scanning.filter_spec import QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository
-from app.infra.query.scan_result_query import apply_filters, apply_sort_and_paginate
+from app.domain.scanning.filter_spec import FilterSpec, SortSpec
+from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
 from app.infra.serialization import convert_numpy_types
 from app.models.scan_result import ScanResult
 from app.models.stock_universe import StockUniverse
@@ -186,6 +187,26 @@ class SqlScanResultRepository(ScanResultRepository):
             total=total,
             page=spec.page.page,
             per_page=spec.page.per_page,
+        )
+
+    def query_all(
+        self,
+        scan_id: str,
+        filters: FilterSpec,
+        sort: SortSpec,
+        *,
+        include_sparklines: bool = False,
+    ) -> tuple[ScanResultItemDomain, ...]:
+        q = (
+            self._session.query(ScanResult, StockUniverse.name)
+            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+            .filter(ScanResult.scan_id == scan_id)
+        )
+        q = apply_filters(q, filters)
+        rows = apply_sort_all(q, sort)
+        return tuple(
+            _map_row_to_domain(result, company_name, include_sparklines)
+            for result, company_name in rows
         )
 
     def get_by_symbol(

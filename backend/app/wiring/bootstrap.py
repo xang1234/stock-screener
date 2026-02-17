@@ -33,6 +33,7 @@ from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
 from app.use_cases.scanning.get_peers import GetPeersUseCase
 from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
 from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
+from app.use_cases.scanning.export_scan_results import ExportScanResultsUseCase
 from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
 
 
@@ -89,6 +90,11 @@ def get_get_single_result_use_case() -> GetSingleResultUseCase:
 def get_get_peers_use_case() -> GetPeersUseCase:
     """Build a GetPeersUseCase (no extra dependencies — reads via UoW)."""
     return GetPeersUseCase()
+
+
+def get_export_scan_results_use_case() -> ExportScanResultsUseCase:
+    """Build an ExportScanResultsUseCase (no extra dependencies — reads via UoW)."""
+    return ExportScanResultsUseCase()
 
 
 def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:

@@ -64,6 +64,12 @@ class ScanStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class ExportFormat(str, Enum):
+    """Supported export file formats."""
+
+    CSV = "csv"
+
+
 # ---------------------------------------------------------------------------
 # Value Objects
 # ---------------------------------------------------------------------------
@@ -216,6 +222,7 @@ __all__ = [
     "RatingCategory",
     "PeerType",
     "ScanStatus",
+    "ExportFormat",
     "UniverseSpec",
     "ScreenerOutputDomain",
     "ScanResultItemDomain",

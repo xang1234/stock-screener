@@ -13,7 +13,7 @@ from __future__ import annotations
 import abc
 from typing import Protocol
 
-from .filter_spec import QuerySpec
+from .filter_spec import FilterSpec, QuerySpec, SortSpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 
@@ -89,6 +89,18 @@ class ScanResultRepository(abc.ABC):
         Returns:
             A :class:`ResultPage` with the matching items and total count.
         """
+        ...
+
+    @abc.abstractmethod
+    def query_all(
+        self,
+        scan_id: str,
+        filters: FilterSpec,
+        sort: SortSpec,
+        *,
+        include_sparklines: bool = False,
+    ) -> tuple[ScanResultItemDomain, ...]:
+        """Return ALL filtered, sorted results (no pagination) for export."""
         ...
 
     @abc.abstractmethod
