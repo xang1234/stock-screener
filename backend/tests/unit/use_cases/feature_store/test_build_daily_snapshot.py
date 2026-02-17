@@ -347,14 +347,14 @@ class TestCancellation:
         uow, scanner = _make_uow(symbols=symbols)
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
 
-        # Cancel after first check (before first chunk)
-        cancel = FakeCancellationToken(cancel_after=1)
+        # Cancel immediately (before first chunk processes)
+        cancel = FakeCancellationToken(cancel_after=0)
 
         result = use_case.execute(
             uow, _make_cmd(chunk_size=5), FakeProgressSink(), cancel
         )
 
-        # Should have stopped before scanning anything
+        assert result.processed_symbols == 0
         assert result.status == RunStatus.COMPLETED.value
         assert result.dq_passed is False
         assert "Cancelled" in result.warnings[0]

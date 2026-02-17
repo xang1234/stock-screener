@@ -198,9 +198,10 @@ class BuildDailyFeatureSnapshotUseCase:
             try:
                 return self._run(uow, run_id, cmd, progress, cancel)
             except Exception:
-                # Best-effort: leave run in RUNNING — the caller (Celery)
-                # knows it failed.  A stale-run cleanup task can reap
-                # RUNNING runs that haven't been updated in N hours.
+                # Best-effort: don't attempt status transition here.
+                # The run may be in RUNNING or COMPLETED depending on
+                # where the error occurred.  A stale-run cleanup task
+                # can reap stuck runs that haven't progressed.
                 logger.exception("Feature run %d failed", run_id)
                 raise
 
