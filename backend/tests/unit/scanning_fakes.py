@@ -91,6 +91,16 @@ class FakeScanResultRepository(ScanResultRepository):
     def get_by_symbol(self, scan_id: str, symbol: str) -> ScanResultItemDomain | None:
         return None
 
+    def get_peers_by_industry(
+        self, scan_id: str, ibd_industry_group: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        return ()
+
+    def get_peers_by_sector(
+        self, scan_id: str, gics_sector: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        return ()
+
 
 class FakeUniverseRepository(UniverseRepository):
     """In-memory universe repository (returns empty by default)."""

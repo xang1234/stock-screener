@@ -203,6 +203,42 @@ class SqlScanResultRepository(ScanResultRepository):
         result, company_name = row
         return _map_row_to_domain(result, company_name, include_sparklines=True)
 
+    def get_peers_by_industry(
+        self, scan_id: str, ibd_industry_group: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        rows = (
+            self._session.query(ScanResult, StockUniverse.name)
+            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+            .filter(
+                ScanResult.scan_id == scan_id,
+                ScanResult.ibd_industry_group == ibd_industry_group,
+            )
+            .order_by(ScanResult.composite_score.desc())
+            .all()
+        )
+        return tuple(
+            _map_row_to_domain(result, company_name, include_sparklines=True)
+            for result, company_name in rows
+        )
+
+    def get_peers_by_sector(
+        self, scan_id: str, gics_sector: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        rows = (
+            self._session.query(ScanResult, StockUniverse.name)
+            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+            .filter(
+                ScanResult.scan_id == scan_id,
+                ScanResult.gics_sector == gics_sector,
+            )
+            .order_by(ScanResult.composite_score.desc())
+            .all()
+        )
+        return tuple(
+            _map_row_to_domain(result, company_name, include_sparklines=True)
+            for result, company_name in rows
+        )
+
     def get_filter_options(self, scan_id: str) -> FilterOptions:
         """Query distinct categorical values for filter dropdowns."""
 

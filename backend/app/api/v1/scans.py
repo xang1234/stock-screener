@@ -20,10 +20,12 @@ from ...models.scan_result import Scan, ScanResult
 from ...models.stock_universe import StockUniverse
 from pydantic import ValidationError
 from ...schemas.universe import UniverseDefinition
-from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case, get_get_single_result_use_case
+from ...wiring.bootstrap import get_uow, get_create_scan_use_case, get_get_filter_options_use_case, get_get_single_result_use_case, get_get_peers_use_case
 from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
 from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
+from ...use_cases.scanning.get_peers import GetPeersQuery, GetPeersUseCase
 from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
+from ...domain.scanning.models import PeerType
 from ...infra.db.uow import SqlUnitOfWork
 from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
 from ...domain.scanning.models import ScanResultItemDomain
@@ -1406,120 +1408,23 @@ async def get_single_result(
 async def get_industry_peers(
     scan_id: str,
     symbol: str,
-    db: Session = Depends(get_db)
+    peer_type: str = Query("industry", pattern="^(industry|sector)$"),
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: GetPeersUseCase = Depends(get_get_peers_use_case),
 ):
-    """
-    Get all stocks in the same IBD industry group as the given symbol.
-
-    Returns ALL stocks in the industry group that were scanned,
-    not just those that passed the scan criteria.
-
-    Args:
-        scan_id: Scan UUID
-        symbol: Stock symbol to find peers for
-        db: Database session
-
-    Returns:
-        List of peer stocks with their metrics
-    """
+    """Get peer stocks in the same industry group or sector as the given symbol."""
     try:
-        # Get the symbol's industry group
-        stock = db.query(ScanResult).filter(
-            ScanResult.scan_id == scan_id,
-            ScanResult.symbol == symbol.upper()
-        ).first()
-
-        if not stock:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Stock {symbol} not found in scan {scan_id}"
-            )
-
-        if not stock.ibd_industry_group:
-            logger.info(f"No industry group for {symbol}, returning empty list")
-            return []  # No industry group data
-
-        # Get all stocks in the same industry group
-        peers = db.query(ScanResult, StockUniverse.name).outerjoin(
-            StockUniverse, ScanResult.symbol == StockUniverse.symbol
-        ).filter(
-            ScanResult.scan_id == scan_id,
-            ScanResult.ibd_industry_group == stock.ibd_industry_group
-        ).order_by(
-            ScanResult.composite_score.desc()
-        ).all()
-
-        # Convert to response model
-        result_items = []
-        for result, company_name in peers:
-            details = result.details or {}
-
-            item = ScanResultItem(
-                symbol=result.symbol,
-                company_name=company_name,
-                composite_score=result.composite_score or 0,
-                minervini_score=result.minervini_score,
-                canslim_score=result.canslim_score,
-                ipo_score=result.ipo_score,
-                custom_score=result.custom_score,
-                volume_breakthrough_score=result.volume_breakthrough_score,
-                rs_rating=result.rs_rating,
-                rs_rating_1m=result.rs_rating_1m,
-                rs_rating_3m=result.rs_rating_3m,
-                rs_rating_12m=result.rs_rating_12m,
-                stage=result.stage,
-                stage_name=details.get('stage_name'),
-                current_price=result.price,
-                volume=result.volume,
-                market_cap=result.market_cap,
-                ma_alignment=details.get('ma_alignment'),
-                vcp_detected=details.get('vcp_detected'),
-                vcp_score=details.get('vcp_score'),
-                vcp_pivot=details.get('vcp_pivot'),
-                vcp_ready_for_breakout=details.get('vcp_ready_for_breakout'),
-                vcp_contraction_ratio=details.get('vcp_contraction_ratio'),
-                vcp_atr_score=details.get('vcp_atr_score'),
-                passes_template=details.get('passes_template', False),
-                rating=result.rating or "Pass",
-                adr_percent=result.adr_percent,
-                eps_growth_qq=details.get('eps_growth_qq'),
-                sales_growth_qq=details.get('sales_growth_qq'),
-                eps_rating=result.eps_rating,
-                screeners_run=details.get('screeners_run'),
-                ibd_industry_group=result.ibd_industry_group,
-                ibd_group_rank=result.ibd_group_rank,
-                gics_sector=result.gics_sector,
-                gics_industry=result.gics_industry,
-                # RS Sparkline data
-                rs_sparkline_data=result.rs_sparkline_data,
-                rs_trend=result.rs_trend,
-                # Price Sparkline data
-                price_sparkline_data=result.price_sparkline_data,
-                price_change_1d=result.price_change_1d,
-                price_trend=result.price_trend,
-                # IPO date
-                ipo_date=result.ipo_date,
-                # Beta and Beta-Adjusted RS metrics
-                beta=result.beta,
-                beta_adj_rs=result.beta_adj_rs,
-                beta_adj_rs_1m=result.beta_adj_rs_1m,
-                beta_adj_rs_3m=result.beta_adj_rs_3m,
-                beta_adj_rs_12m=result.beta_adj_rs_12m,
-            )
-            result_items.append(item)
-
-        logger.info(
-            f"Found {len(result_items)} peers for {symbol} "
-            f"in group '{stock.ibd_industry_group}'"
+        query = GetPeersQuery(
+            scan_id=scan_id,
+            symbol=symbol,
+            peer_type=PeerType(peer_type),
         )
+        result = use_case.execute(uow, query)
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-        return result_items
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting peers: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error getting peers: {str(e)}"
-        )
+    logger.info(
+        f"Found {len(result.peers)} peers for {symbol} "
+        f"({result.peer_type.value}: '{result.group_name}')"
+    )
+    return [_domain_to_response(item) for item in result.peers]

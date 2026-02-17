@@ -47,6 +47,13 @@ class RatingCategory(str, Enum):
     ERROR = "Error"
 
 
+class PeerType(str, Enum):
+    """Dimension used for peer grouping."""
+
+    INDUSTRY = "industry"  # maps to ibd_industry_group
+    SECTOR = "sector"  # maps to gics_sector
+
+
 class ScanStatus(str, Enum):
     """Lifecycle states of a scan."""
 
@@ -207,6 +214,7 @@ __all__ = [
     "ScreenerName",
     "CompositeMethod",
     "RatingCategory",
+    "PeerType",
     "ScanStatus",
     "UniverseSpec",
     "ScreenerOutputDomain",

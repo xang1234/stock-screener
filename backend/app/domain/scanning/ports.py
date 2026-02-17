@@ -117,6 +117,20 @@ class ScanResultRepository(abc.ABC):
         """
         ...
 
+    @abc.abstractmethod
+    def get_peers_by_industry(
+        self, scan_id: str, ibd_industry_group: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        """Return all results in the same IBD industry group, ordered by composite_score DESC."""
+        ...
+
+    @abc.abstractmethod
+    def get_peers_by_sector(
+        self, scan_id: str, gics_sector: str
+    ) -> tuple[ScanResultItemDomain, ...]:
+        """Return all results in the same GICS sector, ordered by composite_score DESC."""
+        ...
+
 
 class UniverseRepository(abc.ABC):
     """Resolve which symbols belong to a universe."""
