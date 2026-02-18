@@ -32,7 +32,7 @@ from app.domain.feature_store.models import (
     validate_transition,
 )
 from app.domain.feature_store.ports import FeatureRunRepository, FeatureStoreRepository
-from app.domain.feature_store.quality import DQResult
+from app.domain.feature_store.quality import DQInputs, DQResult
 from app.domain.scanning.models import (
     FilterOptions,
     ProgressEvent,
@@ -472,6 +472,24 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
         # is lenient — returns empty page for unknown run_ids (like scanning
         # fakes).  Use the real repo + in-memory SQLite for not-found tests.
         return self._build_page(run_id, page)
+
+    def get_run_dq_inputs(self, run_id: int) -> DQInputs:
+        rows = self._rows.get(run_id, [])
+        universe = self._universe.get(run_id, [])
+        result_symbols = tuple(r.symbol for r in rows)
+        scores = tuple(r.composite_score for r in rows if r.composite_score is not None)
+        ratings = tuple(r.overall_rating for r in rows if r.overall_rating is not None)
+        null_count = sum(1 for r in rows if r.composite_score is None)
+        return DQInputs(
+            expected_row_count=len(universe),
+            actual_row_count=len(rows),
+            null_score_count=null_count,
+            total_row_count=len(rows),
+            scores=scores,
+            ratings=ratings,
+            universe_symbols=tuple(universe),
+            result_symbols=result_symbols,
+        )
 
     def _build_page(self, run_id: int, page: PageSpec | None) -> FeaturePage:
         p = page or PageSpec()

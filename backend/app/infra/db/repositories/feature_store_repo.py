@@ -12,6 +12,7 @@ from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import FilterSpec, PageSpec, SortSpec
 from app.domain.feature_store.models import FeaturePage, FeatureRow, FeatureRowWrite
 from app.domain.feature_store.ports import FeatureStoreRepository
+from app.domain.feature_store.quality import DQInputs
 from app.infra.db.models.feature_store import (
     FeatureRun,
     FeatureRunPointer,
@@ -132,6 +133,42 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             filters or FilterSpec(),
             sort or SortSpec(),
             page or PageSpec(),
+        )
+
+    def get_run_dq_inputs(self, run_id: int) -> DQInputs:
+        # Feature rows for this run
+        rows = (
+            self._session.query(
+                StockFeatureDaily.symbol,
+                StockFeatureDaily.composite_score,
+                StockFeatureDaily.overall_rating,
+            )
+            .filter(StockFeatureDaily.run_id == run_id)
+            .all()
+        )
+
+        # Universe symbols for this run
+        universe_rows = (
+            self._session.query(FeatureRunUniverseSymbol.symbol)
+            .filter(FeatureRunUniverseSymbol.run_id == run_id)
+            .all()
+        )
+        universe_symbols = tuple(r.symbol for r in universe_rows)
+
+        result_symbols = tuple(r.symbol for r in rows)
+        scores = tuple(r.composite_score for r in rows if r.composite_score is not None)
+        ratings = tuple(r.overall_rating for r in rows if r.overall_rating is not None)
+        null_count = sum(1 for r in rows if r.composite_score is None)
+
+        return DQInputs(
+            expected_row_count=len(universe_symbols),
+            actual_row_count=len(rows),
+            null_score_count=null_count,
+            total_row_count=len(rows),
+            scores=scores,
+            ratings=ratings,
+            universe_symbols=universe_symbols,
+            result_symbols=result_symbols,
         )
 
     # -- Private helpers ---------------------------------------------------

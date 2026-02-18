@@ -75,6 +75,26 @@ def evaluate_publish_readiness(
     )
 
 
+def evaluate_force_publish(status: RunStatus) -> PublishDecision:
+    """Evaluate whether a run may be force-published by an admin.
+
+    Only QUARANTINED runs can be force-published.  Returns a
+    ``PublishDecision`` with ``allowed=True`` if the run is quarantined.
+    """
+    if status != RunStatus.QUARANTINED:
+        return PublishDecision(
+            allowed=False,
+            blocking_checks=(),
+            warnings=(),
+        )
+
+    return PublishDecision(
+        allowed=True,
+        blocking_checks=(),
+        warnings=(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -82,4 +102,5 @@ def evaluate_publish_readiness(
 __all__ = [
     "PublishDecision",
     "evaluate_publish_readiness",
+    "evaluate_force_publish",
 ]

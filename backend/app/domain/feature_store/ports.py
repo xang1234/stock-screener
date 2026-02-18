@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import date
 
 from app.domain.common.query import FilterSpec, PageSpec, SortSpec
-from app.domain.feature_store.quality import DQResult
+from app.domain.feature_store.quality import DQInputs, DQResult
 
 from .models import FeaturePage, FeatureRowWrite, FeatureRunDomain, RunStats, RunType
 
@@ -155,6 +155,15 @@ class FeatureStoreRepository(abc.ABC):
 
         Raises:
             EntityNotFoundError: If *run_id* does not exist.
+        """
+        ...
+
+    @abc.abstractmethod
+    def get_run_dq_inputs(self, run_id: int) -> DQInputs:
+        """Build DQInputs from persisted feature rows and universe symbols.
+
+        Used by the standalone publish path when DQ inputs are not
+        pre-computed from in-memory rows.
         """
         ...
 

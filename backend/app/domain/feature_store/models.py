@@ -55,7 +55,7 @@ _VALID_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.COMPLETED: frozenset({RunStatus.PUBLISHED, RunStatus.QUARANTINED}),
     RunStatus.FAILED: frozenset(),
     RunStatus.PUBLISHED: frozenset(),
-    RunStatus.QUARANTINED: frozenset(),
+    RunStatus.QUARANTINED: frozenset({RunStatus.PUBLISHED}),
 }
 
 

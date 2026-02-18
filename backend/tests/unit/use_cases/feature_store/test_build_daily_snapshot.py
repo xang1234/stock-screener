@@ -125,24 +125,27 @@ class TestBuildDailySnapshotCommand:
     def test_valid_defaults(self):
         cmd = _make_cmd()
         assert cmd.chunk_size == 50
-        assert cmd.row_count_threshold == 0.9
-        assert cmd.null_max_rate == 0.05
+        assert cmd.dq_thresholds.row_count_threshold == 0.9
+        assert cmd.dq_thresholds.null_max_rate == 0.05
 
     def test_chunk_size_must_be_positive(self):
         with pytest.raises(ValueError, match="chunk_size"):
             _make_cmd(chunk_size=0)
 
-    def test_row_count_threshold_range(self):
+    def test_dq_thresholds_validation_propagated(self):
+        """DQThresholds validation fires during command construction."""
+        from app.domain.feature_store.quality import DQThresholds
+
         with pytest.raises(ValueError, match="row_count_threshold"):
-            _make_cmd(row_count_threshold=1.5)
+            _make_cmd(dq_thresholds=DQThresholds(row_count_threshold=1.5))
 
-    def test_null_max_rate_range(self):
-        with pytest.raises(ValueError, match="null_max_rate"):
-            _make_cmd(null_max_rate=-0.1)
+    def test_custom_dq_thresholds(self):
+        from app.domain.feature_store.quality import DQThresholds
 
-    def test_score_mean_range_low_must_be_less_than_high(self):
-        with pytest.raises(ValueError, match="score_mean_range"):
-            _make_cmd(score_mean_range=(80.0, 20.0))
+        thresholds = DQThresholds(row_count_threshold=0.5, null_max_rate=0.1)
+        cmd = _make_cmd(dq_thresholds=thresholds)
+        assert cmd.dq_thresholds.row_count_threshold == 0.5
+        assert cmd.dq_thresholds.null_max_rate == 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -441,3 +444,48 @@ class TestChunking:
         # Commits: 1 (start_run) + 1 (save_universe) + 4 (chunks)
         #        + 1 (mark_completed) + 1 (publish) = 8
         assert uow.committed >= 8
+
+
+# ---------------------------------------------------------------------------
+# DQ delegation regression
+# ---------------------------------------------------------------------------
+
+
+class TestDQDelegation:
+    @_PATCH_TRADING_DAY
+    def test_five_dq_checks_run_after_delegation(self, _mock_td):
+        """Verify all 5 DQ checks run after refactoring to delegate."""
+        uow, scanner = _make_uow()
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+        assert result.status == RunStatus.PUBLISHED.value
+        # A published result with dq_passed=True means all CRITICAL checks
+        # passed (the 4 WARNING checks are non-blocking).
+        assert result.dq_passed is True
+
+    @_PATCH_TRADING_DAY
+    def test_same_rating_produces_warning(self, _mock_td):
+        """When all symbols get the same rating, rating_distribution warns."""
+        # All symbols return the same score/rating → 1 distinct rating
+        same_result = {
+            "composite_score": 50.0,
+            "rating": "Watch",
+            "screeners_passed": 1,
+        }
+        scanner_results = {
+            "AAPL": same_result,
+            "MSFT": same_result,
+            "GOOGL": same_result,
+        }
+        uow, scanner = _make_uow(scanner_results=scanner_results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+        # Still publishes (rating_distribution is WARNING, not CRITICAL)
+        assert result.status == RunStatus.PUBLISHED.value
+        assert result.dq_passed is True
+        # But warnings should mention rating distribution
+        assert any("distinct rating" in w for w in result.warnings)

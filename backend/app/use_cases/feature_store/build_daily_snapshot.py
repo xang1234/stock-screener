@@ -8,9 +8,8 @@ snapshot:
   4. Scan each symbol via StockScanner in chunks (with progress + cancellation)
   5. Upsert feature rows after each chunk (checkpoint)
   6. Mark run COMPLETED with stats
-  7. Run DQ checks (row count, null rate, score distribution)
-  8. Publish or quarantine based on DQ results
-  9. Emit completion ProgressEvent
+  7. Delegate DQ evaluation and publish/quarantine to PublishFeatureRunUseCase
+  8. Emit completion ProgressEvent
 
 The use case depends ONLY on domain ports — never on SQLAlchemy, Celery,
 Redis, or any other infrastructure.
@@ -36,18 +35,16 @@ from app.domain.feature_store.models import (
     RunStatus,
     RunType,
 )
-from app.domain.feature_store.publish_policy import evaluate_publish_readiness
-from app.domain.feature_store.quality import (
-    DQResult,
-    check_null_rate,
-    check_row_count,
-    check_score_distribution,
-)
+from app.domain.feature_store.quality import DQInputs, DQThresholds
 from app.domain.scanning.models import ProgressEvent
 from app.domain.scanning.ports import (
     CancellationToken,
     ProgressSink,
     StockScanner,
+)
+from app.use_cases.feature_store.publish_run import (
+    PublishFeatureRunUseCase,
+    PublishRunCommand,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,23 +115,11 @@ class BuildDailySnapshotCommand:
     code_version: str | None = None
 
     # DQ thresholds (overridable per-invocation)
-    row_count_threshold: float = 0.9
-    null_max_rate: float = 0.05
-    score_mean_range: tuple[float, float] = (20.0, 80.0)
+    dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
 
     def __post_init__(self) -> None:
         if self.chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
-        if not 0.0 <= self.row_count_threshold <= 1.0:
-            raise ValueError("row_count_threshold must be in [0.0, 1.0]")
-        if not 0.0 <= self.null_max_rate <= 1.0:
-            raise ValueError("null_max_rate must be in [0.0, 1.0]")
-        low, high = self.score_mean_range
-        if low >= high:
-            raise ValueError(
-                f"score_mean_range must be (low, high) with low < high, "
-                f"got ({low}, {high})"
-            )
 
 
 # ── Result (output) ──────────────────────────────────────────────────────
@@ -333,26 +318,36 @@ class BuildDailyFeatureSnapshotUseCase:
             duration,
         )
 
-        # ── 5. DQ checks ───────────────────────────────────────
-        dq_results = self._run_dq_checks(uow, run_id, cmd, total, all_rows)
+        # ── 5. Delegate DQ + publish to PublishFeatureRunUseCase ──
+        actual_count = uow.feature_store.count_by_run_id(run_id)
+        nulls = sum(1 for r in all_rows if r.composite_score is None)
+        scores = tuple(
+            r.composite_score for r in all_rows if r.composite_score is not None
+        )
+        ratings = tuple(
+            r.overall_rating for r in all_rows if r.overall_rating is not None
+        )
+        result_syms = tuple(r.symbol for r in all_rows)
 
-        # ── 6. Publish or quarantine ────────────────────────────
-        run = uow.feature_runs.get_run(run_id)
-        decision = evaluate_publish_readiness(run.status, dq_results)
-        dq_warnings = tuple(r.message for r in dq_results if not r.passed)
+        dq_inputs = DQInputs(
+            expected_row_count=total,
+            actual_row_count=actual_count,
+            null_score_count=nulls,
+            total_row_count=len(all_rows),
+            scores=scores,
+            ratings=ratings,
+            universe_symbols=tuple(symbols),
+            result_symbols=result_syms,
+        )
 
-        if decision.allowed:
-            uow.feature_runs.publish_atomically(run_id)
-            uow.commit()
-            logger.info("Run %d published", run_id)
-            status = RunStatus.PUBLISHED.value
-        else:
-            uow.feature_runs.mark_quarantined(run_id, dq_results)
-            uow.commit()
-            logger.warning("Run %d quarantined: %s", run_id, decision.reason)
-            status = RunStatus.QUARANTINED.value
+        publish_cmd = PublishRunCommand(
+            run_id=run_id,
+            dq_inputs=dq_inputs,
+            dq_thresholds=cmd.dq_thresholds,
+        )
+        pub_result = PublishFeatureRunUseCase().execute(uow, publish_cmd)
 
-        # ── 7. Completion progress ─────────────────────────────
+        # ── 6. Completion progress ─────────────────────────────
         progress.emit(
             ProgressEvent(
                 current=total,
@@ -364,57 +359,13 @@ class BuildDailyFeatureSnapshotUseCase:
 
         return BuildDailySnapshotResult(
             run_id=run_id,
-            status=status,
+            status=pub_result.status,
             total_symbols=total,
             processed_symbols=processed,
             failed_symbols=failed,
-            dq_passed=decision.allowed,
-            warnings=dq_warnings,
+            dq_passed=pub_result.dq_passed,
+            warnings=pub_result.warnings,
         )
-
-    def _run_dq_checks(
-        self,
-        uow: UnitOfWork,
-        run_id: int,
-        cmd: BuildDailySnapshotCommand,
-        expected_count: int,
-        rows: list[FeatureRowWrite],
-    ) -> list[DQResult]:
-        """Execute data quality checks against the completed run."""
-        results: list[DQResult] = []
-
-        # Row count: compare DB count to expected universe size
-        actual_count = uow.feature_store.count_by_run_id(run_id)
-        results.append(
-            check_row_count(
-                expected=expected_count,
-                actual=actual_count,
-                threshold=cmd.row_count_threshold,
-            )
-        )
-
-        # Null rate on composite_score (using in-memory rows)
-        nulls = sum(1 for r in rows if r.composite_score is None)
-        results.append(
-            check_null_rate(
-                column_nulls=nulls,
-                total=len(rows),
-                max_rate=cmd.null_max_rate,
-            )
-        )
-
-        # Score distribution (using in-memory rows)
-        scores = [
-            r.composite_score for r in rows if r.composite_score is not None
-        ]
-        results.append(
-            check_score_distribution(
-                scores=scores,
-                expected_mean_range=cmd.score_mean_range,
-            )
-        )
-
-        return results
 
 
 # ---------------------------------------------------------------------------

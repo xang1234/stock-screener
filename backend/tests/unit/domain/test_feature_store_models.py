@@ -225,6 +225,7 @@ class TestValidateTransition:
             (RunStatus.RUNNING, RunStatus.FAILED),
             (RunStatus.COMPLETED, RunStatus.PUBLISHED),
             (RunStatus.COMPLETED, RunStatus.QUARANTINED),
+            (RunStatus.QUARANTINED, RunStatus.PUBLISHED),
         ],
     )
     def test_valid_transitions(self, current: RunStatus, target: RunStatus):
@@ -255,7 +256,7 @@ class TestValidateTransition:
 
     @pytest.mark.parametrize(
         "terminal",
-        [RunStatus.FAILED, RunStatus.PUBLISHED, RunStatus.QUARANTINED],
+        [RunStatus.FAILED, RunStatus.PUBLISHED],
     )
     def test_terminal_states_reject_all(self, terminal: RunStatus):
         """Terminal states have no valid outgoing transitions."""
