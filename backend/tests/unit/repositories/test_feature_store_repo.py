@@ -14,13 +14,10 @@ from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import (
-    CategoricalFilter,
     FilterSpec,
     PageSpec,
-    RangeFilter,
     SortOrder,
     SortSpec,
-    TextSearchFilter,
 )
 from app.domain.feature_store.models import FeaturePage, FeatureRow, FeatureRowWrite
 from app.domain.feature_store.quality import DQInputs
@@ -406,7 +403,7 @@ class TestQueryRunNoNPlusOne:
     def test_query_run_uses_constant_queries(
         self, repo: SqlFeatureStoreRepository, session: Session, engine
     ):
-        """Verify query_run executes exactly 2 SQL statements (COUNT + SELECT)."""
+        """Verify query_run executes at most 3 SQL statements (GET + COUNT + SELECT)."""
         run_id = _create_run(session)
         repo.upsert_snapshot_rows(
             run_id,

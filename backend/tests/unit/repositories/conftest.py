@@ -10,7 +10,7 @@ from contextlib import contextmanager
 
 import pytest
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 
