@@ -9,9 +9,9 @@ Provides endpoints for:
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-from pydantic import BaseModel
-from datetime import datetime
 
+from ...schemas.common import TaskResponse
+from ...schemas.fundamentals import FundamentalsCacheStats
 from ...tasks.fundamentals_tasks import (
     refresh_all_fundamentals,
     refresh_symbol_fundamentals,
@@ -20,27 +20,6 @@ from ...tasks.fundamentals_tasks import (
 )
 
 router = APIRouter(prefix="/fundamentals", tags=["fundamentals"])
-
-
-# Response Models
-class TaskResponse(BaseModel):
-    """Generic task response model."""
-    task_id: str
-    message: str
-    status: str
-
-
-class FundamentalsCacheStats(BaseModel):
-    """Fundamentals cache statistics response model."""
-    total_checked: int
-    redis_cached: int
-    db_cached: int
-    fresh: int
-    stale: int
-    redis_hit_rate: float
-    db_hit_rate: float
-    last_refresh_date: Optional[str]
-    timestamp: str
 
 
 # Endpoints

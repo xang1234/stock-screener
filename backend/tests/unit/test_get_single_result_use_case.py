@@ -163,7 +163,7 @@ class TestDomainToResponse:
     """Verify the domain→HTTP mapper unpacks all extended_fields correctly."""
 
     def test_all_fields_mapped(self):
-        from app.api.v1.scans import _domain_to_response
+        from app.schemas.scanning import ScanResultItem
 
         item = ScanResultItemDomain(
             symbol="TEST",
@@ -223,7 +223,7 @@ class TestDomainToResponse:
             },
         )
 
-        resp = _domain_to_response(item)
+        resp = ScanResultItem.from_domain(item)
 
         # Core fields from domain item directly
         assert resp.symbol == "TEST"
@@ -279,10 +279,10 @@ class TestDomainToResponse:
         assert resp.beta_adj_rs_12m == 82.0
 
     def test_missing_extended_fields_default_to_none(self):
-        from app.api.v1.scans import _domain_to_response
+        from app.schemas.scanning import ScanResultItem
 
         item = make_domain_item("BARE")
-        resp = _domain_to_response(item)
+        resp = ScanResultItem.from_domain(item)
 
         assert resp.symbol == "BARE"
         assert resp.company_name == "BARE Inc"

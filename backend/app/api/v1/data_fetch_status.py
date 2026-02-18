@@ -5,24 +5,11 @@ Provides endpoints to check which data-fetching task is currently running,
 and to force-release a stuck lock if needed.
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
 
+from ...schemas.data_fetch_status import DataFetchStatusResponse, ForceReleaseLockResponse
 from ...tasks.data_fetch_lock import DataFetchLock
 
 router = APIRouter(prefix="/data-fetch", tags=["data-fetch"])
-
-
-class DataFetchStatusResponse(BaseModel):
-    """Response model for data-fetch status."""
-    is_running: bool
-    current_task: Optional[Dict[str, Any]] = None
-
-
-class ForceReleaseLockResponse(BaseModel):
-    """Response model for force-release lock."""
-    success: bool
-    message: str
 
 
 @router.get("/status", response_model=DataFetchStatusResponse)

@@ -5,37 +5,17 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Header
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...models.app_settings import AppSetting
+from ...schemas.config import LLMConfigResponse, LLMModelUpdate, OllamaSettings
 from ...services.llm.config import AVAILABLE_MODELS, get_model_by_id
 from ...config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-class LLMModelUpdate(BaseModel):
-    """Request body for updating LLM model selection."""
-    model_id: str
-    use_case: str = "extraction"  # "extraction" or "merge"
-
-
-class OllamaSettings(BaseModel):
-    """Request body for updating Ollama settings."""
-    api_base: str
-
-
-class LLMConfigResponse(BaseModel):
-    """Response for LLM configuration."""
-    extraction: dict
-    merge: dict
-    ollama_status: str
-    ollama_api_base: str
-    available_models: list
 
 
 def require_admin(

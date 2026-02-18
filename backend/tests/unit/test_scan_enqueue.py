@@ -7,7 +7,8 @@ router layer: request → command translation and universe parsing.
 
 import pytest
 
-from app.api.v1.scans import ScanCreateRequest, _build_universe_def
+from app.api.v1.scans import _build_universe_def
+from app.schemas.scanning import ScanCreateRequest
 from app.schemas.universe import Exchange, IndexName, UniverseDefinition, UniverseType
 from app.use_cases.scanning.create_scan import CreateScanCommand
 
