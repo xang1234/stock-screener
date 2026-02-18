@@ -8,7 +8,6 @@ Uses httpx.AsyncClient + httpx.ASGITransport per project convention.
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest

@@ -1,11 +1,7 @@
-"""Parity tests: verify old and new scan paths produce identical results.
+"""Use-case scan path tests: verify counts, statuses, and persistence.
 
-Runs the same 10 symbols through both paths with a mocked ScanOrchestrator
-and asserts matching outputs (result counts, statuses, passed/failed).
-
-Known acceptable differences:
-  - `scan_path` key ("legacy" vs "use_case")
-  - IBD/GICS fields (not populated in use-case path — documented gap)
+Runs 10 deterministic symbols through the RunBulkScanUseCase with a
+mocked ScanOrchestrator and asserts correct passed/failed/total counts.
 """
 
 from __future__ import annotations

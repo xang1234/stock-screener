@@ -20,44 +20,6 @@ from .data_fetch_lock import serialized_data_fetch
 logger = logging.getLogger(__name__)
 
 
-def update_scan_status(
-    db: Session,
-    scan_id: str,
-    status: str,
-    **kwargs
-) -> None:
-    """
-    Update scan record in database.
-
-    Args:
-        db: Database session
-        scan_id: UUID of scan
-        status: New status (queued, running, completed, failed)
-        **kwargs: Additional fields to update (total_stocks, passed_stocks, etc.)
-    """
-    try:
-        scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
-
-        if scan:
-            scan.status = status
-
-            if 'total_stocks' in kwargs:
-                scan.total_stocks = kwargs['total_stocks']
-            if 'passed_stocks' in kwargs:
-                scan.passed_stocks = kwargs['passed_stocks']
-            if status == 'completed':
-                scan.completed_at = datetime.utcnow()
-
-            db.commit()
-            logger.info(f"Updated scan {scan_id} status to {status}")
-        else:
-            logger.warning(f"Scan {scan_id} not found for status update")
-
-    except Exception as e:
-        logger.error(f"Error updating scan status: {e}", exc_info=True)
-        db.rollback()
-
-
 def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> None:
     """
     Delete old scans, keeping only the most recent `keep_count` per universe_key.

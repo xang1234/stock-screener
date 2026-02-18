@@ -132,7 +132,11 @@ class FakeScanRepository(ScanRepository):
         self.status_history.append((scan_id, status))
 
     def list_recent(self, limit: int = 20) -> list[FakeScan]:
-        return sorted(self.rows, key=lambda s: getattr(s, "started_at", ""), reverse=True)[:limit]
+        return sorted(
+            self.rows,
+            key=lambda s: s.started_at or datetime.min,
+            reverse=True,
+        )[:limit]
 
     def delete(self, scan_id: str) -> bool:
         if scan_id in self.scans:

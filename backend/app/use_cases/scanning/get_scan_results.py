@@ -13,13 +13,12 @@ FastAPI, or any other infrastructure.
 
 from __future__ import annotations
 
-import copy
 import logging
 from dataclasses import dataclass, field
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.uow import UnitOfWork
-from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.filter_spec import FilterSpec, QuerySpec
 from app.domain.scanning.models import ResultPage
 
 logger = logging.getLogger(__name__)
@@ -67,10 +66,16 @@ class GetScanResultsUseCase:
             # include only "Strong Buy" and "Buy" ratings.
             query_spec = query.query_spec
             if query.passes_only:
-                augmented_filters = copy.copy(query_spec.filters)
-                augmented_filters.add_categorical("rating", ("Strong Buy", "Buy"))
+                # Build a fresh FilterSpec to avoid mutating the caller's object.
+                augmented = FilterSpec(
+                    range_filters=list(query_spec.filters.range_filters),
+                    categorical_filters=list(query_spec.filters.categorical_filters),
+                    boolean_filters=list(query_spec.filters.boolean_filters),
+                    text_searches=list(query_spec.filters.text_searches),
+                )
+                augmented.add_categorical("rating", ("Strong Buy", "Buy"))
                 query_spec = QuerySpec(
-                    filters=augmented_filters,
+                    filters=augmented,
                     sort=query_spec.sort,
                     page=query_spec.page,
                 )
