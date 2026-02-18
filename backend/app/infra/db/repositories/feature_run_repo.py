@@ -143,12 +143,6 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         date_to: date | None = None,
         limit: int = 50,
     ) -> Sequence[tuple[FeatureRunDomain, int, bool]]:
-        # Subquery: row count per run
-        row_count_sq = (
-            func.count(StockFeatureDaily.symbol)
-            .label("row_count")
-        )
-
         # Subquery: latest_published pointer
         pointer_sq = (
             self._session.query(FeatureRunPointer.run_id)
