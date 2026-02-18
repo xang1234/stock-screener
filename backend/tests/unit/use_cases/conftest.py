@@ -73,6 +73,7 @@ class FakeScan:
     completed_at: Any = None
     idempotency_key: str | None = None
     task_id: str | None = None
+    feature_run_id: int | None = None
     universe: str | None = None
     universe_key: str | None = None
     universe_type: str | None = None

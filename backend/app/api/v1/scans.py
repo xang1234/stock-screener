@@ -116,6 +116,7 @@ class ScanCreateResponse(BaseModel):
     status: str
     total_stocks: int
     message: str
+    feature_run_id: Optional[int] = None
 
 
 class ScanStatusResponse(BaseModel):
@@ -311,6 +312,7 @@ async def create_scan(
         status=result.status,
         total_stocks=result.total_stocks,
         message=f"Scan queued for {result.total_stocks} stocks",
+        feature_run_id=result.feature_run_id,
     )
 
 

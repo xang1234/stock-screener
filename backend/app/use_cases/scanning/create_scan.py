@@ -12,12 +12,15 @@ never on SQLAlchemy, Celery, or any other infrastructure.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.ports import TaskDispatcher
+
+logger = logging.getLogger(__name__)
 
 
 # ── Command (input) ──────────────────────────────────────────────────────
@@ -58,6 +61,7 @@ class CreateScanResult:
     status: str
     total_stocks: int
     is_duplicate: bool
+    feature_run_id: int | None = None
 
 
 # ── Use Case ─────────────────────────────────────────────────────────────
@@ -95,6 +99,25 @@ class CreateScanUseCase:
                     "Try refreshing the universe."
                 )
 
+            # ── Bind to latest published feature run (best-effort) ──
+            feature_run_id = None
+            try:
+                latest_run = uow.feature_runs.get_latest_published()
+                if latest_run is not None:
+                    feature_run_id = latest_run.id
+                    logger.info(
+                        "Binding scan to feature run %d (as_of=%s)",
+                        latest_run.id,
+                        latest_run.as_of_date,
+                    )
+                else:
+                    logger.info("No published feature run — scan uses legacy path")
+            except Exception:
+                logger.warning(
+                    "Feature run lookup failed — proceeding without binding",
+                    exc_info=True,
+                )
+
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
             scan = uow.scans.create(
@@ -113,6 +136,7 @@ class CreateScanUseCase:
                 status="queued",
                 task_id=None,
                 idempotency_key=cmd.idempotency_key,
+                feature_run_id=feature_run_id,
             )
 
             # Commit so the scan row is visible to the Celery worker.
@@ -136,4 +160,5 @@ class CreateScanUseCase:
             status="queued",
             total_stocks=len(symbols),
             is_duplicate=False,
+            feature_run_id=feature_run_id,
         )

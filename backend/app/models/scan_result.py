@@ -1,6 +1,7 @@
 """Scan and scan result models"""
 import logging
 from sqlalchemy import Column, Integer, String, Float, BigInteger, DateTime, JSON, Index, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -40,6 +41,15 @@ class Scan(Base):
 
     # Idempotency
     idempotency_key = Column(String(64), nullable=True, unique=True, index=True)
+
+    # Feature Store binding (nullable — legacy scans predate feature store)
+    feature_run_id = Column(
+        Integer,
+        ForeignKey("feature_runs.id"),
+        nullable=True,
+        index=True,
+    )
+    feature_run = relationship("FeatureRun", foreign_keys=[feature_run_id], lazy="select")
 
     # Timestamps
     started_at = Column(DateTime(timezone=True), server_default=func.now())

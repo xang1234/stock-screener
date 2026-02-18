@@ -10,6 +10,7 @@ from app.use_cases.scanning.create_scan import (
 )
 
 from tests.unit.use_cases.conftest import (
+    FakeFeatureRunRepository,
     FakeScanRepository,
     FakeTaskDispatcher,
     FakeUnitOfWork,
@@ -163,3 +164,69 @@ class TestIdempotency:
 
         assert result1.scan_id != result2.scan_id
         assert len(uow.scans.rows) == 2
+
+
+class TestFeatureRunBinding:
+    """Scan binds to latest published feature run at creation time."""
+
+    def test_binds_to_published_feature_run(self):
+        """When a published feature run exists, scan gets its ID."""
+        from datetime import date
+        from app.domain.feature_store.models import RunStats, RunType
+
+        feature_runs = FakeFeatureRunRepository()
+        run = feature_runs.start_run(
+            as_of_date=date(2026, 2, 18),
+            run_type=RunType.DAILY_SNAPSHOT,
+        )
+        feature_runs.mark_completed(run.id, stats=RunStats(
+            total_symbols=100, processed_symbols=100,
+            failed_symbols=0, duration_seconds=1.0,
+        ))
+        feature_runs.publish_atomically(run.id)
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL"]),
+            feature_runs=feature_runs,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.feature_run_id == run.id
+        scan = uow.scans.rows[0]
+        assert scan.feature_run_id == run.id
+
+    def test_no_published_run_leaves_feature_run_id_none(self):
+        """When no feature run is published, feature_run_id is None."""
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.feature_run_id is None
+        scan = uow.scans.rows[0]
+        assert scan.feature_run_id is None
+
+    def test_feature_run_lookup_failure_does_not_block_scan(self):
+        """If feature run lookup raises, scan still creates successfully."""
+
+        class BrokenFeatureRunRepo(FakeFeatureRunRepository):
+            def get_latest_published(self):
+                raise RuntimeError("feature_runs table missing")
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL"]),
+            feature_runs=BrokenFeatureRunRepo(),
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.feature_run_id is None
+        assert result.is_duplicate is False
+        assert result.total_stocks == 1
+        assert len(dispatcher.dispatched) == 1

@@ -45,6 +45,16 @@ def run_feature_store_migration():
         print(f"Warning: Feature Store migration failed (non-fatal): {e}")
 
 
+def run_scan_feature_run_migration():
+    """Add feature_run_id FK column to scans table."""
+    from .db_migrations.scan_feature_run_migration import migrate_scan_feature_run_id
+
+    try:
+        migrate_scan_feature_run_id(engine)
+    except Exception as e:
+        print(f"Warning: Scan feature_run_id migration failed (non-fatal): {e}")
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -97,6 +107,7 @@ async def lifespan(app: FastAPI):
     # Run schema migrations (idempotent — safe on every startup)
     run_universe_migration()
     run_feature_store_migration()
+    run_scan_feature_run_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
