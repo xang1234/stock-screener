@@ -443,6 +443,22 @@ class TestDQThresholds:
         with pytest.raises(ValueError, match="score_mean_range"):
             DQThresholds(score_mean_range=(50.0, 50.0))
 
+    def test_min_distinct_ratings_zero(self):
+        with pytest.raises(ValueError, match="min_distinct_ratings"):
+            DQThresholds(min_distinct_ratings=0)
+
+    def test_min_distinct_ratings_negative(self):
+        with pytest.raises(ValueError, match="min_distinct_ratings"):
+            DQThresholds(min_distinct_ratings=-1)
+
+    def test_symbol_coverage_threshold_too_high(self):
+        with pytest.raises(ValueError, match="symbol_coverage_threshold"):
+            DQThresholds(symbol_coverage_threshold=1.5)
+
+    def test_symbol_coverage_threshold_negative(self):
+        with pytest.raises(ValueError, match="symbol_coverage_threshold"):
+            DQThresholds(symbol_coverage_threshold=-0.1)
+
     def test_frozen(self):
         t = DQThresholds()
         with pytest.raises(AttributeError):

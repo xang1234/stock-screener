@@ -72,6 +72,10 @@ class DQThresholds:
                 f"score_mean_range must be (low, high) with low < high, "
                 f"got ({low}, {high})"
             )
+        if self.min_distinct_ratings < 1:
+            raise ValueError("min_distinct_ratings must be >= 1")
+        if not 0.0 <= self.symbol_coverage_threshold <= 1.0:
+            raise ValueError("symbol_coverage_threshold must be in [0.0, 1.0]")
 
 
 @dataclass(frozen=True)

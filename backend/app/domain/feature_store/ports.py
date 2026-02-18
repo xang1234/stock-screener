@@ -69,14 +69,15 @@ class FeatureRunRepository(abc.ABC):
 
     @abc.abstractmethod
     def publish_atomically(self, run_id: int) -> FeatureRunDomain:
-        """Transition COMPLETED → PUBLISHED and update the pointer.
+        """Transition COMPLETED|QUARANTINED → PUBLISHED and update the pointer.
 
         Both the status change and the pointer swap happen in the same
         flush, so the UoW's ``commit()`` makes them visible atomically.
 
         Raises:
             EntityNotFoundError: If *run_id* does not exist.
-            InvalidTransitionError: If current status is not COMPLETED.
+            InvalidTransitionError: If current status is not COMPLETED
+                or QUARANTINED.
         """
         ...
 
