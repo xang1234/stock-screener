@@ -16,6 +16,7 @@ from fastapi import Query
 from app.domain.scanning.filter_spec import (
     FilterMode,
     FilterSpec,
+    PageSpec,
     SortOrder,
     SortSpec,
 )
@@ -260,3 +261,16 @@ def parse_scan_sort(
     """Build a SortSpec from HTTP query parameters."""
     order = SortOrder.ASC if sort_order.lower() == "asc" else SortOrder.DESC
     return SortSpec(field=sort_by, order=order)
+
+
+# ---------------------------------------------------------------------------
+# Pagination parsing dependency
+# ---------------------------------------------------------------------------
+
+
+def parse_page_spec(
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(50, ge=1, le=100, description="Results per page"),
+) -> PageSpec:
+    """Build a PageSpec from HTTP query parameters."""
+    return PageSpec(page=page, per_page=per_page)

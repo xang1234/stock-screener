@@ -180,17 +180,6 @@ class TestRunBulkScanViaUseCase:
         assert captured_cmd.chunk_size == 25
         assert captured_cmd.correlation_id == "celery-123"
 
-
-class TestStranglerGate:
-    """Verify the use-case path is the default."""
-
-    def test_use_new_scan_path_enabled_by_default(self):
-        """The feature flag should default to True (use-case path is primary)."""
-        from app.config.settings import Settings
-
-        s = Settings()
-        assert s.use_new_scan_path is True
-
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")
     def test_none_criteria_defaults_to_empty_dict(self, mock_settings, mock_pipeline):

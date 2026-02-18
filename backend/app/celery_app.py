@@ -130,7 +130,6 @@ celery_app.conf.task_routes = {
     'app.tasks.fundamentals_tasks.refresh_symbols_hybrid': {'queue': 'data_fetch'},
     # Scan tasks (yfinance)
     'app.tasks.scan_tasks.run_bulk_scan': {'queue': 'data_fetch'},
-    'app.tasks.scan_tasks.scan_stock_batch': {'queue': 'data_fetch'},
     # Universe tasks (finviz)
     'app.tasks.universe_tasks.refresh_stock_universe': {'queue': 'data_fetch'},
     'app.tasks.universe_tasks.refresh_sp500_membership': {'queue': 'data_fetch'},

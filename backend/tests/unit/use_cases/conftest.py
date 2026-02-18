@@ -82,6 +82,7 @@ class FakeScan:
     universe_index: str | None = None
     universe_symbols: list[str] | None = None
     criteria: dict | None = None
+    started_at: Any = None
 
 
 # Alias kept for backward compatibility with scanning_fakes.py consumers.
@@ -130,6 +131,15 @@ class FakeScanRepository(ScanRepository):
                 setattr(scan, k, v)
         self.status_history.append((scan_id, status))
 
+    def list_recent(self, limit: int = 20) -> list[FakeScan]:
+        return sorted(self.rows, key=lambda s: getattr(s, "started_at", ""), reverse=True)[:limit]
+
+    def delete(self, scan_id: str) -> bool:
+        if scan_id in self.scans:
+            del self.scans[scan_id]
+            return True
+        return False
+
 
 class FakeScanResultRepository(ScanResultRepository):
     """Configurable in-memory scan result repository.
@@ -157,6 +167,15 @@ class FakeScanResultRepository(ScanResultRepository):
         for symbol, result in results:
             self._persisted_results.append((scan_id, symbol, result))
         return len(results)
+
+    def delete_by_scan_id(self, scan_id: str) -> int:
+        before = len(self._persisted_results)
+        self._persisted_results = [
+            (sid, sym, res)
+            for sid, sym, res in self._persisted_results
+            if sid != scan_id
+        ]
+        return before - len(self._persisted_results)
 
     def count_by_scan_id(self, scan_id: str) -> int:
         return sum(1 for sid, _, _ in self._persisted_results if sid == scan_id)

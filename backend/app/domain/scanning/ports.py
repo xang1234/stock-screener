@@ -43,6 +43,16 @@ class ScanRepository(abc.ABC):
         """Update scan status and optional fields (total_stocks, passed_stocks, etc.)."""
         ...
 
+    @abc.abstractmethod
+    def list_recent(self, limit: int = 20) -> list[object]:
+        """Return the most recent scans, ordered by started_at descending."""
+        ...
+
+    @abc.abstractmethod
+    def delete(self, scan_id: str) -> bool:
+        """Delete a scan by scan_id. Returns True if deleted, False if not found."""
+        ...
+
 
 class ScanResultRepository(abc.ABC):
     """Persist and retrieve individual scan results."""
@@ -101,6 +111,11 @@ class ScanResultRepository(abc.ABC):
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
         """Return ALL filtered, sorted results (no pagination) for export."""
+        ...
+
+    @abc.abstractmethod
+    def delete_by_scan_id(self, scan_id: str) -> int:
+        """Delete all results for a scan. Returns the number of rows deleted."""
         ...
 
     @abc.abstractmethod

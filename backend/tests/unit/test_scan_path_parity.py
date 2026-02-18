@@ -78,14 +78,14 @@ class TestUseCasePathOutput:
             RunBulkScanCommand,
             RunBulkScanUseCase,
         )
-        from tests.unit.test_run_bulk_scan_use_case import (
+        from tests.unit.use_cases.conftest import (
             FakeScanRepository,
             FakeScanResultRepository,
             FakeUnitOfWork,
-            FakeProgressSink,
-            FakeCancellationToken,
             FakeScan,
         )
+        from app.domain.scanning.ports import NullProgressSink as FakeProgressSink
+        from app.domain.scanning.ports import NeverCancelledToken as FakeCancellationToken
 
         scan_repo = FakeScanRepository()
         scan_repo.scans["parity-001"] = FakeScan(
@@ -114,70 +114,8 @@ class TestUseCasePathOutput:
         assert result.failed == EXPECTED_FAILED
 
 
-class TestLegacyPathOutput:
-    """Run symbols through the legacy sequential path and verify results."""
-
-    @patch("app.tasks.scan_tasks.compute_industry_peer_metrics")
-    @patch("app.tasks.scan_tasks.cleanup_old_scans")
-    @patch("app.tasks.scan_tasks.save_scan_result")
-    @patch("app.tasks.scan_tasks.update_scan_status")
-    @patch("app.tasks.scan_tasks.settings")
-    @patch("app.tasks.scan_tasks.SessionLocal")
-    def test_legacy_path_counts(
-        self,
-        mock_session_local,
-        mock_settings,
-        mock_update_status,
-        mock_save_result,
-        mock_cleanup,
-        mock_peer_metrics,
-    ):
-        """Verify the legacy sequential path produces correct passed/failed counts."""
-        # Configure settings for sequential (legacy) mode
-        mock_settings.use_new_scan_path = False
-        mock_settings.use_parallel_scanning = False
-        mock_settings.scan_rate_limit = 0  # No delays in tests
-
-        # Mock DB session
-        mock_db = MagicMock()
-        mock_session_local.return_value = mock_db
-
-        # Mock scan record
-        mock_scan = MagicMock()
-        mock_scan.screener_types = ["minervini"]
-        mock_scan.composite_method = "weighted_average"
-        mock_scan.status = "running"
-        mock_scan.universe_key = "all"
-        mock_db.query.return_value.filter.return_value.first.return_value = mock_scan
-
-        # Mock orchestrator
-        mock_orchestrator = _make_mock_orchestrator()
-
-        # Mock task instance
-        task_instance = MagicMock()
-        task_instance.request.id = "test-task-id"
-
-        with patch(
-            "app.wiring.bootstrap.get_scan_orchestrator",
-            return_value=mock_orchestrator,
-        ):
-            # Import after patching to get the decorated function's inner
-            from app.tasks.scan_tasks import run_bulk_scan
-
-            # Call the raw function (bypass Celery decorator)
-            result = run_bulk_scan.__wrapped__.__wrapped__(
-                task_instance, "parity-001", SYMBOLS, {}
-            )
-
-        assert result["status"] == "completed"
-        assert result["completed"] == EXPECTED_TOTAL
-        assert result["passed"] == EXPECTED_PASSED
-        assert result["failed"] == EXPECTED_FAILED
-        assert result["scan_path"] == "legacy"
-
-
-class TestParityBetweenPaths:
-    """Compare outputs from both paths side-by-side."""
+class TestUseCasePathCounts:
+    """Verify the use-case path produces correct counts and statuses."""
 
     def test_counts_match_between_paths(self):
         """Both paths must produce identical passed/failed/total counts."""
@@ -186,14 +124,14 @@ class TestParityBetweenPaths:
             RunBulkScanCommand,
             RunBulkScanUseCase,
         )
-        from tests.unit.test_run_bulk_scan_use_case import (
+        from tests.unit.use_cases.conftest import (
             FakeScanRepository,
             FakeScanResultRepository,
             FakeUnitOfWork,
-            FakeProgressSink,
-            FakeCancellationToken,
             FakeScan,
         )
+        from app.domain.scanning.ports import NullProgressSink as FakeProgressSink
+        from app.domain.scanning.ports import NeverCancelledToken as FakeCancellationToken
 
         scan_repo = FakeScanRepository()
         scan_repo.scans["parity-002"] = FakeScan(
@@ -234,14 +172,14 @@ class TestParityBetweenPaths:
             RunBulkScanCommand,
             RunBulkScanUseCase,
         )
-        from tests.unit.test_run_bulk_scan_use_case import (
+        from tests.unit.use_cases.conftest import (
             FakeScanRepository,
             FakeScanResultRepository,
             FakeUnitOfWork,
-            FakeProgressSink,
-            FakeCancellationToken,
             FakeScan,
         )
+        from app.domain.scanning.ports import NullProgressSink as FakeProgressSink
+        from app.domain.scanning.ports import NeverCancelledToken as FakeCancellationToken
 
         scan_repo = FakeScanRepository()
         scan_repo.scans["parity-003"] = FakeScan(

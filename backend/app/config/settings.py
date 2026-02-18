@@ -73,16 +73,8 @@ class Settings(BaseSettings):
     # Phase 2: Bulk Data Fetching Configuration
     use_bulk_fetching: bool = True  # Use yfinance.Tickers() for batch fetching (ENABLED for performance)
 
-    # Phase 3: Parallel Scanning Configuration
-    use_new_scan_path: bool = True  # Strangler: delegates to RunBulkScanUseCase
+    # Scan use-case configuration
     scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
-    use_parallel_scanning: bool = True  # Feature flag for Phase 3.1 rollout (ENABLED for performance)
-    scan_parallel_workers: int = 4 # Conservative: 2 parallel workers per batch
-    scan_parallel_batch_size: int = 50  # Stocks per batch
-    scan_parallel_rate_limit: float = 0.5  # 500ms = 2 req/sec (conservative)
-    scan_rate_limit_max: float = 2.0  # Max delay on errors (adaptive)
-    scan_rate_limit_adaptive: bool = True  # Enable adaptive slowdown on errors
-    scan_max_concurrent_batches: int = 1  # Max batches running simultaneously
 
     # Cache Configuration
     cache_redis_db: int = 2  # Separate DB for cache data

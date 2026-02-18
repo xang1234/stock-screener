@@ -13,6 +13,7 @@ FastAPI, or any other infrastructure.
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass, field
 
@@ -34,6 +35,7 @@ class GetScanResultsQuery:
     scan_id: str
     query_spec: QuerySpec = field(default_factory=QuerySpec)
     include_sparklines: bool = True
+    passes_only: bool = False
 
 
 # ── Result (output) ─────────────────────────────────────────────────────
@@ -61,6 +63,18 @@ class GetScanResultsUseCase:
             if scan is None:
                 raise EntityNotFoundError("Scan", query.scan_id)
 
+            # Apply passes_only business rule: augment filters to
+            # include only "Strong Buy" and "Buy" ratings.
+            query_spec = query.query_spec
+            if query.passes_only:
+                augmented_filters = copy.copy(query_spec.filters)
+                augmented_filters.add_categorical("rating", ("Strong Buy", "Buy"))
+                query_spec = QuerySpec(
+                    filters=augmented_filters,
+                    sort=query_spec.sort,
+                    page=query_spec.page,
+                )
+
             if scan.feature_run_id:
                 # Feature store path: query pre-computed snapshot
                 logger.info(
@@ -71,7 +85,7 @@ class GetScanResultsUseCase:
                 try:
                     result_page = uow.feature_store.query_run_as_scan_results(
                         scan.feature_run_id,
-                        query.query_spec,
+                        query_spec,
                         include_sparklines=query.include_sparklines,
                     )
                 except EntityNotFoundError:
@@ -82,7 +96,7 @@ class GetScanResultsUseCase:
                     )
                     result_page = uow.scan_results.query(
                         scan_id=query.scan_id,
-                        spec=query.query_spec,
+                        spec=query_spec,
                         include_sparklines=query.include_sparklines,
                     )
             else:
@@ -92,7 +106,7 @@ class GetScanResultsUseCase:
                 )
                 result_page = uow.scan_results.query(
                     scan_id=query.scan_id,
-                    spec=query.query_spec,
+                    spec=query_spec,
                     include_sparklines=query.include_sparklines,
                 )
 

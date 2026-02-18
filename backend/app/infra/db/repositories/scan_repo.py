@@ -47,7 +47,23 @@ class SqlScanRepository(ScanRepository):
             scan.total_stocks = fields["total_stocks"]
         if "passed_stocks" in fields:
             scan.passed_stocks = fields["passed_stocks"]
-        if status == "completed":
+        if status in ("completed", "cancelled"):
             scan.completed_at = datetime.utcnow()
 
         self._session.flush()
+
+    def list_recent(self, limit: int = 20) -> list[Scan]:
+        return (
+            self._session.query(Scan)
+            .order_by(Scan.started_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def delete(self, scan_id: str) -> bool:
+        scan = self.get_by_scan_id(scan_id)
+        if scan is None:
+            return False
+        self._session.delete(scan)
+        self._session.flush()
+        return True
