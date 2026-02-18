@@ -22,8 +22,6 @@ from app.domain.common.query import (
     SortOrder,
     SortSpec,
 )
-from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
-from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from tests.helpers.query_counter import count_queries
 
 from .conftest import PERF_FEATURE_RUN_ID, PERF_SCAN_ID
