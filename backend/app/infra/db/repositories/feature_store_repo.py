@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -29,8 +28,6 @@ from app.infra.db.models.feature_store import (
 )
 from app.infra.query.feature_store_query import apply_filters, apply_sort_and_paginate
 from app.models.stock_universe import StockUniverse
-
-logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 500
 
