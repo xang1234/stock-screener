@@ -395,6 +395,18 @@ class ScanOrchestrator:
         # Extract IPO date from fundamentals if available
         if stock_data.fundamentals and stock_data.fundamentals.get("ipo_date"):
             result["ipo_date"] = stock_data.fundamentals["ipo_date"]
+        elif "ipo" in screener_results:
+            # Fall back to IPO screener output when cache fundamentals are missing.
+            ipo_details = screener_results["ipo"].details if screener_results["ipo"] else {}
+            if isinstance(ipo_details, dict) and ipo_details.get("ipo_date"):
+                result["ipo_date"] = ipo_details.get("ipo_date")
+
+        # Extract sector/industry classification from fundamentals for UI + filtering.
+        if stock_data.fundamentals:
+            if stock_data.fundamentals.get("sector"):
+                result["gics_sector"] = stock_data.fundamentals["sector"]
+            if stock_data.fundamentals.get("industry"):
+                result["gics_industry"] = stock_data.fundamentals["industry"]
 
         # Calculate average dollar volume (avg_volume × current_price)
         # Primary: Use avg_volume from fundamentals (Finviz data)
