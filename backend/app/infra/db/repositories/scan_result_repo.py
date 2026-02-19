@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import func
@@ -14,7 +15,9 @@ from app.domain.scanning.ports import ScanResultRepository
 from app.domain.scanning.filter_spec import FilterSpec, SortSpec
 from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
 from app.infra.serialization import convert_numpy_types
+from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
+from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
 
 logger = logging.getLogger(__name__)
@@ -140,11 +143,141 @@ class SqlScanResultRepository(ScanResultRepository):
     def persist_orchestrator_results(
         self, scan_id: str, results: list[tuple[str, dict]]
     ) -> int:
+        if not results:
+            return 0
+
+        symbols = [symbol.upper() for symbol, _ in results]
+        enrichment = self._load_symbol_enrichment(symbols)
+
         rows = [
-            _map_orchestrator_result(scan_id, symbol, result)
+            _map_orchestrator_result(
+                scan_id,
+                symbol,
+                self._enrich_raw_result(symbol.upper(), result, enrichment),
+            )
             for symbol, result in results
         ]
         return self.bulk_insert(rows)
+
+    def _load_symbol_enrichment(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Load enrichment fields used by scan result persistence in bulk."""
+        if not symbols:
+            return {}
+
+        unique_symbols = sorted(set(symbols))
+        enrichment: dict[str, dict[str, Any]] = {
+            s: {} for s in unique_symbols
+        }
+
+        fundamentals_rows = (
+            self._session.query(
+                StockFundamental.symbol,
+                StockFundamental.eps_rating,
+                StockFundamental.ipo_date,
+                StockFundamental.sector,
+                StockFundamental.industry,
+            )
+            .filter(StockFundamental.symbol.in_(unique_symbols))
+            .all()
+        )
+        for row in fundamentals_rows:
+            d = enrichment.setdefault(row.symbol, {})
+            d["eps_rating"] = row.eps_rating
+            d["ipo_date"] = row.ipo_date
+            d["sector"] = row.sector
+            d["industry"] = row.industry
+
+        industry_rows = (
+            self._session.query(
+                StockIndustry.symbol,
+                StockIndustry.sector,
+                StockIndustry.industry,
+            )
+            .filter(StockIndustry.symbol.in_(unique_symbols))
+            .all()
+        )
+        for row in industry_rows:
+            d = enrichment.setdefault(row.symbol, {})
+            # Only backfill missing values from stock_industry.
+            if not d.get("sector"):
+                d["sector"] = row.sector
+            if not d.get("industry"):
+                d["industry"] = row.industry
+
+        ibd_group_rows = (
+            self._session.query(
+                IBDIndustryGroup.symbol,
+                IBDIndustryGroup.industry_group,
+            )
+            .filter(IBDIndustryGroup.symbol.in_(unique_symbols))
+            .all()
+        )
+        for row in ibd_group_rows:
+            d = enrichment.setdefault(row.symbol, {})
+            d["ibd_industry_group"] = row.industry_group
+
+        latest_rank_date = self._session.query(func.max(IBDGroupRank.date)).scalar()
+        rank_by_group: dict[str, int] = {}
+        if latest_rank_date is not None:
+            rank_rows = (
+                self._session.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
+                .filter(IBDGroupRank.date == latest_rank_date)
+                .all()
+            )
+            rank_by_group = {g: rank for g, rank in rank_rows}
+
+        for symbol, d in enrichment.items():
+            group_name = d.get("ibd_industry_group")
+            if group_name:
+                d["ibd_group_rank"] = rank_by_group.get(group_name)
+
+        return enrichment
+
+    def _enrich_raw_result(
+        self,
+        symbol: str,
+        raw: dict[str, Any],
+        enrichment: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Backfill missing classification/fundamental keys before persistence."""
+        enriched = dict(raw)
+        meta = enrichment.get(symbol, {})
+
+        if enriched.get("eps_rating") is None and meta.get("eps_rating") is not None:
+            enriched["eps_rating"] = meta["eps_rating"]
+
+        if not enriched.get("ipo_date"):
+            if meta.get("ipo_date"):
+                enriched["ipo_date"] = _to_iso_date(meta["ipo_date"])
+            else:
+                ipo_from_screener = (
+                    (
+                        enriched.get("details", {})
+                        .get("screeners", {})
+                        .get("ipo", {})
+                        .get("details", {})
+                        .get("ipo_date")
+                    )
+                    if isinstance(enriched.get("details"), dict)
+                    else None
+                )
+                if ipo_from_screener:
+                    enriched["ipo_date"] = _to_iso_date(ipo_from_screener)
+
+        if not enriched.get("gics_sector") and meta.get("sector"):
+            enriched["gics_sector"] = meta["sector"]
+        if not enriched.get("gics_industry") and meta.get("industry"):
+            enriched["gics_industry"] = meta["industry"]
+
+        if not enriched.get("ibd_industry_group") and meta.get("ibd_industry_group"):
+            enriched["ibd_industry_group"] = meta["ibd_industry_group"]
+        if (
+            enriched.get("ibd_group_rank") is None
+            and meta.get("ibd_group_rank") is not None
+        ):
+            enriched["ibd_group_rank"] = meta["ibd_group_rank"]
+
+        return enriched
 
     def delete_by_scan_id(self, scan_id: str) -> int:
         count = (
@@ -269,6 +402,17 @@ class SqlScanResultRepository(ScanResultRepository):
             for result, company_name in rows
         )
 
+    def get_details_by_symbol(
+        self, scan_id: str, symbol: str
+    ) -> dict | None:
+        """Return the raw details JSON blob for a single result, or None."""
+        row = (
+            self._session.query(ScanResult.details)
+            .filter(ScanResult.scan_id == scan_id, ScanResult.symbol == symbol)
+            .first()
+        )
+        return row[0] if row else None
+
     def get_filter_options(self, scan_id: str) -> FilterOptions:
         """Query distinct categorical values for filter dropdowns."""
 
@@ -375,3 +519,16 @@ def _map_row_to_domain(
         screeners_total=details.get("screeners_total", 0),
         extended_fields=extended,
     )
+
+
+def _to_iso_date(value: Any) -> str | None:
+    """Normalize date-like values to YYYY-MM-DD strings."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return str(value)

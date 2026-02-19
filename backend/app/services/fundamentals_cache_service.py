@@ -43,6 +43,19 @@ class FundamentalsCacheService:
     # TTL settings
     CACHE_TTL_SECONDS = 604800  # 7 days (weekly refresh)
     MAX_AGE_DAYS = 7  # Max age before data is considered stale
+    REQUIRED_SCAN_KEYS = (
+        "eps_rating",
+        "ipo_date",
+        "first_trade_date",
+        "sector",
+        "industry",
+        "eps_growth_qq",
+        "sales_growth_qq",
+        "eps_growth_yy",
+        "sales_growth_yy",
+        "market_cap",
+        "avg_volume",
+    )
 
     def __init__(self, redis_client: Optional[redis.Redis] = None):
         """Initialize fundamentals cache service."""
@@ -101,6 +114,11 @@ class FundamentalsCacheService:
 
                 if cached_data:
                     fundamentals = pickle.loads(cached_data)
+                    if self._needs_db_enrichment(fundamentals):
+                        db_data, last_update = self._get_from_database(symbol)
+                        if db_data is not None and self._is_data_fresh(last_update):
+                            fundamentals = self._merge_fundamentals(fundamentals, db_data)
+                            self._store_in_redis(symbol, fundamentals)
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except Exception as e:
@@ -630,6 +648,21 @@ class FundamentalsCacheService:
 
         return is_fresh
 
+    def _needs_db_enrichment(self, fundamentals: Optional[Dict]) -> bool:
+        """True when a cached payload is missing keys needed by scan enrichment."""
+        if not isinstance(fundamentals, dict):
+            return True
+        return any(key not in fundamentals for key in self.REQUIRED_SCAN_KEYS)
+
+    @staticmethod
+    def _merge_fundamentals(primary: Dict, fallback: Dict) -> Dict:
+        """Merge two fundamentals payloads, preferring non-null primary values."""
+        merged = dict(primary)
+        for key, value in fallback.items():
+            if key not in merged or merged[key] is None:
+                merged[key] = value
+        return merged
+
     def _get_many_from_database(
         self,
         symbols: list[str]
@@ -832,14 +865,21 @@ class FundamentalsCacheService:
             cached_data = {}
             redis_hits = []
             redis_misses = []
+            redis_needs_enrichment = []
 
             for symbol, raw_data in zip(symbols, results):
                 if raw_data:
                     try:
                         fundamentals = pickle.loads(raw_data)
                         cached_data[symbol] = fundamentals
-                        redis_hits.append(symbol)
-                        logger.debug(f"Bulk cache HIT for {symbol} fundamentals (Redis)")
+                        if self._needs_db_enrichment(fundamentals):
+                            redis_needs_enrichment.append(symbol)
+                            logger.debug(
+                                f"Bulk cache HIT for {symbol} fundamentals (Redis, stale shape)"
+                            )
+                        else:
+                            redis_hits.append(symbol)
+                            logger.debug(f"Bulk cache HIT for {symbol} fundamentals (Redis)")
                     except Exception as e:
                         logger.warning(f"Error deserializing {symbol}: {e}")
                         cached_data[symbol] = None
@@ -849,26 +889,41 @@ class FundamentalsCacheService:
                     redis_misses.append(symbol)
                     logger.debug(f"Bulk cache MISS for {symbol} fundamentals (Redis)")
 
-            # DATABASE FALLBACK: Fetch misses from database
-            if redis_misses:
-                logger.info(f"Fetching {len(redis_misses)} fundamentals from database (Redis misses)")
+            # DATABASE FALLBACK: Fetch misses + stale-shape payloads from database.
+            db_lookup_symbols = redis_misses + redis_needs_enrichment
+            if db_lookup_symbols:
+                logger.info(
+                    "Fetching %d fundamentals from database (%d misses, %d stale shape)",
+                    len(db_lookup_symbols),
+                    len(redis_misses),
+                    len(redis_needs_enrichment),
+                )
 
-                db_results = self._get_many_from_database(redis_misses)
+                db_results = self._get_many_from_database(db_lookup_symbols)
 
                 db_hits = []
-                for symbol in redis_misses:
+                for symbol in db_lookup_symbols:
                     fundamentals, last_update = db_results.get(symbol, (None, None))
 
                     if fundamentals is not None and self._is_data_fresh(last_update):
-                        cached_data[symbol] = fundamentals
+                        if symbol in redis_needs_enrichment and cached_data.get(symbol):
+                            cached_data[symbol] = self._merge_fundamentals(
+                                cached_data[symbol], fundamentals
+                            )
+                        else:
+                            cached_data[symbol] = fundamentals
                         db_hits.append(symbol)
 
                         # Warm Redis for next time
-                        self._store_in_redis(symbol, fundamentals)
+                        self._store_in_redis(symbol, cached_data[symbol])
 
-                logger.info(f"Database fallback: {len(db_hits)} hits, {len(redis_misses) - len(db_hits)} still missing")
+                logger.info(
+                    "Database fallback: %d hits, %d still missing",
+                    len(db_hits),
+                    len(db_lookup_symbols) - len(db_hits),
+                )
 
-            total_hits = len(redis_hits) + sum(1 for s in redis_misses if cached_data.get(s) is not None)
+            total_hits = sum(1 for s in symbols if cached_data.get(s) is not None)
             total_misses = len(symbols) - total_hits
 
             logger.info(f"Bulk fetched {len(symbols)} fundamentals: {len(redis_hits)} Redis hits, {total_hits - len(redis_hits)} DB hits, {total_misses} misses")
