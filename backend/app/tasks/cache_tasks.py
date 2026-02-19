@@ -196,7 +196,8 @@ def weekly_full_refresh(self):
     """
     Weekly full cache refresh.
 
-    Clears all caches and re-fetches fresh data to ensure consistency.
+    Cleans up orphaned cache keys (delisted/deactivated symbols),
+    warms SPY, then triggers a full universe refresh via smart_refresh_cache.
     Typically runs Sunday morning before markets open.
 
     Returns:
@@ -227,6 +228,8 @@ def weekly_full_refresh(self):
         spy_results = warm_spy_cache()
 
         # 3. Full universe refresh (force mode — no freshness skip)
+        # Note: .delay() only enqueues — it won't start until this task finishes
+        # and releases the data_fetch lock (both tasks share the same queue).
         logger.info(f"\n[3/3] Triggering full universe refresh ({len(active_symbols)} symbols)...")
         refresh_task = smart_refresh_cache.delay(mode="full")
         logger.info(f"✓ Full refresh task queued: {refresh_task.id}")
@@ -862,13 +865,18 @@ def smart_refresh_cache(self, mode: str = "auto"):
                 logger.info(f"Skipping {skipped} recently-refreshed symbols (fresh within {settings.refresh_skip_hours}h)")
 
         if not symbols:
+            message = (
+                "All symbols recently refreshed - nothing to do"
+                if mode == "auto" else
+                "No active symbols found in universe"
+            )
             price_cache.save_warmup_metadata("completed", 0, 0)
             return {
                 "status": "completed",
                 "refreshed": 0,
                 "failed": 0,
                 "total": 0,
-                "message": "No symbols to refresh - cache is empty",
+                "message": message,
                 "mode": mode,
                 "completed_at": datetime.now().isoformat()
             }

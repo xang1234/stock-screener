@@ -1052,7 +1052,9 @@ class PriceCacheService:
             return symbols  # Can't check freshness without Redis — refresh all
 
         try:
-            cutoff = datetime.now() - timedelta(hours=max_age_hours)
+            # Use Eastern time for cutoff since fetch_timestamp is stored in ET
+            now_et = get_eastern_now()
+            cutoff = now_et - timedelta(hours=max_age_hours)
 
             # Batch-read fetch_meta keys via pipeline
             pipeline = self._redis_client.pipeline()
@@ -1076,12 +1078,12 @@ class PriceCacheService:
                         continue
 
                     fetch_ts = datetime.fromisoformat(fetch_ts_str)
-                    # Make naive for comparison (fetch_meta stores ET-aware timestamps)
-                    if fetch_ts.tzinfo is not None:
-                        fetch_ts = fetch_ts.replace(tzinfo=None)
-                    cutoff_naive = cutoff.replace(tzinfo=None) if cutoff.tzinfo else cutoff
+                    # Compare as aware datetimes (both are Eastern)
+                    # If fetch_ts somehow lost tz info, localize it to Eastern
+                    if fetch_ts.tzinfo is None:
+                        fetch_ts = EASTERN.localize(fetch_ts)
 
-                    if fetch_ts < cutoff_naive:
+                    if fetch_ts < cutoff:
                         needs_refresh.append(symbol)
                 except (json.JSONDecodeError, ValueError):
                     needs_refresh.append(symbol)

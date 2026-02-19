@@ -399,12 +399,12 @@ async def smart_refresh(request: SmartRefreshRequest):
     """
     Trigger smart cache refresh with prioritized fetching.
 
-    This is the NEW unified refresh endpoint that replaces the confusing
+    This is the unified refresh endpoint that replaces the confusing
     split between /warm/all and /force-refresh.
 
     Modes:
-    - auto (default): Refresh all currently cached symbols
-    - full: Refresh entire universe (~5000 symbols, takes ~2 hours)
+    - auto (default): Full universe, skip symbols refreshed within 4h
+    - full: Full universe, force re-fetch everything (~2 hours)
 
     Key features:
     - Always warms SPY first (required for RS calculations)
