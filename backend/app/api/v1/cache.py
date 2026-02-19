@@ -369,8 +369,22 @@ async def get_cache_health():
         CacheHealthResponse with status, dates, message, and task info
     """
     try:
+        from sqlalchemy import func
+        from ...models.stock_universe import StockUniverse
+
         price_cache = PriceCacheService.get_instance()
         health = price_cache.get_cache_health_status()
+
+        # Add universe count for frontend display
+        db = SessionLocal()
+        try:
+            universe_count = db.query(func.count(StockUniverse.symbol)).filter(
+                StockUniverse.is_active == True
+            ).scalar()
+            health["universe_count"] = universe_count
+        finally:
+            db.close()
+
         return CacheHealthResponse(**health)
 
     except Exception as e:
@@ -415,7 +429,7 @@ async def smart_refresh(request: SmartRefreshRequest):
         # Queue smart refresh task
         task = smart_refresh_cache.delay(mode=request.mode)
 
-        mode_desc = "cached symbols" if request.mode == "auto" else "entire universe (~2 hours)"
+        mode_desc = "full universe (skips recently refreshed)" if request.mode == "auto" else "entire universe, force re-fetch (~2 hours)"
         return SmartRefreshResponse(
             status="queued",
             task_id=task.id,

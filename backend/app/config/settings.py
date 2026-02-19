@@ -86,7 +86,8 @@ class Settings(BaseSettings):
     # Actual retention is set in PriceCacheService.RECENT_DAYS = 1825
     cache_recent_days: int = 60  # Default for general use (screeners override)
     cache_warmup_enabled: bool = True  # Enable automatic cache warming
-    cache_warmup_symbols: int = 100  # Number of symbols to pre-warm
+    cache_warmup_symbols: int = 100  # DEPRECATED: All refresh paths now use full universe
+    refresh_skip_hours: float = 4.0  # Skip symbols refreshed within this many hours (auto mode)
     cache_incremental_enabled: bool = True  # Enable incremental updates
 
     # Differential cache TTLs for different data types

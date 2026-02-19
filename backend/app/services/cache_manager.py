@@ -374,6 +374,41 @@ class CacheManager:
             logger.error(f"Error invalidating caches: {e}", exc_info=True)
             return {'deleted': 0, 'error': str(e)}
 
+    def cleanup_orphaned_cache_keys(self, active_symbols: set) -> int:
+        """
+        Remove Redis cache entries for symbols no longer in the active universe.
+
+        Compares cached symbols against the active universe set and removes
+        entries for deactivated/delisted symbols to prevent stale data buildup.
+
+        Args:
+            active_symbols: Set of currently active symbol strings
+
+        Returns:
+            Number of orphaned entries removed
+        """
+        if not self.redis_client:
+            logger.warning("Redis not available for orphan cleanup")
+            return 0
+
+        try:
+            cached_symbols = set(self.price_cache.get_all_cached_symbols())
+            orphaned = cached_symbols - active_symbols
+
+            if not orphaned:
+                logger.info("No orphaned cache entries found")
+                return 0
+
+            for symbol in orphaned:
+                self.invalidate_symbol_cache(symbol)
+
+            logger.info(f"Cleaned up {len(orphaned)} orphaned cache entries")
+            return len(orphaned)
+
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned cache keys: {e}", exc_info=True)
+            return 0
+
     def invalidate_symbol_cache(self, symbol: str) -> bool:
         """
         Invalidate cache for a specific symbol.

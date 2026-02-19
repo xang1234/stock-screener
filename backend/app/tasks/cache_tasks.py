@@ -210,25 +210,32 @@ def weekly_full_refresh(self):
     db = SessionLocal()
 
     try:
+        from ..models.stock_universe import StockUniverse
         cache_manager = CacheManager(db)
 
-        # 1. Invalidate all Redis caches
-        logger.info("\n[1/3] Invalidating all caches...")
-        invalidate_results = cache_manager.invalidate_all_caches()
-        logger.info(f"✓ Invalidated {invalidate_results['deleted']} cache keys")
+        # 1. Clean up orphaned cache keys (symbols no longer in active universe)
+        logger.info("\n[1/3] Cleaning up orphaned cache entries...")
+        active_symbols = set(
+            r.symbol for r in db.query(StockUniverse.symbol)
+            .filter(StockUniverse.is_active == True).all()
+        )
+        orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
+        logger.info(f"✓ Cleaned up {orphan_count} orphaned cache entries")
 
         # 2. Warm SPY cache
         logger.info("\n[2/3] Re-warming SPY benchmark cache...")
         spy_results = warm_spy_cache()
 
-        # 3. Warm top symbols
-        logger.info(f"\n[3/3] Re-warming top {settings.cache_warmup_symbols} symbols...")
-        symbol_results = warm_top_symbols(count=settings.cache_warmup_symbols)
+        # 3. Full universe refresh (force mode — no freshness skip)
+        logger.info(f"\n[3/3] Triggering full universe refresh ({len(active_symbols)} symbols)...")
+        refresh_task = smart_refresh_cache.delay(mode="full")
+        logger.info(f"✓ Full refresh task queued: {refresh_task.id}")
 
         results = {
-            'invalidated': invalidate_results,
+            'orphans_cleaned': orphan_count,
             'spy': spy_results,
-            'symbols': symbol_results,
+            'refresh_task_id': refresh_task.id,
+            'universe_size': len(active_symbols),
             'completed_at': datetime.now().isoformat()
         }
 
@@ -793,8 +800,8 @@ def smart_refresh_cache(self, mode: str = "auto"):
 
     Args:
         mode: Refresh mode
-            - "auto": SPY + all currently cached symbols (quick refresh)
-            - "full": SPY + entire universe (~5000 symbols, ~2 hours)
+            - "auto": Full universe, skip symbols refreshed within 4h (smart refresh)
+            - "full": Full universe, force re-fetch everything regardless of freshness
 
     Returns:
         Dict with refresh statistics
@@ -838,21 +845,21 @@ def smart_refresh_cache(self, mode: str = "auto"):
             ]
             logger.info(f"Full refresh: {len(symbols)} symbols (market cap order)")
         else:
-            # Auto mode: Only cached symbols (fast refresh of existing data)
-            all_cached = price_cache.get_all_cached_symbols()
-            if all_cached:
-                # Sort by market cap
-                cap_order = {
-                    r.symbol: r.market_cap or 0
-                    for r in db.query(StockUniverse.symbol, StockUniverse.market_cap)
-                    .filter(StockUniverse.symbol.in_(all_cached))
-                    .all()
-                }
-                symbols = sorted(all_cached, key=lambda s: cap_order.get(s, 0), reverse=True)
-                logger.info(f"Auto refresh: {len(symbols)} cached symbols (market cap order)")
-            else:
-                symbols = []
-                logger.info("Auto refresh: No cached symbols found")
+            # Auto mode: Full universe, skip recently-refreshed symbols
+            symbols = [
+                r.symbol for r in db.query(StockUniverse.symbol)
+                .filter(StockUniverse.is_active == True)
+                .order_by(StockUniverse.market_cap.desc().nullslast())
+                .all()
+            ]
+            logger.info(f"Auto refresh: {len(symbols)} active symbols (full universe, market cap order)")
+
+            # Filter out symbols refreshed within skip window
+            original_count = len(symbols)
+            symbols = price_cache.get_symbols_needing_refresh(symbols, max_age_hours=settings.refresh_skip_hours)
+            skipped = original_count - len(symbols)
+            if skipped > 0:
+                logger.info(f"Skipping {skipped} recently-refreshed symbols (fresh within {settings.refresh_skip_hours}h)")
 
         if not symbols:
             price_cache.save_warmup_metadata("completed", 0, 0)

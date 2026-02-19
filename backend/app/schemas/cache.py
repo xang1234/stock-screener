@@ -72,6 +72,7 @@ class CacheHealthResponse(BaseModel):
     can_force_cancel: Optional[bool] = None
     task_running: Optional[dict] = None
     last_warmup: Optional[dict] = None
+    universe_count: Optional[int] = None
 
 
 class SmartRefreshResponse(BaseModel):

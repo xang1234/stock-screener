@@ -1033,6 +1033,65 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error clearing fetch metadata for {symbol}: {e}", exc_info=True)
 
+    def get_symbols_needing_refresh(self, symbols: List[str], max_age_hours: float = 4.0) -> List[str]:
+        """
+        Filter symbols to only those whose cache is older than max_age_hours.
+
+        Uses Redis pipeline to batch-read fetch_meta keys for efficiency.
+        Returns symbols that are either missing from cache or have a
+        fetch_timestamp older than the threshold.
+
+        Args:
+            symbols: List of symbols to check
+            max_age_hours: Maximum age in hours before a symbol needs refresh
+
+        Returns:
+            List of symbols that need refreshing
+        """
+        if not self._redis_client or not symbols:
+            return symbols  # Can't check freshness without Redis — refresh all
+
+        try:
+            cutoff = datetime.now() - timedelta(hours=max_age_hours)
+
+            # Batch-read fetch_meta keys via pipeline
+            pipeline = self._redis_client.pipeline()
+            for symbol in symbols:
+                meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+                pipeline.get(meta_key)
+            results = pipeline.execute()
+
+            needs_refresh = []
+            for symbol, meta_json in zip(symbols, results):
+                if not meta_json:
+                    # No metadata — never fetched or expired
+                    needs_refresh.append(symbol)
+                    continue
+
+                try:
+                    meta = json.loads(meta_json)
+                    fetch_ts_str = meta.get("fetch_timestamp")
+                    if not fetch_ts_str:
+                        needs_refresh.append(symbol)
+                        continue
+
+                    fetch_ts = datetime.fromisoformat(fetch_ts_str)
+                    # Make naive for comparison (fetch_meta stores ET-aware timestamps)
+                    if fetch_ts.tzinfo is not None:
+                        fetch_ts = fetch_ts.replace(tzinfo=None)
+                    cutoff_naive = cutoff.replace(tzinfo=None) if cutoff.tzinfo else cutoff
+
+                    if fetch_ts < cutoff_naive:
+                        needs_refresh.append(symbol)
+                except (json.JSONDecodeError, ValueError):
+                    needs_refresh.append(symbol)
+
+            return needs_refresh
+
+        except Exception as e:
+            logger.error(f"Error checking symbol freshness: {e}", exc_info=True)
+            return symbols  # On error, refresh all to be safe
+
     def get_all_cached_symbols(self) -> List[str]:
         """
         Get all symbols that have cached price data in Redis.

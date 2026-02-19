@@ -233,7 +233,8 @@ if settings.cache_warmup_enabled:
         },
 
         # Auto-refresh stale intraday data after market close (4:45 PM ET)
-        # Detects and refreshes symbols with data fetched during market hours
+        # Safety net: patches intraday snapshots before the 5:30 PM full refresh.
+        # Only processes symbols with stale intraday data (small count).
         'auto-refresh-after-close': {
             'task': 'app.tasks.cache_tasks.auto_refresh_after_close',
             'schedule': crontab(

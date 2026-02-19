@@ -516,8 +516,8 @@ export default function CacheStatus() {
           <MenuItem onClick={handleAutoRefresh} disabled={refreshMutation.isPending || health?.status === 'updating'}>
             <ListItemIcon><RefreshIcon fontSize="small" /></ListItemIcon>
             <ListItemText
-              primary="Quick Refresh"
-              secondary="Refresh cached symbols"
+              primary="Refresh Cache"
+              secondary={`${health?.universe_count?.toLocaleString() || '~9,000'} symbols (skips fresh)`}
               primaryTypographyProps={{ fontSize: '12px' }}
               secondaryTypographyProps={{ fontSize: '10px' }}
             />
@@ -525,8 +525,8 @@ export default function CacheStatus() {
           <MenuItem onClick={handleFullRefresh} disabled={refreshMutation.isPending || health?.status === 'updating'}>
             <ListItemIcon><UpdateIcon fontSize="small" /></ListItemIcon>
             <ListItemText
-              primary="Full Refresh"
-              secondary="All ~5000 symbols (~2 hours)"
+              primary="Force Full Refresh"
+              secondary={`All ${health?.universe_count?.toLocaleString() || '~9,000'} symbols (~2 hours)`}
               primaryTypographyProps={{ fontSize: '12px' }}
               secondaryTypographyProps={{ fontSize: '10px' }}
             />
@@ -554,7 +554,7 @@ export default function CacheStatus() {
           <DialogContentText sx={{ fontSize: '12px' }}>
             {confirmDialog.type === 'fundamentals'
               ? 'This will refresh data for ~7,000 stocks. Takes ~1 hour.'
-              : 'This will refresh price data for ALL ~5,000 symbols. Takes approximately 2 hours.'}
+              : 'This will force re-fetch price data for ALL symbols regardless of freshness. Takes approximately 2 hours.'}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
