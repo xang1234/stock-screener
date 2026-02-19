@@ -27,6 +27,10 @@ from app.analysis.patterns.models import (
     is_snake_case,
     normalize_iso_date,
 )
+from app.analysis.patterns.report import (
+    SetupEngineReport,
+    assert_valid_setup_engine_report_payload,
+)
 from app.analysis.patterns.policy import (
     SetupEngineDataPolicyResult,
     policy_failed_checks,
@@ -207,6 +211,7 @@ def build_setup_engine_payload(
     }
 
     assert_valid_setup_engine_payload(payload)
+    assert_valid_setup_engine_report_payload(payload)
     return payload
 
 
@@ -218,3 +223,12 @@ def attach_setup_engine(
     merged = dict(details or {})
     merged["setup_engine"] = setup_engine
     return merged
+
+
+def build_setup_engine_payload_from_report(
+    report: SetupEngineReport,
+) -> SetupEnginePayload:
+    """Serialize a typed report container into canonical setup_engine payload."""
+    payload = report.to_payload()
+    assert_valid_setup_engine_report_payload(payload)
+    return payload

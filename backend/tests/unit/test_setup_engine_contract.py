@@ -11,8 +11,10 @@ from app.analysis.patterns.models import (
 )
 from app.analysis.patterns.config import SetupEngineParameters
 from app.analysis.patterns.policy import evaluate_setup_engine_data_policy
+from app.analysis.patterns.report import ExplainPayload, SetupEngineReport
 from app.scanners.setup_engine_scanner import (
     attach_setup_engine,
+    build_setup_engine_payload_from_report,
     build_setup_engine_payload,
 )
 
@@ -166,3 +168,19 @@ def test_candidate_model_input_is_supported():
     assert candidate["pattern"] == "three_weeks_tight"
     assert candidate["checks"]["tight_band_ok"] is True
     assert candidate["notes"] == ["strict_mode"]
+
+
+def test_build_payload_from_typed_report():
+    report = SetupEngineReport(
+        timeframe="daily",
+        setup_ready=False,
+        setup_score=65.0,
+        quality_score=60.0,
+        readiness_score=55.0,
+        pattern_primary="vcp",
+        pattern_confidence_pct=58.0,
+        explain=ExplainPayload(),
+    )
+    payload = build_setup_engine_payload_from_report(report)
+    assert payload["schema_version"] == "v1"
+    assert payload["pattern_primary"] == "vcp"

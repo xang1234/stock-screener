@@ -16,6 +16,7 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorInput,
     PatternDetectorResult,
 )
+from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 
 class HighTightFlagDetector(PatternDetector):
@@ -29,17 +30,24 @@ class HighTightFlagDetector(PatternDetector):
         parameters: SetupEngineParameters,
     ) -> PatternDetectorResult:
         del parameters
-        if detector_input.daily_bars < 180:
+        normalized = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="daily",
+            min_bars=180,
+            feature_key="daily_ohlcv",
+            fallback_bar_count=detector_input.daily_bars,
+        )
+        if not normalized.prerequisites_ok:
             return PatternDetectorResult(
                 detector_name=self.name,
                 candidate=None,
-                failed_checks=("insufficient_data", "daily_bars_lt_180"),
-                warnings=("high_tight_flag_insufficient_data",),
+                failed_checks=("insufficient_data", *normalized.failed_checks),
+                warnings=("high_tight_flag_insufficient_data", *normalized.warnings),
             )
 
         return PatternDetectorResult(
             detector_name=self.name,
             candidate=None,
             failed_checks=("detector_not_implemented",),
-            warnings=("high_tight_flag_stub",),
+            warnings=("high_tight_flag_stub", *normalized.warnings),
         )

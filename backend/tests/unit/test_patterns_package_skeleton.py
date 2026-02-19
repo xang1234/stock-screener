@@ -13,6 +13,8 @@ import app.analysis.patterns.first_pullback as first_pullback_module
 import app.analysis.patterns.high_tight_flag as htf_module
 import app.analysis.patterns.nr7_inside_day as nr7_module
 import app.analysis.patterns.policy as policy_module
+import app.analysis.patterns.normalization as normalization_module
+import app.analysis.patterns.report as report_module
 import app.analysis.patterns.technicals as technicals_module
 import app.analysis.patterns.three_weeks_tight as three_weeks_tight_module
 import app.analysis.patterns.vcp_wrapper as vcp_wrapper_module
@@ -75,6 +77,8 @@ def test_analysis_layer_modules_do_not_import_scanner_layer():
         aggregator_module,
         config_module,
         policy_module,
+        normalization_module,
+        report_module,
         technicals_module,
         cup_entry_module,
         three_weeks_tight_module,
@@ -111,8 +115,10 @@ def test_public_api_exports_stable_symbols_only():
     assert "PatternCandidate" in exported
     assert "coerce_pattern_candidate" in exported
     assert "resample_ohlcv" in exported
+    assert "normalize_ohlcv_frame" in exported
     assert "VCPWrapperDetector" in exported
     assert "ThreeWeeksTightDetector" in exported
+    assert "SetupEngineReport" in exported
     # Internal governance/policy modules are intentionally not wildcard-exported.
     assert "SetupEngineParameters" not in exported
     assert "evaluate_setup_engine_data_policy" not in exported

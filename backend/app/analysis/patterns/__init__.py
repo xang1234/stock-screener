@@ -16,7 +16,22 @@ from .models import (
     coerce_pattern_candidate,
     validate_pattern_candidate,
 )
+from .normalization import (
+    REQUIRED_OHLCV_COLUMNS,
+    NormalizedOHLCV,
+    normalize_detector_input_ohlcv,
+    normalize_ohlcv_frame,
+)
 from .nr7_inside_day import NR7InsideDayDetector
+from .report import (
+    ExplainPayload,
+    InvalidationFlag,
+    KeyLevels,
+    SetupEngineReport,
+    assert_valid_setup_engine_report_payload,
+    canonical_setup_engine_report_examples,
+    validate_setup_engine_report_payload,
+)
 from .technicals import (
     average_true_range,
     bollinger_band_width_percent,
@@ -40,6 +55,10 @@ __all__ = [
     "PatternCandidateModel",
     "coerce_pattern_candidate",
     "validate_pattern_candidate",
+    "REQUIRED_OHLCV_COLUMNS",
+    "NormalizedOHLCV",
+    "normalize_ohlcv_frame",
+    "normalize_detector_input_ohlcv",
     "PatternDetector",
     "PatternDetectorInput",
     "PatternDetectorResult",
@@ -50,6 +69,13 @@ __all__ = [
     "CupHandleDetector",
     "NR7InsideDayDetector",
     "FirstPullbackDetector",
+    "SetupEngineReport",
+    "ExplainPayload",
+    "KeyLevels",
+    "InvalidationFlag",
+    "validate_setup_engine_report_payload",
+    "assert_valid_setup_engine_report_payload",
+    "canonical_setup_engine_report_examples",
     "resample_ohlcv",
     "true_range",
     "true_range_from_ohlc",

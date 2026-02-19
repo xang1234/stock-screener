@@ -13,6 +13,7 @@ from app.domain.scanning.filter_spec import QuerySpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository
 from app.domain.scanning.filter_spec import FilterSpec, SortSpec
+from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
 from app.infra.serialization import convert_numpy_types
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
@@ -34,6 +35,19 @@ def _map_orchestrator_result(scan_id: str, symbol: str, raw: dict) -> dict:
     # Without this, numpy floats/ints from the ScanOrchestrator would
     # cause JSON serialization failures in the ``details`` column.
     raw = convert_numpy_types(raw)
+
+    setup_engine = raw.get("setup_engine")
+    if isinstance(setup_engine, dict):
+        validation_errors = validate_setup_engine_report_payload(setup_engine)
+        if validation_errors:
+            logger.warning(
+                "%s setup_engine payload validation failed; dropping payload. errors=%s",
+                symbol.upper(),
+                validation_errors[:5],
+            )
+            raw = dict(raw)
+            raw.pop("setup_engine", None)
+            raw["setup_engine_validation_errors"] = validation_errors
 
     r: dict[str, Any] = {}
 

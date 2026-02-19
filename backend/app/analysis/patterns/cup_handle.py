@@ -16,6 +16,7 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorInput,
     PatternDetectorResult,
 )
+from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 
 class CupHandleDetector(PatternDetector):
@@ -29,17 +30,24 @@ class CupHandleDetector(PatternDetector):
         parameters: SetupEngineParameters,
     ) -> PatternDetectorResult:
         del parameters
-        if detector_input.weekly_bars < 20:
+        normalized = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="weekly",
+            min_bars=20,
+            feature_key="weekly_ohlcv",
+            fallback_bar_count=detector_input.weekly_bars,
+        )
+        if not normalized.prerequisites_ok:
             return PatternDetectorResult(
                 detector_name=self.name,
                 candidate=None,
-                failed_checks=("insufficient_data", "weekly_bars_lt_20"),
-                warnings=("cup_handle_insufficient_data",),
+                failed_checks=("insufficient_data", *normalized.failed_checks),
+                warnings=("cup_handle_insufficient_data", *normalized.warnings),
             )
 
         return PatternDetectorResult(
             detector_name=self.name,
             candidate=None,
             failed_checks=("detector_not_implemented",),
-            warnings=("cup_handle_stub",),
+            warnings=("cup_handle_stub", *normalized.warnings),
         )

@@ -15,6 +15,7 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorInput,
     PatternDetectorResult,
 )
+from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 
 class VCPWrapperDetector(PatternDetector):
@@ -28,17 +29,24 @@ class VCPWrapperDetector(PatternDetector):
         parameters: SetupEngineParameters,
     ) -> PatternDetectorResult:
         del parameters
-        if detector_input.daily_bars < 120:
+        normalized = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="daily",
+            min_bars=120,
+            feature_key="daily_ohlcv",
+            fallback_bar_count=detector_input.daily_bars,
+        )
+        if not normalized.prerequisites_ok:
             return PatternDetectorResult(
                 detector_name=self.name,
                 candidate=None,
-                failed_checks=("insufficient_data", "daily_bars_lt_120"),
-                warnings=("vcp_wrapper_insufficient_data",),
+                failed_checks=("insufficient_data", *normalized.failed_checks),
+                warnings=("vcp_wrapper_insufficient_data", *normalized.warnings),
             )
 
         return PatternDetectorResult(
             detector_name=self.name,
             candidate=None,
             failed_checks=("detector_not_implemented",),
-            warnings=("vcp_wrapper_stub",),
+            warnings=("vcp_wrapper_stub", *normalized.warnings),
         )

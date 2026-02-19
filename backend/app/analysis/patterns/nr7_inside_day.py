@@ -15,6 +15,7 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorInput,
     PatternDetectorResult,
 )
+from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 
 class NR7InsideDayDetector(PatternDetector):
@@ -28,17 +29,24 @@ class NR7InsideDayDetector(PatternDetector):
         parameters: SetupEngineParameters,
     ) -> PatternDetectorResult:
         del parameters
-        if detector_input.daily_bars < 10:
+        normalized = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="daily",
+            min_bars=10,
+            feature_key="daily_ohlcv",
+            fallback_bar_count=detector_input.daily_bars,
+        )
+        if not normalized.prerequisites_ok:
             return PatternDetectorResult(
                 detector_name=self.name,
                 candidate=None,
-                failed_checks=("insufficient_data", "daily_bars_lt_10"),
-                warnings=("nr7_inside_day_insufficient_data",),
+                failed_checks=("insufficient_data", *normalized.failed_checks),
+                warnings=("nr7_inside_day_insufficient_data", *normalized.warnings),
             )
 
         return PatternDetectorResult(
             detector_name=self.name,
             candidate=None,
             failed_checks=("detector_not_implemented",),
-            warnings=("nr7_inside_day_stub",),
+            warnings=("nr7_inside_day_stub", *normalized.warnings),
         )

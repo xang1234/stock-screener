@@ -14,6 +14,7 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorInput,
     PatternDetectorResult,
 )
+from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
 
 
 class DoubleBottomDetector(PatternDetector):
@@ -27,17 +28,46 @@ class DoubleBottomDetector(PatternDetector):
         parameters: SetupEngineParameters,
     ) -> PatternDetectorResult:
         del parameters
-        if detector_input.weekly_bars < 10 and detector_input.daily_bars < 80:
+        normalized_weekly = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="weekly",
+            min_bars=10,
+            feature_key="weekly_ohlcv",
+            fallback_bar_count=detector_input.weekly_bars,
+        )
+        normalized_daily = normalize_detector_input_ohlcv(
+            features=detector_input.features,
+            timeframe="daily",
+            min_bars=80,
+            feature_key="daily_ohlcv",
+            fallback_bar_count=detector_input.daily_bars,
+        )
+
+        if (not normalized_weekly.prerequisites_ok) and (not normalized_daily.prerequisites_ok):
+            failed = (
+                "insufficient_data",
+                *normalized_weekly.failed_checks,
+                *normalized_daily.failed_checks,
+            )
+            warnings = (
+                "double_bottom_insufficient_data",
+                *normalized_weekly.warnings,
+                *normalized_daily.warnings,
+            )
             return PatternDetectorResult(
                 detector_name=self.name,
                 candidate=None,
-                failed_checks=("insufficient_data",),
-                warnings=("double_bottom_insufficient_data",),
+                failed_checks=tuple(dict.fromkeys(failed)),
+                warnings=tuple(dict.fromkeys(warnings)),
             )
 
         return PatternDetectorResult(
             detector_name=self.name,
             candidate=None,
             failed_checks=("detector_not_implemented",),
-            warnings=("double_bottom_detector_stub",),
+            warnings=(
+                "double_bottom_detector_stub",
+                *normalized_weekly.warnings,
+                *normalized_daily.warnings,
+            ),
         )
