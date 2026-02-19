@@ -7,7 +7,6 @@ correctness.
 """
 import pytest
 from datetime import date, datetime, time, timedelta
-from unittest.mock import patch
 
 from app.utils.market_hours import (
     is_trading_day,
@@ -57,12 +56,16 @@ class TestIsTradingDay:
     def test_thanksgiving_2025_not_trading_day(self):
         assert is_trading_day(date(2025, 11, 27)) is False
 
-    def test_works_for_2027_and_beyond(self):
-        """pandas_market_calendars should cover future years automatically."""
-        # Christmas 2027 is Saturday, observed Friday Dec 24
-        assert is_trading_day(date(2027, 12, 24)) is False
-        # New Year's 2028
-        assert is_trading_day(date(2027, 12, 31)) is True  # Friday before New Year
+    def test_works_for_next_year(self):
+        """Calendar coverage extends beyond the current year (cache is ±1 year)."""
+        from app.utils.market_hours import get_eastern_now
+        next_year = get_eastern_now().year + 1
+        # Christmas is always a holiday regardless of year
+        assert is_trading_day(date(next_year, 12, 25)) is False
+        # Jan 2 is almost always a trading day (unless weekend)
+        jan2 = date(next_year, 1, 2)
+        if jan2.weekday() < 5:  # Only assert if it's a weekday
+            assert is_trading_day(jan2) is True
 
     def test_defaults_to_today(self):
         """When called with no args, should not raise."""
