@@ -10,7 +10,7 @@ This document is the canonical `setup_engine` contract for persistence and front
 
 ## Bool Semantics
 - `setup_ready`:
-  - `true` when `readiness_score >= readiness_threshold_pct` and `failed_checks` is empty.
+  - `true` when `readiness_score >= readiness_score_ready_min_pct` from parameter config and `failed_checks` is empty.
   - `false` otherwise.
 - `rs_line_new_high`:
   - `true` when RS line makes a new high in the selected timeframe window.
@@ -66,4 +66,6 @@ This document is the canonical `setup_engine` contract for persistence and front
 
 ## Canonical Placement
 - Contract types and validators: `backend/app/analysis/patterns/models.py`
+- Parameter governance and threshold bounds: `backend/app/analysis/patterns/config.py`
+- Data requirements and incomplete-data policy: `backend/app/analysis/patterns/policy.py`
 - Payload assembly and semantics: `backend/app/scanners/setup_engine_scanner.py`

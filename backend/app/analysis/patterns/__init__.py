@@ -1,5 +1,24 @@
 """Pattern-analysis contracts for Setup Engine."""
 
+from .aggregator import AggregatedPatternOutput, SetupEngineAggregator
+from .config import (
+    DEFAULT_SETUP_ENGINE_PARAMETERS,
+    SETUP_ENGINE_PARAMETER_SPECS,
+    SetupEngineParameterSpec,
+    SetupEngineParameters,
+    assert_valid_setup_engine_parameters,
+    build_setup_engine_parameters,
+    validate_setup_engine_parameters,
+)
+from .detectors import (
+    CupWithHandleDetector,
+    DoubleBottomDetector,
+    PatternDetector,
+    PatternDetectorInput,
+    PatternDetectorResult,
+    VCPDetector,
+    default_pattern_detectors,
+)
 from .models import (
     SETUP_ENGINE_ALLOWED_TIMEFRAMES,
     SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
@@ -14,8 +33,32 @@ from .models import (
     normalize_iso_date,
     validate_setup_engine_payload,
 )
+from .policy import (
+    SetupEngineDataPolicyResult,
+    SetupEngineDataRequirements,
+    evaluate_setup_engine_data_policy,
+    policy_failed_checks,
+    policy_invalidation_flags,
+    validate_data_requirements,
+)
 
 __all__ = [
+    "AggregatedPatternOutput",
+    "SetupEngineAggregator",
+    "DEFAULT_SETUP_ENGINE_PARAMETERS",
+    "SETUP_ENGINE_PARAMETER_SPECS",
+    "SetupEngineParameterSpec",
+    "SetupEngineParameters",
+    "assert_valid_setup_engine_parameters",
+    "build_setup_engine_parameters",
+    "validate_setup_engine_parameters",
+    "CupWithHandleDetector",
+    "DoubleBottomDetector",
+    "PatternDetector",
+    "PatternDetectorInput",
+    "PatternDetectorResult",
+    "VCPDetector",
+    "default_pattern_detectors",
     "SETUP_ENGINE_ALLOWED_TIMEFRAMES",
     "SETUP_ENGINE_DEFAULT_SCHEMA_VERSION",
     "SETUP_ENGINE_FIELD_SPECS",
@@ -28,4 +71,10 @@ __all__ = [
     "assert_valid_setup_engine_payload",
     "normalize_iso_date",
     "validate_setup_engine_payload",
+    "SetupEngineDataPolicyResult",
+    "SetupEngineDataRequirements",
+    "evaluate_setup_engine_data_policy",
+    "policy_failed_checks",
+    "policy_invalidation_flags",
+    "validate_data_requirements",
 ]

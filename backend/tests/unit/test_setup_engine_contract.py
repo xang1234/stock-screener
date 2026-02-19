@@ -8,6 +8,8 @@ from app.analysis.patterns.models import (
     SETUP_ENGINE_REQUIRED_KEYS,
     validate_setup_engine_payload,
 )
+from app.analysis.patterns.config import SetupEngineParameters
+from app.analysis.patterns.policy import evaluate_setup_engine_data_policy
 from app.scanners.setup_engine_scanner import (
     attach_setup_engine,
     build_setup_engine_payload,
@@ -101,3 +103,34 @@ def test_validator_flags_missing_required_key():
 
     errors = validate_setup_engine_payload(payload)
     assert any("setup_score" in err for err in errors)
+
+
+def test_readiness_threshold_can_come_from_parameters():
+    params = SetupEngineParameters(readiness_score_ready_min_pct=80.0)
+    payload = build_setup_engine_payload(
+        readiness_score=75.0,
+        failed_checks=[],
+        parameters=params,
+    )
+    assert payload["setup_ready"] is False
+
+
+def test_policy_insufficient_nulls_primary_fields():
+    policy = evaluate_setup_engine_data_policy(
+        daily_bars=100,
+        weekly_bars=30,
+        benchmark_bars=20,
+        current_week_sessions=1,
+    )
+    payload = build_setup_engine_payload(
+        setup_score=88.0,
+        pattern_primary="vcp",
+        candidates=[{"pattern": "vcp", "confidence_pct": 80.0}],
+        data_policy_result=policy,
+    )
+
+    assert payload["setup_score"] is None
+    assert payload["pattern_primary"] is None
+    assert payload["candidates"] == []
+    assert payload["setup_ready"] is False
+    assert "insufficient_data" in payload["explain"]["failed_checks"]

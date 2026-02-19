@@ -10,6 +10,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Mapping, Sequence, cast
 
+from app.analysis.patterns.config import (
+    DEFAULT_SETUP_ENGINE_PARAMETERS,
+    SetupEngineParameters,
+    assert_valid_setup_engine_parameters,
+)
 from app.analysis.patterns.models import (
     SETUP_ENGINE_ALLOWED_TIMEFRAMES,
     SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
@@ -20,8 +25,11 @@ from app.analysis.patterns.models import (
     is_snake_case,
     normalize_iso_date,
 )
-
-DEFAULT_SETUP_READY_THRESHOLD_PCT = 70.0
+from app.analysis.patterns.policy import (
+    SetupEngineDataPolicyResult,
+    policy_failed_checks,
+    policy_invalidation_flags,
+)
 
 
 def _to_float(value: Any) -> float | None:
@@ -115,7 +123,9 @@ def build_setup_engine_payload(
     invalidation_flags: Sequence[Any] | None = None,
     timeframe: str = "daily",
     schema_version: str = SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
-    readiness_threshold_pct: float = DEFAULT_SETUP_READY_THRESHOLD_PCT,
+    readiness_threshold_pct: float | None = None,
+    parameters: SetupEngineParameters = DEFAULT_SETUP_ENGINE_PARAMETERS,
+    data_policy_result: SetupEngineDataPolicyResult | None = None,
 ) -> SetupEnginePayload:
     """Build the canonical ``setup_engine`` payload.
 
@@ -137,16 +147,44 @@ def build_setup_engine_payload(
             f"timeframe must be one of {sorted(SETUP_ENGINE_ALLOWED_TIMEFRAMES)}"
         )
 
+    assert_valid_setup_engine_parameters(parameters)
+    threshold_pct = (
+        float(readiness_threshold_pct)
+        if readiness_threshold_pct is not None
+        else float(parameters.readiness_score_ready_min_pct)
+    )
+
     normalized_passed = _normalize_text_list(passed_checks)
     normalized_failed = _normalize_text_list(failed_checks)
+    normalized_flags = _normalize_text_list(invalidation_flags)
 
     normalized_setup_score = _to_float(setup_score)
     normalized_quality_score = _to_float(quality_score)
     normalized_readiness_score = _to_float(readiness_score)
 
+    if data_policy_result is not None:
+        normalized_failed.extend(policy_failed_checks(data_policy_result))
+        normalized_flags.extend(policy_invalidation_flags(data_policy_result))
+        if data_policy_result["status"] == "insufficient":
+            # Deterministic degradation path for insufficient inputs.
+            normalized_setup_score = None
+            normalized_quality_score = None
+            normalized_readiness_score = None
+            pattern_primary = None
+            pattern_confidence = None
+            pivot_price = None
+            pivot_type = None
+            pivot_date = None
+            distance_to_pivot_pct = None
+            atr14_pct = None
+            bb_width_pctile_252 = None
+            volume_vs_50d = None
+            candidates = []
+            rs_line_new_high = False
+
     derived_ready = (
         (normalized_readiness_score is not None)
-        and (normalized_readiness_score >= float(readiness_threshold_pct))
+        and (normalized_readiness_score >= threshold_pct)
         and (len(normalized_failed) == 0)
     )
 
@@ -154,7 +192,7 @@ def build_setup_engine_payload(
         "passed_checks": normalized_passed,
         "failed_checks": normalized_failed,
         "key_levels": _normalize_key_levels(key_levels),
-        "invalidation_flags": _normalize_text_list(invalidation_flags),
+        "invalidation_flags": normalized_flags,
     }
 
     payload: SetupEnginePayload = {
