@@ -67,7 +67,8 @@ class BreadthCalculatorService:
             }
         """
         if calculation_date is None:
-            calculation_date = datetime.now().date()
+            from ..utils.market_hours import get_eastern_now
+            calculation_date = get_eastern_now().date()
 
         logger.info(f"Calculating breadth indicators for {calculation_date}")
 
@@ -326,9 +327,9 @@ class BreadthCalculatorService:
             List of missing trading dates (oldest first)
         """
         from sqlalchemy import func
-        from ..utils.market_hours import ALL_MARKET_HOLIDAYS
+        from ..utils.market_hours import is_trading_day, get_eastern_now
 
-        today = datetime.now().date()
+        today = get_eastern_now().date()
         start_date = today - timedelta(days=lookback_days)
 
         # Get all dates that have breadth data
@@ -340,21 +341,14 @@ class BreadthCalculatorService:
 
         existing_date_set = {d[0] for d in existing_dates}
 
-        # Create set of holiday dates for fast lookup
-        holiday_dates = {h.date() for h in ALL_MARKET_HOLIDAYS}
-
-        # Generate all weekdays in range, excluding holidays
+        # Generate all trading days in range using market calendar
         missing_dates = []
         current_date = start_date
 
         while current_date < today:  # Exclude today (will be calculated separately)
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current_date.weekday() < 5:
-                # Skip holidays
-                if current_date not in holiday_dates:
-                    # Check if missing
-                    if current_date not in existing_date_set:
-                        missing_dates.append(current_date)
+            if is_trading_day(current_date):
+                if current_date not in existing_date_set:
+                    missing_dates.append(current_date)
             current_date += timedelta(days=1)
 
         logger.info(f"Found {len(missing_dates)} missing breadth dates in last {lookback_days} days")

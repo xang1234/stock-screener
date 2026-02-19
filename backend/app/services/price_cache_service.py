@@ -1201,28 +1201,22 @@ class PriceCacheService:
 
     def _is_data_fresh(self, last_date: date, max_age_days: int = 1) -> bool:
         """
-        Check if cached data is fresh enough.
+        Check if cached data is fresh enough using trading-day awareness.
 
-        Data is considered fresh if the last date is within max_age_days.
-        Default is 1 day (yesterday's close is acceptable for today's scan).
+        Delegates to _get_expected_data_date() which correctly handles all
+        edge cases: market hours, grace periods, weekends, and holidays.
         """
         if last_date is None:
             return False
 
-        today = datetime.now().date()
-        age_days = (today - last_date).days
+        expected = self._get_expected_data_date()
+        if expected is None:
+            return False
 
-        # Check if it's weekend/holiday
-        is_weekend = today.weekday() >= 5  # Saturday=5, Sunday=6
-
-        if is_weekend:
-            # On weekend, Friday's data is fresh
-            max_age_days = 2
-
-        is_fresh = age_days <= max_age_days
+        is_fresh = last_date >= expected
 
         if not is_fresh:
-            logger.debug(f"Data is stale (age: {age_days} days, last: {last_date})")
+            logger.debug(f"Data is stale (last: {last_date}, expected: {expected})")
 
         return is_fresh
 

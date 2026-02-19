@@ -17,6 +17,7 @@ from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..config import settings
 from .redis_pool import get_redis_client
+from ..utils.market_hours import get_eastern_now, is_trading_day, is_market_open, get_last_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class BenchmarkCacheService:
 
         try:
             # Calculate date range
-            end_date = datetime.now().date()
+            end_date = get_eastern_now().date()
 
             if period == "2y":
                 start_date = end_date - timedelta(days=730)  # ~2 years
@@ -352,31 +353,34 @@ class BenchmarkCacheService:
 
     def _is_data_fresh(self, data: pd.DataFrame, max_age_hours: int = 24) -> bool:
         """
-        Check if cached data is still fresh.
+        Check if cached SPY data is still fresh using trading-day awareness.
 
-        Data is considered fresh if the last date is within max_age_hours.
+        Uses market calendar to determine expected data date instead of
+        naive timedelta checks that break on holidays and weekends.
         """
         if data is None or data.empty:
             return False
 
         try:
-            # Get the last date in the data
-            if isinstance(data.index, pd.DatetimeIndex):
-                last_date = data.index[-1]
-            else:
-                last_date = pd.to_datetime(data.index[-1])
-
-            # Convert to datetime if needed
+            last_date = data.index[-1]
             if not isinstance(last_date, pd.Timestamp):
                 last_date = pd.Timestamp(last_date)
 
-            # Check age
-            age = datetime.now() - last_date.to_pydatetime()
-            is_fresh = age < timedelta(hours=max_age_hours)
+            now_et = get_eastern_now()
+            today = now_et.date()
 
+            # Determine what date we should have data for
+            if is_trading_day(today) and not is_market_open(now_et) and now_et.hour >= 17:
+                # After 5 PM on trading day: expect today's close
+                expected = today
+            else:
+                # During market hours, before open, grace period, weekend, holiday:
+                # last completed trading day's data is sufficient
+                expected = get_last_trading_day(today - timedelta(days=1))
+
+            is_fresh = last_date.date() >= expected
             if not is_fresh:
-                logger.debug(f"Data is stale (age: {age})")
-
+                logger.debug(f"SPY data stale (last: {last_date.date()}, expected: {expected})")
             return is_fresh
 
         except Exception as e:

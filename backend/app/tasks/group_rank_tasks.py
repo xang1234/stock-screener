@@ -16,6 +16,7 @@ import time
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.ibd_group_rank_service import IBDGroupRankService
+from ..utils.market_hours import is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,13 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
     else:
-        calc_date = datetime.now().date()
+        calc_date = get_eastern_now().date()
+
+        # Skip on non-trading days (weekends, holidays)
+        if not is_trading_day(calc_date):
+            logger.info(f"Skipping group rankings - {calc_date} is not a trading day")
+            return {'skipped': True, 'reason': 'Not a trading day', 'date': calc_date.isoformat()}
+
         logger.info(f"Calculating group rankings for today: {calc_date}")
 
     logger.info("=" * 60)
@@ -311,7 +318,7 @@ def backfill_group_rankings_1year(self):
         service = IBDGroupRankService.get_instance()
 
         # Calculate date range
-        end_date = datetime.now().date()
+        end_date = get_eastern_now().date()
         start_date = end_date - timedelta(days=365)
 
         # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)

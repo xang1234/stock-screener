@@ -17,7 +17,7 @@ from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.cache_manager import CacheManager
 from ..config import settings
-from ..utils.market_hours import is_market_open, format_market_status
+from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,12 @@ def daily_cache_warmup(self):
     logger.info(f"Market status: {format_market_status()}")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
+
+    # Skip on non-trading days (weekends, holidays)
+    today = get_eastern_now().date()
+    if not is_trading_day(today):
+        logger.info(f"Skipping daily cache warmup - {today} is not a trading day")
+        return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat()}
 
     # Check if market is still open (task should run after close)
     if is_market_open():
@@ -460,6 +466,12 @@ def prewarm_all_active_symbols(self):
     logger.info(f"Market status: {format_market_status()}")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
+
+    # Skip on non-trading days (weekends, holidays)
+    today = get_eastern_now().date()
+    if not is_trading_day(today):
+        logger.info(f"Skipping nightly warmup - {today} is not a trading day")
+        return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat()}
 
     db = SessionLocal()
 
@@ -770,6 +782,12 @@ def auto_refresh_after_close(self):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
+    # Skip on non-trading days (weekends, holidays)
+    today = get_eastern_now().date()
+    if not is_trading_day(today):
+        logger.info(f"Skipping auto refresh - {today} is not a trading day")
+        return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat()}
+
     # Check if market is still open (shouldn't be, but safety check)
     if is_market_open():
         logger.warning("Market is still open - skipping auto refresh")
@@ -819,6 +837,13 @@ def smart_refresh_cache(self, mode: str = "auto"):
     logger.info(f"Market status: {format_market_status()}")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
+
+    # Skip on non-trading days in auto mode (full mode can be on-demand)
+    if mode == "auto":
+        today = get_eastern_now().date()
+        if not is_trading_day(today):
+            logger.info(f"Skipping smart refresh (auto) - {today} is not a trading day")
+            return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat(), 'mode': mode}
 
     price_cache = PriceCacheService.get_instance()
     bulk_fetcher = BulkDataFetcher()

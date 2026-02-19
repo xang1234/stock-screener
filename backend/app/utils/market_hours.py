@@ -3,10 +3,13 @@ Market hours utilities for cache staleness detection.
 
 Provides functions to determine if US stock market is open,
 when it closes, and if cached data is stale based on market hours.
+
+Uses pandas_market_calendars for authoritative NYSE holiday/schedule data.
 """
 from datetime import datetime, date, time, timedelta
 from typing import Optional
 import pytz
+import pandas_market_calendars as mcal
 
 
 # US Eastern timezone
@@ -16,36 +19,25 @@ EASTERN = pytz.timezone('US/Eastern')
 MARKET_OPEN_TIME = time(9, 30)  # 9:30 AM ET
 MARKET_CLOSE_TIME = time(16, 0)  # 4:00 PM ET
 
-# US market holidays 2025 (add more years as needed)
-MARKET_HOLIDAYS_2025 = [
-    datetime(2025, 1, 1),   # New Year's Day
-    datetime(2025, 1, 20),  # MLK Day
-    datetime(2025, 2, 17),  # Presidents' Day
-    datetime(2025, 4, 18),  # Good Friday
-    datetime(2025, 5, 26),  # Memorial Day
-    datetime(2025, 6, 19),  # Juneteenth
-    datetime(2025, 7, 4),   # Independence Day
-    datetime(2025, 9, 1),   # Labor Day
-    datetime(2025, 11, 27), # Thanksgiving
-    datetime(2025, 12, 25), # Christmas
-]
+# NYSE calendar singleton
+_NYSE = mcal.get_calendar("NYSE")
 
-# US market holidays 2026
-MARKET_HOLIDAYS_2026 = [
-    datetime(2026, 1, 1),   # New Year's Day
-    datetime(2026, 1, 19),  # MLK Day
-    datetime(2026, 2, 16),  # Presidents' Day
-    datetime(2026, 4, 3),   # Good Friday
-    datetime(2026, 5, 25),  # Memorial Day
-    datetime(2026, 6, 19),  # Juneteenth
-    datetime(2026, 7, 3),   # Independence Day (observed)
-    datetime(2026, 9, 7),   # Labor Day
-    datetime(2026, 11, 26), # Thanksgiving
-    datetime(2026, 12, 25), # Christmas
-]
+# Cache: pre-compute 3-year window of valid trading days for O(1) lookups
+_trading_days_cache: Optional[set] = None
+_cache_year: Optional[int] = None
 
-# Combined list for easy iteration
-ALL_MARKET_HOLIDAYS = MARKET_HOLIDAYS_2025 + MARKET_HOLIDAYS_2026
+
+def _get_trading_days_set() -> set:
+    """Get set of trading days for current year +/- 1 year. Recomputes on year change."""
+    global _trading_days_cache, _cache_year
+    current_year = get_eastern_now().year
+    if _trading_days_cache is None or _cache_year != current_year:
+        start = f"{current_year - 1}-01-01"
+        end = f"{current_year + 1}-12-31"
+        schedule = _NYSE.schedule(start_date=start, end_date=end)
+        _trading_days_cache = set(schedule.index.date)
+        _cache_year = current_year
+    return _trading_days_cache
 
 
 def get_eastern_now() -> datetime:
@@ -77,15 +69,9 @@ def is_market_open(dt: Optional[datetime] = None) -> bool:
         # Convert to Eastern timezone
         dt = dt.astimezone(EASTERN)
 
-    # Check if weekend
-    if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+    # Check if this is a trading day (handles weekends + holidays)
+    if not is_trading_day(dt.date()):
         return False
-
-    # Check if holiday
-    date_only = dt.date()
-    for holiday in ALL_MARKET_HOLIDAYS:
-        if holiday.date() == date_only:
-            return False
 
     # Check if within market hours
     current_time = dt.time()
@@ -125,14 +111,9 @@ def get_next_market_close(dt: Optional[datetime] = None) -> datetime:
             datetime.combine(next_date, MARKET_CLOSE_TIME)
         )
 
-        # Check if this is a trading day
-        if next_dt.weekday() < 5:  # Not weekend
-            # Check if not a holiday
-            is_holiday = any(
-                h.date() == next_date for h in ALL_MARKET_HOLIDAYS
-            )
-            if not is_holiday:
-                return next_dt
+        # Check if this is a trading day (handles weekends + holidays)
+        if is_trading_day(next_date):
+            return next_dt
 
     # Fallback: return tomorrow at close
     return EASTERN.localize(
@@ -164,29 +145,21 @@ def get_last_market_close(dt: Optional[datetime] = None) -> datetime:
     current_time = dt.time()
 
     # If today is a trading day and market has closed, return today's close
-    if dt.weekday() < 5 and current_time >= MARKET_CLOSE_TIME:
-        is_holiday = any(h.date() == current_date for h in ALL_MARKET_HOLIDAYS)
-        if not is_holiday:
-            return EASTERN.localize(
-                datetime.combine(current_date, MARKET_CLOSE_TIME)
-            )
+    if is_trading_day(current_date) and current_time >= MARKET_CLOSE_TIME:
+        return EASTERN.localize(
+            datetime.combine(current_date, MARKET_CLOSE_TIME)
+        )
 
     # Otherwise, look backwards for last trading day
     max_days = 10
 
     for i in range(1, max_days):
         prev_date = current_date - timedelta(days=i)
-        prev_dt = EASTERN.localize(
-            datetime.combine(prev_date, MARKET_CLOSE_TIME)
-        )
 
-        # Check if this was a trading day
-        if prev_dt.weekday() < 5:  # Not weekend
-            is_holiday = any(
-                h.date() == prev_date for h in ALL_MARKET_HOLIDAYS
+        if is_trading_day(prev_date):
+            return EASTERN.localize(
+                datetime.combine(prev_date, MARKET_CLOSE_TIME)
             )
-            if not is_holiday:
-                return prev_dt
 
     # Fallback: return yesterday at close
     return EASTERN.localize(
@@ -285,17 +258,7 @@ def is_trading_day(d: date = None) -> bool:
     """Check if a date is a valid trading day (not weekend, not holiday)."""
     if d is None:
         d = get_eastern_now().date()
-
-    # Check weekend
-    if d.weekday() >= 5:
-        return False
-
-    # Check holiday
-    for holiday in ALL_MARKET_HOLIDAYS:
-        if holiday.date() == d:
-            return False
-
-    return True
+    return d in _get_trading_days_set()
 
 
 def get_last_trading_day(d: date = None) -> date:

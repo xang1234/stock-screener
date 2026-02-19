@@ -59,8 +59,8 @@ def calculate_daily_breadth(self, calculation_date: str = None):
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
     else:
-        from ..utils.market_hours import is_trading_day
-        calc_date = datetime.now().date()
+        from ..utils.market_hours import is_trading_day, get_eastern_now
+        calc_date = get_eastern_now().date()
 
         if not is_trading_day(calc_date):
             logger.warning(f"Today ({calc_date}) is not a trading day. Skipping.")
@@ -390,9 +390,9 @@ def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
         # Step 2: Calculate today's breadth (only if trading day)
-        from ..utils.market_hours import is_trading_day, get_last_trading_day
+        from ..utils.market_hours import is_trading_day, get_last_trading_day, get_eastern_now
 
-        today = datetime.now().date()
+        today = get_eastern_now().date()
 
         if is_trading_day(today):
             logger.info(f"Calculating breadth for today ({today})...")
