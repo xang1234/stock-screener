@@ -603,33 +603,66 @@ class PriceCacheService:
         """
         Scan Redis for all symbols with stale intraday data.
 
+        Uses pipeline to batch-read all fetch_meta values after SCAN,
+        reducing from ~N individual GETs to 1 pipeline round-trip.
+
         Returns:
             List of symbols that have stale intraday data
         """
         if not self._redis_client:
             return []
 
-        stale_symbols = []
-
         try:
-            # Find all fetch_meta keys
+            # Pre-compute market state once (not per-symbol)
+            now_et = get_eastern_now()
+            market_open = is_market_open(now_et)
+
+            # If market is still open, no data is "stale" yet
+            if market_open:
+                return []
+
+            # Check if we're past the close buffer
+            post_close_buffer = time(16, 30)
+            if now_et.time() < post_close_buffer:
+                return []
+
+            # Collect all fetch_meta keys via SCAN
             pattern = "price:*:fetch_meta"
+            all_keys = []
+            all_symbols = []
             cursor = 0
 
             while True:
-                cursor, keys = self._redis_client.scan(cursor, match=pattern, count=100)
-
+                cursor, keys = self._redis_client.scan(cursor, match=pattern, count=500)
                 for key in keys:
-                    # Extract symbol from key (price:{symbol}:fetch_meta)
                     key_str = key.decode('utf-8') if isinstance(key, bytes) else key
                     parts = key_str.split(':')
                     if len(parts) == 3:
-                        symbol = parts[1]
-                        if self._is_intraday_data_stale(symbol):
-                            stale_symbols.append(symbol)
-
+                        all_keys.append(key)
+                        all_symbols.append(parts[1])
                 if cursor == 0:
                     break
+
+            if not all_keys:
+                return []
+
+            # Pipeline-read all fetch_meta values at once
+            pipeline = self._redis_client.pipeline()
+            for key in all_keys:
+                pipeline.get(key)
+            meta_values = pipeline.execute()
+
+            # Filter locally for stale intraday data
+            stale_symbols = []
+            for symbol, meta_json in zip(all_symbols, meta_values):
+                if not meta_json:
+                    continue
+                try:
+                    meta = json.loads(meta_json)
+                    if meta.get("needs_refresh_after_close", False):
+                        stale_symbols.append(symbol)
+                except (json.JSONDecodeError, ValueError):
+                    continue
 
             logger.info(f"Found {len(stale_symbols)} symbols with stale intraday data")
             return stale_symbols
@@ -734,7 +767,24 @@ class PriceCacheService:
                             "task_id": current_holder.get('task_id'),
                             "task_name": current_holder.get('task_name'),
                             "started_at": current_holder.get('started_at'),
-                            "minutes_since_heartbeat": int(minutes_since_heartbeat) if minutes_since_heartbeat else None
+                            "minutes_since_heartbeat": int(minutes_since_heartbeat)
+                        },
+                        "last_warmup": self._get_warmup_metadata()
+                    }
+                elif minutes_since_heartbeat is None:
+                    # Heartbeat expired (1h TTL) but lock still held — task likely dead
+                    return {
+                        "status": "stuck",
+                        "message": "Task unresponsive (no heartbeat)",
+                        "can_refresh": True,
+                        "can_force_cancel": True,
+                        "spy_last_date": None,
+                        "expected_date": None,
+                        "task_running": {
+                            "task_id": current_holder.get('task_id'),
+                            "task_name": current_holder.get('task_name'),
+                            "started_at": current_holder.get('started_at'),
+                            "minutes_since_heartbeat": None
                         },
                         "last_warmup": self._get_warmup_metadata()
                     }
@@ -755,9 +805,10 @@ class PriceCacheService:
                     "last_warmup": self._get_warmup_metadata()
                 }
 
-            # No task running - check SPY freshness
+            # No task running - check SPY freshness first (authoritative signal)
             spy_last_date = self._get_spy_last_date()
             expected_date = self._get_expected_data_date()
+            warmup_meta = self._get_warmup_metadata()
 
             if spy_last_date is None:
                 return {
@@ -767,11 +818,26 @@ class PriceCacheService:
                     "spy_last_date": None,
                     "expected_date": str(expected_date) if expected_date else None,
                     "task_running": None,
-                    "last_warmup": self._get_warmup_metadata()
+                    "last_warmup": warmup_meta
                 }
 
-            # Check warmup metadata for partial completion
-            warmup_meta = self._get_warmup_metadata()
+            # Compare SPY date with expected date
+            is_fresh = spy_last_date >= expected_date if expected_date else True
+
+            if is_fresh:
+                # SPY is fresh — this is the authoritative signal.
+                # Return "fresh" regardless of last warmup's partial status.
+                return {
+                    "status": "fresh",
+                    "message": "Cache is up to date",
+                    "can_refresh": True,
+                    "spy_last_date": str(spy_last_date),
+                    "expected_date": str(expected_date) if expected_date else None,
+                    "task_running": None,
+                    "last_warmup": warmup_meta
+                }
+
+            # SPY is stale — check if warmup metadata gives more context
             if warmup_meta and warmup_meta.get('status') == 'partial':
                 return {
                     "status": "partial",
@@ -783,29 +849,15 @@ class PriceCacheService:
                     "last_warmup": warmup_meta
                 }
 
-            # Compare SPY date with expected date
-            is_fresh = spy_last_date >= expected_date if expected_date else True
-
-            if is_fresh:
-                return {
-                    "status": "fresh",
-                    "message": "Cache is up to date",
-                    "can_refresh": True,
-                    "spy_last_date": str(spy_last_date),
-                    "expected_date": str(expected_date) if expected_date else None,
-                    "task_running": None,
-                    "last_warmup": warmup_meta
-                }
-            else:
-                return {
-                    "status": "stale",
-                    "message": f"Missing data for {expected_date}",
-                    "can_refresh": True,
-                    "spy_last_date": str(spy_last_date),
-                    "expected_date": str(expected_date),
-                    "task_running": None,
-                    "last_warmup": warmup_meta
-                }
+            return {
+                "status": "stale",
+                "message": f"Missing data for {expected_date}",
+                "can_refresh": True,
+                "spy_last_date": str(spy_last_date),
+                "expected_date": str(expected_date),
+                "task_running": None,
+                "last_warmup": warmup_meta
+            }
 
         except Exception as e:
             logger.error(f"Error in get_cache_health_status: {e}", exc_info=True)
@@ -821,26 +873,28 @@ class PriceCacheService:
 
     def _get_spy_last_date(self) -> Optional[date]:
         """
-        Get the last date in SPY benchmark cache.
+        Get the last date in SPY cache from Redis only (no API calls).
+
+        IMPORTANT: This is called by the health endpoint (polled every 5-60s).
+        It must never trigger a yfinance download. If SPY isn't in Redis,
+        we return None (stale) and the user can trigger a refresh.
 
         Returns:
             date object of last SPY data, or None if not cached
         """
         try:
-            from .benchmark_cache_service import BenchmarkCacheService
-            benchmark_cache = BenchmarkCacheService.get_instance()
-            spy_df = benchmark_cache.get_spy_data(period="2y")
-
-            if spy_df is None or spy_df.empty:
+            if not self._redis_client:
                 return None
 
-            last_date = spy_df.index[-1]
-            if hasattr(last_date, 'date'):
-                return last_date.date()
-            return last_date
+            last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol="SPY")
+            last_date_str = self._redis_client.get(last_update_key)
+            if last_date_str:
+                decoded = last_date_str.decode() if isinstance(last_date_str, bytes) else last_date_str
+                return date.fromisoformat(decoded)
+            return None
 
         except Exception as e:
-            logger.error(f"Error getting SPY last date: {e}")
+            logger.error(f"Error getting SPY last date from Redis: {e}")
             return None
 
     def _get_expected_data_date(self) -> Optional[date]:
@@ -868,12 +922,17 @@ class PriceCacheService:
             return get_last_trading_day(today - timedelta(days=1))
 
         if is_trading_day(today):
-            if now_et.hour >= 17:
-                # After 5 PM on trading day: expect today's close
+            if now_et.hour >= 17 and now_et.minute >= 45:
+                # After 5:45 PM on trading day: expect today's close
+                # (scheduled refresh starts at 5:30 PM, give it 15 min to warm SPY)
+                return today
+            elif now_et.hour >= 18:
+                # After 6 PM: definitely expect today's close
                 return today
             elif now_et.hour >= 16:
-                # Grace period 4-5 PM: yesterday's close is acceptable
-                # Data providers may not have final close until ~4:30 PM
+                # Grace period 4:00-5:44 PM: yesterday's close is acceptable
+                # Data providers may not have final close until ~4:30 PM,
+                # and the scheduled refresh doesn't start until 5:30 PM
                 return get_last_trading_day(today - timedelta(days=1))
             else:
                 # Before market open (e.g., 7 AM Monday)
@@ -1248,6 +1307,168 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error caching {symbol}: {e}")
 
+    def store_batch_in_cache(
+        self,
+        batch_data: Dict[str, pd.DataFrame],
+        also_store_db: bool = True
+    ) -> int:
+        """
+        Store multiple symbols' price data in cache using Redis pipeline.
+
+        Uses a single Redis pipeline for all symbols in the batch, reducing
+        from 3 * N round-trips to 1 round-trip for N symbols.
+
+        Args:
+            batch_data: Dict mapping symbol to price DataFrame
+            also_store_db: Whether to also store in database (default True)
+
+        Returns:
+            Number of symbols successfully cached
+        """
+        if not batch_data:
+            return 0
+
+        stored = 0
+
+        # Batch Redis writes using pipeline
+        if self._redis_client:
+            try:
+                now_et = get_eastern_now()
+                market_open = is_market_open(now_et)
+                data_type = "intraday" if market_open else "closing"
+                # Pre-compute fetch metadata once (same for all symbols in batch)
+                fetch_meta_json = json.dumps({
+                    "fetch_timestamp": now_et.isoformat(),
+                    "market_was_open": market_open,
+                    "data_type": data_type,
+                    "needs_refresh_after_close": market_open
+                })
+
+                pipeline = self._redis_client.pipeline()
+                for symbol, data in batch_data.items():
+                    if data is None or data.empty:
+                        continue
+
+                    try:
+                        # Keep last 5 years for volume analysis
+                        cutoff_datetime = datetime.now() - timedelta(days=self.RECENT_DAYS)
+                        if hasattr(data.index, 'tz') and data.index.tz is not None:
+                            cutoff_date = pd.Timestamp(cutoff_datetime, tz=data.index.tz)
+                        else:
+                            cutoff_date = pd.Timestamp(cutoff_datetime)
+                        recent_data = data[data.index >= cutoff_date]
+                        if recent_data.empty:
+                            continue
+
+                        redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
+                        pickled_data = pickle.dumps(recent_data)
+                        pipeline.setex(redis_key, self.CACHE_TTL_SECONDS, pickled_data)
+
+                        last_update_key = self.REDIS_KEY_LAST_UPDATE.format(symbol=symbol)
+                        last_date = recent_data.index[-1].strftime('%Y-%m-%d')
+                        pipeline.setex(last_update_key, self.CACHE_TTL_SECONDS, last_date)
+
+                        meta_key = self.REDIS_KEY_FETCH_META.format(symbol=symbol)
+                        pipeline.setex(meta_key, self.CACHE_TTL_SECONDS, fetch_meta_json)
+
+                        stored += 1
+                    except Exception as e:
+                        logger.warning(f"Error preparing Redis pipeline for {symbol}: {e}")
+
+                pipeline.execute()
+                logger.debug(f"Batch stored {stored} symbols in Redis via pipeline")
+
+            except Exception as e:
+                logger.error(f"Error in batch Redis write: {e}", exc_info=True)
+                # Fall back to individual writes
+                for symbol, data in batch_data.items():
+                    if data is not None and not data.empty:
+                        self._store_recent_in_redis(symbol, data)
+
+        # Batch DB writes
+        if also_store_db:
+            self._store_batch_in_database(batch_data)
+
+        return stored
+
+    def _store_batch_in_database(self, batch_data: Dict[str, pd.DataFrame]) -> None:
+        """
+        Store multiple symbols' price data in database in a single transaction.
+
+        Queries existing dates for ALL symbols at once, then bulk inserts
+        only new rows. Much more efficient than per-symbol _store_in_database().
+
+        Args:
+            batch_data: Dict mapping symbol to price DataFrame
+        """
+        if not batch_data:
+            return
+
+        db = SessionLocal()
+
+        try:
+            symbols = list(batch_data.keys())
+
+            # Query all existing (symbol, date) pairs at once
+            from sqlalchemy import and_, tuple_
+            existing_pairs = set()
+            # Query in chunks to respect SQLite's variable limit (999 max)
+            for chunk_start in range(0, len(symbols), 100):
+                chunk_symbols = symbols[chunk_start:chunk_start + 100]
+                rows = db.query(StockPrice.symbol, StockPrice.date).filter(
+                    StockPrice.symbol.in_(chunk_symbols)
+                ).all()
+                existing_pairs.update((r[0], r[1]) for r in rows)
+
+            # Prepare all insert rows
+            rows_to_insert = []
+            for symbol, data in batch_data.items():
+                if data is None or data.empty:
+                    continue
+
+                df = data.reset_index()
+                for _, row in df.iterrows():
+                    row_date = row['Date']
+                    if isinstance(row_date, pd.Timestamp):
+                        row_date = row_date.date()
+                    elif isinstance(row_date, datetime):
+                        row_date = row_date.date()
+
+                    if (symbol, row_date) in existing_pairs:
+                        continue
+
+                    try:
+                        rows_to_insert.append({
+                            'symbol': symbol,
+                            'date': row_date,
+                            'open': float(row.get('Open', 0)),
+                            'high': float(row.get('High', 0)),
+                            'low': float(row.get('Low', 0)),
+                            'close': float(row.get('Close', 0)),
+                            'volume': int(row.get('Volume', 0)) if pd.notna(row.get('Volume')) else 0,
+                            'adj_close': float(row.get('Close', 0))
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error preparing row for {symbol}: {e}")
+
+            # Bulk insert in chunks (SQLite 999-variable limit / 8 columns = ~124 rows max)
+            if rows_to_insert:
+                chunk_size = 100
+                for i in range(0, len(rows_to_insert), chunk_size):
+                    chunk = rows_to_insert[i:i + chunk_size]
+                    db.bulk_insert_mappings(StockPrice, chunk)
+                db.commit()
+                logger.info(f"Batch inserted {len(rows_to_insert)} new rows for {len(batch_data)} symbols")
+            else:
+                logger.debug(f"No new rows to persist for batch of {len(batch_data)} symbols")
+
+        except Exception as e:
+            logger.error(f"Error in batch database write: {e}", exc_info=True)
+            db.rollback()
+
+        finally:
+            db.close()
+
     def get_many(self, symbols: list[str], period: str = "2y") -> Dict[str, Optional[pd.DataFrame]]:
         """
         Get cached price data for multiple symbols using Redis pipeline.
@@ -1280,6 +1501,9 @@ class PriceCacheService:
             # Use bulk Redis client with longer timeout for large pipeline operations
             bulk_client = get_bulk_redis_client() or self._redis_client
             chunk_size = getattr(settings, 'redis_pipeline_chunk_size', 500)
+
+            # Pre-compute expected_date once (avoids per-symbol market hours calculation)
+            expected_date = self._get_expected_data_date()
 
             # Parse results
             cached_data = {}
@@ -1319,12 +1543,13 @@ class PriceCacheService:
                             # Check if Redis data is sufficient for requested period
                             # Redis stores last 5 years (1825 days), but verify we have at least 200 days minimum
                             if len(df) >= 200:
-                                # Check freshness - get last date from DataFrame index
+                                # Check freshness using pre-computed expected_date (B2 optimization)
                                 last_date = df.index[-1]
                                 if hasattr(last_date, 'date'):
                                     last_date = last_date.date()
 
-                                if self._is_data_fresh(last_date):
+                                is_fresh = last_date >= expected_date if expected_date else True
+                                if is_fresh:
                                     cached_data[symbol] = df
                                     redis_hits.append(symbol)
                                     chunk_hits += 1
@@ -1365,7 +1590,8 @@ class PriceCacheService:
 
                 for symbol in needs_db_fallback:
                     df, last_date = db_results.get(symbol, (None, None))
-                    if df is not None and not df.empty and self._is_data_fresh(last_date):
+                    is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
+                    if df is not None and not df.empty and is_fresh:
                         cached_data[symbol] = df
                         db_hits.append(symbol)
                         # Warm Redis for next time

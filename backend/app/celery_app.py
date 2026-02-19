@@ -232,18 +232,10 @@ if settings.cache_warmup_enabled:
             },
         },
 
-        # Auto-refresh stale intraday data after market close (4:45 PM ET)
-        # Safety net: patches intraday snapshots before the 5:30 PM full refresh.
-        # Only processes symbols with stale intraday data (small count).
-        'auto-refresh-after-close': {
-            'task': 'app.tasks.cache_tasks.auto_refresh_after_close',
-            'schedule': crontab(
-                hour=16,  # 4:45 PM ET (after market close at 4 PM)
-                minute=45,
-                day_of_week='1-5'  # Monday-Friday only
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
+        # NOTE: auto-refresh-after-close (4:45 PM) was removed to eliminate
+        # daily schedule overlap. The 5:30 PM daily-smart-refresh already does
+        # a full refresh that supersedes the stale-intraday refresh. The task
+        # function remains available for manual invocation via the API.
 
         # Weekly cleanup of orphaned scans (cancelled, stale running/queued)
         # Runs Sunday at 2 AM ET, before weekly-full-refresh

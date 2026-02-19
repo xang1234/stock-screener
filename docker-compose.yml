@@ -138,7 +138,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule
+    command: sh -c "rm -f /app/data/celerybeat-schedule && celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule"
     environment:
       - TZ=${CELERY_TIMEZONE:-America/New_York}
       - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}

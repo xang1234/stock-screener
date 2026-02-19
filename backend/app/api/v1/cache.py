@@ -426,8 +426,11 @@ async def smart_refresh(request: SmartRefreshRequest):
                 message=f"Refresh already in progress ({running.get('task_name')})"
             )
 
-        # Queue smart refresh task
-        task = smart_refresh_cache.delay(mode=request.mode)
+        # Queue smart refresh task (mark as manual to bypass time-window guard)
+        task = smart_refresh_cache.apply_async(
+            kwargs={'mode': request.mode},
+            headers={'origin': 'manual'}
+        )
 
         mode_desc = "full universe (skips recently refreshed)" if request.mode == "auto" else "entire universe, force re-fetch (~2 hours)"
         return SmartRefreshResponse(
@@ -479,6 +482,7 @@ async def force_cancel_refresh():
                 "task_id": running.get("task_id"),
                 "task_name": running.get("task_name")
             }
+        # minutes is None (heartbeat expired) or > 30 — allow cancel
 
         # Force release the lock
         lock.force_release()

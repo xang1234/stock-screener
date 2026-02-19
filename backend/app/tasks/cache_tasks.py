@@ -203,25 +203,38 @@ def weekly_full_refresh(self):
     Weekly full cache refresh.
 
     Cleans up orphaned cache keys (delisted/deactivated symbols),
-    warms SPY, then triggers a full universe refresh via smart_refresh_cache.
+    warms SPY, then performs a full universe refresh inline.
     Typically runs Sunday morning before markets open.
+
+    NOTE: Previously this task called smart_refresh_cache.delay(mode="full"),
+    which spawned a duplicate task on the data_fetch queue. Now the full
+    refresh logic is inlined to prevent task pileup.
 
     Returns:
         Dict with refresh results
     """
+    import time
+    from ..services.price_cache_service import PriceCacheService
+    from ..services.bulk_data_fetcher import BulkDataFetcher
+
     logger.info("=" * 80)
     logger.info("TASK: Weekly Full Cache Refresh")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
     db = SessionLocal()
+    refreshed = 0
+    failed = 0
+    failed_symbols = []
 
     try:
         from ..models.stock_universe import StockUniverse
         cache_manager = CacheManager(db)
+        price_cache = PriceCacheService.get_instance()
+        bulk_fetcher = BulkDataFetcher()
 
         # 1. Clean up orphaned cache keys (symbols no longer in active universe)
-        logger.info("\n[1/3] Cleaning up orphaned cache entries...")
+        logger.info("\n[1/4] Cleaning up orphaned cache entries...")
         active_symbols = set(
             r.symbol for r in db.query(StockUniverse.symbol)
             .filter(StockUniverse.is_active == True).all()
@@ -230,32 +243,115 @@ def weekly_full_refresh(self):
         logger.info(f"✓ Cleaned up {orphan_count} orphaned cache entries")
 
         # 2. Warm SPY cache
-        logger.info("\n[2/3] Re-warming SPY benchmark cache...")
+        logger.info("\n[2/4] Re-warming SPY benchmark cache...")
         spy_results = warm_spy_cache()
 
-        # 3. Full universe refresh (force mode — no freshness skip)
-        # Note: .delay() only enqueues — it won't start until this task finishes
-        # and releases the data_fetch lock (both tasks share the same queue).
-        logger.info(f"\n[3/3] Triggering full universe refresh ({len(active_symbols)} symbols)...")
-        refresh_task = smart_refresh_cache.delay(mode="full")
-        logger.info(f"✓ Full refresh task queued: {refresh_task.id}")
+        # 3. Get all active symbols ordered by market cap
+        logger.info(f"\n[3/4] Preparing full universe refresh ({len(active_symbols)} symbols)...")
+        symbols = [
+            r.symbol for r in db.query(StockUniverse.symbol)
+            .filter(StockUniverse.is_active == True)
+            .order_by(StockUniverse.market_cap.desc().nullslast())
+            .all()
+        ]
 
-        results = {
+        if not symbols:
+            logger.warning("No active symbols found in universe")
+            price_cache.save_warmup_metadata("completed", 0, 0)
+            return {
+                'orphans_cleaned': orphan_count,
+                'spy': spy_results,
+                'refreshed': 0,
+                'universe_size': 0,
+                'completed_at': datetime.now().isoformat()
+            }
+
+        total = len(symbols)
+
+        # 4. Batch fetch all symbols (inline, no child task)
+        logger.info(f"\n[4/4] Fetching {total} symbols...")
+        from .data_fetch_lock import DataFetchLock
+        lock = DataFetchLock.get_instance()
+        task_id = self.request.id or 'unknown'
+
+        batch_size = 100
+        for batch_start in range(0, total, batch_size):
+            batch_symbols = symbols[batch_start:batch_start + batch_size]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (total + batch_size - 1) // batch_size
+
+            logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols")
+
+            try:
+                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
+                batch_to_store = {}
+                for symbol, data in batch_results.items():
+                    if not data.get('has_error') and data.get('price_data') is not None:
+                        price_df = data['price_data']
+                        if not price_df.empty:
+                            batch_to_store[symbol] = price_df
+                            refreshed += 1
+                        else:
+                            failed += 1
+                            failed_symbols.append(symbol)
+                    else:
+                        failed += 1
+                        failed_symbols.append(symbol)
+                # Batch store in Redis (pipeline) + DB (single transaction)
+                if batch_to_store:
+                    price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+            except Exception as e:
+                logger.error(f"Batch {batch_num} error: {e}")
+                failed += len(batch_symbols)
+                failed_symbols.extend(batch_symbols)
+
+            # Update progress
+            progress = min((batch_start + batch_size), total)
+            percent = (progress / total) * 100
+            self.update_state(state='PROGRESS', meta={
+                'current': progress, 'total': total, 'percent': percent,
+                'refreshed': refreshed, 'failed': failed
+            })
+            price_cache.update_warmup_heartbeat(progress, total, percent)
+
+            # Extend lock TTL to prevent expiry during long runs (A5)
+            lock.extend_lock(task_id, 3600)
+
+            # Rate limit between batches
+            if batch_start + batch_size < total:
+                from ..services.rate_limiter import rate_limiter
+                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
+
+        # Save final metadata
+        success_rate = refreshed / total if total > 0 else 0
+        status = "completed" if success_rate >= 0.95 else "partial"
+        price_cache.save_warmup_metadata(status, refreshed, total)
+        price_cache.clear_warmup_heartbeat()
+
+        logger.info("=" * 80)
+        logger.info(f"✓ Weekly full refresh completed:")
+        logger.info(f"  Orphans cleaned: {orphan_count}")
+        logger.info(f"  Refreshed: {refreshed}/{total}")
+        logger.info(f"  Failed: {failed}")
+        logger.info("=" * 80)
+
+        return {
             'orphans_cleaned': orphan_count,
             'spy': spy_results,
-            'refresh_task_id': refresh_task.id,
+            'status': status,
+            'refreshed': refreshed,
+            'failed': failed,
+            'total': total,
             'universe_size': len(active_symbols),
+            'failed_symbols': failed_symbols[:20],
             'completed_at': datetime.now().isoformat()
         }
 
-        logger.info("=" * 80)
-        logger.info("✓ Weekly full refresh completed successfully")
-        logger.info("=" * 80)
-
-        return results
-
     except Exception as e:
         logger.error(f"Error in weekly_full_refresh task: {e}", exc_info=True)
+        price_cache = PriceCacheService.get_instance()
+        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e))
+        price_cache.clear_warmup_heartbeat()
         return {
             'error': str(e),
             'completed_at': datetime.now().isoformat()
@@ -554,11 +650,11 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
 
     for attempt in range(max_retries):
         try:
-            results = bulk_fetcher.fetch_batch_data(
+            # Use yf.download()-based batch fetch (single HTTP request per batch)
+            # instead of per-ticker fetch_batch_data() which sleeps between each symbol
+            results = bulk_fetcher.fetch_batch_prices(
                 symbols,
                 period=period,
-                include_fundamentals=False,  # Price data only for speed
-                delay_per_ticker=settings.yfinance_per_ticker_delay,
             )
 
             # Check for per-symbol rate limit errors that fetch_batch_data
@@ -668,16 +764,16 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
             logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols using yfinance.Tickers()")
 
             try:
-                # Batch fetch using yfinance.Tickers() with rate limit backoff
+                # Batch fetch using yf.download() with rate limit backoff
                 batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
 
-                # Process results and store in cache
+                # Separate successes from failures, then batch-store
+                batch_to_store = {}
                 for symbol, data in batch_results.items():
                     if not data.get('has_error') and data.get('price_data') is not None:
                         price_df = data['price_data']
                         if not price_df.empty:
-                            # Store in cache (Redis + DB)
-                            price_cache.store_in_cache(symbol, price_df, also_store_db=True)
+                            batch_to_store[symbol] = price_df
                             refreshed += 1
                             logger.debug(f"✓ {symbol}: {len(price_df)} rows refreshed")
                         else:
@@ -689,6 +785,10 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
                         failed_symbols.append(symbol)
                         error_msg = data.get('error', 'Unknown error')
                         logger.warning(f"✗ {symbol}: {error_msg}")
+
+                # Batch store in Redis (pipeline) + DB (single transaction)
+                if batch_to_store:
+                    price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
 
             except Exception as e:
                 logger.error(f"Batch {batch_num} error: {e}")
@@ -838,6 +938,32 @@ def smart_refresh_cache(self, mode: str = "auto"):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
+    # Time-window guard: reject Beat-scheduled full mode outside expected windows.
+    # This prevents catchup storms (Beat replaying missed schedules on restart).
+    # Manual API calls set headers={'origin': 'manual'} to bypass this guard.
+    is_manual = getattr(self.request, 'headers', None) and self.request.headers.get('origin') == 'manual'
+    if mode == "full" and not is_manual:
+        now_et = get_eastern_now()
+        weekday = now_et.weekday()  # 0=Mon, 6=Sun
+        hour = now_et.hour
+
+        # Allow: weekdays 4PM-midnight (daily refresh window)
+        # Allow: Sunday 1AM-6AM (weekly refresh window)
+        in_weekday_window = weekday < 5 and 16 <= hour < 24
+        in_sunday_window = weekday == 6 and 1 <= hour < 6
+
+        if not in_weekday_window and not in_sunday_window:
+            logger.warning(
+                f"Rejecting Beat-scheduled full refresh outside time window "
+                f"(weekday={weekday}, hour={hour}). Likely a catchup storm."
+            )
+            return {
+                'skipped': True,
+                'reason': f'Outside refresh window (weekday={weekday}, hour={hour})',
+                'mode': mode,
+                'timestamp': datetime.now().isoformat()
+            }
+
     # Skip on non-trading days in auto mode (full mode can be on-demand)
     if mode == "auto":
         today = get_eastern_now().date()
@@ -921,15 +1047,16 @@ def smart_refresh_cache(self, mode: str = "auto"):
             logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols")
 
             try:
-                # Batch fetch using yfinance.Tickers() with rate limit backoff
+                # Batch fetch using yf.download() (single HTTP request per batch)
                 batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
 
-                # Process results and store in cache
+                # Separate successes from failures, then batch-store all successes
+                batch_to_store = {}
                 for symbol, data in batch_results.items():
                     if not data.get('has_error') and data.get('price_data') is not None:
                         price_df = data['price_data']
                         if not price_df.empty:
-                            price_cache.store_in_cache(symbol, price_df, also_store_db=True)
+                            batch_to_store[symbol] = price_df
                             refreshed += 1
                         else:
                             failed += 1
@@ -937,6 +1064,10 @@ def smart_refresh_cache(self, mode: str = "auto"):
                     else:
                         failed += 1
                         failed_symbols.append(symbol)
+
+                # Batch store in Redis (pipeline) + DB (single transaction)
+                if batch_to_store:
+                    price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
 
             except Exception as e:
                 logger.error(f"Batch {batch_num} error: {e}")
@@ -962,13 +1093,20 @@ def smart_refresh_cache(self, mode: str = "auto"):
             # Update heartbeat for stuck detection
             price_cache.update_warmup_heartbeat(progress, total, percent)
 
+            # Extend lock TTL to prevent expiry during long-running tasks (A5)
+            task_id = self.request.id or 'unknown'
+            from .data_fetch_lock import DataFetchLock
+            lock = DataFetchLock.get_instance()
+            lock.extend_lock(task_id, 3600)
+
             # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:
                 from ..services.rate_limiter import rate_limiter
                 rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
 
-        # Save final warmup metadata
-        status = "completed" if failed == 0 else "partial"
+        # Save final warmup metadata (treat >95% success as "completed")
+        success_rate = refreshed / total if total > 0 else 0
+        status = "completed" if success_rate >= 0.95 else "partial"
         price_cache.save_warmup_metadata(status, refreshed, total)
         price_cache.clear_warmup_heartbeat()
 
@@ -994,7 +1132,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
     except Exception as e:
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
         # Save partial progress
-        price_cache.save_warmup_metadata("failed", refreshed, total if 'total' in dir() else 0, str(e))
+        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e))
         price_cache.clear_warmup_heartbeat()
         return {
             "status": "failed",

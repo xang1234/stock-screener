@@ -390,6 +390,137 @@ class BulkDataFetcher:
 
         return result
 
+    def fetch_batch_prices(
+        self,
+        symbols: List[str],
+        period: str = '2y',
+    ) -> Dict[str, Dict]:
+        """
+        Fetch price data for multiple symbols using yf.download() (single HTTP request).
+
+        This is significantly faster than fetch_batch_data() which calls ticker.history()
+        per symbol with per-ticker delays. yf.download() batches all symbols into one
+        request and returns data for all tickers at once.
+
+        Args:
+            symbols: List of ticker symbols to fetch
+            period: Time period for historical data (default: 2y)
+
+        Returns:
+            Dict mapping symbols to their data:
+            {
+                'AAPL': {
+                    'symbol': 'AAPL',
+                    'price_data': pd.DataFrame,
+                    'info': None,
+                    'fundamentals': None,
+                    'has_error': False
+                },
+                ...
+            }
+        """
+        if not symbols:
+            return {}
+
+        logger.info(f"Batch fetching prices for {len(symbols)} symbols using yf.download()")
+
+        results = {}
+
+        try:
+            # yf.download with group_by='ticker' returns MultiIndex columns: (ticker, OHLCV)
+            # threads=False avoids threading issues inside Celery workers
+            # progress=False suppresses the tqdm progress bar
+            raw = yf.download(
+                tickers=symbols,
+                period=period,
+                group_by='ticker',
+                threads=False,
+                progress=False,
+            )
+
+            if raw is None or raw.empty:
+                logger.warning("yf.download returned empty DataFrame")
+                for symbol in symbols:
+                    results[symbol] = {
+                        'symbol': symbol, 'price_data': None, 'info': None,
+                        'fundamentals': None, 'has_error': True,
+                        'error': 'yf.download returned empty'
+                    }
+                return results
+
+            # Single symbol: yf.download returns flat columns (Open, High, etc.)
+            # Multi-symbol: returns MultiIndex columns (AAPL/Open, AAPL/High, etc.)
+            if len(symbols) == 1:
+                symbol = symbols[0]
+                df = raw.copy()
+                if df is not None and not df.empty:
+                    results[symbol] = {
+                        'symbol': symbol, 'price_data': df, 'info': None,
+                        'fundamentals': None, 'has_error': False, 'error': None
+                    }
+                else:
+                    results[symbol] = {
+                        'symbol': symbol, 'price_data': None, 'info': None,
+                        'fundamentals': None, 'has_error': True, 'error': 'No data returned'
+                    }
+            else:
+                # Multi-symbol: split by ticker
+                for symbol in symbols:
+                    try:
+                        if symbol in raw.columns.get_level_values(0):
+                            df = raw[symbol].copy()
+                            # Drop rows where all values are NaN (symbol had no data for that date)
+                            df = df.dropna(how='all')
+                            if not df.empty:
+                                results[symbol] = {
+                                    'symbol': symbol, 'price_data': df, 'info': None,
+                                    'fundamentals': None, 'has_error': False, 'error': None
+                                }
+                            else:
+                                results[symbol] = {
+                                    'symbol': symbol, 'price_data': None, 'info': None,
+                                    'fundamentals': None, 'has_error': True,
+                                    'error': 'No data after filtering NaN rows'
+                                }
+                        else:
+                            results[symbol] = {
+                                'symbol': symbol, 'price_data': None, 'info': None,
+                                'fundamentals': None, 'has_error': True,
+                                'error': 'Symbol not in download results'
+                            }
+                    except Exception as e:
+                        logger.warning(f"Error extracting {symbol} from download: {e}")
+                        results[symbol] = {
+                            'symbol': symbol, 'price_data': None, 'info': None,
+                            'fundamentals': None, 'has_error': True, 'error': str(e)
+                        }
+
+            success = len([r for r in results.values() if not r['has_error']])
+            failed = len(results) - success
+            logger.info(f"Batch price download: {success} successful, {failed} failed")
+
+            # Add missing symbols as errors
+            for symbol in symbols:
+                if symbol not in results:
+                    results[symbol] = {
+                        'symbol': symbol, 'price_data': None, 'info': None,
+                        'fundamentals': None, 'has_error': True,
+                        'error': 'Missing from results'
+                    }
+
+            return results
+
+        except Exception as e:
+            logger.error(f"yf.download batch failed: {e}", exc_info=True)
+            return {
+                symbol: {
+                    'symbol': symbol, 'price_data': None, 'info': None,
+                    'fundamentals': None, 'has_error': True,
+                    'error': f"Batch download error: {str(e)}"
+                }
+                for symbol in symbols
+            }
+
     def fetch_batch_with_cache_check(
         self,
         symbols: List[str],
