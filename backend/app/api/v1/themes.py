@@ -526,9 +526,10 @@ async def run_pipeline_async(
 
     Queues a Celery task to run:
     1. Content ingestion from all active sources
-    2. Theme extraction via LLM (with pipeline-specific prompts)
-    3. Metrics calculation for all themes (with pipeline-specific weights)
-    4. Alert generation
+    2. Reprocess previously failed extractions (retry)
+    3. Theme extraction via LLM (with pipeline-specific prompts)
+    4. Metrics calculation for all themes (with pipeline-specific weights)
+    5. Alert generation
 
     If pipeline is None, runs for both technical and fundamental sequentially.
 

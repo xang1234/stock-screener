@@ -602,27 +602,35 @@ Example themes for this pipeline: {examples_str}
                 pipeline_source_ids.append(source.id)
         return pipeline_source_ids
 
-    def process_batch(self, limit: int = 50) -> dict:
+    def process_batch(self, limit: int = 50, item_ids: list[int] = None) -> dict:
         """
         Process a batch of unprocessed content items
 
         Filters content items to only those from sources assigned to this pipeline.
+        If item_ids is provided, only processes those specific items (used by reprocessing).
 
         Returns summary of processing results
         """
-        pipeline_source_ids = self._get_pipeline_source_ids()
+        if item_ids is not None:
+            # Process specific items (e.g., reset failed items during reprocessing)
+            items = self.db.query(ContentItem).filter(
+                ContentItem.id.in_(item_ids),
+                ContentItem.is_processed == False,
+            ).order_by(ContentItem.published_at.desc()).all()
+        else:
+            pipeline_source_ids = self._get_pipeline_source_ids()
 
-        # Get unprocessed items from sources in this pipeline
-        query = self.db.query(ContentItem).filter(
-            ContentItem.is_processed == False
-        )
+            # Get unprocessed items from sources in this pipeline
+            query = self.db.query(ContentItem).filter(
+                ContentItem.is_processed == False
+            )
 
-        if pipeline_source_ids:
-            query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+            if pipeline_source_ids:
+                query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
 
-        items = query.order_by(
-            ContentItem.published_at.desc()
-        ).limit(limit).all()
+            items = query.order_by(
+                ContentItem.published_at.desc()
+            ).limit(limit).all()
 
         results = {
             "processed": 0,
@@ -710,8 +718,8 @@ Example themes for this pipeline: {examples_str}
             item.processed_at = None
         self.db.commit()
 
-        # Delegate to existing process_batch() — all logic reused
-        result = self.process_batch(limit=limit)
+        # Delegate to process_batch() with specific IDs — only retries these items
+        result = self.process_batch(limit=limit, item_ids=item_ids)
         result["reprocessed_count"] = len(item_ids)
         return result
 
@@ -728,7 +736,6 @@ Example themes for this pipeline: {examples_str}
         Returns dict with count and list of reset item IDs.
         """
         from datetime import timedelta
-        from sqlalchemy import and_
 
         age_days = max_age_days if max_age_days is not None else self.max_age_days
         cutoff_date = datetime.utcnow() - timedelta(days=age_days)

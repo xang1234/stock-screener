@@ -161,7 +161,8 @@ class TestReprocessFailedItems:
         # Verify the item was reset before process_batch was called
         db_session.refresh(failed_item)
         # After process_batch mock, item state depends on mock — check process_batch was called
-        mock_batch.assert_called_once_with(limit=100)
+        # process_batch receives item_ids to avoid "stealing" freshly ingested items
+        mock_batch.assert_called_once_with(limit=100, item_ids=[failed_item.id])
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")

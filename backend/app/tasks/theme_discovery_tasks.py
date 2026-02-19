@@ -670,7 +670,7 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None):
             }
         )
 
-        logger.info("\n[Step 3/5] Metrics Calculation...")
+        logger.info("\n[Step 4/5] Metrics Calculation...")
         results['metrics'] = calculate_theme_metrics(pipeline=pipeline)
 
         if pipeline_run:
