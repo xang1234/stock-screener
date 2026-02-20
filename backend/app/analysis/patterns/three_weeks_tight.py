@@ -220,15 +220,11 @@ def _find_tight_runs(
     n = len(weekly)
     runs: list[_TightRun] = []
 
-    modes = (
-        (
-            "strict",
-            parameters.three_weeks_tight_max_contraction_pct_strict,
-        ),
-        (
-            "relaxed",
-            parameters.three_weeks_tight_max_contraction_pct_relaxed,
-        ),
+    strict_threshold = (
+        parameters.three_weeks_tight_max_contraction_pct_strict
+    )
+    relaxed_threshold = (
+        parameters.three_weeks_tight_max_contraction_pct_relaxed
     )
 
     for weeks_tight in range(_MIN_WEEKS_TIGHT, _MAX_WEEKS_TIGHT + 1):
@@ -264,33 +260,40 @@ def _find_tight_runs(
             pivot_price = float(highs.iat[pivot_idx])
             recency_weeks = n - 1 - end_idx
 
-            for mode, threshold in modes:
-                if tight_band_pct > threshold:
-                    continue
-                mode_bias = 0.10 if mode == "strict" else 0.0
-                score = (
-                    min(weeks_tight, _MAX_WEEKS_TIGHT) * 0.16
-                    + max(0.0, 1.0 - (tight_band_pct / max(threshold, 1e-9)))
-                    * 0.55
-                    + max(0.0, 1.0 - recency_weeks / 10.0) * 0.19
-                    + mode_bias
+            if tight_band_pct <= strict_threshold:
+                mode = "strict"
+                threshold = strict_threshold
+                mode_bias = 0.10
+            elif tight_band_pct <= relaxed_threshold:
+                mode = "relaxed"
+                threshold = relaxed_threshold
+                mode_bias = 0.0
+            else:
+                continue
+
+            score = (
+                min(weeks_tight, _MAX_WEEKS_TIGHT) * 0.16
+                + max(0.0, 1.0 - (tight_band_pct / max(threshold, 1e-9)))
+                * 0.55
+                + max(0.0, 1.0 - recency_weeks / 10.0) * 0.19
+                + mode_bias
+            )
+            runs.append(
+                _TightRun(
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                    weeks_tight=weeks_tight,
+                    mode=mode,
+                    max_contraction_pct=threshold,
+                    tight_band_pct=tight_band_pct,
+                    tight_range_pct=tight_range_pct,
+                    vol_vs_10w=vol_vs_10w,
+                    pivot_idx=pivot_idx,
+                    pivot_price=pivot_price,
+                    recency_weeks=recency_weeks,
+                    score=score,
                 )
-                runs.append(
-                    _TightRun(
-                        start_idx=start_idx,
-                        end_idx=end_idx,
-                        weeks_tight=weeks_tight,
-                        mode=mode,
-                        max_contraction_pct=threshold,
-                        tight_band_pct=tight_band_pct,
-                        tight_range_pct=tight_range_pct,
-                        vol_vs_10w=vol_vs_10w,
-                        pivot_idx=pivot_idx,
-                        pivot_price=pivot_price,
-                        recency_weeks=recency_weeks,
-                        score=score,
-                    )
-                )
+            )
 
     runs.sort(
         key=lambda run: (

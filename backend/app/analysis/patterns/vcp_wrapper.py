@@ -14,8 +14,8 @@ from app.analysis.patterns.detectors.base import (
     PatternDetectorResult,
 )
 from app.analysis.patterns.models import PatternCandidateModel
+from app.analysis.patterns.legacy_vcp_detection import VCPDetector
 from app.analysis.patterns.normalization import normalize_detector_input_ohlcv
-from app.scanners.criteria.vcp_detection import VCPDetector
 
 
 class VCPWrapperDetector(PatternDetector):
