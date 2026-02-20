@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     default_universe: str = "all"
     scan_batch_size: int = 20
     cache_ttl_hours: int = 24
+    setup_engine_enabled: bool = True  # Feature flag to toggle Setup Engine scanner
 
     # Celery / Redis
     redis_host: str = "localhost"

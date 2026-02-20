@@ -68,6 +68,8 @@ _logger = logging.getLogger(__name__)
 @celery_app.on_after_configure.connect
 def _log_timezone(sender, **kwargs):
     _logger.info("Celery timezone: %s (enable_utc=%s)", settings.celery_timezone, True)
+    if not settings.setup_engine_enabled:
+        _logger.warning("SetupEngine scanner disabled via SETUP_ENGINE_ENABLED=false")
 
 
 @worker_ready.connect

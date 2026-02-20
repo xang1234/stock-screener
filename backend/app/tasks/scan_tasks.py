@@ -180,11 +180,51 @@ def compute_industry_peer_metrics(db: Session, scan_id: str):
         safe_rollback(db)
 
 
+def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:
+    """Log setup_engine score distribution for observability."""
+    try:
+        from sqlalchemy import func, select
+        scores_rows = db.execute(
+            select(
+                func.json_extract(ScanResult.details, '$.setup_engine.setup_score'),
+                func.json_extract(ScanResult.details, '$.setup_engine.setup_ready'),
+            ).where(
+                ScanResult.scan_id == scan_id,
+                func.json_extract(ScanResult.details, '$.setup_engine.setup_score').isnot(None),
+            )
+        ).all()
+
+        if not scores_rows:
+            return
+
+        scores = [float(row[0]) for row in scores_rows if row[0] is not None]
+        if not scores:
+            return
+
+        ready_count = sum(1 for row in scores_rows if row[1] in (True, 1, "true", "1"))
+        scores_sorted = sorted(scores)
+        n = len(scores_sorted)
+        median = (
+            scores_sorted[n // 2]
+            if n % 2 == 1
+            else (scores_sorted[n // 2 - 1] + scores_sorted[n // 2]) / 2.0
+        )
+
+        logger.info(
+            "SE score distribution [%s]: n=%d min=%.1f max=%.1f mean=%.1f median=%.1f ready=%d",
+            scan_id, n, min(scores), max(scores),
+            sum(scores) / n, median, ready_count,
+        )
+    except Exception as e:
+        logger.debug("SE distribution telemetry skipped: %s", e)
+
+
 def _run_post_scan_pipeline(scan_id: str) -> None:
-    """Post-scan: peer metrics, retention cleanup, chart cache warming."""
+    """Post-scan: peer metrics, retention cleanup, chart cache warming, SE telemetry."""
     db = SessionLocal()
     try:
         compute_industry_peer_metrics(db, scan_id)
+        _log_setup_engine_distribution(db, scan_id)
         scan = db.query(Scan).filter(Scan.scan_id == scan_id).first()
         if scan and scan.universe_key:
             cleanup_old_scans(db, scan.universe_key)

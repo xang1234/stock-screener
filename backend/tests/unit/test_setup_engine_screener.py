@@ -8,16 +8,20 @@ Covers:
 - Error handling
 - Rating calculation thresholds
 - Weekly OHLCV propagation to detectors
+- Scanner-level timing observability (SE-E9)
+- Per-detector elapsed_ms in DetectorExecutionTrace (SE-E9)
 """
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from app.analysis.patterns.aggregator import DetectorExecutionTrace
 from app.analysis.patterns.models import validate_setup_engine_payload
 from app.scanners.base_screener import DataRequirements, ScreenerResult, StockData
 from app.scanners.screener_registry import screener_registry
@@ -250,3 +254,67 @@ class TestCountCurrentWeekSessions:
         dates = pd.bdate_range("2025-12-15", "2025-12-19")  # Mon-Fri
         df = pd.DataFrame({"Close": range(len(dates))}, index=dates)
         assert _count_current_week_sessions(df) == 5
+
+
+class TestTimingObservability:
+    """SE-E9: Scanner-level timing and per-detector elapsed_ms."""
+
+    def test_scanner_emits_timing_log(self, caplog):
+        """INFO-level timing line should appear for a valid scan."""
+        data = _make_stock_data(num_days=350)
+        scanner = SetupEngineScanner()
+
+        with caplog.at_level(logging.INFO, logger="app.scanners.setup_engine_screener"):
+            scanner.scan_stock("TIMING", data)
+
+        timing_lines = [r for r in caplog.records if "SE timing TIMING" in r.message]
+        assert len(timing_lines) == 1
+        msg = timing_lines[0].message
+        assert "prep=" in msg
+        assert "detectors=" in msg
+        assert "readiness=" in msg
+        assert "total=" in msg
+        assert "score=" in msg
+
+    def test_detector_traces_have_elapsed_ms(self):
+        """Every DetectorExecutionTrace should have a non-negative elapsed_ms."""
+        from app.analysis.patterns.aggregator import SetupEngineAggregator
+        from app.analysis.patterns.config import DEFAULT_SETUP_ENGINE_PARAMETERS
+        from app.analysis.patterns.detectors import PatternDetectorInput
+
+        price_data = _make_price_data(350)
+        from app.analysis.patterns.technicals import resample_ohlcv
+        weekly_data = resample_ohlcv(price_data, exclude_incomplete_last_period=True)
+
+        detector_input = PatternDetectorInput(
+            symbol="TRACE",
+            timeframe="daily",
+            daily_bars=len(price_data),
+            weekly_bars=len(weekly_data),
+            features={
+                "daily_ohlcv": price_data,
+                "weekly_ohlcv": weekly_data,
+            },
+        )
+
+        aggregator = SetupEngineAggregator()
+        output = aggregator.aggregate(detector_input, parameters=DEFAULT_SETUP_ENGINE_PARAMETERS)
+
+        assert len(output.detector_traces) > 0
+        for trace in output.detector_traces:
+            assert isinstance(trace, DetectorExecutionTrace)
+            assert trace.elapsed_ms >= 0.0
+
+    def test_per_detector_debug_logs(self, caplog):
+        """DEBUG-level per-detector lines should appear for each detector."""
+        data = _make_stock_data(num_days=350)
+        scanner = SetupEngineScanner()
+
+        with caplog.at_level(logging.DEBUG, logger="app.scanners.setup_engine_screener"):
+            scanner.scan_stock("DETLOG", data)
+
+        debug_lines = [r for r in caplog.records if "SE detector" in r.message and "DETLOG" in r.message]
+        assert len(debug_lines) > 0
+        for line in debug_lines:
+            assert "elapsed=" in line.message
+            assert "outcome=" in line.message

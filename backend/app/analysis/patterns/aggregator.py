@@ -5,6 +5,7 @@ TODO(SE-B7): Emit typed SetupEngineReport-compatible aggregation output.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -43,6 +44,7 @@ class DetectorExecutionTrace:
     failed_checks: tuple[str, ...]
     warnings: tuple[str, ...]
     error_detail: str | None
+    elapsed_ms: float
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,9 @@ class SetupEngineAggregator:
         detector_traces: list[DetectorExecutionTrace] = []
 
         for idx, detector in enumerate(self._detectors):
+            t0 = time.perf_counter()
             result = detector.detect_safe(detector_input, parameters)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
             detector_traces.append(
                 DetectorExecutionTrace(
                     execution_index=idx,
@@ -115,6 +119,7 @@ class SetupEngineAggregator:
                     failed_checks=tuple(result.failed_checks),
                     warnings=tuple(result.warnings),
                     error_detail=result.error_detail,
+                    elapsed_ms=elapsed_ms,
                 )
             )
 

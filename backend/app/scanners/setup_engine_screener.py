@@ -8,6 +8,7 @@ to existing modules in ``app.analysis.patterns``.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -96,6 +97,11 @@ class SetupEngineScanner(BaseStockScreener):
         data: StockData,
         criteria: Optional[Dict],
     ) -> ScreenerResult:
+        t_total = time.perf_counter()
+
+        # ── Phase A: prep (data policy, parameter build, detector input) ──
+        t_prep = time.perf_counter()
+
         # 1. Quick guard on absolute minimum data
         if not data.has_sufficient_data(min_days=100):
             return self._insufficient_data_result(
@@ -159,12 +165,30 @@ class SetupEngineScanner(BaseStockScreener):
             },
         )
 
+        prep_ms = (time.perf_counter() - t_prep) * 1000.0
+
+        # ── Phase B: detectors (aggregation pipeline) ──
+        t_detectors = time.perf_counter()
+
         # 10. Run aggregation pipeline
         agg_output: AggregatedPatternOutput = self._aggregator.aggregate(
             detector_input,
             parameters=parameters,
             policy_result=policy_result,
         )
+
+        detectors_ms = (time.perf_counter() - t_detectors) * 1000.0
+
+        # Per-detector timing at DEBUG level (avoids 3500+ lines per full scan)
+        for trace in agg_output.detector_traces:
+            logger.debug(
+                "SE detector %s: outcome=%s candidates=%d elapsed=%.1fms | %s",
+                trace.detector_name, trace.outcome, trace.candidate_count,
+                trace.elapsed_ms, symbol,
+            )
+
+        # ── Phase C: readiness + payload assembly ──
+        t_readiness = time.perf_counter()
 
         # 11. Extract pivot price for readiness computation
         pivot_price = agg_output.pivot_price
@@ -193,9 +217,23 @@ class SetupEngineScanner(BaseStockScreener):
             data_policy_result=policy_result,
         )
 
+        readiness_ms = (time.perf_counter() - t_readiness) * 1000.0
+
         # 14. Package into ScreenerResult
         score = payload["setup_score"] if payload["setup_score"] is not None else 0.0
         details: Dict[str, Any] = {"setup_engine": payload}
+
+        total_ms = (time.perf_counter() - t_total) * 1000.0
+
+        # Scanner-level timing breakdown at INFO (1 line per symbol)
+        error_count = sum(1 for t in agg_output.detector_traces if t.outcome == "error")
+        no_data_count = sum(1 for t in agg_output.detector_traces if t.outcome == "no_data")
+        logger.info(
+            "SE timing %s: prep=%.1fms detectors=%.1fms readiness=%.1fms total=%.1fms "
+            "score=%s errors=%d no_data=%d",
+            symbol, prep_ms, detectors_ms, readiness_ms, total_ms,
+            payload.get("setup_score"), error_count, no_data_count,
+        )
 
         return ScreenerResult(
             score=score,

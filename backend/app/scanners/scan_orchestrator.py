@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .base_screener import BaseStockScreener, ScreenerResult, StockData, DataRequirements
 from .screener_registry import ScreenerRegistry
 
+from app.config import settings
 from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
 from app.domain.scanning.scoring import calculate_composite_score, calculate_overall_rating
 from app.domain.scanning.ports import StockDataProvider
@@ -84,7 +85,20 @@ class ScanOrchestrator:
                 logger.warning("Unknown composite method '%s', defaulting to weighted_average", composite_method)
                 method_enum = CompositeMethod.WEIGHTED_AVERAGE
 
-            # 1. Get screener instances from registry
+            # 1. Filter disabled screeners (silent — no per-symbol warning)
+            if not settings.setup_engine_enabled:
+                screener_names = [n for n in screener_names if n != "setup_engine"]
+            if not screener_names:
+                return {
+                    "symbol": symbol,
+                    "composite_score": 0,
+                    "rating": "Error",
+                    "error": "All requested screeners are disabled",
+                    "current_price": None,
+                    "screeners_run": [],
+                }
+
+            # 2. Get screener instances from registry
             try:
                 screeners = self._registry.get_multiple(screener_names)
             except ValueError as e:
