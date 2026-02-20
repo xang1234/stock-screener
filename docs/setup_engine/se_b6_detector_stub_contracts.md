@@ -3,10 +3,10 @@
 ## Explicit Entry Modules
 - `backend/app/analysis/patterns/vcp_wrapper.py` (`TODO(SE-C1)`)
 - `backend/app/analysis/patterns/three_weeks_tight.py` (`TODO(SE-C2)`)
-- `backend/app/analysis/patterns/high_tight_flag.py` (`TODO(SE-C3a)`, `TODO(SE-C3b)`)
-- `backend/app/analysis/patterns/cup_handle.py` (`TODO(SE-C4a)`, `TODO(SE-C4b)`)
+- `backend/app/analysis/patterns/high_tight_flag.py` (implemented through SE-C3b)
+- `backend/app/analysis/patterns/cup_handle.py` (implemented through SE-C4b)
 - `backend/app/analysis/patterns/nr7_inside_day.py` (`TODO(SE-C5)`)
-- `backend/app/analysis/patterns/first_pullback.py` (`TODO(SE-C6a)`, `TODO(SE-C6b)`)
+- `backend/app/analysis/patterns/first_pullback.py` (implemented through SE-C6b)
 
 ## Interface Boundary
 - Detector contract: `backend/app/analysis/patterns/detectors/base.py`
