@@ -109,7 +109,48 @@ _JSON_FIELD_MAP: dict[str, str] = {
     "passes_template": "$.passes_template",
     "vcp_contraction_ratio": "$.vcp_contraction_ratio",
     "vcp_atr_score": "$.vcp_atr_score",
+    # Setup Engine (numeric)
+    "se_setup_score": "$.setup_engine.setup_score",
+    "se_quality_score": "$.setup_engine.quality_score",
+    "se_readiness_score": "$.setup_engine.readiness_score",
+    "se_pattern_confidence": "$.setup_engine.pattern_confidence",
+    "se_pivot_price": "$.setup_engine.pivot_price",
+    "se_distance_to_pivot_pct": "$.setup_engine.distance_to_pivot_pct",
+    "se_atr14_pct": "$.setup_engine.atr14_pct",
+    "se_atr14_pct_trend": "$.setup_engine.atr14_pct_trend",
+    "se_bb_width_pct": "$.setup_engine.bb_width_pct",
+    "se_bb_width_pctile_252": "$.setup_engine.bb_width_pctile_252",
+    "se_volume_vs_50d": "$.setup_engine.volume_vs_50d",
+    "se_rs": "$.setup_engine.rs",
+    "se_rs_vs_spy_65d": "$.setup_engine.rs_vs_spy_65d",
+    "se_rs_vs_spy_trend_20d": "$.setup_engine.rs_vs_spy_trend_20d",
+    # Setup Engine (boolean)
+    "se_setup_ready": "$.setup_engine.setup_ready",
+    "se_rs_line_new_high": "$.setup_engine.rs_line_new_high",
+    # Setup Engine (string)
+    "se_pattern_primary": "$.setup_engine.pattern_primary",
+    "se_pivot_type": "$.setup_engine.pivot_type",
 }
+
+# JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
+# Scoped to VCP numeric + all se_* numeric fields only; existing fields
+# (minervini_score, price, etc.) continue to sort without cast.
+_JSON_SORT_NUMERIC: frozenset[str] = frozenset({
+    "vcp_score", "vcp_pivot",
+    "se_setup_score", "se_quality_score", "se_readiness_score",
+    "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
+    "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
+    "se_bb_width_pctile_252", "se_volume_vs_50d", "se_rs",
+    "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
+})
+
+
+def _json_sort_expr(field: str, column, json_path: str, order: SortOrder):
+    """ORDER BY expression for a JSON field: numeric cast + nulls-last."""
+    json_val = func.json_extract(column, json_path)
+    expr = cast(json_val, SAFloat) if field in _JSON_SORT_NUMERIC else json_val
+    order_fn = asc if order == SortOrder.ASC else desc
+    return order_fn(expr).nullslast()
 
 
 # ── Public API ──────────────────────────────────────────────────────────
@@ -142,9 +183,9 @@ def apply_sort_and_paginate(
         query = query.order_by(order_fn(col))
     elif sort.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[sort.field]
-        json_val = func.json_extract(StockFeatureDaily.details_json, json_path)
-        order_fn = asc if sort.order == SortOrder.ASC else desc
-        query = query.order_by(order_fn(json_val))
+        query = query.order_by(
+            _json_sort_expr(sort.field, StockFeatureDaily.details_json, json_path, sort.order)
+        )
     else:
         # Unknown sort field — fall back to composite_score desc
         query = query.order_by(desc(StockFeatureDaily.composite_score))
@@ -168,9 +209,9 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
         query = query.order_by(order_fn(col))
     elif sort.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[sort.field]
-        json_val = func.json_extract(StockFeatureDaily.details_json, json_path)
-        order_fn = asc if sort.order == SortOrder.ASC else desc
-        query = query.order_by(order_fn(json_val))
+        query = query.order_by(
+            _json_sort_expr(sort.field, StockFeatureDaily.details_json, json_path, sort.order)
+        )
     else:
         query = query.order_by(desc(StockFeatureDaily.composite_score))
     return query.all()

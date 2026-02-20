@@ -2,7 +2,8 @@
 
 These tests verify the query builder's public API (apply_filters,
 apply_sort_and_paginate) by checking the behavior of the _COLUMN_MAP,
-_JSON_FIELD_MAP, and _PYTHON_SORT_FIELDS constants and helper functions.
+_JSON_FIELD_MAP, _JSON_SORT_NUMERIC, and _PYTHON_SORT_FIELDS constants
+and helper functions.
 """
 
 import pytest
@@ -17,6 +18,7 @@ from app.domain.scanning.filter_spec import (
 from app.infra.query.scan_result_query import (
     _COLUMN_MAP,
     _JSON_FIELD_MAP,
+    _JSON_SORT_NUMERIC,
     _PYTHON_SORT_FIELDS,
 )
 
@@ -56,6 +58,68 @@ class TestColumnMapCoverage:
     ])
     def test_python_sort_fields(self, field):
         assert field in _PYTHON_SORT_FIELDS, f"{field} should be in _PYTHON_SORT_FIELDS"
+
+
+class TestSetupEngineFieldCoverage:
+    """Verify all 18 setup_engine fields are registered."""
+
+    SE_NUMERIC_FIELDS = [
+        "se_setup_score", "se_quality_score", "se_readiness_score",
+        "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
+        "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
+        "se_bb_width_pctile_252", "se_volume_vs_50d", "se_rs",
+        "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
+    ]
+
+    SE_BOOLEAN_FIELDS = ["se_setup_ready", "se_rs_line_new_high"]
+
+    SE_STRING_FIELDS = ["se_pattern_primary", "se_pivot_type"]
+
+    SE_ALL_FIELDS = SE_NUMERIC_FIELDS + SE_BOOLEAN_FIELDS + SE_STRING_FIELDS
+
+    @pytest.mark.parametrize("field", SE_ALL_FIELDS)
+    def test_se_field_in_json_field_map(self, field):
+        assert field in _JSON_FIELD_MAP, f"{field} should be in _JSON_FIELD_MAP"
+
+    @pytest.mark.parametrize("field", SE_ALL_FIELDS)
+    def test_se_field_has_setup_engine_prefix_in_path(self, field):
+        path = _JSON_FIELD_MAP[field]
+        assert path.startswith("$.setup_engine."), (
+            f"{field} path should start with $.setup_engine., got {path}"
+        )
+
+    def test_se_field_count(self):
+        se_fields = [k for k in _JSON_FIELD_MAP if k.startswith("se_")]
+        assert len(se_fields) == 18
+
+    @pytest.mark.parametrize("field", SE_NUMERIC_FIELDS)
+    def test_numeric_se_field_in_sort_numeric(self, field):
+        assert field in _JSON_SORT_NUMERIC, f"{field} should be in _JSON_SORT_NUMERIC"
+
+    @pytest.mark.parametrize("field", SE_BOOLEAN_FIELDS + SE_STRING_FIELDS)
+    def test_non_numeric_se_field_not_in_sort_numeric(self, field):
+        assert field not in _JSON_SORT_NUMERIC, (
+            f"{field} should NOT be in _JSON_SORT_NUMERIC"
+        )
+
+
+class TestJsonSortNumericConsistency:
+    """Verify _JSON_SORT_NUMERIC is consistent with _JSON_FIELD_MAP."""
+
+    def test_sort_numeric_is_subset_of_json_field_map(self):
+        assert _JSON_SORT_NUMERIC <= _JSON_FIELD_MAP.keys(), (
+            f"Fields in _JSON_SORT_NUMERIC but not in _JSON_FIELD_MAP: "
+            f"{_JSON_SORT_NUMERIC - _JSON_FIELD_MAP.keys()}"
+        )
+
+    def test_vcp_numeric_fields_in_sort_numeric(self):
+        assert "vcp_score" in _JSON_SORT_NUMERIC
+        assert "vcp_pivot" in _JSON_SORT_NUMERIC
+
+    def test_vcp_non_numeric_not_in_sort_numeric(self):
+        assert "vcp_detected" not in _JSON_SORT_NUMERIC
+        assert "vcp_ready_for_breakout" not in _JSON_SORT_NUMERIC
+        assert "ma_alignment" not in _JSON_SORT_NUMERIC
 
 
 class TestFilterSpecBuilder:

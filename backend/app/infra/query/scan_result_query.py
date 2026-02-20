@@ -84,12 +84,44 @@ _COLUMN_MAP: dict[str, Any] = {
 # JSON details paths for fields stored in the details blob.
 # Maps domain field name → json_extract path.
 _JSON_FIELD_MAP: dict[str, str] = {
+    # VCP
     "vcp_score": "$.vcp_score",
     "vcp_pivot": "$.vcp_pivot",
     "vcp_detected": "$.vcp_detected",
     "vcp_ready_for_breakout": "$.vcp_ready_for_breakout",
     "ma_alignment": "$.ma_alignment",
+    # Setup Engine (numeric)
+    "se_setup_score": "$.setup_engine.setup_score",
+    "se_quality_score": "$.setup_engine.quality_score",
+    "se_readiness_score": "$.setup_engine.readiness_score",
+    "se_pattern_confidence": "$.setup_engine.pattern_confidence",
+    "se_pivot_price": "$.setup_engine.pivot_price",
+    "se_distance_to_pivot_pct": "$.setup_engine.distance_to_pivot_pct",
+    "se_atr14_pct": "$.setup_engine.atr14_pct",
+    "se_atr14_pct_trend": "$.setup_engine.atr14_pct_trend",
+    "se_bb_width_pct": "$.setup_engine.bb_width_pct",
+    "se_bb_width_pctile_252": "$.setup_engine.bb_width_pctile_252",
+    "se_volume_vs_50d": "$.setup_engine.volume_vs_50d",
+    "se_rs": "$.setup_engine.rs",
+    "se_rs_vs_spy_65d": "$.setup_engine.rs_vs_spy_65d",
+    "se_rs_vs_spy_trend_20d": "$.setup_engine.rs_vs_spy_trend_20d",
+    # Setup Engine (boolean)
+    "se_setup_ready": "$.setup_engine.setup_ready",
+    "se_rs_line_new_high": "$.setup_engine.rs_line_new_high",
+    # Setup Engine (string)
+    "se_pattern_primary": "$.setup_engine.pattern_primary",
+    "se_pivot_type": "$.setup_engine.pivot_type",
 }
+
+# JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
+_JSON_SORT_NUMERIC: frozenset[str] = frozenset({
+    "vcp_score", "vcp_pivot",
+    "se_setup_score", "se_quality_score", "se_readiness_score",
+    "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
+    "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
+    "se_bb_width_pctile_252", "se_volume_vs_50d", "se_rs",
+    "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
+})
 
 # Sort fields that must be fetched and sorted in Python (not in SQL).
 _PYTHON_SORT_FIELDS = frozenset({
@@ -101,6 +133,14 @@ _PYTHON_SORT_FIELDS = frozenset({
 
 # Cap for Python-sorted queries to prevent memory issues.
 _PYTHON_SORT_LIMIT = 1000
+
+
+def _json_sort_expr(field: str, column, json_path: str, order: SortOrder):
+    """ORDER BY expression for a JSON field: numeric cast + nulls-last."""
+    json_val = func.json_extract(column, json_path)
+    expr = cast(json_val, SAFloat) if field in _JSON_SORT_NUMERIC else json_val
+    order_fn = asc if order == SortOrder.ASC else desc
+    return order_fn(expr).nullslast()
 
 
 # ── Public API ──────────────────────────────────────────────────────────
@@ -142,6 +182,11 @@ def apply_sort_and_paginate(
         if col is not None:
             order_fn = asc if sort.order == SortOrder.ASC else desc
             query = query.order_by(order_fn(col))
+        elif sort.field in _JSON_FIELD_MAP:
+            json_path = _JSON_FIELD_MAP[sort.field]
+            query = query.order_by(
+                _json_sort_expr(sort.field, ScanResult.details, json_path, sort.order)
+            )
         else:
             # Unknown sort field — fall back to composite_score desc
             query = query.order_by(desc(ScanResult.composite_score))
@@ -164,6 +209,11 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
     if col is not None:
         order_fn = asc if sort.order == SortOrder.ASC else desc
         query = query.order_by(order_fn(col))
+    elif sort.field in _JSON_FIELD_MAP:
+        json_path = _JSON_FIELD_MAP[sort.field]
+        query = query.order_by(
+            _json_sort_expr(sort.field, ScanResult.details, json_path, sort.order)
+        )
     else:
         query = query.order_by(desc(ScanResult.composite_score))
     return query.all()
@@ -199,14 +249,20 @@ def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
 
 
 def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
-    """Apply an include/exclude categorical filter on a SQL column."""
+    """Apply an include/exclude categorical filter on a SQL column or JSON field."""
     col = _COLUMN_MAP.get(cf.field)
-    if col is None:
-        return query  # unknown field — skip
-    if cf.mode == FilterMode.EXCLUDE:
-        query = query.filter(~col.in_(cf.values))
-    else:
-        query = query.filter(col.in_(cf.values))
+    if col is not None:
+        if cf.mode == FilterMode.EXCLUDE:
+            query = query.filter(~col.in_(cf.values))
+        else:
+            query = query.filter(col.in_(cf.values))
+    elif cf.field in _JSON_FIELD_MAP:
+        json_path = _JSON_FIELD_MAP[cf.field]
+        json_val = func.json_extract(ScanResult.details, json_path)
+        if cf.mode == FilterMode.EXCLUDE:
+            query = query.filter(~json_val.in_(cf.values))
+        else:
+            query = query.filter(json_val.in_(cf.values))
     return query
 
 
@@ -226,10 +282,14 @@ def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
 
 
 def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
-    """Apply a LIKE text search on a SQL column."""
+    """Apply a LIKE text search on a SQL column or JSON field."""
     col = _COLUMN_MAP.get(ts.field)
     if col is not None:
         query = query.filter(col.ilike(f"%{ts.pattern}%"))
+    elif ts.field in _JSON_FIELD_MAP:
+        json_path = _JSON_FIELD_MAP[ts.field]
+        json_val = func.json_extract(ScanResult.details, json_path)
+        query = query.filter(json_val.ilike(f"%{ts.pattern}%"))
     return query
 
 
