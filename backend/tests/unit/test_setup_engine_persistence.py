@@ -11,8 +11,7 @@ Verifies:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -65,12 +64,6 @@ _SE_PAYLOAD: dict[str, Any] = {
         "key_levels": {},
     },
 }
-
-# Lookup from se_* field name to the inner payload key
-_SE_FIELD_TO_PAYLOAD_KEY: dict[str, str] = {}
-for _k, _path in SR_JSON_FIELD_MAP.items():
-    if _k.startswith("se_") and _path.startswith("$.setup_engine."):
-        _SE_FIELD_TO_PAYLOAD_KEY[_k] = _path.split(".")[-1]
 
 
 def _make_stub_stock_data(symbol: str = "TEST") -> StockData:
