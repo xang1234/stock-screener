@@ -337,6 +337,14 @@ class TestBuildScoreTrace:
             assert entry["formula"] == ""
             assert entry["inputs"] == {}
 
+    def test_null_score_trace_entries_are_distinct_objects(self):
+        """Each null trace entry must be a separate dict (no shared mutable refs)."""
+        trace = build_null_score_trace()
+        entries = list(trace.values())
+        for i, a in enumerate(entries):
+            for b in entries[i + 1:]:
+                assert a is not b, "Null trace entries must not alias the same dict"
+
     def test_unit_values_are_valid(self):
         """Each trace entry uses a recognized unit."""
         valid_units = {"pct", "ratio", "bool"}

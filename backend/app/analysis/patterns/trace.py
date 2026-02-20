@@ -168,24 +168,22 @@ def build_score_trace(
     return trace
 
 
+def _null_field_trace() -> FieldTrace:
+    return FieldTrace(formula="", inputs={}, output=None, unit="")
+
+
 def build_null_score_trace() -> ScoreTrace:
     """All-null trace for degraded paths (insufficient data, etc)."""
-    null_entry = FieldTrace(
-        formula="",
-        inputs={},
-        output=None,
-        unit="",
-    )
     return {
-        "setup_score": null_entry,
-        "distance_to_pivot_pct": null_entry,
-        "atr14_pct": null_entry,
-        "atr14_pct_trend": null_entry,
-        "bb_width_pct": null_entry,
-        "bb_width_pctile_252": null_entry,
-        "volume_vs_50d": null_entry,
-        "rs": null_entry,
-        "rs_line_new_high": null_entry,
-        "rs_vs_spy_65d": null_entry,
-        "rs_vs_spy_trend_20d": null_entry,
+        "setup_score": _null_field_trace(),
+        "distance_to_pivot_pct": _null_field_trace(),
+        "atr14_pct": _null_field_trace(),
+        "atr14_pct_trend": _null_field_trace(),
+        "bb_width_pct": _null_field_trace(),
+        "bb_width_pctile_252": _null_field_trace(),
+        "volume_vs_50d": _null_field_trace(),
+        "rs": _null_field_trace(),
+        "rs_line_new_high": _null_field_trace(),
+        "rs_vs_spy_65d": _null_field_trace(),
+        "rs_vs_spy_trend_20d": _null_field_trace(),
     }
