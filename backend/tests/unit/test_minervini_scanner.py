@@ -105,7 +105,8 @@ def test_scan_orchestrator():
 
             logger.info(f"Symbol: {result['symbol']}")
             logger.info(f"Composite Score: {result['composite_score']:.2f}")
-            logger.info(f"Minervini Score: {result.get('minervini_score', 'N/A'):.2f}")
+            _ms = result.get('minervini_score')
+            logger.info(f"Minervini Score: {_ms:.2f}" if _ms is not None else "Minervini Score: N/A")
             logger.info(f"Rating: {result['rating']}")
             logger.info(f"Current Price: ${result.get('current_price', 'N/A')}")
             logger.info(f"RS Rating: {result.get('rs_rating', 'N/A')}")

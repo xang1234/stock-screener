@@ -74,10 +74,10 @@ def _stub_external_data(monkeypatch):
     Stub external data sources for unit tests to avoid network/Redis access.
     """
 
-    def _prepare_data_stub(self, symbol, requirements):
+    def _prepare_data_stub(self, symbol, requirements, *, allow_partial=True):
         return _make_stub_stock_data(symbol)
 
-    def _prepare_data_bulk_stub(self, symbols, requirements):
+    def _prepare_data_bulk_stub(self, symbols, requirements, *, allow_partial=True):
         return {symbol: _make_stub_stock_data(symbol) for symbol in symbols}
 
     monkeypatch.setattr(DataPreparationLayer, "prepare_data", _prepare_data_stub, raising=True)

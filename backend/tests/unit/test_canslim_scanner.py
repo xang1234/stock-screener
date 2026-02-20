@@ -156,8 +156,10 @@ def test_multi_screener():
         logger.info(f"  Composite Method: {result.get('composite_method', 'N/A')}")
 
         logger.info("\nIndividual Scores:")
-        logger.info(f"  Minervini Score: {result.get('minervini_score', 'N/A'):.2f}")
-        logger.info(f"  CANSLIM Score:   {result.get('canslim_score', 'N/A'):.2f}")
+        _ms = result.get('minervini_score')
+        logger.info(f"  Minervini Score: {_ms:.2f}" if _ms is not None else "  Minervini Score: N/A")
+        _cs = result.get('canslim_score')
+        logger.info(f"  CANSLIM Score:   {_cs:.2f}" if _cs is not None else "  CANSLIM Score: N/A")
 
         logger.info("\nPass Status:")
         logger.info(f"  Minervini Passes: {result.get('minervini_passes', False)}")
