@@ -679,3 +679,28 @@ def test_first_pullback_does_not_double_count_clustered_touch_bars():
     best = result.candidates[0]
     assert best["metrics"]["tests_count"] == 1
     assert best["metrics"]["is_first_test"] is True
+
+
+def test_first_pullback_depth_uses_span_min_low_across_multiple_tests():
+    frame = _first_pullback_frame(touch_positions=(80, 90))
+    frame.loc[frame.index[80], "Low"] = 98.6
+    frame.loc[frame.index[90], "Low"] = 99.5
+    detector_input = PatternDetectorInput(
+        symbol="PB",
+        timeframe="daily",
+        daily_bars=len(frame),
+        weekly_bars=60,
+        features={"daily_ohlcv": frame},
+    )
+
+    result = FirstPullbackDetector().detect_safe(
+        detector_input, DEFAULT_SETUP_ENGINE_PARAMETERS
+    )
+    assert result.outcome == DetectorOutcome.DETECTED
+    best = result.candidates[0]
+    latest_touch_depth = (
+        best["metrics"]["pullback_high_price"] - best["metrics"]["latest_test_low"]
+    )
+    assert best["metrics"]["tests_count"] == 2
+    assert best["metrics"]["pullback_span_low"] == 98.6
+    assert best["metrics"]["pullback_depth_points"] > latest_touch_depth

@@ -100,7 +100,10 @@ class FirstPullbackDetector(PatternDetector):
         )
         pullback_high_price = float(frame["High"].iat[pullback_high_idx])
         pullback_high_date = frame.index[pullback_high_idx].date().isoformat()
-        pullback_depth_points = max(0.0, pullback_high_price - latest_low)
+        pullback_span_low = float(
+            frame["Low"].iloc[first_test_idx : latest_test_idx + 1].min()
+        )
+        pullback_depth_points = max(0.0, pullback_high_price - pullback_span_low)
         pullback_depth_pct_from_high = (
             pullback_depth_points / max(abs(pullback_high_price), 1e-9)
         ) * 100.0
@@ -177,6 +180,7 @@ class FirstPullbackDetector(PatternDetector):
                 "pullback_span_bars": pullback_span_bars,
                 "pullback_high_price": round(pullback_high_price, 4),
                 "pullback_high_date": pullback_high_date,
+                "pullback_span_low": round(pullback_span_low, 4),
                 "pullback_depth_points": round(pullback_depth_points, 4),
                 "pullback_depth_pct_from_high": round(
                     pullback_depth_pct_from_high, 6
