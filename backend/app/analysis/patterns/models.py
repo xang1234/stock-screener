@@ -28,6 +28,18 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 JsonScalar = str | int | float | bool | None
 
 
+class FieldTrace(TypedDict):
+    """One field's formula, raw inputs, computed output, and unit."""
+
+    formula: str
+    inputs: dict[str, JsonScalar]
+    output: JsonScalar
+    unit: str
+
+
+ScoreTrace = dict[str, FieldTrace]
+
+
 class PatternCandidate(TypedDict, total=False):
     """Canonical candidate shape emitted by all detectors.
 
@@ -432,6 +444,14 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
         unit=None,
         source_module="backend/app/scanners/setup_engine_scanner.py",
         description="Reasons this setup should not be acted on.",
+    ),
+    SetupEngineFieldSpec(
+        name="explain.score_trace",
+        type_name="ScoreTrace",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/analysis/patterns/trace.py",
+        description="Optional per-field calculation trace for auditability.",
     ),
 )
 

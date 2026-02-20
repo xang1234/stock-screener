@@ -17,6 +17,7 @@ from app.analysis.patterns.models import (
     SETUP_ENGINE_NUMERIC_UNITS,
     PatternCandidate,
     PatternCandidateModel,
+    ScoreTrace,
     SetupEngineExplain,
     SetupEnginePayload,
     coerce_pattern_candidate,
@@ -82,6 +83,7 @@ class ExplainPayload:
     failed_checks: tuple[str, ...] = ()
     key_levels: KeyLevels = field(default_factory=KeyLevels)
     invalidation_flags: tuple[InvalidationFlag | str, ...] = ()
+    score_trace: ScoreTrace | None = None
 
     def __post_init__(self) -> None:
         for check in (*self.passed_checks, *self.failed_checks):
@@ -98,12 +100,17 @@ class ExplainPayload:
                     continue
                 flags.append(str(flag))
 
-        return SetupEngineExplain(
+        result = SetupEngineExplain(
             passed_checks=[c for c in self.passed_checks if c],
             failed_checks=[c for c in self.failed_checks if c],
             key_levels=self.key_levels.to_payload(),
             invalidation_flags=flags,
         )
+
+        if self.score_trace is not None:
+            result["score_trace"] = self.score_trace  # type: ignore[typeddict-unknown-key]
+
+        return result
 
 
 @dataclass(frozen=True)

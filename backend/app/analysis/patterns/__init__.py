@@ -38,9 +38,12 @@ from .report import (
 )
 from .readiness import (
     BreakoutReadinessFeatures,
+    BreakoutReadinessTraceInputs,
     compute_breakout_readiness_features,
+    compute_breakout_readiness_features_with_trace,
     readiness_features_to_payload_fields,
 )
+from .trace import build_null_score_trace, build_score_trace
 from .technicals import (
     average_true_range,
     bollinger_band_width_percent,
@@ -88,8 +91,12 @@ __all__ = [
     "assert_valid_setup_engine_report_payload",
     "canonical_setup_engine_report_examples",
     "BreakoutReadinessFeatures",
+    "BreakoutReadinessTraceInputs",
     "compute_breakout_readiness_features",
+    "compute_breakout_readiness_features_with_trace",
     "readiness_features_to_payload_fields",
+    "build_score_trace",
+    "build_null_score_trace",
     "resample_ohlcv",
     "has_incomplete_last_period",
     "true_range",

@@ -17,6 +17,7 @@ import app.analysis.patterns.normalization as normalization_module
 import app.analysis.patterns.report as report_module
 import app.analysis.patterns.technicals as technicals_module
 import app.analysis.patterns.three_weeks_tight as three_weeks_tight_module
+import app.analysis.patterns.trace as trace_module
 import app.analysis.patterns.vcp_wrapper as vcp_wrapper_module
 import app.analysis.patterns as patterns_public_api
 from app.analysis.patterns.aggregator import SetupEngineAggregator
@@ -80,6 +81,7 @@ def test_analysis_layer_modules_do_not_import_scanner_layer():
         normalization_module,
         report_module,
         technicals_module,
+        trace_module,
         cup_entry_module,
         three_weeks_tight_module,
         htf_module,

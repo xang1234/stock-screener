@@ -39,8 +39,10 @@ from app.analysis.patterns.policy import (
 )
 from app.analysis.patterns.readiness import (
     BreakoutReadinessFeatures,
+    BreakoutReadinessTraceInputs,
     readiness_features_to_payload_fields,
 )
+from app.analysis.patterns.trace import build_score_trace
 
 
 def _to_float(value: Any) -> float | None:
@@ -183,6 +185,8 @@ def build_setup_engine_payload(
     readiness_threshold_pct: float | None = None,
     parameters: SetupEngineParameters = DEFAULT_SETUP_ENGINE_PARAMETERS,
     data_policy_result: SetupEngineDataPolicyResult | None = None,
+    include_score_trace: bool = False,
+    readiness_trace_inputs: BreakoutReadinessTraceInputs | None = None,
 ) -> SetupEnginePayload:
     """Build the canonical ``setup_engine`` payload.
 
@@ -402,6 +406,21 @@ def build_setup_engine_payload(
         "key_levels": _normalize_key_levels(key_levels),
         "invalidation_flags": normalized_flags,
     }
+
+    # ── Optional score trace ──────────────────────
+    if (
+        include_score_trace
+        and readiness_trace_inputs is not None
+        and normalized_readiness is not None
+    ):
+        score_trace = build_score_trace(
+            normalized_readiness,
+            readiness_trace_inputs,
+            quality_score=normalized_quality_score,
+            readiness_score=normalized_readiness_score,
+            setup_score=normalized_setup_score,
+        )
+        explain["score_trace"] = score_trace  # type: ignore[typeddict-unknown-key]
 
     payload: SetupEnginePayload = {
         "schema_version": schema_version,
