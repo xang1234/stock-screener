@@ -387,6 +387,9 @@ def test_cup_with_handle_returns_handle_validated_candidate():
     assert best["metrics"]["handle_depth_pct"] <= 15.0
     assert best["checks"]["handle_in_upper_half"] is True
     assert best["metrics"]["handle_volume_ratio_vs_right_side"] <= 1.1
+    assert "confidence_penalty_v_shape" in best["metrics"]
+    assert "confidence_penalty_weak_handle" in best["metrics"]
+    assert "confidence_after_penalties" in best["metrics"]
 
 
 def test_cup_with_handle_rejects_when_handle_too_deep():
@@ -513,6 +516,75 @@ def test_cup_with_handle_rejects_invalid_volume_baseline():
     assert "handle_volume_baseline_invalid" in rejected
 
 
+def test_cup_with_handle_emits_confidence_penalties_for_weak_structure(
+    monkeypatch,
+):
+    index = pd.date_range("2023-01-06", periods=120, freq="W-FRI")
+    close = np.linspace(80.0, 120.0, len(index))
+    frame = _ohlcv_frame(index=index, close=close)
+    detector_input = PatternDetectorInput(
+        symbol="CUP",
+        timeframe="weekly",
+        daily_bars=400,
+        weekly_bars=len(frame),
+        features={"weekly_ohlcv": frame},
+    )
+
+    structures = (
+        cup_module._CupStructure(
+            left_idx=20,
+            low_idx=40,
+            right_idx=70,
+            duration_weeks=50,
+            depth_pct=30.0,
+            recovery_strength_pct=96.0,
+            curvature_balance=0.20,
+            recency_weeks=8,
+            structure_score=0.78,
+        ),
+    )
+
+    def _mock_find_cups(_frame):
+        return cup_module._CupParseResult(candidates=structures, capped=False)
+
+    def _mock_find_handle(_frame, *, structure):
+        return (
+            cup_module._HandleCandidate(
+                structure=structure,
+                start_idx=71,
+                end_idx=74,
+                duration_weeks=4,
+                handle_high=111.0,
+                handle_low=98.0,
+                pivot_idx=72,
+                handle_depth_pct=11.5,
+                upper_half_floor=97.0,
+                upper_half_margin_pct=1.0,
+                volume_ratio=1.05,
+                score=0.65,
+                recency_weeks=4,
+            ),
+            (),
+        )
+
+    monkeypatch.setattr(cup_module, "_find_cup_structures", _mock_find_cups)
+    monkeypatch.setattr(
+        cup_module, "_find_best_handle_candidate", _mock_find_handle
+    )
+
+    result = CupHandleDetector().detect_safe(
+        detector_input, DEFAULT_SETUP_ENGINE_PARAMETERS
+    )
+    assert result.outcome == DetectorOutcome.DETECTED
+    best = result.candidates[0]
+    assert best["metrics"]["confidence_penalty_v_shape"] > 0.0
+    assert best["metrics"]["confidence_penalty_weak_handle"] > 0.0
+    assert (
+        best["metrics"]["confidence_after_penalties"]
+        < best["metrics"]["confidence_base"]
+    )
+
+
 def _first_pullback_frame(
     *,
     touch_positions: tuple[int, ...],
@@ -562,6 +634,8 @@ def test_first_pullback_marks_resumption_pivot_mode_when_trigger_exists():
     assert best["metrics"]["pivot_mode_alternate"] == "pullback_high"
     assert best["checks"]["resumption_trigger_confirmed"] is True
     assert best["metrics"]["tests_count"] == 2
+    assert best["metrics"]["pullback_depth_pct_from_high"] > 0.0
+    assert best["checks"]["pullback_depth_positive"] is True
 
 
 def test_first_pullback_falls_back_to_pullback_high_when_no_trigger():

@@ -100,6 +100,10 @@ class FirstPullbackDetector(PatternDetector):
         )
         pullback_high_price = float(frame["High"].iat[pullback_high_idx])
         pullback_high_date = frame.index[pullback_high_idx].date().isoformat()
+        pullback_depth_points = max(0.0, pullback_high_price - latest_low)
+        pullback_depth_pct_from_high = (
+            pullback_depth_points / max(abs(pullback_high_price), 1e-9)
+        ) * 100.0
         resumption = _find_resumption_candidate(
             frame,
             start_idx=latest_test_idx + 1,
@@ -173,6 +177,10 @@ class FirstPullbackDetector(PatternDetector):
                 "pullback_span_bars": pullback_span_bars,
                 "pullback_high_price": round(pullback_high_price, 4),
                 "pullback_high_date": pullback_high_date,
+                "pullback_depth_points": round(pullback_depth_points, 4),
+                "pullback_depth_pct_from_high": round(
+                    pullback_depth_pct_from_high, 6
+                ),
                 "resumption_high_price": (
                     round(float(resumption["high_price"]), 4)
                     if resumption["high_price"] is not None
@@ -217,11 +225,15 @@ class FirstPullbackDetector(PatternDetector):
             },
             checks={
                 "ma_touch_detected": True,
-                "ma_touch_within_band": ma_touch_distance_pct <= _MA_TOUCH_BAND_PCT,
-                "is_first_test": is_first_test,
-                "is_second_test": is_second_test,
-                "pullback_orderly": orderliness["pullback_orderliness_score"]
-                >= 0.5,
+                "ma_touch_within_band": bool(
+                    ma_touch_distance_pct <= _MA_TOUCH_BAND_PCT
+                ),
+                "is_first_test": bool(is_first_test),
+                "is_second_test": bool(is_second_test),
+                "pullback_depth_positive": bool(pullback_depth_points > 0.0),
+                "pullback_orderly": bool(
+                    orderliness["pullback_orderliness_score"] >= 0.5
+                ),
                 "resumption_trigger_confirmed": chosen_mode == "resumption_high",
                 "resumption_price_reclaimed_ema10": bool(
                     resumption["price_above_ema10"]
@@ -229,9 +241,10 @@ class FirstPullbackDetector(PatternDetector):
                 "resumption_volume_supportive": bool(
                     resumption["volume_supportive"]
                 ),
-                "pivot_mode_pullback_high": chosen_mode == "pullback_high",
-                "pivot_mode_resumption_high": chosen_mode
-                == "resumption_high",
+                "pivot_mode_pullback_high": bool(chosen_mode == "pullback_high"),
+                "pivot_mode_resumption_high": bool(
+                    chosen_mode == "resumption_high"
+                ),
             },
             notes=(
                 "ma_touch_test_counting_complete",

@@ -155,14 +155,31 @@ class CupHandleDetector(PatternDetector):
                 0.0,
                 1.0 - max(0.0, handle_candidate.volume_ratio - 1.0),
             )
+            base_confidence = (
+                0.30
+                + (structure.structure_score * 0.40)
+                + (depth_component * 0.18)
+                + (volume_component * 0.12)
+            )
+            # Make confidence penalties explicit for explainability.
+            v_shape_penalty = max(
+                0.0,
+                (0.55 - structure.curvature_balance) * 0.25,
+            )
+            weak_handle_penalty = (
+                max(
+                    0.0,
+                    (handle_candidate.handle_depth_pct / _HANDLE_MAX_DEPTH_PCT)
+                    - 0.5,
+                )
+                * 0.12
+                + max(0.0, handle_candidate.volume_ratio - 1.0) * 0.25
+            )
             confidence = min(
                 0.95,
                 max(
                     0.05,
-                    0.30
-                    + (structure.structure_score * 0.40)
-                    + (depth_component * 0.18)
-                    + (volume_component * 0.12),
+                    base_confidence - v_shape_penalty - weak_handle_penalty,
                 ),
             )
             quality_score = min(
@@ -238,33 +255,49 @@ class CupHandleDetector(PatternDetector):
                             handle_candidate.volume_ratio, 6
                         ),
                         "handle_recency_weeks": handle_candidate.recency_weeks,
+                        "confidence_base": round(base_confidence, 6),
+                        "confidence_penalty_v_shape": round(
+                            v_shape_penalty, 6
+                        ),
+                        "confidence_penalty_weak_handle": round(
+                            weak_handle_penalty, 6
+                        ),
+                        "confidence_after_penalties": round(confidence, 6),
                     },
                     checks={
-                        "cup_duration_in_range": (
+                        "cup_duration_in_range": bool(
                             _CUP_MIN_WEEKS
                             <= structure.duration_weeks
                             <= _CUP_MAX_WEEKS
                         ),
-                        "cup_depth_in_range": (
+                        "cup_depth_in_range": bool(
                             _CUP_MIN_DEPTH_PCT
                             <= structure.depth_pct
                             <= _CUP_MAX_DEPTH_PCT
                         ),
-                        "cup_recovery_in_range": structure.recovery_strength_pct
-                        >= _CUP_MIN_RECOVERY_PCT,
-                        "cup_curvature_balanced": structure.curvature_balance
-                        >= 0.35,
-                        "handle_duration_in_range": (
+                        "cup_recovery_in_range": bool(
+                            structure.recovery_strength_pct >= _CUP_MIN_RECOVERY_PCT
+                        ),
+                        "cup_curvature_balanced": bool(
+                            structure.curvature_balance >= 0.35
+                        ),
+                        "handle_duration_in_range": bool(
                             _HANDLE_MIN_WEEKS
                             <= handle_candidate.duration_weeks
                             <= _HANDLE_MAX_WEEKS
                         ),
-                        "handle_depth_in_range": handle_candidate.handle_depth_pct
-                        <= _HANDLE_MAX_DEPTH_PCT,
-                        "handle_in_upper_half": handle_candidate.handle_low
-                        >= handle_candidate.upper_half_floor,
-                        "handle_volume_contracting": handle_candidate.volume_ratio
-                        <= _HANDLE_MAX_VOLUME_RATIO,
+                        "handle_depth_in_range": bool(
+                            handle_candidate.handle_depth_pct
+                            <= _HANDLE_MAX_DEPTH_PCT
+                        ),
+                        "handle_in_upper_half": bool(
+                            handle_candidate.handle_low
+                            >= handle_candidate.upper_half_floor
+                        ),
+                        "handle_volume_contracting": bool(
+                            handle_candidate.volume_ratio
+                            <= _HANDLE_MAX_VOLUME_RATIO
+                        ),
                     },
                     notes=(
                         "cup_and_handle_validated",

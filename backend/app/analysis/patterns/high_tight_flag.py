@@ -216,24 +216,29 @@ class HighTightFlagDetector(PatternDetector):
                         <= _RECENT_POLE_BARS,
                     },
                     checks={
-                        "pole_window_in_range": (
+                        "pole_window_in_range": bool(
                             _POLE_MIN_BARS
                             <= window.window_bars
                             <= _POLE_MAX_BARS
                         ),
-                        "pole_return_threshold_met": window.pole_return
-                        >= _MIN_POLE_RETURN,
-                        "flag_duration_in_range": (
+                        "pole_return_threshold_met": bool(
+                            window.pole_return >= _MIN_POLE_RETURN
+                        ),
+                        "flag_duration_in_range": bool(
                             _FLAG_MIN_BARS
                             <= flag_candidate.duration_bars
                             <= _FLAG_MAX_BARS
                         ),
-                        "flag_depth_in_range": flag_candidate.flag_depth_pct
-                        <= _FLAG_MAX_DEPTH_PCT,
-                        "flag_in_upper_half": flag_candidate.flag_low
-                        >= flag_candidate.upper_half_floor,
-                        "flag_volume_contracting": flag_candidate.volume_ratio
-                        <= _FLAG_MAX_VOLUME_RATIO,
+                        "flag_depth_in_range": bool(
+                            flag_candidate.flag_depth_pct <= _FLAG_MAX_DEPTH_PCT
+                        ),
+                        "flag_in_upper_half": bool(
+                            flag_candidate.flag_low
+                            >= flag_candidate.upper_half_floor
+                        ),
+                        "flag_volume_contracting": bool(
+                            flag_candidate.volume_ratio <= _FLAG_MAX_VOLUME_RATIO
+                        ),
                     },
                     notes=(
                         "pole_and_flag_validated",
