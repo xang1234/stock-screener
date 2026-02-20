@@ -118,9 +118,7 @@ class CupHandleDetector(PatternDetector):
         candidates: list[PatternCandidateModel] = []
         failed_reasons: list[str] = []
 
-        for cup_rank, structure in enumerate(
-            parse_result.candidates[:_MAX_CUP_CANDIDATES], start=1
-        ):
+        for cup_rank, structure in enumerate(parse_result.candidates, start=1):
             handle_candidate, rejected = _find_best_handle_candidate(
                 normalized.frame,
                 structure=structure,
@@ -282,9 +280,10 @@ class CupHandleDetector(PatternDetector):
                 warnings=tuple(warnings),
             )
 
+        output_candidates = tuple(candidates[:_MAX_CUP_CANDIDATES])
         return PatternDetectorResult.detected(
             self.name,
-            tuple(candidates),
+            output_candidates,
             passed_checks=(
                 "cup_structure_candidates_found",
                 "handle_candidates_validated",
@@ -419,7 +418,7 @@ def _find_best_handle_candidate(
         volumes.iloc[structure.low_idx : structure.right_idx + 1].mean()
     )
     if right_side_volume_mean <= 0.0 or pd.isna(right_side_volume_mean):
-        right_side_volume_mean = 1.0
+        return None, ("handle_volume_baseline_invalid",)
 
     rejected: list[str] = []
     valid_candidates: list[_HandleCandidate] = []
@@ -444,6 +443,9 @@ def _find_best_handle_candidate(
         handle_depth_pct = ((handle_high - handle_low) / handle_high) * 100.0
         upper_half_margin_pct = ((handle_low - upper_half_floor) / cup_range) * 100.0
         handle_volume_mean = float(handle_volume_values.mean())
+        if handle_volume_mean <= 0.0 or pd.isna(handle_volume_mean):
+            rejected.append("handle_volume_rejected")
+            continue
         volume_ratio = handle_volume_mean / right_side_volume_mean
 
         depth_ok = handle_depth_pct <= _HANDLE_MAX_DEPTH_PCT

@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+import app.analysis.patterns.cup_handle as cup_module
+import app.analysis.patterns.high_tight_flag as htf_module
 from app.analysis.patterns.config import DEFAULT_SETUP_ENGINE_PARAMETERS
 from app.analysis.patterns.cup_handle import CupHandleDetector
 from app.analysis.patterns.detectors import DetectorOutcome, PatternDetectorInput
@@ -101,6 +103,93 @@ def test_high_tight_flag_reports_rejection_reason_when_flag_missing():
     assert "flag_missing_structure" in result.failed_checks
 
 
+def test_high_tight_flag_validates_beyond_first_five_poles(monkeypatch):
+    index = pd.bdate_range("2025-01-02", periods=220)
+    close = np.linspace(40.0, 120.0, len(index))
+    frame = _ohlcv_frame(index=index, close=close)
+    detector_input = PatternDetectorInput(
+        symbol="HTF",
+        timeframe="daily",
+        daily_bars=len(frame),
+        weekly_bars=60,
+        features={"daily_ohlcv": frame},
+    )
+
+    poles = [
+        htf_module._PoleCandidateWindow(
+            start_idx=40 + i,
+            end_idx=80 + i,
+            window_bars=20,
+            pole_return=1.1,
+            recency_bars=10 + i,
+            weighted_score=2.0 - (i * 0.01),
+        )
+        for i in range(10)
+    ]
+
+    def _mock_find_poles(_frame):
+        return poles
+
+    call_index = {"value": 0}
+
+    def _mock_find_flag(_frame, *, pole_candidate):
+        call_index["value"] += 1
+        if call_index["value"] < 7:
+            return None, ("flag_depth_rejected",)
+        return (
+            htf_module._FlagCandidate(
+                pole=pole_candidate,
+                start_idx=120,
+                end_idx=124,
+                duration_bars=5,
+                flag_high=112.0,
+                flag_low=106.0,
+                pivot_idx=121,
+                flag_depth_pct=5.36,
+                upper_half_floor=95.0,
+                upper_half_margin_pct=3.0,
+                volume_ratio=0.95,
+                score=0.8,
+                recency_bars=8,
+            ),
+            (),
+        )
+
+    monkeypatch.setattr(htf_module, "_find_pole_windows", _mock_find_poles)
+    monkeypatch.setattr(
+        htf_module, "_find_best_flag_candidate", _mock_find_flag
+    )
+
+    result = HighTightFlagDetector().detect_safe(
+        detector_input, DEFAULT_SETUP_ENGINE_PARAMETERS
+    )
+    assert result.outcome == DetectorOutcome.DETECTED
+    assert result.candidates[0]["metrics"]["pole_rank"] == 7
+
+
+def test_high_tight_flag_rejects_invalid_volume_baseline():
+    index = pd.bdate_range("2025-01-02", periods=220)
+    close = np.linspace(40.0, 120.0, len(index))
+    volume = np.zeros(len(index))
+    frame = _ohlcv_frame(index=index, close=close, volume=volume)
+    pole = htf_module._PoleCandidateWindow(
+        start_idx=50,
+        end_idx=90,
+        window_bars=20,
+        pole_return=1.2,
+        recency_bars=5,
+        weighted_score=2.0,
+    )
+
+    candidate, rejected = htf_module._find_best_flag_candidate(
+        frame,
+        pole_candidate=pole,
+    )
+
+    assert candidate is None
+    assert "flag_volume_baseline_invalid" in rejected
+
+
 def test_cup_with_handle_returns_handle_validated_candidate():
     index = pd.date_range("2023-01-06", periods=90, freq="W-FRI")
     close = np.concatenate(
@@ -164,6 +253,99 @@ def test_cup_with_handle_rejects_when_handle_too_deep():
         check in result.failed_checks
         for check in ("handle_depth_rejected", "handle_upper_half_rejected")
     )
+
+
+def test_cup_with_handle_validates_beyond_first_five_cup_structures(monkeypatch):
+    index = pd.date_range("2023-01-06", periods=110, freq="W-FRI")
+    close = np.linspace(70.0, 120.0, len(index))
+    frame = _ohlcv_frame(index=index, close=close)
+    detector_input = PatternDetectorInput(
+        symbol="CUP",
+        timeframe="weekly",
+        daily_bars=400,
+        weekly_bars=len(frame),
+        features={"weekly_ohlcv": frame},
+    )
+
+    structures = tuple(
+        cup_module._CupStructure(
+            left_idx=10 + i,
+            low_idx=20 + i,
+            right_idx=30 + i,
+            duration_weeks=20,
+            depth_pct=20.0,
+            recovery_strength_pct=95.0,
+            curvature_balance=0.7,
+            recency_weeks=15 + i,
+            structure_score=0.9 - (i * 0.01),
+        )
+        for i in range(10)
+    )
+
+    def _mock_find_cups(_frame):
+        return cup_module._CupParseResult(candidates=structures, capped=False)
+
+    call_index = {"value": 0}
+
+    def _mock_find_handle(_frame, *, structure):
+        call_index["value"] += 1
+        if call_index["value"] < 7:
+            return None, ("handle_depth_rejected",)
+        return (
+            cup_module._HandleCandidate(
+                structure=structure,
+                start_idx=55,
+                end_idx=58,
+                duration_weeks=4,
+                handle_high=111.0,
+                handle_low=106.0,
+                pivot_idx=56,
+                handle_depth_pct=4.5,
+                upper_half_floor=95.0,
+                upper_half_margin_pct=3.0,
+                volume_ratio=0.92,
+                score=0.8,
+                recency_weeks=5,
+            ),
+            (),
+        )
+
+    monkeypatch.setattr(cup_module, "_find_cup_structures", _mock_find_cups)
+    monkeypatch.setattr(
+        cup_module, "_find_best_handle_candidate", _mock_find_handle
+    )
+
+    result = CupHandleDetector().detect_safe(
+        detector_input, DEFAULT_SETUP_ENGINE_PARAMETERS
+    )
+    assert result.outcome == DetectorOutcome.DETECTED
+    assert result.candidates[0]["metrics"]["cup_rank"] == 7
+
+
+def test_cup_with_handle_rejects_invalid_volume_baseline():
+    index = pd.date_range("2023-01-06", periods=90, freq="W-FRI")
+    close = np.linspace(70.0, 95.0, len(index))
+    volume = np.zeros(len(index))
+    frame = _ohlcv_frame(index=index, close=close, volume=volume)
+    structure = cup_module._CupStructure(
+        left_idx=10,
+        low_idx=25,
+        right_idx=40,
+        duration_weeks=30,
+        depth_pct=20.0,
+        recovery_strength_pct=95.0,
+        curvature_balance=0.7,
+        recency_weeks=8,
+        structure_score=0.8,
+    )
+
+    candidate, rejected = cup_module._find_best_handle_candidate(
+        frame,
+        structure=structure,
+    )
+
+    assert candidate is None
+    assert "handle_volume_baseline_invalid" in rejected
 
 
 def _first_pullback_frame(

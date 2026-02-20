@@ -103,9 +103,7 @@ class HighTightFlagDetector(PatternDetector):
         low = normalized.frame["Low"]
         volume = normalized.frame["Volume"]
 
-        for pole_rank, window in enumerate(
-            pole_windows[:_MAX_POLE_CANDIDATES], start=1
-        ):
+        for pole_rank, window in enumerate(pole_windows, start=1):
             flag_candidate, rejected = _find_best_flag_candidate(
                 normalized.frame,
                 pole_candidate=window,
@@ -251,9 +249,10 @@ class HighTightFlagDetector(PatternDetector):
                 warnings=normalized.warnings,
             )
 
+        output_candidates = tuple(candidates[:_MAX_POLE_CANDIDATES])
         return PatternDetectorResult.detected(
             self.name,
-            tuple(candidates),
+            output_candidates,
             passed_checks=("pole_candidates_found", "flag_candidates_validated"),
             warnings=normalized.warnings,
         )
@@ -350,7 +349,7 @@ def _find_best_flag_candidate(
         volumes.iloc[pole_candidate.start_idx : pole_candidate.end_idx + 1].mean()
     )
     if pole_volume_mean <= 0.0 or pd.isna(pole_volume_mean):
-        pole_volume_mean = 1.0
+        return None, ("flag_volume_baseline_invalid",)
 
     rejected: list[str] = []
     valid_candidates: list[_FlagCandidate] = []
@@ -375,6 +374,9 @@ def _find_best_flag_candidate(
         flag_depth_pct = ((flag_high - flag_low) / flag_high) * 100.0
         upper_half_margin_pct = ((flag_low - upper_half_floor) / pole_range) * 100.0
         flag_volume_mean = float(segment_volume.mean())
+        if flag_volume_mean <= 0.0 or pd.isna(flag_volume_mean):
+            rejected.append("flag_volume_rejected")
+            continue
         volume_ratio = flag_volume_mean / pole_volume_mean
 
         depth_ok = flag_depth_pct <= _FLAG_MAX_DEPTH_PCT
