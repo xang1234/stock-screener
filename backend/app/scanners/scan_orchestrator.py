@@ -358,6 +358,12 @@ class ScanOrchestrator:
             if "beta_adj_rs_12m" in minervini_details:
                 result["beta_adj_rs_12m"] = minervini_details["beta_adj_rs_12m"]
 
+        # Promote setup_engine payload to top level for json_extract queries
+        if "setup_engine" in screener_results:
+            se_details = screener_results["setup_engine"].details
+            if isinstance(se_details, dict) and "setup_engine" in se_details:
+                result["setup_engine"] = dict(se_details["setup_engine"])
+
         # Fallback: Extract growth metrics from CANSLIM if not already set
         if "canslim" in screener_results:
             canslim_details = screener_results["canslim"].details
