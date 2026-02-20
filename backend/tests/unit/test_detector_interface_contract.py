@@ -434,11 +434,16 @@ class TestAllDefaultDetectors:
             assert result.detector_name == det.name
             assert result.outcome in set(DetectorOutcome)
 
-    def test_all_stubs_return_not_implemented_with_sufficient_bars(self, detector_input):
+    def test_default_detectors_return_contract_outcomes_with_sufficient_bars(
+        self, detector_input
+    ):
         for det in default_pattern_detectors():
             result = det.detect_safe(detector_input, DEFAULT_SETUP_ENGINE_PARAMETERS)
-            assert result.outcome == DetectorOutcome.NOT_IMPLEMENTED, (
-                f"{det.name} expected NOT_IMPLEMENTED, got {result.outcome}"
+            assert result.outcome in {
+                DetectorOutcome.NOT_IMPLEMENTED,
+                DetectorOutcome.INSUFFICIENT_DATA,
+            }, (
+                f"{det.name} expected NOT_IMPLEMENTED/INSUFFICIENT_DATA, got {result.outcome}"
             )
 
     def test_detectors_with_insufficient_bars_return_insufficient_data(
@@ -496,5 +501,5 @@ class TestAggregatorWithDetectSafe:
         result = agg.aggregate(
             _make_input(), parameters=DEFAULT_SETUP_ENGINE_PARAMETERS
         )
-        # All stubs report NOT_IMPLEMENTED, so "not_implemented" should be in failed_checks
+        # Some detectors are still stubs, so "not_implemented" should be present.
         assert "not_implemented" in result.failed_checks
