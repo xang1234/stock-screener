@@ -96,6 +96,16 @@ class ScanResultItem(BaseModel):
     custom_score: Optional[float] = None
     volume_breakthrough_score: Optional[float] = None
 
+    # Setup Engine fields
+    se_setup_score: Optional[float] = None
+    se_pattern_primary: Optional[str] = None
+    se_distance_to_pivot_pct: Optional[float] = None
+    se_bb_width_pctile_252: Optional[float] = None
+    se_volume_vs_50d: Optional[float] = None
+    se_rs_line_new_high: Optional[bool] = None
+    se_pivot_price: Optional[float] = None
+    se_setup_ready: Optional[bool] = None
+
     # Minervini fields
     rs_rating: Optional[float] = None
     rs_rating_1m: Optional[float] = None
@@ -176,6 +186,15 @@ class ScanResultItem(BaseModel):
             ipo_score=ef.get("ipo_score"),
             custom_score=ef.get("custom_score"),
             volume_breakthrough_score=ef.get("volume_breakthrough_score"),
+            # Setup Engine fields
+            se_setup_score=ef.get("se_setup_score"),
+            se_pattern_primary=ef.get("se_pattern_primary"),
+            se_distance_to_pivot_pct=ef.get("se_distance_to_pivot_pct"),
+            se_bb_width_pctile_252=ef.get("se_bb_width_pctile_252"),
+            se_volume_vs_50d=ef.get("se_volume_vs_50d"),
+            se_rs_line_new_high=ef.get("se_rs_line_new_high"),
+            se_pivot_price=ef.get("se_pivot_price"),
+            se_setup_ready=ef.get("se_setup_ready"),
             # Minervini fields
             rs_rating=ef.get("rs_rating"),
             rs_rating_1m=ef.get("rs_rating_1m"),

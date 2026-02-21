@@ -60,6 +60,18 @@ export const buildFilterParams = (filters, options = {}) => {
   if (filters.volBreakthroughScore?.min != null) params.min_vol_breakthrough = filters.volBreakthroughScore.min;
   if (filters.volBreakthroughScore?.max != null) params.max_vol_breakthrough = filters.volBreakthroughScore.max;
 
+  // Setup Engine
+  if (filters.seSetupScore?.min != null) params.min_se_setup_score = filters.seSetupScore.min;
+  if (filters.seSetupScore?.max != null) params.max_se_setup_score = filters.seSetupScore.max;
+  if (filters.seDistanceToPivot?.min != null) params.min_se_distance_to_pivot_pct = filters.seDistanceToPivot.min;
+  if (filters.seDistanceToPivot?.max != null) params.max_se_distance_to_pivot_pct = filters.seDistanceToPivot.max;
+  if (filters.seBbSqueeze?.min != null) params.min_se_bb_width_pctile_252 = filters.seBbSqueeze.min;
+  if (filters.seBbSqueeze?.max != null) params.max_se_bb_width_pctile_252 = filters.seBbSqueeze.max;
+  if (filters.seVolumeVs50d?.min != null) params.min_se_volume_vs_50d = filters.seVolumeVs50d.min;
+  if (filters.seVolumeVs50d?.max != null) params.max_se_volume_vs_50d = filters.seVolumeVs50d.max;
+  if (filters.seSetupReady != null) params.se_setup_ready = filters.seSetupReady;
+  if (filters.seRsLineNewHigh != null) params.se_rs_line_new_high = filters.seRsLineNewHigh;
+
   // RS ranges
   if (filters.rsRating?.min != null) params.min_rs = filters.rsRating.min;
   if (filters.rsRating?.max != null) params.max_rs = filters.rsRating.max;

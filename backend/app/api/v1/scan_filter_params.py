@@ -89,6 +89,17 @@ def parse_scan_filters(
     max_custom: Optional[float] = Query(None, description="Maximum custom score"),
     min_vol_breakthrough: Optional[float] = Query(None, description="Minimum vol breakthrough score"),
     max_vol_breakthrough: Optional[float] = Query(None, description="Maximum vol breakthrough score"),
+    # Setup Engine
+    min_se_setup_score: Optional[float] = Query(None, description="Minimum SE setup score"),
+    max_se_setup_score: Optional[float] = Query(None, description="Maximum SE setup score"),
+    min_se_distance_to_pivot_pct: Optional[float] = Query(None, description="Minimum SE distance to pivot %"),
+    max_se_distance_to_pivot_pct: Optional[float] = Query(None, description="Maximum SE distance to pivot %"),
+    min_se_bb_width_pctile_252: Optional[float] = Query(None, description="Minimum SE BB squeeze percentile"),
+    max_se_bb_width_pctile_252: Optional[float] = Query(None, description="Maximum SE BB squeeze percentile"),
+    min_se_volume_vs_50d: Optional[float] = Query(None, description="Minimum SE volume vs 50d ratio"),
+    max_se_volume_vs_50d: Optional[float] = Query(None, description="Maximum SE volume vs 50d ratio"),
+    se_setup_ready: Optional[bool] = Query(None, description="SE setup ready filter"),
+    se_rs_line_new_high: Optional[bool] = Query(None, description="SE RS line new high filter"),
     # RS ratings
     min_rs: Optional[float] = Query(None, ge=0, le=100, description="Minimum RS Rating"),
     max_rs: Optional[float] = Query(None, ge=0, le=100, description="Maximum RS Rating"),
@@ -179,6 +190,10 @@ def parse_scan_filters(
     f.add_range("ipo_score", min_ipo, max_ipo)
     f.add_range("custom_score", min_custom, max_custom)
     f.add_range("volume_breakthrough_score", min_vol_breakthrough, max_vol_breakthrough)
+    f.add_range("se_setup_score", min_se_setup_score, max_se_setup_score)
+    f.add_range("se_distance_to_pivot_pct", min_se_distance_to_pivot_pct, max_se_distance_to_pivot_pct)
+    f.add_range("se_bb_width_pctile_252", min_se_bb_width_pctile_252, max_se_bb_width_pctile_252)
+    f.add_range("se_volume_vs_50d", min_se_volume_vs_50d, max_se_volume_vs_50d)
     f.add_range("rs_rating", min_rs, max_rs)
     f.add_range("rs_rating_1m", min_rs_1m, max_rs_1m)
     f.add_range("rs_rating_3m", min_rs_3m, max_rs_3m)
@@ -239,6 +254,10 @@ def parse_scan_filters(
         f.add_boolean("vcp_ready_for_breakout", vcp_ready)
     if ma_alignment is not None:
         f.add_boolean("ma_alignment", ma_alignment)
+    if se_setup_ready is not None:
+        f.add_boolean("se_setup_ready", se_setup_ready)
+    if se_rs_line_new_high is not None:
+        f.add_boolean("se_rs_line_new_high", se_rs_line_new_high)
 
     # IPO date (range on string column)
     if ipo_after:

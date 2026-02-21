@@ -48,6 +48,13 @@ const columns = [
   { id: 'ipo_score', label: 'IPO', sortable: true, width: 45 },
   { id: 'custom_score', label: 'Cust', sortable: true, width: 45 },
   { id: 'volume_breakthrough_score', label: 'VolB', sortable: true, width: 50 },
+  { id: 'se_setup_score', label: 'SE', sortable: true, width: 45 },
+  { id: 'se_pattern_primary', label: 'Pat', sortable: true, width: 55 },
+  { id: 'se_distance_to_pivot_pct', label: 'Pvt%', sortable: true, width: 50 },
+  { id: 'se_bb_width_pctile_252', label: 'Sqz', sortable: true, width: 45 },
+  { id: 'se_volume_vs_50d', label: 'V50', sortable: true, width: 45 },
+  { id: 'se_rs_line_new_high', label: 'RSH', sortable: false, width: 35 },
+  { id: 'se_pivot_price', label: 'Pvt$', sortable: true, width: 55 },
   { id: 'rs_rating', label: 'RS', sortable: true, width: 40 },
   { id: 'rs_rating_1m', label: '1M', sortable: true, width: 40 },
   { id: 'rs_rating_3m', label: '3M', sortable: true, width: 40 },
@@ -166,6 +173,38 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
 
       <TableCell align="center" sx={{ fontFamily: 'monospace', width: 50, minWidth: 50 }}>
         {row.volume_breakthrough_score != null ? row.volume_breakthrough_score.toFixed(1) : '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ fontFamily: 'monospace', width: 45, minWidth: 45 }}>
+        {row.se_setup_score != null ? row.se_setup_score.toFixed(1) : '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ color: 'text.secondary', width: 55, minWidth: 55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {row.se_pattern_primary || '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ fontFamily: 'monospace', width: 50, minWidth: 50 }}>
+        {row.se_distance_to_pivot_pct != null ? `${row.se_distance_to_pivot_pct.toFixed(1)}%` : '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ fontFamily: 'monospace', width: 45, minWidth: 45 }}>
+        {row.se_bb_width_pctile_252 != null ? row.se_bb_width_pctile_252.toFixed(0) : '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ fontFamily: 'monospace', width: 45, minWidth: 45 }}>
+        {row.se_volume_vs_50d != null ? `${row.se_volume_vs_50d.toFixed(1)}x` : '-'}
+      </TableCell>
+
+      <TableCell align="center" sx={{ width: 35, minWidth: 35 }}>
+        {row.se_rs_line_new_high == null ? '-' : row.se_rs_line_new_high ? (
+          <CheckIcon sx={{ fontSize: 14, color: 'success.main' }} />
+        ) : (
+          <CloseIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
+        )}
+      </TableCell>
+
+      <TableCell align="right" sx={{ fontFamily: 'monospace', width: 55, minWidth: 55 }}>
+        {row.se_pivot_price != null ? `$${row.se_pivot_price.toFixed(2)}` : '-'}
       </TableCell>
 
       <TableCell align="center" sx={{ fontFamily: 'monospace', width: 40, minWidth: 40 }}>
@@ -360,7 +399,7 @@ function ResultsTable({ results, total, page, perPage, sortBy, sortOrder, onPage
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: 1900 }}>
+        <Table stickyHeader size="small" sx={{ minWidth: 2230 }}>
           <TableHead>
             <TableRow>
               {columns.map((column) => (

@@ -517,6 +517,17 @@ def _map_row_to_domain(
         "week_52_low_distance": result.week_52_low_distance,
     }
 
+    # Setup Engine fields (extracted from details JSON blob)
+    se_data = details.get("setup_engine", {}) or {}
+    extended["se_setup_score"] = se_data.get("setup_score")
+    extended["se_pattern_primary"] = se_data.get("pattern_primary")
+    extended["se_distance_to_pivot_pct"] = se_data.get("distance_to_pivot_pct")
+    extended["se_bb_width_pctile_252"] = se_data.get("bb_width_pctile_252")
+    extended["se_volume_vs_50d"] = se_data.get("volume_vs_50d")
+    extended["se_rs_line_new_high"] = se_data.get("rs_line_new_high")
+    extended["se_pivot_price"] = se_data.get("pivot_price")
+    extended["se_setup_ready"] = se_data.get("setup_ready")
+
     # Clamp score to 0-100 to satisfy domain invariant; legacy data may exceed.
     raw_score = result.composite_score or 0
     clamped_score = max(0.0, min(100.0, float(raw_score)))

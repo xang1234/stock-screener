@@ -69,8 +69,10 @@ const TECHNICAL_KEYS = [
 
 const RATING_KEYS = [
   'compositeScore', 'minerviniScore', 'canslimScore', 'ipoScore',
-  'customScore', 'volBreakthroughScore', 'vcpScore',
-  'vcpDetected', 'vcpReady', 'passesTemplate'
+  'customScore', 'volBreakthroughScore',
+  'seSetupScore', 'seDistanceToPivot', 'seBbSqueeze', 'seVolumeVs50d',
+  'seSetupReady', 'seRsLineNewHigh',
+  'vcpScore', 'vcpDetected', 'vcpReady', 'passesTemplate'
 ];
 
 /**
@@ -179,6 +181,7 @@ function FilterPanel({
       { key: 'ipoScore', label: 'IPO' },
       { key: 'customScore', label: 'Custom' },
       { key: 'volBreakthroughScore', label: 'Vol BT' },
+      { key: 'seSetupScore', label: 'SE Score' },
     ];
 
     scoreFilters.forEach(({ key, label }) => {
@@ -249,6 +252,12 @@ function FilterPanel({
     if (filters.passesTemplate != null) {
       active.push({ key: 'passesTemplate', label: `Passes: ${filters.passesTemplate ? 'Yes' : 'No'}` });
     }
+    if (filters.seSetupReady != null) {
+      active.push({ key: 'seSetupReady', label: `SE Ready: ${filters.seSetupReady ? 'Yes' : 'No'}` });
+    }
+    if (filters.seRsLineNewHigh != null) {
+      active.push({ key: 'seRsLineNewHigh', label: `RS New Hi: ${filters.seRsLineNewHigh ? 'Yes' : 'No'}` });
+    }
 
     // Technical Filters
     const techFilters = [
@@ -266,6 +275,9 @@ function FilterPanel({
       { key: 'week52LowDistance', label: '52W Lo' },
       { key: 'beta', label: 'Beta' },
       { key: 'betaAdjRs', label: 'β-adj RS' },
+      { key: 'seDistanceToPivot', label: 'Pvt Dist' },
+      { key: 'seBbSqueeze', label: 'Squeeze' },
+      { key: 'seVolumeVs50d', label: 'Vol/50d' },
     ];
 
     techFilters.forEach(({ key, label }) => {
@@ -292,7 +304,7 @@ function FilterPanel({
       newFilters[key] = [];
     } else if (['ibdIndustries', 'gicsSectors'].includes(key)) {
       newFilters[key] = { values: [], mode: 'include' };
-    } else if (['vcpDetected', 'vcpReady', 'maAlignment', 'passesTemplate'].includes(key)) {
+    } else if (['vcpDetected', 'vcpReady', 'maAlignment', 'passesTemplate', 'seSetupReady', 'seRsLineNewHigh'].includes(key)) {
       newFilters[key] = null;
     } else {
       // Range filters
@@ -832,6 +844,64 @@ function FilterPanel({
                   minLimit={0}
                   maxLimit={100}
                   minOnly
+                />
+              </Grid>
+              <Grid item xs={6} sm={4} md={1.2}>
+                <CompactRangeInput
+                  label="SE Score"
+                  minValue={filters.seSetupScore?.min}
+                  maxValue={filters.seSetupScore?.max}
+                  onChange={(range) => updateRangeFilter('seSetupScore', range)}
+                  step={5}
+                  minLimit={0}
+                  maxLimit={100}
+                  minOnly
+                />
+              </Grid>
+              <Grid item xs={6} sm={4} md={1.2}>
+                <CompactRangeInput
+                  label="Pvt Dist"
+                  minValue={filters.seDistanceToPivot?.min}
+                  maxValue={filters.seDistanceToPivot?.max}
+                  onChange={(range) => updateRangeFilter('seDistanceToPivot', range)}
+                  step={1}
+                  suffix="%"
+                />
+              </Grid>
+              <Grid item xs={6} sm={4} md={1.2}>
+                <CompactRangeInput
+                  label="Squeeze"
+                  minValue={filters.seBbSqueeze?.min}
+                  maxValue={filters.seBbSqueeze?.max}
+                  onChange={(range) => updateRangeFilter('seBbSqueeze', range)}
+                  step={5}
+                  minLimit={0}
+                  maxLimit={100}
+                />
+              </Grid>
+              <Grid item xs={6} sm={4} md={1.2}>
+                <CompactRangeInput
+                  label="Vol/50d"
+                  minValue={filters.seVolumeVs50d?.min}
+                  maxValue={filters.seVolumeVs50d?.max}
+                  onChange={(range) => updateRangeFilter('seVolumeVs50d', range)}
+                  step={0.5}
+                  minLimit={0}
+                  suffix="x"
+                />
+              </Grid>
+              <Grid item xs={6} sm={3} md={1}>
+                <CompactCheckbox
+                  label="SE Ready"
+                  value={filters.seSetupReady}
+                  onChange={(value) => updateFilter('seSetupReady', value)}
+                />
+              </Grid>
+              <Grid item xs={6} sm={3} md={1}>
+                <CompactCheckbox
+                  label="RS Hi"
+                  value={filters.seRsLineNewHigh}
+                  onChange={(value) => updateFilter('seRsLineNewHigh', value)}
                 />
               </Grid>
               <Grid item xs={6} sm={4} md={1.2}>

@@ -103,6 +103,14 @@ function ScanPage() {
     customScore: { min: null, max: null },
     volBreakthroughScore: { min: null, max: null },
 
+    // Setup Engine
+    seSetupScore: { min: null, max: null },
+    seDistanceToPivot: { min: null, max: null },
+    seBbSqueeze: { min: null, max: null },
+    seVolumeVs50d: { min: null, max: null },
+    seSetupReady: null,
+    seRsLineNewHigh: null,
+
     // RS ranges
     rsRating: { min: null, max: null },
     rs1m: { min: null, max: null },
@@ -382,6 +390,13 @@ function ScanPage() {
       ipoScore: { min: null, max: null },
       customScore: { min: null, max: null },
       volBreakthroughScore: { min: null, max: null },
+      // Setup Engine
+      seSetupScore: { min: null, max: null },
+      seDistanceToPivot: { min: null, max: null },
+      seBbSqueeze: { min: null, max: null },
+      seVolumeVs50d: { min: null, max: null },
+      seSetupReady: null,
+      seRsLineNewHigh: null,
       rsRating: { min: null, max: null },
       rs1m: { min: null, max: null },
       rs3m: { min: null, max: null },
