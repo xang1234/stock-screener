@@ -127,7 +127,7 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
         }}
       >
         <Typography variant="subtitle1" fontWeight="bold">
-          Setup Engine Details
+          Setup Engine Details{stockData.symbol ? ` — ${stockData.symbol}` : ''}
         </Typography>
         <IconButton onClick={onClose} size="small">
           <CloseIcon fontSize="small" />
@@ -172,17 +172,19 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
 
               {/* Ready chip */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Chip
-                  label={stockData.se_setup_ready ? 'READY' : 'NOT READY'}
-                  size="small"
-                  sx={{
-                    fontSize: '0.7rem',
-                    height: 22,
-                    bgcolor: stockData.se_setup_ready ? '#4caf50' : '#9e9e9e',
-                    color: 'white',
-                    fontWeight: 'bold',
-                  }}
-                />
+                {stockData.se_setup_ready != null && (
+                  <Chip
+                    label={stockData.se_setup_ready ? 'READY' : 'NOT READY'}
+                    size="small"
+                    sx={{
+                      fontSize: '0.7rem',
+                      height: 22,
+                      bgcolor: stockData.se_setup_ready ? '#4caf50' : '#9e9e9e',
+                      color: 'white',
+                      fontWeight: 'bold',
+                    }}
+                  />
+                )}
                 {stockData.se_timeframe && (
                   <Chip
                     label={stockData.se_timeframe}
