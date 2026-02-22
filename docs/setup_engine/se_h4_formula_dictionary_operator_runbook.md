@@ -34,7 +34,7 @@
 
 | File | Content |
 |------|---------|
-| `backend/app/analysis/patterns/models.py:235-484` | All 30 `SETUP_ENGINE_FIELD_SPECS` entries |
+| `backend/app/analysis/patterns/models.py:235-484` | All 31 `SETUP_ENGINE_FIELD_SPECS` entries |
 | `backend/app/analysis/patterns/readiness.py` | 10 readiness feature formulas |
 | `backend/app/analysis/patterns/explain_builder.py` | 10-gate evaluation, check string enumeration |
 | `backend/app/analysis/patterns/operational_flags.py` | 4 operational flag conditions |
@@ -53,7 +53,7 @@
 
 ## 1. Quick-Reference Field Index
 
-All 30 fields from `SETUP_ENGINE_FIELD_SPECS` (`models.py:235-484`):
+All 31 fields from `SETUP_ENGINE_FIELD_SPECS` (`models.py:235-484`):
 
 | # | Field | Type | Unit | Nullable | Short Formula | Section |
 |---|-------|------|------|----------|---------------|---------|
@@ -80,19 +80,20 @@ All 30 fields from `SETUP_ENGINE_FIELD_SPECS` (`models.py:235-484`):
 | 21 | `rs_vs_spy_trend_20d` | `float` | ratio | Yes | `slope(rs, window=20)` | [§4](#4-readiness-feature-fields) |
 | 22 | `stage` | `int` | — | Yes | Weinstein stage 1–4 via `quick_stage_check()` | [§5](#5-context-fields) |
 | 23 | `ma_alignment_score` | `float` | pct | Yes | Minervini MA alignment (50>150>200) | [§5](#5-context-fields) |
-| 24 | `rs_rating` | `float` | pct | Yes | Multi-period weighted RS (50 = outperforming SPY) | [§5](#5-context-fields) |
+| 24 | `rs_rating` | `float` | pct | Yes | Multi-period weighted RS (50 = matching SPY) | [§5](#5-context-fields) |
 | 25 | `candidates` | `list[PatternCandidate]` | — | No | All detector candidates (calibrated) | [§7](#7-candidate-sub-object-reference) |
 | 26 | `explain` | `SetupEngineExplain` | — | No | Structured pass/fail checks | [§6](#6-explain-payload-reference) |
 | 27 | `explain.passed_checks` | `list[str]` | — | No | Checks passed by the setup | [§6](#6-explain-payload-reference) |
 | 28 | `explain.failed_checks` | `list[str]` | — | No | Checks failed by the setup | [§6](#6-explain-payload-reference) |
 | 29 | `explain.key_levels` | `dict[str, float\|None]` | price | No | Named price levels (pivot, support, etc.) | [§6](#6-explain-payload-reference) |
 | 30 | `explain.invalidation_flags` | `list[str]` | — | No | Operational risk warnings | [§6](#6-explain-payload-reference) |
+| 31 | `explain.score_trace` | `ScoreTrace` | — | Yes | Per-field calculation trace (opt-in) | [§6](#score-trace-format) |
 
 **Non-computed metadata fields:**
 - `schema_version`: Always `"v1"` (from `SETUP_ENGINE_DEFAULT_SCHEMA_VERSION` in `models.py:15`). Used for future schema migration gates.
 - `timeframe`: Set to `"daily"` by the screener (`setup_engine_screener.py:169`). Allowed values: `{"daily", "weekly"}`.
 
-The optional `explain.score_trace` field is documented in [§6](#score-trace-format) — it is present only when explicitly opted in and is not part of the 30-field spec list.
+The `explain.score_trace` field (#31) is present only when explicitly opted in via `include_score_trace=True`. See [§6 Score Trace Format](#score-trace-format) for details.
 
 ---
 
@@ -699,7 +700,7 @@ ma_alignment_score = ma_result["minervini_ma_score"]
 ```python
 # Uses RelativeStrengthCalculator.calculate_rs_rating():
 # Multi-period weighted performance vs SPY benchmark
-# Linear scale where 50 = outperforming SPY
+# Linear scale where 50 = matching SPY, >50 = outperforming
 rs_rating = rs_result["rs_rating"]
 ```
 
@@ -707,7 +708,7 @@ rs_rating = rs_result["rs_rating"]
 
 **Unit/Range:** 0–100 (pct), nullable
 
-**Interpretation:** A composite relative-strength rating comparing the stock's performance to SPY over multiple time periods. A score of 50 means the stock is outperforming SPY on a blended basis. Unlike `rs_vs_spy_65d` (single window), this uses multiple weighted periods.
+**Interpretation:** A composite relative-strength rating comparing the stock's performance to SPY over multiple time periods. A score of 50 means the stock is matching SPY on a blended basis; scores above 50 indicate outperformance, below 50 indicate underperformance. Unlike `rs_vs_spy_65d` (single window), this uses multiple weighted periods.
 
 **Edge Cases:** `None` when SPY benchmark data is unavailable or empty.
 
