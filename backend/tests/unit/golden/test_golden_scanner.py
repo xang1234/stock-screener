@@ -31,7 +31,6 @@ import pandas as pd
 import pytest
 
 from app.scanners.setup_engine_screener import SetupEngineScanner
-from app.scanners.base_screener import StockData
 
 from .conftest import (
     assert_golden_scanner_match,

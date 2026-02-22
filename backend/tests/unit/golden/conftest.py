@@ -760,7 +760,7 @@ def assert_golden_scanner_match(
     payload = result.details.get("setup_engine") if hasattr(result, "details") else None
 
     if expectation.get("has_setup_engine") is False:
-        assert payload is None or "setup_engine" not in result.details, (
+        assert "setup_engine" not in result.details, (
             "Expected no setup_engine key in details"
         )
         return
