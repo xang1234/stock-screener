@@ -185,6 +185,9 @@ def build_setup_engine_payload(
     invalidation_flags: Sequence[Any] | None = None,
     timeframe: str = "daily",
     schema_version: str = SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
+    stage: int | None = None,
+    ma_alignment_score: int | float | None = None,
+    rs_rating: int | float | None = None,
     readiness_threshold_pct: float | None = None,
     parameters: SetupEngineParameters = DEFAULT_SETUP_ENGINE_PARAMETERS,
     data_policy_result: SetupEngineDataPolicyResult | None = None,
@@ -313,6 +316,9 @@ def build_setup_engine_payload(
             rs_line_new_high = False
             rs_vs_spy_65d = None
             rs_vs_spy_trend_20d = None
+            stage = None
+            ma_alignment_score = None
+            rs_rating = None
 
     # ── Setup score synthesis ─────────────────────────
     if normalized_setup_score is None and normalized_quality_score is not None and normalized_readiness_score is not None:
@@ -341,7 +347,9 @@ def build_setup_engine_payload(
         volume_vs_50d=norm_volume,
         rs_vs_spy_65d=norm_rs_vs_spy,
         rs_line_new_high=bool(rs_line_new_high) if rs_line_new_high is not None else False,
-        stage_ok=extracted_stage_ok,
+        stage=stage,
+        ma_alignment_score=_to_float(ma_alignment_score),
+        rs_rating=_to_float(rs_rating),
         parameters=parameters,
         readiness_threshold_pct=threshold_pct,
         include_score_trace=include_score_trace,
@@ -372,6 +380,9 @@ def build_setup_engine_payload(
         "rs_line_new_high": bool(rs_line_new_high),
         "rs_vs_spy_65d": norm_rs_vs_spy,
         "rs_vs_spy_trend_20d": _to_float(rs_vs_spy_trend_20d),
+        "stage": stage,
+        "ma_alignment_score": _to_float(ma_alignment_score),
+        "rs_rating": _to_float(rs_rating),
         "candidates": _normalize_candidates(
             candidates,
             default_timeframe=timeframe,

@@ -30,6 +30,9 @@
     "rs_line_new_high": false,
     "rs_vs_spy_65d": -3.197466395177706,
     "rs_vs_spy_trend_20d": -8.53611669833123e-05,
+    "stage": 2,
+    "ma_alignment_score": 100.0,
+    "rs_rating": 47.98,
     "candidates": [
       {
         "pattern": "cup_with_handle",
@@ -789,7 +792,8 @@
         "in_early_zone",
         "atr14_within_limit",
         "volume_sufficient",
-        "stage_ok"
+        "stage_ok",
+        "ma_alignment_ok"
       ],
       "failed_checks": [
         "not_detected",
@@ -799,7 +803,8 @@
         "vcp_score_below_legacy_threshold",
         "vcp_insufficient_bases",
         "not_implemented",
-        "rs_leadership_insufficient"
+        "rs_leadership_insufficient",
+        "rs_rating_insufficient"
       ],
       "key_levels": {
         "pivot_price": 103.02

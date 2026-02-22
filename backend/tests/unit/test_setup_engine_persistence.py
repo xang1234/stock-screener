@@ -56,6 +56,9 @@ _SE_PAYLOAD: dict[str, Any] = {
     "rs_line_new_high": True,
     "rs_vs_spy_65d": 8.5,
     "rs_vs_spy_trend_20d": 0.03,
+    "stage": 2,
+    "ma_alignment_score": 75.0,
+    "rs_rating": 62.0,
     "candidates": [],
     "explain": {
         "passed_checks": [],

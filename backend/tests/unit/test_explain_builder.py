@@ -44,7 +44,9 @@ def _default_input(**overrides) -> ExplainBuilderInput:
         volume_vs_50d=1.2,
         rs_vs_spy_65d=5.0,
         rs_line_new_high=True,
-        stage_ok=True,
+        stage=2,
+        ma_alignment_score=80.0,
+        rs_rating=60.0,
         parameters=DEFAULT_SETUP_ENGINE_PARAMETERS,
         readiness_threshold_pct=70.0,
         include_score_trace=False,
@@ -107,7 +109,7 @@ class TestNoScoreFastPath:
         gate_checks = {
             "setup_score_ok", "quality_floor_ok", "readiness_floor_ok",
             "in_early_zone", "atr14_within_limit", "volume_sufficient",
-            "rs_leadership_ok", "stage_ok",
+            "rs_leadership_ok", "stage_ok", "ma_alignment_ok", "rs_rating_ok",
         }
         result = build_explain_payload(_default_input(setup_score=None))
         payload = result.explain.to_payload()
@@ -298,17 +300,76 @@ class TestGate7RsLeadership:
         assert "rs_leadership_ok" in result.explain.to_payload()["passed_checks"]
 
 
-# ── Gate 8: stage_ok ─────────────────────────────
+# ── Gate 8: stage (semi-permissive) ──────────────
 
 
-class TestGate8StageOk:
-    def test_stage_ok_true_passes(self):
-        result = build_explain_payload(_default_input(stage_ok=True))
+class TestGate8Stage:
+    def test_stage_2_passes(self):
+        result = build_explain_payload(_default_input(stage=2))
         assert "stage_ok" in result.explain.to_payload()["passed_checks"]
 
-    def test_stage_ok_false_fails(self):
-        result = build_explain_payload(_default_input(stage_ok=False))
+    def test_stage_1_passes(self):
+        result = build_explain_payload(_default_input(stage=1))
+        assert "stage_ok" in result.explain.to_payload()["passed_checks"]
+
+    def test_stage_3_fails(self):
+        result = build_explain_payload(_default_input(stage=3))
         assert "stage_not_ok" in result.explain.to_payload()["failed_checks"]
+
+    def test_stage_4_fails(self):
+        result = build_explain_payload(_default_input(stage=4))
+        assert "stage_not_ok" in result.explain.to_payload()["failed_checks"]
+
+    def test_stage_none_passes_semi_permissive(self):
+        """Gate 8 is semi-permissive: None -> stage_ok."""
+        result = build_explain_payload(_default_input(stage=None))
+        assert "stage_ok" in result.explain.to_payload()["passed_checks"]
+
+
+# ── Gate 9: MA alignment (permissive) ────────────
+
+
+class TestGate9MaAlignment:
+    def test_above_threshold_passes(self):
+        result = build_explain_payload(_default_input(ma_alignment_score=80.0))
+        assert "ma_alignment_ok" in result.explain.to_payload()["passed_checks"]
+
+    def test_at_threshold_passes(self):
+        threshold = DEFAULT_SETUP_ENGINE_PARAMETERS.context_ma_alignment_min_pct
+        result = build_explain_payload(_default_input(ma_alignment_score=threshold))
+        assert "ma_alignment_ok" in result.explain.to_payload()["passed_checks"]
+
+    def test_below_threshold_fails(self):
+        result = build_explain_payload(_default_input(ma_alignment_score=20.0))
+        assert "ma_alignment_insufficient" in result.explain.to_payload()["failed_checks"]
+
+    def test_none_passes_permissive(self):
+        """Gate 9 is permissive: None -> ma_alignment_ok."""
+        result = build_explain_payload(_default_input(ma_alignment_score=None))
+        assert "ma_alignment_ok" in result.explain.to_payload()["passed_checks"]
+
+
+# ── Gate 10: RS rating (permissive) ──────────────
+
+
+class TestGate10RsRating:
+    def test_above_threshold_passes(self):
+        result = build_explain_payload(_default_input(rs_rating=70.0))
+        assert "rs_rating_ok" in result.explain.to_payload()["passed_checks"]
+
+    def test_at_threshold_passes(self):
+        threshold = DEFAULT_SETUP_ENGINE_PARAMETERS.context_rs_rating_min
+        result = build_explain_payload(_default_input(rs_rating=threshold))
+        assert "rs_rating_ok" in result.explain.to_payload()["passed_checks"]
+
+    def test_below_threshold_fails(self):
+        result = build_explain_payload(_default_input(rs_rating=20.0))
+        assert "rs_rating_insufficient" in result.explain.to_payload()["failed_checks"]
+
+    def test_none_passes_permissive(self):
+        """Gate 10 is permissive: None -> rs_rating_ok."""
+        result = build_explain_payload(_default_input(rs_rating=None))
+        assert "rs_rating_ok" in result.explain.to_payload()["passed_checks"]
 
 
 # ── Pre-existing check merge ─────────────────────

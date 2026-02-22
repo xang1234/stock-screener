@@ -30,6 +30,9 @@
     "rs_line_new_high": true,
     "rs_vs_spy_65d": 2.795248078266943,
     "rs_vs_spy_trend_20d": 9.924893188794194e-05,
+    "stage": 2,
+    "ma_alignment_score": 100.0,
+    "rs_rating": 57.93,
     "candidates": [
       {
         "pattern": "three_weeks_tight",
@@ -445,7 +448,9 @@
         "atr14_within_limit",
         "volume_sufficient",
         "rs_leadership_ok",
-        "stage_ok"
+        "stage_ok",
+        "ma_alignment_ok",
+        "rs_rating_ok"
       ],
       "failed_checks": [
         "not_detected",

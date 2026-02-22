@@ -30,6 +30,9 @@
     "rs_line_new_high": false,
     "rs_vs_spy_65d": null,
     "rs_vs_spy_trend_20d": null,
+    "stage": 3,
+    "ma_alignment_score": 60.0,
+    "rs_rating": null,
     "candidates": [
       {
         "pattern": "three_weeks_tight",
@@ -713,7 +716,8 @@
         "atr14_within_limit",
         "volume_sufficient",
         "rs_leadership_ok",
-        "stage_ok"
+        "ma_alignment_ok",
+        "rs_rating_ok"
       ],
       "failed_checks": [
         "not_detected",
@@ -723,7 +727,8 @@
         "vcp_tight_near_highs_failed",
         "vcp_score_below_legacy_threshold",
         "vcp_insufficient_bases",
-        "not_implemented"
+        "not_implemented",
+        "stage_not_ok"
       ],
       "key_levels": {
         "pivot_price": 101.28524300278332

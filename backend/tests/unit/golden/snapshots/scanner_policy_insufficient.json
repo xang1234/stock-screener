@@ -26,6 +26,9 @@
     "rs_line_new_high": false,
     "rs_vs_spy_65d": null,
     "rs_vs_spy_trend_20d": null,
+    "stage": null,
+    "ma_alignment_score": null,
+    "rs_rating": null,
     "candidates": [],
     "explain": {
       "passed_checks": [],

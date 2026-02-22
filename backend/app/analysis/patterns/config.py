@@ -59,6 +59,10 @@ class SetupEngineParameters:
     # Composite setup score gate.
     setup_score_min_pct: float = 65.0
 
+    # Context gate thresholds.
+    context_ma_alignment_min_pct: float = 60.0
+    context_rs_rating_min: float = 50.0
+
 
 SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
     SetupEngineParameterSpec(
@@ -168,6 +172,24 @@ SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
         unit="pct",
         profile="baseline",
         rationale="Minimum composite setup score combining quality and readiness to enable setup_ready classification.",
+    ),
+    SetupEngineParameterSpec(
+        name="context_ma_alignment_min_pct",
+        default_value=60.0,
+        min_value=0.0,
+        max_value=100.0,
+        unit="pct",
+        profile="baseline",
+        rationale="Minimum Minervini MA alignment score (50>150>200) for Gate 9. Permissive: None passes.",
+    ),
+    SetupEngineParameterSpec(
+        name="context_rs_rating_min",
+        default_value=50.0,
+        min_value=0.0,
+        max_value=100.0,
+        unit="pct",
+        profile="baseline",
+        rationale="Minimum RS rating for Gate 10. Linear scale: 50 = outperforming SPY. Permissive: None passes.",
     ),
 )
 

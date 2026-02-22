@@ -106,6 +106,10 @@ class SetupEnginePayload(TypedDict):
     rs_vs_spy_65d: float | None
     rs_vs_spy_trend_20d: float | None
 
+    stage: int | None
+    ma_alignment_score: float | None
+    rs_rating: float | None
+
     candidates: list[PatternCandidate]
     explain: SetupEngineExplain
 
@@ -398,6 +402,30 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
         description="20-session slope of RS line.",
     ),
     SetupEngineFieldSpec(
+        name="stage",
+        type_name="int",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_screener.py",
+        description="Weinstein stage 1-4 via quick_stage_check() MA structure analysis.",
+    ),
+    SetupEngineFieldSpec(
+        name="ma_alignment_score",
+        type_name="float",
+        nullable=True,
+        unit="pct",
+        source_module="backend/app/scanners/setup_engine_screener.py",
+        description="Minervini MA alignment score (50>150>200) on 0..100 scale.",
+    ),
+    SetupEngineFieldSpec(
+        name="rs_rating",
+        type_name="float",
+        nullable=True,
+        unit="pct",
+        source_module="backend/app/scanners/setup_engine_screener.py",
+        description="Multi-period weighted RS rating on 0..100 linear scale (50 = outperforming SPY).",
+    ),
+    SetupEngineFieldSpec(
         name="candidates",
         type_name="list[PatternCandidate]",
         nullable=False,
@@ -477,6 +505,9 @@ SETUP_ENGINE_REQUIRED_KEYS: tuple[str, ...] = (
     "rs_line_new_high",
     "rs_vs_spy_65d",
     "rs_vs_spy_trend_20d",
+    "stage",
+    "ma_alignment_score",
+    "rs_rating",
     "candidates",
     "explain",
 )

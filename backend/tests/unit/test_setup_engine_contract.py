@@ -42,6 +42,9 @@ MANDATORY_V1_KEYS = {
     "rs_line_new_high",
     "rs_vs_spy_65d",
     "rs_vs_spy_trend_20d",
+    "stage",
+    "ma_alignment_score",
+    "rs_rating",
     "candidates",
     "explain",
 }
@@ -87,6 +90,9 @@ def test_build_payload_defaults_and_bool_semantics():
     assert payload["rs"] is None
     assert payload["rs_vs_spy_65d"] is None
     assert payload["rs_vs_spy_trend_20d"] is None
+    assert payload["stage"] is None
+    assert payload["ma_alignment_score"] is None
+    assert payload["rs_rating"] is None
 
 
 def test_build_payload_failed_checks_forces_not_ready():
@@ -160,6 +166,9 @@ def test_policy_insufficient_nulls_primary_fields():
     assert payload["rs"] is None
     assert payload["rs_vs_spy_65d"] is None
     assert payload["rs_vs_spy_trend_20d"] is None
+    assert payload["stage"] is None
+    assert payload["ma_alignment_score"] is None
+    assert payload["rs_rating"] is None
     assert "insufficient_data" in payload["explain"]["failed_checks"]
 
 
@@ -242,7 +251,7 @@ def test_build_payload_accepts_central_readiness_features_mapping():
 
 
 def _all_gates_pass_kwargs():
-    """Return kwargs that satisfy all 9 gates for setup_ready=True."""
+    """Return kwargs that satisfy all 10 gates for setup_ready=True."""
     return dict(
         quality_score=75.0,
         readiness_score=82.0,
@@ -251,11 +260,13 @@ def _all_gates_pass_kwargs():
         volume_vs_50d=1.2,
         rs_vs_spy_65d=5.0,
         rs_line_new_high=False,
+        stage=2,
+        ma_alignment_score=80.0,
+        rs_rating=60.0,
         candidates=[{
             "pattern": "vcp",
             "timeframe": "daily",
             "confidence": 0.80,
-            "checks": {"stage_ok": True},
         }],
         pattern_primary="vcp",
         failed_checks=[],
@@ -404,14 +415,9 @@ class TestSetupReadyGates:
         assert payload["setup_ready"] is False
         assert "volume_below_minimum" in payload["explain"]["failed_checks"]
 
-    def test_setup_ready_stage_ok_from_candidate_checks(self):
+    def test_setup_ready_stage_fails_when_topping(self):
         kwargs = _all_gates_pass_kwargs()
-        kwargs["candidates"] = [{
-            "pattern": "vcp",
-            "timeframe": "daily",
-            "confidence": 0.80,
-            "checks": {"stage_ok": False},
-        }]
+        kwargs["stage"] = 3  # Stage 3 = Topping
         payload = build_setup_engine_payload(**kwargs)
         assert payload["setup_ready"] is False
         assert "stage_not_ok" in payload["explain"]["failed_checks"]
@@ -428,6 +434,8 @@ class TestSetupReadyGates:
         assert "volume_sufficient" in passed
         assert "rs_leadership_ok" in passed
         assert "stage_ok" in passed
+        assert "ma_alignment_ok" in passed
+        assert "rs_rating_ok" in passed
         assert payload["explain"]["failed_checks"] == []
 
 
@@ -448,7 +456,7 @@ class TestGateExplainability:
     def test_context_gate_passes_appear_in_passed_checks(self):
         payload = build_setup_engine_payload(**_all_gates_pass_kwargs())
         passed = payload["explain"]["passed_checks"]
-        assert len(passed) >= 8  # All 8 gate checks should be in passed
+        assert len(passed) >= 10  # All 10 gate checks should be in passed
 
     def test_gates_skipped_when_no_setup_score(self):
         """Insufficient data produces no gate entries."""
@@ -465,6 +473,8 @@ class TestGateExplainability:
             "volume_sufficient", "volume_below_minimum",
             "rs_leadership_ok", "rs_leadership_insufficient",
             "stage_ok", "stage_not_ok",
+            "ma_alignment_ok", "ma_alignment_insufficient",
+            "rs_rating_ok", "rs_rating_insufficient",
         }
         all_checks = set(payload["explain"]["passed_checks"]) | set(payload["explain"]["failed_checks"])
         assert all_checks.isdisjoint(gate_names)

@@ -55,3 +55,25 @@ def test_setup_score_min_pct_bounds():
     params = SetupEngineParameters(setup_score_min_pct=10.0)
     errors = validate_setup_engine_parameters(params)
     assert any("setup_score_min_pct" in err for err in errors)
+
+
+def test_context_ma_alignment_min_pct_bounds():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "context_ma_alignment_min_pct"
+    )
+    assert spec.default_value == 60.0
+    assert spec.min_value == 0.0
+    assert spec.max_value == 100.0
+    assert spec.unit == "pct"
+    assert spec.profile == "baseline"
+
+
+def test_context_rs_rating_min_bounds():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "context_rs_rating_min"
+    )
+    assert spec.default_value == 50.0
+    assert spec.min_value == 0.0
+    assert spec.max_value == 100.0
+    assert spec.unit == "pct"
+    assert spec.profile == "baseline"

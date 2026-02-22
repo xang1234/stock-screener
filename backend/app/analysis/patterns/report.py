@@ -141,6 +141,10 @@ class SetupEngineReport:
     rs_vs_spy_65d: float | None = None
     rs_vs_spy_trend_20d: float | None = None
 
+    stage: int | None = None
+    ma_alignment_score: float | None = None
+    rs_rating: float | None = None
+
     candidates: tuple[PatternCandidateModel | Mapping[str, Any], ...] = ()
     explain: ExplainPayload = field(default_factory=ExplainPayload)
     schema_version: str = SETUP_ENGINE_DEFAULT_SCHEMA_VERSION
@@ -179,6 +183,9 @@ class SetupEngineReport:
             "rs_line_new_high": bool(self.rs_line_new_high),
             "rs_vs_spy_65d": _as_float(self.rs_vs_spy_65d),
             "rs_vs_spy_trend_20d": _as_float(self.rs_vs_spy_trend_20d),
+            "stage": self.stage,
+            "ma_alignment_score": _as_float(self.ma_alignment_score),
+            "rs_rating": _as_float(self.rs_rating),
             "candidates": normalized_candidates,
             "explain": self.explain.to_payload(),
         }
@@ -283,6 +290,9 @@ def canonical_setup_engine_report_examples() -> tuple[SetupEnginePayload, ...]:
         bb_width_pctile_252=28.0,
         volume_vs_50d=1.04,
         rs_line_new_high=False,
+        stage=2,
+        ma_alignment_score=75.0,
+        rs_rating=62.0,
         candidates=(
             PatternCandidateModel(
                 pattern="three_weeks_tight",

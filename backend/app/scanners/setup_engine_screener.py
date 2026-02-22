@@ -35,6 +35,9 @@ from app.scanners.base_screener import (
     StockData,
 )
 from app.scanners.screener_registry import register_screener
+from app.scanners.criteria.moving_averages import MovingAverageAnalyzer
+from app.scanners.criteria.relative_strength import RelativeStrengthCalculator
+from app.scanners.criteria.stage_analysis import quick_stage_check
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,8 @@ class SetupEngineScanner(BaseStockScreener):
 
     def __init__(self) -> None:
         self._aggregator = SetupEngineAggregator()
+        self._ma_analyzer = MovingAverageAnalyzer()
+        self._rs_calc = RelativeStrengthCalculator()
 
     def get_data_requirements(self, criteria: Optional[Dict] = None) -> DataRequirements:
         return DataRequirements(
@@ -187,6 +192,12 @@ class SetupEngineScanner(BaseStockScreener):
                 trace.elapsed_ms, symbol,
             )
 
+        # ── Phase B½: context analysis (stage, MA alignment, RS rating) ──
+        context = self._compute_context(
+            price_data, spy_close, symbol,
+            self._ma_analyzer, self._rs_calc,
+        )
+
         # ── Phase C: readiness + payload assembly ──
         t_readiness = time.perf_counter()
 
@@ -213,6 +224,9 @@ class SetupEngineScanner(BaseStockScreener):
             key_levels=agg_output.key_levels,
             invalidation_flags=list(agg_output.invalidation_flags),
             readiness_features=readiness_features,
+            stage=context["stage"],
+            ma_alignment_score=context["ma_alignment_score"],
+            rs_rating=context["rs_rating"],
             parameters=parameters,
             data_policy_result=policy_result,
         )
@@ -247,6 +261,57 @@ class SetupEngineScanner(BaseStockScreener):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_context(
+        price_data: pd.DataFrame,
+        spy_close: pd.Series | None,
+        symbol: str,
+        ma_analyzer: MovingAverageAnalyzer,
+        rs_calc: RelativeStrengthCalculator,
+    ) -> dict:
+        """Compute stage, MA alignment, and RS rating from price data."""
+        prices_chrono = price_data["Close"].reset_index(drop=True)
+
+        ma_200_series = prices_chrono.rolling(200, min_periods=200).mean()
+        ma_50 = prices_chrono.rolling(50, min_periods=50).mean().iloc[-1]
+        ma_150 = prices_chrono.rolling(150, min_periods=150).mean().iloc[-1]
+        ma_200 = ma_200_series.iloc[-1]
+
+        if pd.isna(ma_200) or pd.isna(ma_150) or pd.isna(ma_50):
+            return {"stage": None, "ma_alignment_score": None, "rs_rating": None}
+
+        current_price = float(prices_chrono.iloc[-1])
+        ma_200_month_ago = (
+            float(ma_200_series.iloc[-21])
+            if len(ma_200_series) > 220
+            else float(ma_200)
+        )
+
+        stage = quick_stage_check(
+            current_price, float(ma_50), float(ma_150),
+            float(ma_200), ma_200_month_ago,
+        )
+
+        ma_result = ma_analyzer.comprehensive_ma_analysis(
+            current_price, float(ma_50), float(ma_150),
+            float(ma_200), ma_200_month_ago,
+        )
+        ma_alignment_score = float(ma_result["minervini_ma_score"])
+
+        rs_rating = None
+        if spy_close is not None and not spy_close.empty:
+            prices_rev = prices_chrono[::-1].reset_index(drop=True)
+            spy_chrono = spy_close.reset_index(drop=True)
+            spy_rev = spy_chrono[::-1].reset_index(drop=True)
+            rs_result = rs_calc.calculate_rs_rating(symbol, prices_rev, spy_rev)
+            rs_rating = float(rs_result["rs_rating"])
+
+        return {
+            "stage": stage,
+            "ma_alignment_score": ma_alignment_score,
+            "rs_rating": rs_rating,
+        }
 
     @staticmethod
     def _extract_breakdown(payload: Dict[str, Any]) -> Dict[str, float]:

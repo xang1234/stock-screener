@@ -46,7 +46,9 @@ class ExplainBuilderInput:
     volume_vs_50d: float | None
     rs_vs_spy_65d: float | None
     rs_line_new_high: bool
-    stage_ok: bool
+    stage: int | None
+    ma_alignment_score: float | None
+    rs_rating: float | None
 
     # Thresholds
     parameters: SetupEngineParameters
@@ -67,7 +69,7 @@ class ExplainResult:
 
 
 def build_explain_payload(inp: ExplainBuilderInput) -> ExplainResult:
-    """Evaluate 8 readiness gates and build a typed ExplainPayload.
+    """Evaluate 10 readiness gates and build a typed ExplainPayload.
 
     Gate semantics:
     - Gate 1 (setup_score): score >= setup_score_min_pct
@@ -77,7 +79,9 @@ def build_explain_payload(inp: ExplainBuilderInput) -> ExplainResult:
     - Gate 5 (ATR14 cap): atr14_pct <= max — **permissive** (None passes)
     - Gate 6 (volume floor): volume >= min — **permissive** (None passes)
     - Gate 7 (RS leadership): rs_vs_spy > 0 or rs_line_new_high — **permissive** (both None passes)
-    - Gate 8 (stage_ok): from primary candidate checks
+    - Gate 8 (stage): stage in (1, 2) — **semi-permissive** (None passes, 3/4 fail)
+    - Gate 9 (MA alignment): ma_alignment_score >= min — **permissive** (None passes)
+    - Gate 10 (RS rating): rs_rating >= min — **permissive** (None passes)
 
     ``derived_ready`` is True only when ALL checks (pre-existing + gates) pass.
     """
@@ -148,11 +152,31 @@ def build_explain_payload(inp: ExplainBuilderInput) -> ExplainResult:
         else:
             passed.append("rs_leadership_ok")
 
-        # Gate 8: Stage OK (from primary candidate checks)
-        if inp.stage_ok:
+        # Gate 8: Stage (semi-permissive: None passes, stage 1/2 pass, 3/4 fail)
+        if inp.stage is None:
+            passed.append("stage_ok")
+        elif inp.stage in (1, 2):
             passed.append("stage_ok")
         else:
             failed.append("stage_not_ok")
+
+        # Gate 9: MA alignment (permissive: None passes)
+        if inp.ma_alignment_score is not None:
+            if inp.ma_alignment_score >= params.context_ma_alignment_min_pct:
+                passed.append("ma_alignment_ok")
+            else:
+                failed.append("ma_alignment_insufficient")
+        else:
+            passed.append("ma_alignment_ok")
+
+        # Gate 10: RS rating (permissive: None passes)
+        if inp.rs_rating is not None:
+            if inp.rs_rating >= params.context_rs_rating_min:
+                passed.append("rs_rating_ok")
+            else:
+                failed.append("rs_rating_insufficient")
+        else:
+            passed.append("rs_rating_ok")
 
         # derived_ready = all gates passed (no failures from any source)
         derived_ready = len(failed) == 0
