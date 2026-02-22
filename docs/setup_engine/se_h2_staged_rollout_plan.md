@@ -223,11 +223,11 @@ Record the `n`, `min`, `max`, `mean`, `median`, `ready` values.
 **Step 2 — Rating distribution query.** Run against the database:
 
 ```sql
-SELECT json_extract(details, '$.screeners.setup_engine.rating') AS se_rating,
+SELECT json_extract(details, '$.details.screeners.setup_engine.rating') AS se_rating,
        COUNT(*) AS cnt
 FROM scan_results
 WHERE scan_id = '<latest-scan-id>'
-  AND json_extract(details, '$.screeners.setup_engine.rating') IS NOT NULL
+  AND json_extract(details, '$.details.screeners.setup_engine.rating') IS NOT NULL
 GROUP BY se_rating
 ORDER BY cnt DESC;
 ```
