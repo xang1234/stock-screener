@@ -182,3 +182,85 @@ export const malformedExplainStock = {
   se_explain: [1, 2, 3],
   se_candidates: null,
 };
+
+// ── Table row fixtures for ResultsTable tests ──────────────────────────
+// These match the flat scan_results API shape (no se_explain/se_candidates).
+
+/** Common non-SE fields required to render a ResultsTable row without errors. */
+const baseRow = {
+  composite_score: 85.2,
+  rs_rating: 92,
+  current_price: 195.40,
+  stage: 2,
+  rating: 'Leader',
+  ma_alignment: true,
+  vcp_detected: false,
+  vcp_ready_for_breakout: false,
+  passes_template: true,
+  rs_sparkline_data: null,
+  price_sparkline_data: null,
+  minervini_score: null,
+  canslim_score: null,
+  ipo_score: null,
+  custom_score: null,
+  volume_breakthrough_score: null,
+  vcp_score: null,
+  vcp_pivot: null,
+  rs_rating_1m: null,
+  rs_rating_3m: null,
+  rs_rating_12m: null,
+  beta: null,
+  beta_adj_rs: null,
+  eps_rating: null,
+  volume: null,
+  market_cap: null,
+  ipo_date: null,
+  eps_growth_qq: null,
+  sales_growth_qq: null,
+  adr_percent: null,
+  gics_sector: null,
+  ibd_group_rank: null,
+  price_change_1d: null,
+  rs_trend: null,
+  price_trend: null,
+  ibd_industry_group: null,
+};
+
+/** All 7 SE table columns populated. */
+export const fullSeRow = {
+  ...baseRow,
+  symbol: 'FULL',
+  se_setup_score: 78.3,
+  se_pattern_primary: 'cup_with_handle',
+  se_distance_to_pivot_pct: -3.2,
+  se_bb_width_pctile_252: 15,
+  se_volume_vs_50d: 1.8,
+  se_rs_line_new_high: true,
+  se_pivot_price: 198.50,
+};
+
+/** All 7 SE columns null — each should render as '-'. */
+export const nullSeRow = {
+  ...baseRow,
+  symbol: 'NULL',
+  se_setup_score: null,
+  se_pattern_primary: null,
+  se_distance_to_pivot_pct: null,
+  se_bb_width_pctile_252: null,
+  se_volume_vs_50d: null,
+  se_rs_line_new_high: null,
+  se_pivot_price: null,
+};
+
+/** Partial SE data + false boolean. */
+export const mixedSeRow = {
+  ...baseRow,
+  symbol: 'MIX',
+  se_setup_score: 62.1,
+  se_pattern_primary: null,
+  se_distance_to_pivot_pct: 4.7,
+  se_bb_width_pctile_252: null,
+  se_volume_vs_50d: 2.3,
+  se_rs_line_new_high: false,
+  se_pivot_price: null,
+};
