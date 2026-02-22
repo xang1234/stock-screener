@@ -97,11 +97,16 @@ gate-4: ## Performance baselines (advisory)
 gate-5: ## Golden regression
 	$(PYTEST) $(GATE_5) -v --tb=short
 
-gates: gate-1 gate-2 gate-3 gate-4 gate-5 ## Run all 5 gates sequentially
+gates: ## Run all 5 gates sequentially (gate-4 advisory)
+	$(MAKE) gate-1
+	$(MAKE) gate-2
+	$(MAKE) gate-3
+	-$(MAKE) gate-4
+	$(MAKE) gate-5
 
 gate-check: ## Verify all SE test files are assigned to a gate
 	@echo "Checking that all SE test files are assigned to a gate..."
-	@MISSING=""; \
+	@FAIL=0; \
 	for f in $$(find backend/tests -type f -name '*.py' \( \
 	  -name 'test_*setup_engine*.py' -o \
 	  -name 'test_*detector*.py' -o \
@@ -115,14 +120,13 @@ gate-check: ## Verify all SE test files are assigned to a gate
 	  for g in $(ALL_GATE_FILES); do \
 	    if [ "$$f" = "$$g" ]; then FOUND=1; break; fi; \
 	  done; \
-	  if [ $$FOUND -eq 0 ]; then MISSING="$$MISSING\n  $$f"; fi; \
+	  if [ $$FOUND -eq 0 ]; then \
+	    if [ $$FAIL -eq 0 ]; then echo "ERROR: Unassigned SE test files:"; FAIL=1; fi; \
+	    echo "  $$f"; \
+	  fi; \
 	done; \
-	if [ -n "$$MISSING" ]; then \
-	  echo "ERROR: Unassigned SE test files:$$MISSING"; \
-	  exit 1; \
-	else \
-	  echo "All SE test files are assigned to a gate."; \
-	fi
+	if [ $$FAIL -eq 1 ]; then exit 1; fi; \
+	echo "All SE test files are assigned to a gate."
 
 # ── Frontend ────────────────────────────────────────────────────────
 
