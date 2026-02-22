@@ -92,6 +92,20 @@ bd sync                 # Commit any new beads changes
 git push                # Push to remote
 ```
 
+### Quality Gates
+
+Before closing issues or ending sessions, run the relevant quality gates:
+
+```bash
+# Backend tests
+cd backend && source venv/bin/activate && pytest
+
+# Frontend tests (requires Node 18+ via NVM)
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+cd frontend && npm run test:run   # All tests once
+cd frontend && npm run lint       # ESLint
+```
+
 ### Best Practices
 
 - Check `bd ready` at session start to find available work

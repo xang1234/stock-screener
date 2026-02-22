@@ -64,6 +64,8 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 **Note:** Backend runs as non-root user (uid 1000). After upgrade: `sudo chown -R 1000:1000 ./data`
 
 ### Running Tests
+
+#### Backend (pytest)
 ```bash
 cd backend
 source venv/bin/activate
@@ -83,6 +85,35 @@ pytest -v
 # Run specific test file
 pytest tests/unit/test_canslim_scanner.py
 ```
+
+#### Frontend (Vitest + React Testing Library)
+```bash
+cd frontend
+
+# Run all tests once (CI mode)
+npm run test:run
+
+# Run tests in watch mode (development)
+npm run test
+
+# Run a specific test file
+npx vitest run src/components/Scan/ResultsTable.test.jsx
+
+# Lint test files
+npm run lint
+```
+
+**Note:** Vitest 4.x requires Node 18+. On this machine, the system Node is v14 — use NVM to activate Node 22:
+```bash
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+```
+
+**Test file locations:**
+- `frontend/src/components/Scan/` — component tests (ResultsTable, FilterPanel, SetupEngineDrawer)
+- `frontend/src/components/Scan/filters/` — filter sub-component tests (CompactRangeInput, CompactCheckbox)
+- `frontend/src/utils/` — utility tests (formatUtils)
+- `frontend/src/test/fixtures/` — shared test fixtures
+- `frontend/src/test/renderWithProviders.jsx` — MUI ThemeProvider test wrapper
 
 ### Diagnostic Scripts
 Utility scripts are in `backend/scripts/`:
