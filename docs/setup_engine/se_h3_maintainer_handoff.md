@@ -100,14 +100,14 @@ Source: `config.py:16` — `CANDIDATE_SETUP_SCORE_WEIGHTS = (0.55, 0.35, 0.10)`
 |----------|---------------|
 | What does field X mean? | [SE-H4 §1 Quick-Reference Field Index](se_h4_formula_dictionary_operator_runbook.md#1-quick-reference-field-index) |
 | What is the default value of parameter Y? | [SE-H1 §1 Quick-Reference Tuning Card](se_h1_parameter_catalog.md#1-quick-reference-tuning-card) |
-| How is `setup_score` calculated? | [SE-H4 §3 Score Synthesis Formulas](se_h4_formula_dictionary_operator_runbook.md#3-score-synthesis-formulas) |
-| Why does a stock show `setup_ready = false`? | [SE-H4 §5 Gate-by-Gate Evaluation](se_h4_formula_dictionary_operator_runbook.md#5-gate-by-gate-evaluation) |
+| How is `setup_score` calculated? | [SE-H4 §2 Score & Verdict Fields](se_h4_formula_dictionary_operator_runbook.md#2-score--verdict-fields) |
+| Why does a stock show `setup_ready = false`? | [SE-H4 §6 Explain Payload Reference](se_h4_formula_dictionary_operator_runbook.md#6-explain-payload-reference) |
 | What data does SE need? | [SE-A4 Data Requirements Policy](se_a4_data_requirements_policy.md) |
 | How do I add a new detector? | [This document §5.1](#51-adding-a-detector) |
 | How do I tune a threshold? | [SE-H1 §2 Score Synthesis Architecture](se_h1_parameter_catalog.md#2-score-synthesis-architecture) |
-| How do I enable/disable SE? | [SE-H2 §2 Feature Flag Configuration](se_h2_staged_rollout_plan.md#2-feature-flag-configuration) |
+| How do I enable/disable SE? | [SE-H2 §2 Infrastructure Inventory](se_h2_staged_rollout_plan.md#2-infrastructure-inventory) |
 | How do I regenerate golden snapshots? | [This document §6](#6-quality-gate-reference) — `make golden-update` |
-| What are the operational flags? | [SE-H4 §6 Operational Flags](se_h4_formula_dictionary_operator_runbook.md#6-operational-flags) |
+| What are the operational flags? | [SE-H4 §6 Explain Payload Reference](se_h4_formula_dictionary_operator_runbook.md#6-explain-payload-reference) |
 | How does SE integrate with the orchestrator? | [SE-A1 Compatibility Matrix](se_a1_compatibility_matrix.md) |
 | What invariants must I preserve? | [This document §5.4](#54-invariants-table) |
 
@@ -126,7 +126,7 @@ Organized by layer from outermost (entry points) to innermost (infrastructure).
 | `scanners/setup_engine_screener.py` | 411 | Runtime entry point; bridges `StockData` → analysis pipeline → `ScreenerResult` |
 | `scanners/setup_engine_scanner.py` | 414 | Payload assembly helpers; `build_setup_engine_payload()` score synthesis |
 
-**Detectors (8 files, 2,716 lines)**
+**Detectors (8 files, 2,658 lines)**
 
 | File | Lines | Role |
 |------|------:|------|
@@ -139,7 +139,7 @@ Organized by layer from outermost (entry points) to innermost (infrastructure).
 | `analysis/patterns/detectors/double_bottom.py` | 71 | Double-bottom detector stub (`not_implemented`) |
 | `analysis/patterns/detectors/base.py` | 319 | Detector interface, outcome taxonomy, graceful-failure semantics |
 
-**Infrastructure + Registry (17 files, 4,180 lines)**
+**Infrastructure + Registry (17 files, 4,238 lines)**
 
 | File | Lines | Role |
 |------|------:|------|
@@ -219,7 +219,7 @@ Gates 5–10 pass when their input is `None`. This means a stock with missing RS
 
 Source: `explain_builder.py:127-179`
 
-Cross-ref: [SE-H1 §6 Readiness Gates](se_h1_parameter_catalog.md#6-readiness-gates)
+Cross-ref: [SE-H1 §3 Setup Ready Gate Map](se_h1_parameter_catalog.md#3-setup-ready-gate-map-10-gates)
 
 **Decision 2: Canonical weights (60/40 + 55/35/10)**
 
@@ -257,7 +257,7 @@ The four operational flags are deliberately decoupled from `derived_ready`. This
 
 Source: `operational_flags.py:37-91`
 
-Cross-ref: [SE-H4 §6 Operational Flags](se_h4_formula_dictionary_operator_runbook.md#6-operational-flags)
+Cross-ref: [SE-H4 §6 Explain Payload Reference](se_h4_formula_dictionary_operator_runbook.md#6-explain-payload-reference)
 
 ---
 
