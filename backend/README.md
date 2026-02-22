@@ -65,29 +65,31 @@ Interactive docs available at:
 
 ### Endpoint Groups
 
-| Group | Prefix | Description |
-|-------|--------|-------------|
-| Scans | `/api/v1/scans` | Scan management, results, and history |
-| Stocks | `/api/v1/stocks` | Stock data, fundamentals, chart data |
-| Features | `/api/v1/features` | Feature store management |
-| Breadth | `/api/v1/breadth` | Market breadth indicators |
-| Groups | `/api/v1/groups` | IBD group rankings |
-| Themes | `/api/v1/themes` | Theme discovery and analysis |
-| Technical | `/api/v1/technical` | Technical indicators |
-| Fundamentals | `/api/v1/fundamentals` | Fundamental data |
-| Chatbot | `/api/v1/chatbot` | AI chat sessions and messages |
-| Chat Folders | `/api/v1/chatbot/folders` | Chat folder management |
-| Prompt Presets | `/api/v1/prompt-presets` | Saved chatbot prompts |
-| Watchlists | `/api/v1/user-watchlists` | Watchlist management |
-| User Themes | `/api/v1/user-themes` | User theme management |
-| Market Scan | `/api/v1/market-scan` | Dashboard market scan lists |
-| Filter Presets | `/api/v1/filter-presets` | Saved scan filter configurations |
-| Universe | `/api/v1/universe` | Stock universe management |
-| Cache | `/api/v1/cache` | Cache management |
-| Tasks | `/api/v1/tasks` | Background task status |
-| Config | `/api/v1/config` | Admin configuration |
-| Data Fetch | `/api/v1/data-fetch-status` | Data fetch monitoring |
-| Ticker Validation | `/api/v1/ticker-validation` | Ticker symbol validation |
+| Swagger Tag | Route Module | Description |
+|-------------|--------------|-------------|
+| scans | `scans.py` | Scan management, results, and history |
+| stocks | `stocks.py` | Stock data, fundamentals, chart data |
+| features | `features.py` | Feature store management |
+| breadth | `breadth.py` | Market breadth indicators |
+| groups | `groups.py` | IBD group rankings |
+| themes | `themes.py` | Theme discovery and analysis |
+| technical | `technical.py` | Technical indicators |
+| fundamentals | `fundamentals.py` | Fundamental data refresh and stats |
+| chatbot | `chatbot.py` | AI chat sessions and messages |
+| chatbot-folders | `chatbot_folders.py` | Chat folder management |
+| prompt-presets | `prompt_presets.py` | Saved chatbot prompts |
+| user-watchlists | `user_watchlists.py` | Watchlist management |
+| user-themes | `user_themes.py` | User theme management |
+| market-scan | `market_scan.py` | Dashboard market scan lists |
+| filter-presets | `filter_presets.py` | Saved scan filter configurations |
+| universe | `universe.py` | Stock universe management |
+| cache | `cache.py` | Cache management and monitoring |
+| tasks | `tasks.py` | Background task status |
+| config | `config.py` | Admin configuration (LLM, Ollama) |
+| data-fetch | `data_fetch_status.py` | Data fetch lock monitoring |
+| ticker-validation | `ticker_validation.py` | Ticker symbol validation |
+
+All routes are under `/api/v1/`. Exact paths visible in [Swagger UI](http://localhost:8000/docs).
 
 ## Architecture
 
@@ -173,7 +175,7 @@ SQLite at `data/stockscanner.db` (project root). Uses absolute path in `DATABASE
 ### Tables by Category
 
 **Core:**
-`stock_prices`, `stock_fundamentals`, `stock_universe`, `stock_technicals`, `stock_industry`
+`stock_prices`, `stock_fundamentals`, `stock_universe`, `stock_technicals`, `stock_industry`, `institutional_ownership_history`
 
 **Feature Store:**
 `feature_runs`, `feature_run_universe_symbols`, `stock_feature_daily`, `feature_run_pointers`
@@ -182,16 +184,16 @@ SQLite at `data/stockscanner.db` (project root). Uses absolute path in `DATABASE
 `scans`, `scan_results`
 
 **Market Analysis:**
-`market_breadth`, `market_status`, `ibd_industry_groups`, `ibd_group_ranks`, `ibd_group_peer_cache`
+`market_breadth`, `market_status`, `industries`, `industry_performance`, `sector_rotation`, `ibd_industry_groups`, `ibd_group_ranks`, `ibd_group_peer_cache`
 
 **Themes:**
-`theme_clusters`, `theme_constituents`, `theme_metrics`, `theme_alerts`, `theme_pipeline_runs`, `content_sources`, `content_items`
+`theme_clusters`, `theme_constituents`, `theme_metrics`, `theme_alerts`, `theme_pipeline_runs`, `theme_mentions`, `theme_embeddings`, `theme_merge_suggestions`, `theme_merge_history`, `content_sources`, `content_items`
 
 **User Data:**
-`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_subgroups`, `user_theme_stocks`, `chatbot_conversations`, `chatbot_messages`, `chatbot_folders`, `filter_presets`, `prompt_presets`
+`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_subgroups`, `user_theme_stocks`, `scan_watchlist`, `chatbot_conversations`, `chatbot_messages`, `chatbot_agent_executions`, `chatbot_folders`, `filter_presets`, `prompt_presets`
 
 **System:**
-`app_settings`, `task_execution_history`, `ticker_validation_log`, `document_cache`
+`app_settings`, `task_execution_history`, `ticker_validation_log`, `document_cache`, `document_chunks`
 
 Migrations in `app/db_migrations/` — idempotent, run on startup.
 
