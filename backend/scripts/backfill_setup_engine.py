@@ -29,14 +29,12 @@ Note: Best run during low-activity periods as it holds brief DB write locks.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import random
 import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Path setup — identical to other scripts in this directory
@@ -182,17 +180,37 @@ def _build_query(
 # Spot-check verification
 # ───────────────────────────────────────────────────────────────────────────
 
-def _spot_check(db, sample_size: int = 5) -> bool:
-    """Verify a few random backfilled rows have valid setup_engine data."""
-    rows = (
-        db.query(StockFeatureDaily.run_id, StockFeatureDaily.symbol, StockFeatureDaily.details_json)
-        .filter(StockFeatureDaily.details_json.isnot(None))
-        .order_by(text("RANDOM()"))
-        .limit(sample_size)
-        .all()
-    )
+def _spot_check(
+    db,
+    updated_keys: List[Tuple[int, str]],
+    sample_size: int = 5,
+) -> bool:
+    """Verify a few random backfilled rows have valid setup_engine data.
+
+    Only samples from *updated_keys* (run_id, symbol pairs that were actually
+    written during this backfill) so the check is meaningful even when only a
+    subset of symbols was processed.
+    """
+    if not updated_keys:
+        logger.info("Spot-check: no rows were updated — nothing to verify.")
+        return True
+
+    import random as _rng
+
+    sample = _rng.sample(updated_keys, min(sample_size, len(updated_keys)))
     ok = 0
-    for run_id, symbol, details in rows:
+    for run_id, symbol in sample:
+        row = (
+            db.query(StockFeatureDaily.details_json)
+            .filter(
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.symbol == symbol,
+            )
+            .first()
+        )
+        if row is None:
+            continue
+        details = row[0]
         if not details or not isinstance(details, dict):
             continue
         se = details.get("setup_engine")
@@ -200,9 +218,9 @@ def _spot_check(db, sample_size: int = 5) -> bool:
             ok += 1
     logger.info(
         "Spot-check: %d/%d sampled rows have valid setup_engine (schema=%s)",
-        ok, len(rows), CURRENT_SCHEMA,
+        ok, len(sample), CURRENT_SCHEMA,
     )
-    return ok == len(rows)
+    return ok == len(sample)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -299,6 +317,7 @@ def run_backfill(args: argparse.Namespace) -> None:
         skipped = 0
         errors = 0
         failed_symbols: List[str] = []
+        updated_keys: List[Tuple[int, str]] = []  # (run_id, symbol) of written rows
         start_time = time.monotonic()
 
         for chunk_start in range(0, total_symbols, args.chunk_size):
@@ -341,8 +360,8 @@ def run_backfill(args: argparse.Namespace) -> None:
                             # Extract the setup_engine payload from scanner result
                             se_payload = result.details.get("setup_engine")
                             if se_payload is None:
-                                logger.debug(
-                                    "Scanner returned no setup_engine for %s @ %s (rating=%s)",
+                                logger.info(
+                                    "Scanner returned no setup_engine for %s @ %s (rating=%s) — skipping",
                                     symbol, as_of_date, result.rating,
                                 )
                                 skipped += 1
@@ -351,6 +370,7 @@ def run_backfill(args: argparse.Namespace) -> None:
                             # Merge into existing details_json
                             merged = attach_setup_engine(existing_details, se_payload)
                             batch_updates.append((merged, run_id, symbol))
+                            updated_keys.append((run_id, symbol))
                             processed += 1
 
                         except Exception as row_exc:
@@ -398,7 +418,7 @@ def run_backfill(args: argparse.Namespace) -> None:
 
         # ── 8. Post-backfill spot-check ───────────────────────────────
         logger.info("Running post-backfill spot-check...")
-        _spot_check(db)
+        _spot_check(db, updated_keys)
 
         # ── 9. Final summary ──────────────────────────────────────────
         elapsed = time.monotonic() - start_time

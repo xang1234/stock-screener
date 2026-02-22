@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
-from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
