@@ -77,3 +77,46 @@ def test_context_rs_rating_min_bounds():
     assert spec.max_value == 100.0
     assert spec.unit == "pct"
     assert spec.profile == "baseline"
+
+
+# ── Operational invalidation threshold specs (SE-E7) ──
+
+
+def test_too_extended_pivot_distance_pct_spec():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "too_extended_pivot_distance_pct"
+    )
+    assert spec.default_value == 10.0
+    assert spec.min_value == 2.0
+    assert spec.max_value == 50.0
+    assert spec.unit == "pct"
+
+
+def test_breaks_50d_support_cushion_pct_spec():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "breaks_50d_support_cushion_pct"
+    )
+    assert spec.default_value == 0.0
+    assert spec.min_value == 0.0
+    assert spec.max_value == 10.0
+    assert spec.unit == "pct"
+
+
+def test_low_liquidity_adtv_min_usd_spec():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "low_liquidity_adtv_min_usd"
+    )
+    assert spec.default_value == 1_000_000.0
+    assert spec.min_value == 0.0
+    assert spec.max_value == 100_000_000.0
+    assert spec.unit == "usd"
+
+
+def test_earnings_soon_window_days_spec():
+    spec = next(
+        s for s in SETUP_ENGINE_PARAMETER_SPECS if s.name == "earnings_soon_window_days"
+    )
+    assert spec.default_value == 21.0
+    assert spec.min_value == 1.0
+    assert spec.max_value == 90.0
+    assert spec.unit == "days"

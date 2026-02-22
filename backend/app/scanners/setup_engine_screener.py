@@ -26,6 +26,10 @@ from app.analysis.patterns.policy import (
     SetupEngineDataPolicyResult,
     evaluate_setup_engine_data_policy,
 )
+from app.analysis.patterns.operational_flags import (
+    OperationalFlagInputs,
+    compute_operational_flags,
+)
 from app.analysis.patterns.readiness import compute_breakout_readiness_features
 from app.analysis.patterns.technicals import resample_ohlcv
 from app.scanners.base_screener import (
@@ -211,7 +215,34 @@ class SetupEngineScanner(BaseStockScreener):
             benchmark_close=spy_close,
         )
 
-        # 13. Build canonical payload
+        # 13. Compute operational invalidation flags
+        dollar_volume = price_data["Close"] * price_data["Volume"]
+        adtv_series = dollar_volume.rolling(50, min_periods=50).mean()
+        adtv_usd = float(adtv_series.iloc[-1]) if not pd.isna(adtv_series.iloc[-1]) else None
+
+        next_earnings_date = None
+        if data.fundamentals and isinstance(data.fundamentals, dict):
+            raw_earnings = data.fundamentals.get("next_earnings_date")
+            if isinstance(raw_earnings, date):
+                next_earnings_date = raw_earnings
+
+        reference_date = price_data.index[-1].date()
+
+        op_inputs = OperationalFlagInputs(
+            distance_to_pivot_pct=readiness_features.distance_to_pivot_pct,
+            current_price=context["_current_price"],
+            ma_50=context["_ma_50"],
+            adtv_usd=adtv_usd,
+            next_earnings_date=next_earnings_date,
+            reference_date=reference_date,
+        )
+        operational_flags = compute_operational_flags(op_inputs, parameters)
+        all_invalidation_flags = (
+            list(agg_output.invalidation_flags)
+            + [f.to_payload() for f in operational_flags]
+        )
+
+        # 14. Build canonical payload
         payload = build_setup_engine_payload(
             pattern_primary=agg_output.pattern_primary,
             pattern_confidence=agg_output.pattern_confidence,
@@ -222,7 +253,7 @@ class SetupEngineScanner(BaseStockScreener):
             passed_checks=list(agg_output.passed_checks),
             failed_checks=list(agg_output.failed_checks),
             key_levels=agg_output.key_levels,
-            invalidation_flags=list(agg_output.invalidation_flags),
+            invalidation_flags=all_invalidation_flags,
             readiness_features=readiness_features,
             stage=context["stage"],
             ma_alignment_score=context["ma_alignment_score"],
@@ -279,7 +310,10 @@ class SetupEngineScanner(BaseStockScreener):
         ma_200 = ma_200_series.iloc[-1]
 
         if pd.isna(ma_200) or pd.isna(ma_150) or pd.isna(ma_50):
-            return {"stage": None, "ma_alignment_score": None, "rs_rating": None}
+            return {
+                "stage": None, "ma_alignment_score": None, "rs_rating": None,
+                "_current_price": None, "_ma_50": None,
+            }
 
         current_price = float(prices_chrono.iloc[-1])
         ma_200_month_ago = (
@@ -311,6 +345,8 @@ class SetupEngineScanner(BaseStockScreener):
             "stage": stage,
             "ma_alignment_score": ma_alignment_score,
             "rs_rating": rs_rating,
+            "_current_price": current_price,
+            "_ma_50": float(ma_50),
         }
 
     @staticmethod

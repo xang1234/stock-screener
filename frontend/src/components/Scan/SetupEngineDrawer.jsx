@@ -33,7 +33,15 @@ const CHECK_NAME_MAP = {
   primary_pattern_fallback_selected: 'Primary selected via fallback',
   detector_pipeline_executed: 'Detector pipeline executed',
   cross_detector_calibration_applied: 'Cross-detector calibration applied',
+  too_extended: 'Entry is too extended past pivot',
+  breaks_50d_support: 'Price below 50-day moving average',
+  low_liquidity: 'Average daily volume below liquidity threshold',
+  earnings_soon: 'Earnings announcement within risk window',
 };
+
+// Operational flags with hard severity (structural break — renders red).
+// All other operational flags are soft (caution — renders amber).
+const HARD_FLAGS = new Set(['breaks_50d_support']);
 
 /**
  * Format a check/flag string to human-readable text
@@ -324,14 +332,19 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
             {/* Section 5: Invalidation Flags */}
             {explain.invalidation_flags?.length > 0 && (
               <DrawerSection title="INVALIDATION FLAGS">
-                {explain.invalidation_flags.map((flag) => (
-                  <CheckItem
-                    key={flag}
-                    icon={<WarningAmberIcon sx={{ fontSize: 16, color: '#ff9800' }} />}
-                    text={formatCheckName(flag)}
-                    color="#ff9800"
-                  />
-                ))}
+                {explain.invalidation_flags.map((flag) => {
+                  const flagBase = typeof flag === 'string' ? flag.split(':')[0] : '';
+                  const isHard = HARD_FLAGS.has(flagBase);
+                  const flagColor = isHard ? '#f44336' : '#ff9800';
+                  return (
+                    <CheckItem
+                      key={flag}
+                      icon={<WarningAmberIcon sx={{ fontSize: 16, color: flagColor }} />}
+                      text={formatCheckName(flag)}
+                      color={flagColor}
+                    />
+                  );
+                })}
               </DrawerSection>
             )}
 

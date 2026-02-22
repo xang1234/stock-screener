@@ -63,6 +63,12 @@ class SetupEngineParameters:
     context_ma_alignment_min_pct: float = 60.0
     context_rs_rating_min: float = 50.0
 
+    # Operational invalidation thresholds.
+    too_extended_pivot_distance_pct: float = 10.0
+    breaks_50d_support_cushion_pct: float = 0.0
+    low_liquidity_adtv_min_usd: float = 1_000_000.0
+    earnings_soon_window_days: float = 21.0
+
 
 SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
     SetupEngineParameterSpec(
@@ -190,6 +196,42 @@ SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
         unit="pct",
         profile="baseline",
         rationale="Minimum RS rating for Gate 10. Linear scale: 50 = outperforming SPY. Permissive: None passes.",
+    ),
+    SetupEngineParameterSpec(
+        name="too_extended_pivot_distance_pct",
+        default_value=10.0,
+        min_value=2.0,
+        max_value=50.0,
+        unit="pct",
+        profile="baseline",
+        rationale="O'Neil: buying >5-8% past pivot is chasing. Flags extended entries.",
+    ),
+    SetupEngineParameterSpec(
+        name="breaks_50d_support_cushion_pct",
+        default_value=0.0,
+        min_value=0.0,
+        max_value=10.0,
+        unit="pct",
+        profile="baseline",
+        rationale="0 = strict (any close below 50d MA). Higher = allow N% below before flagging.",
+    ),
+    SetupEngineParameterSpec(
+        name="low_liquidity_adtv_min_usd",
+        default_value=1_000_000.0,
+        min_value=0.0,
+        max_value=100_000_000.0,
+        unit="usd",
+        profile="baseline",
+        rationale="Minimum ADTV (50-day) for meaningful position sizing.",
+    ),
+    SetupEngineParameterSpec(
+        name="earnings_soon_window_days",
+        default_value=21.0,
+        min_value=1.0,
+        max_value=90.0,
+        unit="days",
+        profile="baseline",
+        rationale="~3 weeks covers pre-earnings risk window.",
     ),
 )
 

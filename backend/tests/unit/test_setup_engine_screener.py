@@ -318,3 +318,106 @@ class TestTimingObservability:
         for line in debug_lines:
             assert "elapsed=" in line.message
             assert "outcome=" in line.message
+
+
+class TestOperationalFlagsIntegration:
+    """SE-E7: Operational invalidation flags wired through full pipeline."""
+
+    def test_low_liquidity_flag_in_full_pipeline(self):
+        """Synthetic stock with tiny volume should trigger low_liquidity flag."""
+        num_days = 350
+        dates = pd.bdate_range(end=pd.Timestamp("2025-12-19"), periods=num_days)
+        np.random.seed(42)
+        close = 50.0 + np.cumsum(np.random.randn(num_days) * 0.5 + 0.05)
+        close = np.maximum(close, 1.0)
+        price_data = pd.DataFrame(
+            {
+                "Open": close * 0.99,
+                "High": close * 1.02,
+                "Low": close * 0.98,
+                "Close": close,
+                "Volume": np.full(num_days, 100.0),  # Tiny volume → tiny ADTV
+            },
+            index=dates,
+        )
+        benchmark_data = _make_price_data(num_days, start_price=400.0)
+        data = StockData(
+            symbol="ILLIQUID",
+            price_data=price_data,
+            benchmark_data=benchmark_data,
+        )
+
+        scanner = SetupEngineScanner()
+        result = scanner.scan_stock("ILLIQUID", data)
+
+        assert "setup_engine" in result.details
+        payload = result.details["setup_engine"]
+        flags = payload["explain"]["invalidation_flags"]
+        assert "low_liquidity" in flags
+
+    def test_breaks_50d_flag_in_full_pipeline(self):
+        """Last bar collapsed below 50d MA should trigger breaks_50d_support."""
+        num_days = 350
+        dates = pd.bdate_range(end=pd.Timestamp("2025-12-19"), periods=num_days)
+        np.random.seed(42)
+        close = 50.0 + np.cumsum(np.random.randn(num_days) * 0.5 + 0.05)
+        close = np.maximum(close, 1.0)
+        # Crash the last bar way below the 50d MA
+        close[-1] = close[-50:].mean() * 0.80
+        price_data = pd.DataFrame(
+            {
+                "Open": close * 0.99,
+                "High": close * 1.02,
+                "Low": close * 0.98,
+                "Close": close,
+                "Volume": np.random.randint(100_000, 5_000_000, size=num_days).astype(float),
+            },
+            index=dates,
+        )
+        benchmark_data = _make_price_data(num_days, start_price=400.0)
+        data = StockData(
+            symbol="CRASHED",
+            price_data=price_data,
+            benchmark_data=benchmark_data,
+        )
+
+        scanner = SetupEngineScanner()
+        result = scanner.scan_stock("CRASHED", data)
+
+        assert "setup_engine" in result.details
+        payload = result.details["setup_engine"]
+        flags = payload["explain"]["invalidation_flags"]
+        assert "breaks_50d_support" in flags
+
+    def test_no_operational_flags_on_clean_uptrend(self):
+        """Deterministic uptrend above 50d MA with healthy volume → no operational flags."""
+        num_days = 350
+        dates = pd.bdate_range(end=pd.Timestamp("2025-12-19"), periods=num_days)
+        # Deterministic steady uptrend — guarantees close > 50d MA
+        close = np.linspace(50.0, 100.0, num_days)
+        price_data = pd.DataFrame(
+            {
+                "Open": close * 0.995,
+                "High": close * 1.02,
+                "Low": close * 0.98,
+                "Close": close,
+                "Volume": np.full(num_days, 2_000_000.0),
+            },
+            index=dates,
+        )
+        benchmark_data = _make_price_data(num_days, start_price=400.0)
+        data = StockData(
+            symbol="UPTREND",
+            price_data=price_data,
+            benchmark_data=benchmark_data,
+        )
+
+        scanner = SetupEngineScanner()
+        result = scanner.scan_stock("UPTREND", data)
+
+        assert "setup_engine" in result.details
+        payload = result.details["setup_engine"]
+        flags = payload["explain"]["invalidation_flags"]
+        operational_flag_names = {"too_extended", "breaks_50d_support", "low_liquidity", "earnings_soon"}
+        operational_present = [f for f in flags if f in operational_flag_names]
+        assert operational_present == [], f"Unexpected operational flags: {operational_present}"

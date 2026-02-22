@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping, Sequence, TypedDict, cast
 
 SETUP_ENGINE_DEFAULT_SCHEMA_VERSION = "v1"
 SETUP_ENGINE_ALLOWED_TIMEFRAMES = frozenset({"daily", "weekly"})
-SETUP_ENGINE_NUMERIC_UNITS = frozenset({"pct", "ratio", "days", "weeks", "price"})
+SETUP_ENGINE_NUMERIC_UNITS = frozenset({"pct", "ratio", "days", "weeks", "price", "usd"})
 
 PATTERN_SCORE_MIN = 0.0
 PATTERN_SCORE_MAX = 100.0

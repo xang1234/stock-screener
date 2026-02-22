@@ -264,3 +264,17 @@ export const mixedSeRow = {
   se_rs_line_new_high: false,
   se_pivot_price: null,
 };
+
+/**
+ * Operational flags stock — includes operational invalidation flags
+ * (too_extended + low_liquidity) for severity-aware rendering tests.
+ */
+export const operationalFlagsStock = {
+  ...fullPayloadStock,
+  symbol: 'EXTENDED',
+  se_distance_to_pivot_pct: 15.2,
+  se_explain: {
+    ...fullPayloadStock.se_explain,
+    invalidation_flags: ['too_extended', 'low_liquidity', 'breaks_50d_support'],
+  },
+};
