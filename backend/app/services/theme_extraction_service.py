@@ -13,9 +13,16 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from ..models.theme import ContentItem, ThemeMention, ThemeCluster, ThemeConstituent
+from ..models.theme import (
+    ContentItem,
+    ContentItemPipelineState,
+    ThemeMention,
+    ThemeCluster,
+    ThemeConstituent,
+)
 from ..config import settings
 from .llm import LLMService, LLMError
 
@@ -106,6 +113,7 @@ class ThemeExtractionService:
         "models/gemini-2.0-flash-lite",
         "models/gemini-2.5-flash",
     ]
+    PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
 
     def __init__(self, db: Session, pipeline: str = "technical"):
         self.db = db
@@ -420,30 +428,26 @@ Example themes for this pipeline: {examples_str}
             logger.error(f"LLM extraction failed (will retry): {e}")
             raise  # Re-raise so process_batch() marks extraction_error
 
-    def process_content_item(self, content_item: ContentItem) -> int:
+    def _extract_and_store_mentions(self, content_item: ContentItem) -> int:
         """
-        Process a content item: extract themes and store mentions
+        Extract and persist mentions for a content item.
 
-        Returns number of theme mentions created
+        Returns number of theme mentions created.
         """
-        # Extract themes
         mentions = self.extract_from_content(content_item)
 
-        # Store mentions
         mention_count = 0
         for mention_data in mentions:
-            # Get or create the theme cluster first
             cluster = self._get_or_create_cluster(mention_data)
 
-            # Create mention linked to cluster
             theme_mention = ThemeMention(
                 content_item_id=content_item.id,
-                theme_cluster_id=cluster.id,  # Link to cluster!
+                theme_cluster_id=cluster.id,
                 source_type=content_item.source_type,
                 source_name=content_item.source_name,
                 raw_theme=mention_data["theme"],
                 canonical_theme=self._normalize_theme(mention_data["theme"]),
-                pipeline=self.pipeline,  # Set pipeline from service instance
+                pipeline=self.pipeline,
                 tickers=mention_data["tickers"],
                 ticker_count=len(mention_data["tickers"]),
                 sentiment=mention_data["sentiment"],
@@ -454,17 +458,134 @@ Example themes for this pipeline: {examples_str}
             self.db.add(theme_mention)
             mention_count += 1
 
-            # Update theme constituents (ticker-to-theme mapping)
             self._update_theme_constituents(mention_data, cluster)
+
+        return mention_count
+
+    def process_content_item(self, content_item: ContentItem) -> int:
+        """
+        Backward-compatible single-item processing API.
+
+        This method retains legacy commit semantics for direct callers. Batch
+        orchestration uses pipeline-state-aware transactional handling instead.
+        """
+        mention_count = self._extract_and_store_mentions(content_item)
 
         # Mark content as processed
         content_item.is_processed = True
         content_item.processed_at = datetime.utcnow()
+        content_item.extraction_error = None
 
         self.db.commit()
 
         logger.info(f"Extracted {mention_count} theme mentions from content item {content_item.id}")
         return mention_count
+
+    def _get_or_create_pipeline_state(self, content_item_id: int) -> ContentItemPipelineState:
+        """Get or lazily create per-pipeline processing state for a content item."""
+        state = self.db.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == content_item_id,
+            ContentItemPipelineState.pipeline == self.pipeline,
+        ).first()
+        if state:
+            return state
+
+        state = ContentItemPipelineState(
+            content_item_id=content_item_id,
+            pipeline=self.pipeline,
+            status="pending",
+            attempt_count=0,
+        )
+        self.db.add(state)
+        self.db.flush()
+        return state
+
+    def _classify_failure_status(self, error: Exception) -> str:
+        """Classify failures into retryable or terminal pipeline-state buckets."""
+        error_text = str(error).lower()
+        terminal_markers = (
+            "invalid api key",
+            "authentication",
+            "unauthorized",
+            "forbidden",
+            "403",
+            "quota exceeded",
+            "billing",
+            "context length",
+            "request too large",
+            "413",
+        )
+        if any(marker in error_text for marker in terminal_markers):
+            return "failed_terminal"
+        return "failed_retryable"
+
+    def _failure_code(self, error: Exception) -> str:
+        """Best-effort normalized error code for observability."""
+        name = error.__class__.__name__.lower()
+        if isinstance(error, LLMError):
+            return f"llm_{name}"
+        if "json" in name:
+            return "json_decode_error"
+        return name
+
+    def _process_item_transactional(self, item_id: int) -> tuple[bool, int]:
+        """
+        Process one item with transactional state transitions.
+
+        Returns (processed_flag, mention_count). If processed_flag is False,
+        the item was skipped because its pipeline state is not eligible.
+        """
+        item = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
+        if not item:
+            return False, 0
+
+        try:
+            state = self._get_or_create_pipeline_state(item_id)
+            if state.status not in self.PROCESSABLE_STATUSES:
+                return False, 0
+
+            now = datetime.utcnow()
+            state.status = "in_progress"
+            state.attempt_count = (state.attempt_count or 0) + 1
+            state.last_attempt_at = now
+            state.error_code = None
+            state.error_message = None
+
+            mention_count = self._extract_and_store_mentions(item)
+
+            processed_at = datetime.utcnow()
+            state.status = "processed"
+            state.processed_at = processed_at
+
+            # Compatibility writes (global fields remain populated during cutover)
+            item.is_processed = True
+            item.processed_at = processed_at
+            item.extraction_error = None
+
+            self.db.commit()
+            return True, mention_count
+        except Exception as error:
+            self.db.rollback()
+
+            item_for_failure = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
+            if item_for_failure is None:
+                return False, 0
+
+            failure_state = self._get_or_create_pipeline_state(item_id)
+            failure_state.status = self._classify_failure_status(error)
+            failure_state.attempt_count = (failure_state.attempt_count or 0) + 1
+            failure_state.last_attempt_at = datetime.utcnow()
+            failure_state.error_code = self._failure_code(error)
+            failure_state.error_message = str(error)[:4000]
+            failure_state.processed_at = None
+
+            # Compatibility writes
+            item_for_failure.is_processed = True
+            item_for_failure.processed_at = datetime.utcnow()
+            item_for_failure.extraction_error = str(error)
+
+            self.db.commit()
+            raise
 
     def _normalize_theme(self, theme: str) -> str:
         """
@@ -611,26 +732,40 @@ Example themes for this pipeline: {examples_str}
 
         Returns summary of processing results
         """
+        pipeline_source_ids = self._get_pipeline_source_ids()
+        state_alias = ContentItemPipelineState
+        query = self.db.query(ContentItem.id).outerjoin(
+            state_alias,
+            and_(
+                state_alias.content_item_id == ContentItem.id,
+                state_alias.pipeline == self.pipeline,
+            ),
+        )
+
+        if pipeline_source_ids:
+            query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+
         if item_ids is not None:
-            # Process specific items (e.g., reset failed items during reprocessing)
-            items = self.db.query(ContentItem).filter(
-                ContentItem.id.in_(item_ids),
-                ContentItem.is_processed == False,
-            ).order_by(ContentItem.published_at.desc()).all()
-        else:
-            pipeline_source_ids = self._get_pipeline_source_ids()
-
-            # Get unprocessed items from sources in this pipeline
-            query = self.db.query(ContentItem).filter(
-                ContentItem.is_processed == False
+            query = query.filter(ContentItem.id.in_(item_ids))
+            query = query.filter(
+                or_(
+                    state_alias.id.is_(None),
+                    state_alias.status.in_(list(self.PROCESSABLE_STATUSES)),
+                )
             )
+        else:
+            query = query.filter(
+                or_(
+                    state_alias.id.is_(None),
+                    state_alias.status.in_(list(self.PROCESSABLE_STATUSES)),
+                )
+            )
+        query = query.order_by(ContentItem.published_at.desc())
+        if item_ids is None:
+            query = query.limit(limit)
 
-            if pipeline_source_ids:
-                query = query.filter(ContentItem.source_id.in_(pipeline_source_ids))
-
-            items = query.order_by(
-                ContentItem.published_at.desc()
-            ).limit(limit).all()
+        item_id_rows = query.all()
+        process_item_ids = [row[0] for row in item_id_rows]
 
         results = {
             "processed": 0,
@@ -640,16 +775,14 @@ Example themes for this pipeline: {examples_str}
             "pipeline": self.pipeline,
         }
 
-        for item in items:
+        for item_id in process_item_ids:
             try:
-                mention_count = self.process_content_item(item)
-                results["processed"] += 1
-                results["total_mentions"] += mention_count
+                processed, mention_count = self._process_item_transactional(item_id)
+                if processed:
+                    results["processed"] += 1
+                    results["total_mentions"] += mention_count
             except Exception as e:
-                logger.error(f"Error processing item {item.id}: {e}")
-                item.is_processed = True
-                item.extraction_error = str(e)
-                self.db.commit()
+                logger.error(f"Error processing item {item_id}: {e}")
                 results["errors"] += 1
 
         # Get newly discovered themes
@@ -686,10 +819,15 @@ Example themes for this pipeline: {examples_str}
         cutoff_date = datetime.utcnow() - timedelta(days=self.max_age_days)
         pipeline_source_ids = self._get_pipeline_source_ids()
 
-        # Find failed items eligible for retry
-        query = self.db.query(ContentItem).filter(
-            ContentItem.is_processed == True,
-            ContentItem.extraction_error != None,
+        # Find pipeline-scoped retryable failures eligible for retry
+        query = self.db.query(ContentItem).join(
+            ContentItemPipelineState,
+            and_(
+                ContentItemPipelineState.content_item_id == ContentItem.id,
+                ContentItemPipelineState.pipeline == self.pipeline,
+            ),
+        ).filter(
+            ContentItemPipelineState.status == "failed_retryable",
             ContentItem.published_at >= cutoff_date,
         )
         if pipeline_source_ids:
@@ -713,6 +851,11 @@ Example themes for this pipeline: {examples_str}
         item_ids = [item.id for item in failed_items]
         logger.info(f"[{self.pipeline}] Resetting {len(failed_items)} failed items for reprocessing")
         for item in failed_items:
+            state = self._get_or_create_pipeline_state(item.id)
+            state.status = "pending"
+            state.error_code = None
+            state.error_message = None
+            state.processed_at = None
             item.is_processed = False
             item.extraction_error = None
             item.processed_at = None
@@ -741,14 +884,20 @@ Example themes for this pipeline: {examples_str}
         cutoff_date = datetime.utcnow() - timedelta(days=age_days)
         pipeline_source_ids = self._get_pipeline_source_ids()
 
-        # Subquery: content_item_ids that have at least one theme mention
-        mentioned_ids = self.db.query(ThemeMention.content_item_id).distinct().subquery()
+        # Subquery: content_item_ids that have at least one theme mention in this pipeline
+        mentioned_ids = self.db.query(ThemeMention.content_item_id).filter(
+            ThemeMention.pipeline == self.pipeline
+        ).distinct().subquery()
 
-        # Find items that are "processed" but have zero mentions
-        query = self.db.query(ContentItem).filter(
-            ContentItem.is_processed == True,
-            ContentItem.extraction_error == None,
-            ContentItem.processed_at != None,
+        # Find items with pipeline state marked processed but with zero mentions in this pipeline
+        query = self.db.query(ContentItem).join(
+            ContentItemPipelineState,
+            and_(
+                ContentItemPipelineState.content_item_id == ContentItem.id,
+                ContentItemPipelineState.pipeline == self.pipeline,
+            ),
+        ).filter(
+            ContentItemPipelineState.status == "processed",
             ContentItem.published_at >= cutoff_date,
             ~ContentItem.id.in_(self.db.query(mentioned_ids.c.content_item_id)),
         )
@@ -765,6 +914,9 @@ Example themes for this pipeline: {examples_str}
         logger.info(f"[{self.pipeline}] Found {len(silent_failures)} silent failures, resetting for reprocessing")
 
         for item in silent_failures:
+            state = self._get_or_create_pipeline_state(item.id)
+            state.status = "pending"
+            state.processed_at = None
             item.is_processed = False
             item.processed_at = None
         self.db.commit()

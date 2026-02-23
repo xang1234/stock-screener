@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models.theme import (
     ContentItem,
+    ContentItemPipelineState,
     ContentSource,
     ThemeMention,
     ThemeCluster,
@@ -58,6 +59,28 @@ def _make_content_item(db_session, source, **overrides):
     db_session.add(item)
     db_session.commit()
     return item
+
+
+def _set_pipeline_state(db_session, item_id: int, pipeline: str, status: str, **overrides):
+    """Helper to upsert pipeline state for a content item."""
+    state = db_session.query(ContentItemPipelineState).filter(
+        ContentItemPipelineState.content_item_id == item_id,
+        ContentItemPipelineState.pipeline == pipeline,
+    ).first()
+    if not state:
+        state = ContentItemPipelineState(
+            content_item_id=item_id,
+            pipeline=pipeline,
+            status=status,
+            attempt_count=overrides.pop("attempt_count", 0),
+        )
+        db_session.add(state)
+    else:
+        state.status = status
+    for key, value in overrides.items():
+        setattr(state, key, value)
+    db_session.commit()
+    return state
 
 
 class TestExtractFromContentBugFix:
@@ -141,6 +164,15 @@ class TestReprocessFailedItems:
             processed_at=datetime.utcnow() - timedelta(hours=2),
             extraction_error="429 Rate limit exceeded",
         )
+        _set_pipeline_state(
+            db_session,
+            failed_item.id,
+            pipeline="technical",
+            status="failed_retryable",
+            attempt_count=1,
+            error_code="exception",
+            error_message="429 Rate limit exceeded",
+        )
 
         service = ThemeExtractionService.__new__(ThemeExtractionService)
         service.db = db_session
@@ -201,6 +233,16 @@ class TestReprocessFailedItems:
             published_at=datetime.utcnow() - timedelta(days=60),
             extraction_error="timeout",
         )
+        old_item = db_session.query(ContentItem).filter(ContentItem.title == "Old failure").first()
+        _set_pipeline_state(
+            db_session,
+            old_item.id,
+            pipeline="technical",
+            status="failed_retryable",
+            attempt_count=1,
+            error_code="timeout",
+            error_message="timeout",
+        )
 
         service = ThemeExtractionService.__new__(ThemeExtractionService)
         service.db = db_session
@@ -213,6 +255,46 @@ class TestReprocessFailedItems:
 
         assert result["reprocessed_count"] == 0
         mock_batch.assert_not_called()
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_reprocess_is_pipeline_scoped(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """Retry selection should only include failures for the active pipeline."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        technical_item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="Technical pipeline fail",
+            is_processed=True,
+            extraction_error="failed",
+            external_id="tech-fail",
+        )
+        fundamental_item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="Fundamental pipeline fail",
+            is_processed=True,
+            extraction_error="failed",
+            external_id="fund-fail",
+        )
+
+        _set_pipeline_state(db_session, technical_item.id, "technical", "failed_retryable", attempt_count=1)
+        _set_pipeline_state(db_session, fundamental_item.id, "fundamental", "failed_retryable", attempt_count=1)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(service, "process_batch", return_value={"processed": 1, "total_mentions": 0, "errors": 0, "pipeline": "technical"}) as mock_batch:
+            result = service.reprocess_failed_items(limit=100)
+
+        assert result["reprocessed_count"] == 1
+        mock_batch.assert_called_once_with(limit=100, item_ids=[technical_item.id])
 
 
 class TestIdentifySilentFailures:
@@ -234,6 +316,13 @@ class TestIdentifySilentFailures:
             processed_at=datetime.utcnow() - timedelta(hours=5),
             extraction_error=None,
         )
+        _set_pipeline_state(
+            db_session,
+            silent_fail.id,
+            pipeline="technical",
+            status="processed",
+            processed_at=datetime.utcnow() - timedelta(hours=5),
+        )
 
         # Item that was genuinely processed with mentions (should NOT be reset)
         legit_item = _make_content_item(
@@ -243,6 +332,13 @@ class TestIdentifySilentFailures:
             processed_at=datetime.utcnow() - timedelta(hours=3),
             extraction_error=None,
             external_id="legit-1",
+        )
+        _set_pipeline_state(
+            db_session,
+            legit_item.id,
+            pipeline="technical",
+            status="processed",
+            processed_at=datetime.utcnow() - timedelta(hours=3),
         )
 
         # Create a cluster and mention for the legitimate item
@@ -289,3 +385,43 @@ class TestIdentifySilentFailures:
         # Verify legit_item was NOT reset
         db_session.refresh(legit_item)
         assert legit_item.is_processed is True
+
+
+class TestPipelineStateDrivenBatching:
+    """Verify extraction batching eligibility is pipeline-state driven."""
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_process_batch_uses_pipeline_state_not_global_flag(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """An item should be processed when pipeline state is pending even if global flag is processed."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="State-driven item",
+            is_processed=True,
+            processed_at=datetime.utcnow() - timedelta(hours=1),
+            extraction_error=None,
+        )
+        _set_pipeline_state(db_session, item.id, "technical", "pending", attempt_count=0)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(service, "_extract_and_store_mentions", return_value=0):
+            result = service.process_batch(limit=10)
+
+        assert result["processed"] == 1
+        assert result["errors"] == 0
+
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == item.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state.status == "processed"
