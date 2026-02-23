@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
   Box,
@@ -20,7 +20,7 @@ import { fetchPriceHistory, priceHistoryKeys } from '../../api/priceHistory';
 import { getStockFundamentals } from '../../api/stocks';
 import { getGroupDetail } from '../../api/groups';
 import { useChartNavigation } from '../../hooks/useChartNavigation';
-import { buildFilterParams, getFilterCacheKey } from '../../utils/filterUtils';
+import { buildFilterParams, getStableFilterKey } from '../../utils/filterUtils';
 import CandlestickChart from '../Charts/CandlestickChart';
 import StockMetricsSidebar from './StockMetricsSidebar';
 import PeerComparisonModal from './PeerComparisonModal';
@@ -64,14 +64,26 @@ function ChartViewerModal({
   );
 
   // Generate stable cache key for filters
-  const filterCacheKey = useMemo(() => getFilterCacheKey(filters), [filters]);
+  const filterCacheKey = useMemo(() => getStableFilterKey(filters), [filters]);
 
-  // Fetch all filtered symbols for navigation
+  // Invalidate cached symbol list when sort changes so navigation always
+  // reflects the current table order — even if the modal is currently closed.
+  const prevSortRef = useRef({ sortBy, sortOrder });
+  useEffect(() => {
+    const prev = prevSortRef.current;
+    if (prev.sortBy !== sortBy || prev.sortOrder !== sortOrder) {
+      queryClient.removeQueries({ queryKey: ['allFilteredSymbols'] });
+      prevSortRef.current = { sortBy, sortOrder };
+    }
+  }, [sortBy, sortOrder, queryClient]);
+
+  // Fetch all filtered symbols for navigation (sort-aware)
   const { data: allSymbols, isLoading: symbolsLoading } = useQuery({
     queryKey: ['allFilteredSymbols', scanId, filterCacheKey, sortBy, sortOrder],
     queryFn: () => getAllFilteredSymbols(scanId, filterParams),
     enabled: open && !!scanId,
-    staleTime: 60000, // 1 minute
+    staleTime: 5000, // 5 seconds — short enough to catch mid-session sort changes
+    refetchOnMount: 'always', // Always refetch when modal opens to pick up sort changes
   });
 
   // Use navigation hook

@@ -76,6 +76,16 @@ def test_compute_breakout_readiness_features_matches_formula_spec():
         float(rolling_slope(rs_series, window=20).iloc[-1])
     )
 
+    # bb_squeeze: True when bb_width_pctile_252 is at or below the 20th percentile
+    assert isinstance(computed.bb_squeeze, bool)
+
+    # up_down_volume_ratio_10d: 10-bar up-volume / down-volume ratio
+    assert computed.up_down_volume_ratio_10d is not None
+
+    # quiet_days_10d: count of quiet days in last 10 bars
+    assert isinstance(computed.quiet_days_10d, int)
+    assert 0 <= computed.quiet_days_10d <= 10
+
 
 def test_compute_breakout_readiness_features_without_benchmark_rs_fields_are_null():
     computed = compute_breakout_readiness_features(
@@ -100,7 +110,10 @@ def test_compute_breakout_readiness_features_handles_short_history_with_null_win
     assert computed.atr14_pct_trend is None
     assert computed.bb_width_pct is not None
     assert computed.bb_width_pctile_252 is None
-    assert computed.volume_vs_50d is None
+    assert computed.bb_squeeze is False  # requires bb_width_pctile_252 which is None
+    assert computed.volume_vs_50d is None  # needs 50 bars
+    assert computed.up_down_volume_ratio_10d is not None  # only needs 10 bars
+    assert computed.quiet_days_10d == 0  # volume_sma is NaN (< 50 bars), so no quiet days detected
 
 
 def test_readiness_features_to_payload_fields_exports_expected_keys():
@@ -116,7 +129,10 @@ def test_readiness_features_to_payload_fields_exports_expected_keys():
         "atr14_pct_trend",
         "bb_width_pct",
         "bb_width_pctile_252",
+        "bb_squeeze",
         "volume_vs_50d",
+        "up_down_volume_ratio_10d",
+        "quiet_days_10d",
         "rs",
         "rs_line_new_high",
         "rs_vs_spy_65d",

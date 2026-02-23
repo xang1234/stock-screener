@@ -7,6 +7,7 @@ future detectors can feed a stable persistence/query contract.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Any, Mapping, Sequence, cast
 
@@ -54,7 +55,10 @@ def _to_float(value: Any) -> float | None:
     if isinstance(value, bool):
         raise ValueError("Boolean values are not valid numeric fields")
     if isinstance(value, (int, float)):
-        return float(value)
+        result = float(value)
+        if math.isnan(result) or math.isinf(result):
+            return None
+        return result
     raise ValueError(f"Expected numeric value, got {type(value)!r}")
 
 

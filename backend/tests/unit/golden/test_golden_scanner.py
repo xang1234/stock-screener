@@ -88,7 +88,7 @@ def _build_scanner_3wt_strict() -> tuple[dict[str, Any], dict[str, Any]]:
     fixture = {"symbol": "GOLDEN_SCAN_3WT", "data": data}
     expectation = {
         # setup_ready=False because derived_ready merges all detector failures
-        # (other detectors' not_detected checks), even though all 8 gates pass
+        # (other detectors' not_detected checks), even though 7 of 8 gates pass
         "passes": False,
         "screener_name": "setup_engine",
         # Actual: score=92.5, quality=100, readiness=81.3
@@ -100,12 +100,12 @@ def _build_scanner_3wt_strict() -> tuple[dict[str, Any], dict[str, Any]]:
         "quality_score": (85, 100),
         "readiness_score": (69, 95),
         "required_readiness_fields": _STANDARD_READINESS_FIELDS,
-        # All 8 gates pass despite setup_ready=False
+        # 7 of 8 context gates pass (volume_sufficient fails: volume_vs_50d=1.0 > 0.8 cap)
         # Note: stage_ok omitted because tight ±0.3% jitter can make
         # price ≈ MA50, causing quick_stage_check() to return Stage 3
         "passed_contains": [
             "setup_score_ok", "quality_floor_ok", "readiness_floor_ok",
-            "in_early_zone", "atr14_within_limit", "volume_sufficient",
+            "in_early_zone", "atr14_within_limit",
             "rs_leadership_ok", "ma_alignment_ok", "rs_rating_ok",
         ],
     }

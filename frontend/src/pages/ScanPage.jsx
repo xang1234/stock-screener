@@ -1095,7 +1095,7 @@ function ScanPage() {
         onClose={() => setChartModalOpen(false)}
         initialSymbol={selectedSymbol}
         scanId={currentScanId}
-        filters={filters}
+        filters={debouncedFilters}
         sortBy={sortBy}
         sortOrder={sortOrder}
         currentPageResults={resultsData?.results || []}

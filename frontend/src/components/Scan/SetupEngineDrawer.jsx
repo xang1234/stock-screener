@@ -154,6 +154,7 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
       anchor="right"
       open={open}
       onClose={onClose}
+      sx={{ zIndex: 1400 }}
       slotProps={{
         backdrop: { sx: { backgroundColor: 'transparent' } },
       }}

@@ -17,11 +17,20 @@
     "pivot_type": null,
     "pivot_date": null,
     "distance_to_pivot_pct": null,
+    "in_early_zone": null,
+    "extended_from_pivot": null,
+    "base_length_weeks": null,
+    "base_depth_pct": null,
+    "support_tests_count": null,
+    "tight_closes_count": null,
     "atr14_pct": null,
     "atr14_pct_trend": null,
     "bb_width_pct": null,
     "bb_width_pctile_252": null,
+    "bb_squeeze": null,
     "volume_vs_50d": null,
+    "up_down_volume_ratio_10d": null,
+    "quiet_days_10d": null,
     "rs": null,
     "rs_line_new_high": false,
     "rs_vs_spy_65d": null,
@@ -39,10 +48,26 @@
       ],
       "key_levels": {},
       "invalidation_flags": [
-        "data_policy:insufficient",
-        "insufficient_daily_bars",
-        "insufficient_weekly_bars",
-        "missing_or_short_benchmark_history"
+        {
+          "code": "data_policy",
+          "message": "insufficient",
+          "severity": "medium"
+        },
+        {
+          "code": "insufficient_daily_bars",
+          "message": "insufficient daily bars",
+          "severity": "medium"
+        },
+        {
+          "code": "insufficient_weekly_bars",
+          "message": "insufficient weekly bars",
+          "severity": "medium"
+        },
+        {
+          "code": "missing_or_short_benchmark_history",
+          "message": "missing or short benchmark history",
+          "severity": "medium"
+        }
       ]
     }
   }
