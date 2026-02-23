@@ -34,14 +34,26 @@ def test_invariant_spec_shape_and_ids():
 
     seen = set()
     allowed_severities = {"critical", "high", "medium", "low"}
+    allowed_check_kinds = {"sql", "repo"}
     for invariant in payload["invariants"]:
         iid = invariant["id"]
         assert re.fullmatch(r"PRICE-INV-\d{3}", iid), f"Bad invariant id: {iid}"
         assert iid not in seen, f"Duplicate invariant id: {iid}"
         seen.add(iid)
+        assert invariant["check_kind"] in allowed_check_kinds
         assert invariant["severity"] in allowed_severities
         assert invariant["description"].strip()
-        assert invariant["sql_check"].strip().upper().startswith("SELECT")
+        if invariant["check_kind"] == "sql":
+            sql = invariant["sql_check"].strip()
+            assert sql.upper().startswith("SELECT")
+            assert "SELECT 0 AS VIOLATIONS;" not in sql.upper()
+        else:
+            repo_check = invariant["repo_check"]
+            assert isinstance(repo_check, dict)
+            paths = repo_check.get("paths")
+            literals = repo_check.get("required_literals")
+            assert isinstance(paths, list) and paths
+            assert isinstance(literals, list) and literals
         assert invariant["compliance_rule"].strip()
 
     assert seen == EXPECTED_IDS
@@ -51,4 +63,3 @@ def test_adr_lists_all_invariant_ids():
     text = ADR_PATH.read_text(encoding="utf-8")
     for iid in EXPECTED_IDS:
         assert iid in text, f"ADR is missing invariant id reference: {iid}"
-

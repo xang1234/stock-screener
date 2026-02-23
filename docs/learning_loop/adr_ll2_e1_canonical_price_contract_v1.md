@@ -92,6 +92,13 @@ Normative invariant definitions are versioned in:
 
 - `docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.invariants.json`
 
+Each invariant declares a machine-check type:
+
+- `check_kind = "sql"` uses `sql_check` and must return one scalar `violations` value.
+- `check_kind = "repo"` uses `repo_check` path/literal assertions against repository code.
+
+For SQL checks that depend on future schema, `violations = -1` means "required schema not present yet" and is treated as non-compliant until the migration is shipped.
+
 Required IDs for v1:
 
 - `PRICE-INV-001`
@@ -109,4 +116,3 @@ Required IDs for v1:
 - Known current non-compliance is documented in the LL2-E1-T1 audit.
 - LL2-E1-T3 must implement schema/write-path/read-path changes to make these invariants pass.
 - LL2-E1-T4 must backfill/reconcile historical rows against this contract.
-

@@ -5,20 +5,23 @@
   "invariants": [
     {
       "id": "PRICE-INV-001",
+      "check_kind": "sql",
       "severity": "critical",
-      "description": "Adj close must never be a blind alias of close across the entire dataset.",
-      "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE close IS NOT NULL AND adj_close IS NOT NULL AND adj_close = close;",
-      "compliance_rule": "violations must be materially lower than total rows and explainable by factor==1 windows, never by default fill."
+      "description": "Rows where adj_close equals close are only valid when the stored adjustment factor is ~1.0.",
+      "sql_check": "SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_info('stock_prices') WHERE name='adj_factor_close') THEN (SELECT COUNT(*) FROM stock_prices WHERE close IS NOT NULL AND adj_close IS NOT NULL AND ABS(adj_close - close) < 1e-8 AND ABS(COALESCE(adj_factor_close, -999.0) - 1.0) > 1e-6) ELSE -1 END AS violations;",
+      "compliance_rule": "violations must be 0. A value of -1 means required schema columns are missing (non-compliant until migrated)."
     },
     {
       "id": "PRICE-INV-002",
+      "check_kind": "sql",
       "severity": "critical",
       "description": "Rows must be upsert-correctable by (symbol, date); stale same-day values cannot persist due to insert-only behavior.",
-      "sql_check": "SELECT COUNT(*) AS duplicate_rows FROM stock_prices GROUP BY symbol, date HAVING COUNT(*) > 1;",
-      "compliance_rule": "duplicate_rows result set must be empty and write path must support replacement of same-day values."
+      "sql_check": "SELECT COUNT(*) AS violations FROM (SELECT symbol, date FROM stock_prices GROUP BY symbol, date HAVING COUNT(*) > 1) dup;",
+      "compliance_rule": "violations must be 0."
     },
     {
       "id": "PRICE-INV-003",
+      "check_kind": "sql",
       "severity": "high",
       "description": "Adjustment factor must be positive and finite whenever raw and adjusted close are present.",
       "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE close IS NOT NULL AND close != 0 AND adj_close IS NOT NULL AND (adj_close / close) <= 0;",
@@ -26,6 +29,7 @@
     },
     {
       "id": "PRICE-INV-004",
+      "check_kind": "sql",
       "severity": "high",
       "description": "Daily OHLC relationship must be internally valid for raw fields.",
       "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND (high < low OR high < open OR high < close OR low > open OR low > close);",
@@ -33,31 +37,60 @@
     },
     {
       "id": "PRICE-INV-005",
+      "check_kind": "repo",
       "severity": "high",
       "description": "Fetch mode must be explicit: auto_adjust=False and actions=True for daily Yahoo ingestions.",
-      "sql_check": "SELECT 0 AS violations;",
-      "compliance_rule": "enforced via code review and unit tests that inspect ingestion call sites."
+      "repo_check": {
+        "paths": [
+          "backend/app/services/yfinance_service.py",
+          "backend/app/services/bulk_data_fetcher.py"
+        ],
+        "required_literals": [
+          "auto_adjust=False",
+          "actions=True"
+        ]
+      },
+      "compliance_rule": "All daily Yahoo fetch call sites must explicitly set auto_adjust=False and actions=True."
     },
     {
       "id": "PRICE-INV-006",
+      "check_kind": "repo",
       "severity": "medium",
       "description": "Stale intraday rows must be replaced after close buffer.",
-      "sql_check": "SELECT 0 AS violations;",
-      "compliance_rule": "enforced by refresh job checks and write-path upsert behavior."
+      "repo_check": {
+        "paths": [
+          "backend/app/services/price_cache_service.py"
+        ],
+        "required_literals": [
+          "_is_intraday_data_stale",
+          "needs_refresh_after_close"
+        ]
+      },
+      "compliance_rule": "Read path and write path must include stale-intraday detection and same-day replacement logic."
     },
     {
       "id": "PRICE-INV-007",
+      "check_kind": "sql",
       "severity": "medium",
       "description": "Corporate-action context must be preserved or derivable for auditability.",
-      "sql_check": "SELECT 0 AS violations;",
-      "compliance_rule": "split/dividend provenance must be available in persisted schema or derivation table."
+      "sql_check": "SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_info('stock_prices') WHERE name='split_ratio') AND EXISTS(SELECT 1 FROM pragma_table_info('stock_prices') WHERE name='dividend_cash') THEN 0 ELSE 1 END AS violations;",
+      "compliance_rule": "violations must be 0."
     },
     {
       "id": "PRICE-INV-008",
+      "check_kind": "repo",
       "severity": "medium",
       "description": "Outcome analytics must use adjusted series and avoid raw-vs-adjusted mixing.",
-      "sql_check": "SELECT 0 AS violations;",
-      "compliance_rule": "enforced by outcome-layer integration tests and review of return expressions."
+      "repo_check": {
+        "paths": [
+          "backend/app",
+          "backend/tests"
+        ],
+        "required_literals": [
+          "adj_close"
+        ]
+      },
+      "compliance_rule": "Outcome-layer code/tests must reference adjusted-series fields for forward return calculations."
     }
   ]
 }
