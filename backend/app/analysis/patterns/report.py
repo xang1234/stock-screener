@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence, cast
 
 from app.analysis.patterns.models import (
+    InvalidationFlagPayload,
     SETUP_ENGINE_DEFAULT_SCHEMA_VERSION,
     SETUP_ENGINE_FIELD_SPECS,
     SETUP_ENGINE_NUMERIC_UNITS,
@@ -43,19 +44,34 @@ class InvalidationFlag:
     """Typed invalidation flag emitted by explain payload."""
 
     code: str
+    message: str | None = None
+    severity: Literal["low", "medium", "high"] | None = None
     detail: str | None = None
-    is_hard: bool = True
+    is_hard: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("InvalidationFlag.code is required")
         if not is_snake_case(self.code):
             raise ValueError("InvalidationFlag.code must be snake_case")
+        severity = self.severity
+        if severity is None:
+            severity = "high" if self.is_hard else "medium"
+            object.__setattr__(self, "severity", severity)
+        if severity not in {"low", "medium", "high"}:
+            raise ValueError("InvalidationFlag.severity must be low, medium, or high")
 
-    def to_payload(self) -> str:
-        if self.detail:
-            return f"{self.code}:{self.detail}"
-        return self.code
+        message = self.message or self.detail
+        if not message:
+            message = self.code.replace("_", " ")
+        object.__setattr__(self, "message", message)
+
+    def to_payload(self) -> InvalidationFlagPayload:
+        return InvalidationFlagPayload(
+            code=self.code,
+            message=str(self.message),
+            severity=cast(Literal["low", "medium", "high"], self.severity),
+        )
 
 
 @dataclass(frozen=True)
@@ -82,7 +98,7 @@ class ExplainPayload:
     passed_checks: tuple[str, ...] = ()
     failed_checks: tuple[str, ...] = ()
     key_levels: KeyLevels = field(default_factory=KeyLevels)
-    invalidation_flags: tuple[InvalidationFlag | str, ...] = ()
+    invalidation_flags: tuple[InvalidationFlag | str | Mapping[str, Any], ...] = ()
     score_trace: ScoreTrace | None = None
 
     def __post_init__(self) -> None:
@@ -91,14 +107,46 @@ class ExplainPayload:
                 raise ValueError(f"check key must be snake_case: {check}")
 
     def to_payload(self) -> SetupEngineExplain:
-        flags: list[str] = []
+        flags: list[InvalidationFlagPayload] = []
         for flag in self.invalidation_flags:
             if isinstance(flag, InvalidationFlag):
                 flags.append(flag.to_payload())
-            else:
-                if not flag:
+                continue
+
+            if isinstance(flag, Mapping):
+                raw_code = str(flag.get("code") or "").strip()
+                if not raw_code:
                     continue
-                flags.append(str(flag))
+                raw_message = str(flag.get("message") or "").strip()
+                raw_severity = str(flag.get("severity") or "").strip().lower()
+                if raw_severity not in {"low", "medium", "high"}:
+                    raw_severity = "medium"
+                message = raw_message or raw_code.replace("_", " ")
+                flags.append(
+                    InvalidationFlagPayload(
+                        code=raw_code,
+                        message=message,
+                        severity=cast(Literal["low", "medium", "high"], raw_severity),
+                    )
+                )
+                continue
+
+            text = str(flag or "").strip()
+            if not text:
+                continue
+            code, detail = (text.split(":", 1) + [""])[:2]
+            code = code.strip()
+            if not code:
+                continue
+            detail = detail.strip()
+            message = detail or code.replace("_", " ")
+            flags.append(
+                InvalidationFlagPayload(
+                    code=code,
+                    message=message,
+                    severity="medium",
+                )
+            )
 
         result = SetupEngineExplain(
             passed_checks=[c for c in self.passed_checks if c],
@@ -131,11 +179,20 @@ class SetupEngineReport:
     pivot_date: str | date | datetime | None = None
 
     distance_to_pivot_pct: float | None = None
+    in_early_zone: bool | None = None
+    extended_from_pivot: bool | None = None
+    base_length_weeks: float | None = None
+    base_depth_pct: float | None = None
+    support_tests_count: int | None = None
+    tight_closes_count: int | None = None
     atr14_pct: float | None = None
     atr14_pct_trend: float | None = None
     bb_width_pct: float | None = None
     bb_width_pctile_252: float | None = None
+    bb_squeeze: bool | None = None
     volume_vs_50d: float | None = None
+    up_down_volume_ratio_10d: float | None = None
+    quiet_days_10d: int | None = None
     rs: float | None = None
     rs_line_new_high: bool = False
     rs_vs_spy_65d: float | None = None
@@ -174,11 +231,26 @@ class SetupEngineReport:
             "pivot_type": self.pivot_type,
             "pivot_date": normalize_iso_date(self.pivot_date),
             "distance_to_pivot_pct": _as_float(self.distance_to_pivot_pct),
+            "in_early_zone": self.in_early_zone,
+            "extended_from_pivot": self.extended_from_pivot,
+            "base_length_weeks": _as_float(self.base_length_weeks),
+            "base_depth_pct": _as_float(self.base_depth_pct),
+            "support_tests_count": (
+                int(self.support_tests_count) if self.support_tests_count is not None else None
+            ),
+            "tight_closes_count": (
+                int(self.tight_closes_count) if self.tight_closes_count is not None else None
+            ),
             "atr14_pct": _as_float(self.atr14_pct),
             "atr14_pct_trend": _as_float(self.atr14_pct_trend),
             "bb_width_pct": _as_float(self.bb_width_pct),
             "bb_width_pctile_252": _as_float(self.bb_width_pctile_252),
+            "bb_squeeze": self.bb_squeeze,
             "volume_vs_50d": _as_float(self.volume_vs_50d),
+            "up_down_volume_ratio_10d": _as_float(self.up_down_volume_ratio_10d),
+            "quiet_days_10d": (
+                int(self.quiet_days_10d) if self.quiet_days_10d is not None else None
+            ),
             "rs": _as_float(self.rs),
             "rs_line_new_high": bool(self.rs_line_new_high),
             "rs_vs_spy_65d": _as_float(self.rs_vs_spy_65d),

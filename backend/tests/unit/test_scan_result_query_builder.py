@@ -61,17 +61,26 @@ class TestColumnMapCoverage:
 
 
 class TestSetupEngineFieldCoverage:
-    """Verify all 18 setup_engine fields are registered."""
+    """Verify all setup_engine query fields are registered."""
 
     SE_NUMERIC_FIELDS = [
         "se_setup_score", "se_quality_score", "se_readiness_score",
         "se_pattern_confidence", "se_pivot_price", "se_distance_to_pivot_pct",
+        "se_base_length_weeks", "se_base_depth_pct", "se_support_tests_count",
+        "se_tight_closes_count",
         "se_atr14_pct", "se_atr14_pct_trend", "se_bb_width_pct",
-        "se_bb_width_pctile_252", "se_volume_vs_50d", "se_rs",
+        "se_bb_width_pctile_252", "se_volume_vs_50d",
+        "se_up_down_volume_ratio_10d", "se_quiet_days_10d", "se_rs",
         "se_rs_vs_spy_65d", "se_rs_vs_spy_trend_20d",
     ]
 
-    SE_BOOLEAN_FIELDS = ["se_setup_ready", "se_rs_line_new_high"]
+    SE_BOOLEAN_FIELDS = [
+        "se_setup_ready",
+        "se_rs_line_new_high",
+        "se_in_early_zone",
+        "se_extended_from_pivot",
+        "se_bb_squeeze",
+    ]
 
     SE_STRING_FIELDS = ["se_pattern_primary", "se_pivot_type"]
 
@@ -90,7 +99,7 @@ class TestSetupEngineFieldCoverage:
 
     def test_se_field_count(self):
         se_fields = [k for k in _JSON_FIELD_MAP if k.startswith("se_")]
-        assert len(se_fields) == 18
+        assert len(se_fields) == 27
 
     @pytest.mark.parametrize("field", SE_NUMERIC_FIELDS)
     def test_numeric_se_field_in_sort_numeric(self, field):

@@ -729,7 +729,19 @@ def assert_explain_checks(
                 f"explain.failed_checks missing {check!r}; have: {sorted(failed)}"
             )
     if invalidation_flags_contains:
-        flags = set(explain.get("invalidation_flags", []))
+        raw_flags = explain.get("invalidation_flags", [])
+        flags: set[str] = set()
+        if isinstance(raw_flags, Sequence):
+            for raw in raw_flags:
+                if isinstance(raw, Mapping):
+                    code = raw.get("code")
+                    if code:
+                        detail = raw.get("message")
+                        flags.add(str(code))
+                        if detail:
+                            flags.add(f"{code}:{detail}")
+                elif raw:
+                    flags.add(str(raw))
         for flag in invalidation_flags_contains:
             assert flag in flags, (
                 f"explain.invalidation_flags missing {flag!r}; have: {sorted(flags)}"

@@ -55,6 +55,8 @@ class PatternCandidate(TypedDict, total=False):
     pivot_price: float | None
     pivot_type: str | None
     pivot_date: str | None
+    start_date: str | None
+    end_date: str | None
 
     distance_to_pivot_pct: float | None
     setup_score: float | None
@@ -69,13 +71,21 @@ class PatternCandidate(TypedDict, total=False):
     notes: list[str]
 
 
+class InvalidationFlagPayload(TypedDict):
+    """Structured invalidation flag for explain payload."""
+
+    code: str
+    message: str
+    severity: Literal["low", "medium", "high"]
+
+
 class SetupEngineExplain(TypedDict):
     """Human-readable checks and key levels used by setup_engine."""
 
     passed_checks: list[str]
     failed_checks: list[str]
     key_levels: dict[str, float | None]
-    invalidation_flags: list[str]
+    invalidation_flags: list[InvalidationFlagPayload]
 
 
 class SetupEnginePayload(TypedDict):
@@ -96,11 +106,20 @@ class SetupEnginePayload(TypedDict):
     pivot_date: str | None
 
     distance_to_pivot_pct: float | None
+    in_early_zone: bool | None
+    extended_from_pivot: bool | None
+    base_length_weeks: float | None
+    base_depth_pct: float | None
+    support_tests_count: int | None
+    tight_closes_count: int | None
     atr14_pct: float | None
     atr14_pct_trend: float | None
     bb_width_pct: float | None
     bb_width_pctile_252: float | None
+    bb_squeeze: bool | None
     volume_vs_50d: float | None
+    up_down_volume_ratio_10d: float | None
+    quiet_days_10d: int | None
     rs: float | None
     rs_line_new_high: bool
     rs_vs_spy_65d: float | None
@@ -125,6 +144,8 @@ class PatternCandidateModel:
     pivot_price: float | None = None
     pivot_type: str | None = None
     pivot_date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
 
     distance_to_pivot_pct: float | None = None
     setup_score: float | None = None
@@ -159,6 +180,10 @@ class PatternCandidateModel:
 
         if self.pivot_date is not None:
             normalize_iso_date(self.pivot_date)
+        if self.start_date is not None:
+            normalize_iso_date(self.start_date)
+        if self.end_date is not None:
+            normalize_iso_date(self.end_date)
 
     @property
     def confidence_pct(self) -> float | None:
@@ -175,6 +200,8 @@ class PatternCandidateModel:
             pivot_price=self.pivot_price,
             pivot_type=self.pivot_type,
             pivot_date=self.pivot_date,
+            start_date=self.start_date,
+            end_date=self.end_date,
             distance_to_pivot_pct=self.distance_to_pivot_pct,
             setup_score=self.setup_score,
             quality_score=self.quality_score,
@@ -200,6 +227,29 @@ class PatternCandidateModel:
         if confidence_raw is None and raw.get("confidence_pct") is not None:
             confidence_raw = float(raw["confidence_pct"]) / 100.0
 
+        metrics_raw = raw.get("metrics")
+        metrics_mapping: Mapping[str, Any] = (
+            metrics_raw if isinstance(metrics_raw, Mapping) else {}
+        )
+        start_date_raw = (
+            raw.get("start_date")
+            or metrics_mapping.get("run_start_date")
+            or metrics_mapping.get("handle_start_date")
+            or metrics_mapping.get("flag_start_date")
+            or metrics_mapping.get("pole_start_date")
+            or metrics_mapping.get("left_lip_date")
+            or metrics_mapping.get("pullback_high_date")
+        )
+        end_date_raw = (
+            raw.get("end_date")
+            or metrics_mapping.get("run_end_date")
+            or metrics_mapping.get("handle_end_date")
+            or metrics_mapping.get("flag_end_date")
+            or metrics_mapping.get("pole_end_date")
+            or metrics_mapping.get("right_lip_date")
+            or metrics_mapping.get("resumption_high_date")
+        )
+
         return cls(
             pattern=cast(str, raw.get("pattern") or "unknown"),
             timeframe=cast(Any, timeframe),
@@ -208,6 +258,12 @@ class PatternCandidateModel:
             pivot_type=cast(str | None, raw.get("pivot_type")),
             pivot_date=normalize_iso_date(
                 cast(str | date | datetime | None, raw.get("pivot_date"))
+            ),
+            start_date=normalize_iso_date(
+                cast(str | date | datetime | None, start_date_raw)
+            ),
+            end_date=normalize_iso_date(
+                cast(str | date | datetime | None, end_date_raw)
             ),
             distance_to_pivot_pct=_as_float(raw.get("distance_to_pivot_pct")),
             setup_score=_as_float(raw.get("setup_score")),
@@ -330,6 +386,54 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
         description="Percent distance from current price to pivot.",
     ),
     SetupEngineFieldSpec(
+        name="in_early_zone",
+        type_name="bool",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="True when distance_to_pivot_pct is within the configured early zone window.",
+    ),
+    SetupEngineFieldSpec(
+        name="extended_from_pivot",
+        type_name="bool",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="True when distance_to_pivot_pct is beyond extended-entry threshold.",
+    ),
+    SetupEngineFieldSpec(
+        name="base_length_weeks",
+        type_name="float",
+        nullable=True,
+        unit="weeks",
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="Estimated base duration in weeks for the selected primary pattern.",
+    ),
+    SetupEngineFieldSpec(
+        name="base_depth_pct",
+        type_name="float",
+        nullable=True,
+        unit="pct",
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="Estimated base depth percent for the selected primary pattern.",
+    ),
+    SetupEngineFieldSpec(
+        name="support_tests_count",
+        type_name="int",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="Estimated count of support tests in the detected base.",
+    ),
+    SetupEngineFieldSpec(
+        name="tight_closes_count",
+        type_name="int",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="Estimated count of tight closes within the detected base.",
+    ),
+    SetupEngineFieldSpec(
         name="atr14_pct",
         type_name="float",
         nullable=True,
@@ -362,12 +466,36 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
         description="252-session Bollinger width percentile on 0..100.",
     ),
     SetupEngineFieldSpec(
+        name="bb_squeeze",
+        type_name="bool",
+        nullable=True,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="True when Bollinger width percentile is in configured squeeze zone.",
+    ),
+    SetupEngineFieldSpec(
         name="volume_vs_50d",
         type_name="float",
         nullable=True,
         unit="ratio",
         source_module="backend/app/scanners/setup_engine_scanner.py",
         description="Volume / 50-day average volume ratio.",
+    ),
+    SetupEngineFieldSpec(
+        name="up_down_volume_ratio_10d",
+        type_name="float",
+        nullable=True,
+        unit="ratio",
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="10-session up-volume to down-volume ratio.",
+    ),
+    SetupEngineFieldSpec(
+        name="quiet_days_10d",
+        type_name="float",
+        nullable=True,
+        unit="days",
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="Count of quiet consolidation sessions in the last 10 bars.",
     ),
     SetupEngineFieldSpec(
         name="rs",
@@ -467,7 +595,7 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
     ),
     SetupEngineFieldSpec(
         name="explain.invalidation_flags",
-        type_name="list[str]",
+        type_name="list[InvalidationFlagPayload]",
         nullable=False,
         unit=None,
         source_module="backend/app/scanners/setup_engine_scanner.py",
@@ -496,11 +624,20 @@ SETUP_ENGINE_REQUIRED_KEYS: tuple[str, ...] = (
     "pivot_type",
     "pivot_date",
     "distance_to_pivot_pct",
+    "in_early_zone",
+    "extended_from_pivot",
+    "base_length_weeks",
+    "base_depth_pct",
+    "support_tests_count",
+    "tight_closes_count",
     "atr14_pct",
     "atr14_pct_trend",
     "bb_width_pct",
     "bb_width_pctile_252",
+    "bb_squeeze",
     "volume_vs_50d",
+    "up_down_volume_ratio_10d",
+    "quiet_days_10d",
     "rs",
     "rs_line_new_high",
     "rs_vs_spy_65d",
@@ -688,6 +825,33 @@ def validate_setup_engine_payload(payload: Mapping[str, Any]) -> list[str]:
                     )
         else:
             errors.append("explain.key_levels must be an object")
+
+        invalidation_flags = explain.get("invalidation_flags")
+        if not isinstance(invalidation_flags, list):
+            errors.append("explain.invalidation_flags must be a list")
+        else:
+            valid_severities = {"low", "medium", "high"}
+            for idx, flag in enumerate(invalidation_flags):
+                if not isinstance(flag, Mapping):
+                    errors.append(
+                        f"explain.invalidation_flags[{idx}] must be an object"
+                    )
+                    continue
+                code = flag.get("code")
+                message = flag.get("message")
+                severity = flag.get("severity")
+                if not isinstance(code, str) or not is_snake_case(code):
+                    errors.append(
+                        f"explain.invalidation_flags[{idx}].code must be snake_case string"
+                    )
+                if not isinstance(message, str) or not message:
+                    errors.append(
+                        f"explain.invalidation_flags[{idx}].message must be non-empty string"
+                    )
+                if severity not in valid_severities:
+                    errors.append(
+                        f"explain.invalidation_flags[{idx}].severity must be one of: low, medium, high"
+                    )
 
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):

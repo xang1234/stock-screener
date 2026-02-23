@@ -94,12 +94,27 @@ def parse_scan_filters(
     max_se_setup_score: Optional[float] = Query(None, description="Maximum SE setup score"),
     min_se_distance_to_pivot_pct: Optional[float] = Query(None, description="Minimum SE distance to pivot %"),
     max_se_distance_to_pivot_pct: Optional[float] = Query(None, description="Maximum SE distance to pivot %"),
+    min_se_base_length_weeks: Optional[float] = Query(None, description="Minimum SE base length (weeks)"),
+    max_se_base_length_weeks: Optional[float] = Query(None, description="Maximum SE base length (weeks)"),
+    min_se_base_depth_pct: Optional[float] = Query(None, description="Minimum SE base depth %"),
+    max_se_base_depth_pct: Optional[float] = Query(None, description="Maximum SE base depth %"),
+    min_se_support_tests_count: Optional[float] = Query(None, description="Minimum SE support tests count"),
+    max_se_support_tests_count: Optional[float] = Query(None, description="Maximum SE support tests count"),
+    min_se_tight_closes_count: Optional[float] = Query(None, description="Minimum SE tight closes count"),
+    max_se_tight_closes_count: Optional[float] = Query(None, description="Maximum SE tight closes count"),
     min_se_bb_width_pctile_252: Optional[float] = Query(None, description="Minimum SE BB squeeze percentile"),
     max_se_bb_width_pctile_252: Optional[float] = Query(None, description="Maximum SE BB squeeze percentile"),
     min_se_volume_vs_50d: Optional[float] = Query(None, description="Minimum SE volume vs 50d ratio"),
     max_se_volume_vs_50d: Optional[float] = Query(None, description="Maximum SE volume vs 50d ratio"),
+    min_se_up_down_volume_ratio_10d: Optional[float] = Query(None, description="Minimum SE up/down volume ratio (10d)"),
+    max_se_up_down_volume_ratio_10d: Optional[float] = Query(None, description="Maximum SE up/down volume ratio (10d)"),
+    min_se_quiet_days_10d: Optional[float] = Query(None, description="Minimum SE quiet days count (10d)"),
+    max_se_quiet_days_10d: Optional[float] = Query(None, description="Maximum SE quiet days count (10d)"),
     se_setup_ready: Optional[bool] = Query(None, description="SE setup ready filter"),
     se_rs_line_new_high: Optional[bool] = Query(None, description="SE RS line new high filter"),
+    se_in_early_zone: Optional[bool] = Query(None, description="SE in early zone filter"),
+    se_extended_from_pivot: Optional[bool] = Query(None, description="SE extended from pivot filter"),
+    se_bb_squeeze: Optional[bool] = Query(None, description="SE BB squeeze filter"),
     # RS ratings
     min_rs: Optional[float] = Query(None, ge=0, le=100, description="Minimum RS Rating"),
     max_rs: Optional[float] = Query(None, ge=0, le=100, description="Maximum RS Rating"),
@@ -192,8 +207,14 @@ def parse_scan_filters(
     f.add_range("volume_breakthrough_score", min_vol_breakthrough, max_vol_breakthrough)
     f.add_range("se_setup_score", min_se_setup_score, max_se_setup_score)
     f.add_range("se_distance_to_pivot_pct", min_se_distance_to_pivot_pct, max_se_distance_to_pivot_pct)
+    f.add_range("se_base_length_weeks", min_se_base_length_weeks, max_se_base_length_weeks)
+    f.add_range("se_base_depth_pct", min_se_base_depth_pct, max_se_base_depth_pct)
+    f.add_range("se_support_tests_count", min_se_support_tests_count, max_se_support_tests_count)
+    f.add_range("se_tight_closes_count", min_se_tight_closes_count, max_se_tight_closes_count)
     f.add_range("se_bb_width_pctile_252", min_se_bb_width_pctile_252, max_se_bb_width_pctile_252)
     f.add_range("se_volume_vs_50d", min_se_volume_vs_50d, max_se_volume_vs_50d)
+    f.add_range("se_up_down_volume_ratio_10d", min_se_up_down_volume_ratio_10d, max_se_up_down_volume_ratio_10d)
+    f.add_range("se_quiet_days_10d", min_se_quiet_days_10d, max_se_quiet_days_10d)
     f.add_range("rs_rating", min_rs, max_rs)
     f.add_range("rs_rating_1m", min_rs_1m, max_rs_1m)
     f.add_range("rs_rating_3m", min_rs_3m, max_rs_3m)
@@ -258,6 +279,12 @@ def parse_scan_filters(
         f.add_boolean("se_setup_ready", se_setup_ready)
     if se_rs_line_new_high is not None:
         f.add_boolean("se_rs_line_new_high", se_rs_line_new_high)
+    if se_in_early_zone is not None:
+        f.add_boolean("se_in_early_zone", se_in_early_zone)
+    if se_extended_from_pivot is not None:
+        f.add_boolean("se_extended_from_pivot", se_extended_from_pivot)
+    if se_bb_squeeze is not None:
+        f.add_boolean("se_bb_squeeze", se_bb_squeeze)
 
     # IPO date (range on string column)
     if ipo_after:

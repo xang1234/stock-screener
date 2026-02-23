@@ -33,6 +33,9 @@ class BreakoutReadinessFeatures:
     rs_line_new_high: bool
     rs_vs_spy_65d: float | None
     rs_vs_spy_trend_20d: float | None
+    bb_squeeze: bool = False
+    quiet_days_10d: int | None = None
+    up_down_volume_ratio_10d: float | None = None
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,11 @@ def _compute_readiness_core(
     trend_lookback: int = 20,
     bb_window: int = 20,
     bb_pctile_window: int = 252,
+    bb_squeeze_threshold_pctile: float = 20.0,
     volume_sma_window: int = 50,
+    volume_ratio_window: int = 10,
+    quiet_days_window: int = 10,
+    quiet_volume_threshold: float = 0.8,
     rs_lookback: int = 252,
     rs_vs_spy_window: int = 65,
 ) -> tuple[BreakoutReadinessFeatures, BreakoutReadinessTraceInputs]:
@@ -102,6 +109,8 @@ def _compute_readiness_core(
         raise ValueError("price_frame must be a pandas DataFrame")
 
     close = _resolve_series(price_frame, "Close").astype(float)
+    high = _resolve_series(price_frame, "High").astype(float)
+    low = _resolve_series(price_frame, "Low").astype(float)
     volume = _resolve_series(price_frame, "Volume").astype(float)
     latest_close = _last_valid(close)
 
@@ -138,9 +147,43 @@ def _compute_readiness_core(
     bb_width_pctile_252 = _last_valid(
         rolling_percentile_rank(bb_width_pct_series, window=bb_pctile_window)
     )
+    bb_squeeze = bool(
+        bb_width_pctile_252 is not None
+        and bb_width_pctile_252 <= float(bb_squeeze_threshold_pctile)
+    )
 
     volume_sma = volume.rolling(window=volume_sma_window, min_periods=volume_sma_window).mean()
     volume_vs_50d = _last_valid(_safe_divide(volume, volume_sma))
+    prev_close = close.shift(1)
+    up_volume_10d = volume.where(close > prev_close, 0.0).rolling(
+        window=volume_ratio_window,
+        min_periods=volume_ratio_window,
+    ).sum()
+    down_volume_10d = volume.where(close < prev_close, 0.0).rolling(
+        window=volume_ratio_window,
+        min_periods=volume_ratio_window,
+    ).sum()
+    down_volume_10d_safe = down_volume_10d.where(down_volume_10d > 0.0, 1e-9)
+    up_down_volume_ratio_10d = _last_valid(up_volume_10d / down_volume_10d_safe)
+
+    true_range = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    true_range_pct = _safe_divide(true_range, close.abs()) * 100.0
+    quiet_day_mask = (
+        volume < (volume_sma * float(quiet_volume_threshold))
+    ) & (true_range_pct < atr14_pct_series.abs())
+    quiet_days_10d_raw = quiet_day_mask.rolling(
+        window=quiet_days_window,
+        min_periods=quiet_days_window,
+    ).sum()
+    quiet_days_10d_val = _last_valid(quiet_days_10d_raw)
+    quiet_days_10d = int(quiet_days_10d_val) if quiet_days_10d_val is not None else None
 
     # Capture raw trace intermediates for volume.
     latest_volume = _last_valid(volume)
@@ -198,6 +241,9 @@ def _compute_readiness_core(
         rs_line_new_high=rs_line_new_high,
         rs_vs_spy_65d=rs_vs_spy_65d,
         rs_vs_spy_trend_20d=rs_vs_spy_trend_20d,
+        bb_squeeze=bb_squeeze,
+        quiet_days_10d=quiet_days_10d,
+        up_down_volume_ratio_10d=up_down_volume_ratio_10d,
     )
 
     trace_inputs = BreakoutReadinessTraceInputs(
@@ -228,7 +274,11 @@ def compute_breakout_readiness_features(
     trend_lookback: int = 20,
     bb_window: int = 20,
     bb_pctile_window: int = 252,
+    bb_squeeze_threshold_pctile: float = 20.0,
     volume_sma_window: int = 50,
+    volume_ratio_window: int = 10,
+    quiet_days_window: int = 10,
+    quiet_volume_threshold: float = 0.8,
     rs_lookback: int = 252,
     rs_vs_spy_window: int = 65,
 ) -> BreakoutReadinessFeatures:
@@ -240,7 +290,10 @@ def compute_breakout_readiness_features(
     - atr14_pct_trend = slope(atr14_pct, lookback=20)
     - bb_width_pct = 100*(bb_upper-bb_lower)/bb_mid
     - bb_width_pctile_252 = pct_rank(bb_width_pct[-1], bb_width_pct[-252:])
+    - bb_squeeze = bb_width_pctile_252 <= squeeze_threshold
     - volume_vs_50d = vol / SMA(vol,50)
+    - up_down_volume_ratio_10d = sum(up_volume,10) / max(sum(down_volume,10), epsilon)
+    - quiet_days_10d = count(last 10 where volume dry-up && true range < ATR14%)
     - rs = close/spy_close
     """
     features, _trace = _compute_readiness_core(
@@ -251,7 +304,11 @@ def compute_breakout_readiness_features(
         trend_lookback=trend_lookback,
         bb_window=bb_window,
         bb_pctile_window=bb_pctile_window,
+        bb_squeeze_threshold_pctile=bb_squeeze_threshold_pctile,
         volume_sma_window=volume_sma_window,
+        volume_ratio_window=volume_ratio_window,
+        quiet_days_window=quiet_days_window,
+        quiet_volume_threshold=quiet_volume_threshold,
         rs_lookback=rs_lookback,
         rs_vs_spy_window=rs_vs_spy_window,
     )
@@ -267,7 +324,11 @@ def compute_breakout_readiness_features_with_trace(
     trend_lookback: int = 20,
     bb_window: int = 20,
     bb_pctile_window: int = 252,
+    bb_squeeze_threshold_pctile: float = 20.0,
     volume_sma_window: int = 50,
+    volume_ratio_window: int = 10,
+    quiet_days_window: int = 10,
+    quiet_volume_threshold: float = 0.8,
     rs_lookback: int = 252,
     rs_vs_spy_window: int = 65,
 ) -> tuple[BreakoutReadinessFeatures, BreakoutReadinessTraceInputs]:
@@ -285,7 +346,11 @@ def compute_breakout_readiness_features_with_trace(
         trend_lookback=trend_lookback,
         bb_window=bb_window,
         bb_pctile_window=bb_pctile_window,
+        bb_squeeze_threshold_pctile=bb_squeeze_threshold_pctile,
         volume_sma_window=volume_sma_window,
+        volume_ratio_window=volume_ratio_window,
+        quiet_days_window=quiet_days_window,
+        quiet_volume_threshold=quiet_volume_threshold,
         rs_lookback=rs_lookback,
         rs_vs_spy_window=rs_vs_spy_window,
     )
@@ -293,7 +358,7 @@ def compute_breakout_readiness_features_with_trace(
 
 def readiness_features_to_payload_fields(
     features: BreakoutReadinessFeatures,
-) -> dict[str, float | bool | None]:
+) -> dict[str, float | int | bool | None]:
     """Convert typed readiness features into setup_engine top-level fields."""
     return {
         "distance_to_pivot_pct": features.distance_to_pivot_pct,
@@ -306,4 +371,7 @@ def readiness_features_to_payload_fields(
         "rs_line_new_high": features.rs_line_new_high,
         "rs_vs_spy_65d": features.rs_vs_spy_65d,
         "rs_vs_spy_trend_20d": features.rs_vs_spy_trend_20d,
+        "bb_squeeze": features.bb_squeeze,
+        "quiet_days_10d": features.quiet_days_10d,
+        "up_down_volume_ratio_10d": features.up_down_volume_ratio_10d,
     }

@@ -49,6 +49,8 @@ def test_setup_engine_report_to_payload_validates_successfully():
     payload = report.to_payload()
     assert payload["pattern_confidence"] == pytest.approx(61.0)
     assert payload["candidates"][0]["confidence"] == pytest.approx(0.61)
+    assert payload["explain"]["invalidation_flags"][0]["code"] == "breakout_volume_unconfirmed"
+    assert payload["explain"]["invalidation_flags"][0]["severity"] in {"low", "medium", "high"}
     assert_valid_setup_engine_report_payload(payload)
 
 

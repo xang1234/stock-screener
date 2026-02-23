@@ -353,7 +353,8 @@ class TestOperationalFlagsIntegration:
         assert "setup_engine" in result.details
         payload = result.details["setup_engine"]
         flags = payload["explain"]["invalidation_flags"]
-        assert "low_liquidity" in flags
+        flag_codes = {flag["code"] for flag in flags}
+        assert "low_liquidity" in flag_codes
 
     def test_breaks_50d_flag_in_full_pipeline(self):
         """Last bar collapsed below 50d MA should trigger breaks_50d_support."""
@@ -387,7 +388,8 @@ class TestOperationalFlagsIntegration:
         assert "setup_engine" in result.details
         payload = result.details["setup_engine"]
         flags = payload["explain"]["invalidation_flags"]
-        assert "breaks_50d_support" in flags
+        flag_codes = {flag["code"] for flag in flags}
+        assert "breaks_50d_support" in flag_codes
 
     def test_no_operational_flags_on_clean_uptrend(self):
         """Deterministic uptrend above 50d MA with healthy volume → no operational flags."""
@@ -419,5 +421,7 @@ class TestOperationalFlagsIntegration:
         payload = result.details["setup_engine"]
         flags = payload["explain"]["invalidation_flags"]
         operational_flag_names = {"too_extended", "breaks_50d_support", "low_liquidity", "earnings_soon"}
-        operational_present = [f for f in flags if f in operational_flag_names]
+        operational_present = [
+            f["code"] for f in flags if f.get("code") in operational_flag_names
+        ]
         assert operational_present == [], f"Unexpected operational flags: {operational_present}"

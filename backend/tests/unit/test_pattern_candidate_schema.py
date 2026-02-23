@@ -75,3 +75,19 @@ def test_candidate_validation_rejects_score_outside_0_100():
         }
     )
     assert any("setup_score" in err for err in errors)
+
+
+def test_candidate_dates_can_be_inferred_from_metrics_aliases():
+    payload = coerce_pattern_candidate(
+        {
+            "pattern": "three_weeks_tight",
+            "timeframe": "weekly",
+            "metrics": {
+                "run_start_date": "2026-01-01",
+                "run_end_date": "2026-01-29",
+            },
+        }
+    )
+
+    assert payload["start_date"] == "2026-01-01"
+    assert payload["end_date"] == "2026-01-29"

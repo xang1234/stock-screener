@@ -43,6 +43,23 @@ const CHECK_NAME_MAP = {
 // All other operational flags are soft (caution — renders amber).
 const HARD_FLAGS = new Set(['breaks_50d_support']);
 
+const getFlagCode = (flag) => {
+  if (!flag) return '';
+  if (typeof flag === 'string') return String(flag).split(':')[0];
+  if (typeof flag === 'object' && !Array.isArray(flag) && flag.code) return String(flag.code);
+  return '';
+};
+
+const getFlagMessage = (flag) => {
+  if (!flag) return '';
+  if (typeof flag === 'string') return String(flag);
+  if (typeof flag === 'object' && !Array.isArray(flag)) {
+    if (flag.message) return String(flag.message);
+    if (flag.code) return String(flag.code);
+  }
+  return '';
+};
+
 /**
  * Format a check/flag string to human-readable text
  */
@@ -118,10 +135,18 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
   const candidates = Array.isArray(stockData.se_candidates) ? stockData.se_candidates : null;
 
   const hasInsufficientData = explain?.invalidation_flags?.some(
-    (f) => typeof f === 'string' && (f === 'insufficient_data' || f.startsWith('data_policy:insufficient'))
+    (f) => {
+      const code = getFlagCode(f);
+      const text = getFlagMessage(f);
+      return code === 'insufficient_data' || text.startsWith('data_policy:insufficient') || (code === 'data_policy' && text.includes('insufficient'));
+    }
   );
   const hasDegradedData = !hasInsufficientData && explain?.invalidation_flags?.some(
-    (f) => typeof f === 'string' && f.startsWith('data_policy:degraded')
+    (f) => {
+      const text = getFlagMessage(f);
+      const code = getFlagCode(f);
+      return text.startsWith('data_policy:degraded') || (code === 'data_policy' && text.includes('degraded'));
+    }
   );
 
   return (
@@ -332,15 +357,16 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
             {/* Section 5: Invalidation Flags */}
             {explain.invalidation_flags?.length > 0 && (
               <DrawerSection title="INVALIDATION FLAGS">
-                {explain.invalidation_flags.map((flag) => {
-                  const flagBase = typeof flag === 'string' ? flag.split(':')[0] : '';
+                {explain.invalidation_flags.map((flag, idx) => {
+                  const flagBase = getFlagCode(flag);
+                  const flagText = getFlagMessage(flag);
                   const isHard = HARD_FLAGS.has(flagBase);
                   const flagColor = isHard ? '#f44336' : '#ff9800';
                   return (
                     <CheckItem
-                      key={flag}
+                      key={`${flagBase || 'flag'}-${idx}`}
                       icon={<WarningAmberIcon sx={{ fontSize: 16, color: flagColor }} />}
-                      text={formatCheckName(flag)}
+                      text={formatCheckName(flagText)}
                       color={flagColor}
                     />
                   );

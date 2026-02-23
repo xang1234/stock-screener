@@ -33,11 +33,20 @@ MANDATORY_V1_KEYS = {
     "pivot_type",
     "pivot_date",
     "distance_to_pivot_pct",
+    "in_early_zone",
+    "extended_from_pivot",
+    "base_length_weeks",
+    "base_depth_pct",
+    "support_tests_count",
+    "tight_closes_count",
     "atr14_pct",
     "atr14_pct_trend",
     "bb_width_pct",
     "bb_width_pctile_252",
+    "bb_squeeze",
     "volume_vs_50d",
+    "up_down_volume_ratio_10d",
+    "quiet_days_10d",
     "rs",
     "rs_line_new_high",
     "rs_vs_spy_65d",
@@ -203,6 +212,20 @@ def test_candidate_model_input_is_supported():
     assert candidate["notes"] == ["strict_mode"]
 
 
+def test_pattern_confidence_falls_back_from_primary_candidate():
+    payload = build_setup_engine_payload(
+        pattern_primary="vcp",
+        candidates=[
+            {
+                "pattern": "vcp",
+                "timeframe": "daily",
+                "confidence": 0.73,
+            }
+        ],
+    )
+    assert payload["pattern_confidence"] == pytest.approx(73.0)
+
+
 def test_build_payload_from_typed_report():
     report = SetupEngineReport(
         timeframe="daily",
@@ -228,6 +251,9 @@ def test_build_payload_accepts_central_readiness_features_mapping():
             "bb_width_pct": 7.8,
             "bb_width_pctile_252": 26.0,
             "volume_vs_50d": 1.15,
+            "bb_squeeze": False,
+            "quiet_days_10d": 2,
+            "up_down_volume_ratio_10d": 1.4,
             "rs": 1.32,
             "rs_line_new_high": True,
             "rs_vs_spy_65d": 8.5,
@@ -241,6 +267,9 @@ def test_build_payload_accepts_central_readiness_features_mapping():
     assert payload["bb_width_pct"] == pytest.approx(7.8)
     assert payload["bb_width_pctile_252"] == pytest.approx(26.0)
     assert payload["volume_vs_50d"] == pytest.approx(1.15)
+    assert payload["bb_squeeze"] is False
+    assert payload["quiet_days_10d"] == 2
+    assert payload["up_down_volume_ratio_10d"] == pytest.approx(1.4)
     assert payload["rs"] == pytest.approx(1.32)
     assert payload["rs_line_new_high"] is True
     assert payload["rs_vs_spy_65d"] == pytest.approx(8.5)
@@ -257,7 +286,7 @@ def _all_gates_pass_kwargs():
         readiness_score=82.0,
         distance_to_pivot_pct=1.0,
         atr14_pct=3.5,
-        volume_vs_50d=1.2,
+        volume_vs_50d=0.6,
         rs_vs_spy_65d=5.0,
         rs_line_new_high=False,
         stage=2,
@@ -410,7 +439,7 @@ class TestSetupReadyGates:
 
     def test_setup_ready_volume_gate(self):
         kwargs = _all_gates_pass_kwargs()
-        kwargs["volume_vs_50d"] = 0.5  # below default min of 1.0
+        kwargs["volume_vs_50d"] = 1.5  # above default dry-up cap of 0.8
         payload = build_setup_engine_payload(**kwargs)
         assert payload["setup_ready"] is False
         assert "volume_below_minimum" in payload["explain"]["failed_checks"]

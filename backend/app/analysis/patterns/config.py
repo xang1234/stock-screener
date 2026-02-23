@@ -54,7 +54,7 @@ class SetupEngineParameters:
 
     # Supplemental readiness controls.
     atr14_pct_max_for_ready: float = 8.0
-    volume_vs_50d_min_for_ready: float = 1.0
+    volume_vs_50d_max_for_ready: float = 0.8
 
     # Composite setup score gate.
     setup_score_min_pct: float = 65.0
@@ -68,6 +68,11 @@ class SetupEngineParameters:
     breaks_50d_support_cushion_pct: float = 0.0
     low_liquidity_adtv_min_usd: float = 1_000_000.0
     earnings_soon_window_days: float = 21.0
+
+    @property
+    def volume_vs_50d_min_for_ready(self) -> float:
+        """Backward-compatible alias for the pre dry-up naming."""
+        return self.volume_vs_50d_max_for_ready
 
 
 SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
@@ -162,13 +167,13 @@ SETUP_ENGINE_PARAMETER_SPECS: tuple[SetupEngineParameterSpec, ...] = (
         rationale="Caps volatility to avoid breakout-ready flags in disorderly conditions.",
     ),
     SetupEngineParameterSpec(
-        name="volume_vs_50d_min_for_ready",
-        default_value=1.0,
+        name="volume_vs_50d_max_for_ready",
+        default_value=0.8,
         min_value=0.2,
         max_value=5.0,
         unit="ratio",
         profile="baseline",
-        rationale="Requires at least baseline liquidity participation at decision time.",
+        rationale="Dry-up readiness prefers quieter than average volume before breakout.",
     ),
     SetupEngineParameterSpec(
         name="setup_score_min_pct",
@@ -303,12 +308,16 @@ def build_setup_engine_parameters(
     values = asdict(DEFAULT_SETUP_ENGINE_PARAMETERS)
 
     if overrides:
+        alias_map = {
+            "volume_vs_50d_min_for_ready": "volume_vs_50d_max_for_ready",
+        }
         for key, value in overrides.items():
-            if key not in values:
+            normalized_key = alias_map.get(key, key)
+            if normalized_key not in values:
                 raise KeyError(f"Unknown setup_engine parameter: {key}")
             if isinstance(value, bool):
                 raise ValueError(f"Parameter '{key}' expects a numeric value")
-            values[key] = float(value)
+            values[normalized_key] = float(value)
 
     params = SetupEngineParameters(**values)
     assert_valid_setup_engine_parameters(params)

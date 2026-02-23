@@ -41,7 +41,7 @@ def _default_input(**overrides) -> ExplainBuilderInput:
         readiness_score=82.0,
         distance_to_pivot_pct=1.0,
         atr14_pct=3.0,
-        volume_vs_50d=1.2,
+        volume_vs_50d=0.6,
         rs_vs_spy_65d=5.0,
         rs_line_new_high=True,
         stage=2,
@@ -240,16 +240,16 @@ class TestGate5Atr14:
 
 class TestGate6Volume:
     def test_sufficient_passes(self):
-        result = build_explain_payload(_default_input(volume_vs_50d=1.5))
+        result = build_explain_payload(_default_input(volume_vs_50d=0.6))
         assert "volume_sufficient" in result.explain.to_payload()["passed_checks"]
 
-    def test_at_minimum_passes(self):
-        minimum = DEFAULT_SETUP_ENGINE_PARAMETERS.volume_vs_50d_min_for_ready
-        result = build_explain_payload(_default_input(volume_vs_50d=minimum))
+    def test_at_maximum_passes(self):
+        maximum = DEFAULT_SETUP_ENGINE_PARAMETERS.volume_vs_50d_max_for_ready
+        result = build_explain_payload(_default_input(volume_vs_50d=maximum))
         assert "volume_sufficient" in result.explain.to_payload()["passed_checks"]
 
-    def test_below_minimum_fails(self):
-        result = build_explain_payload(_default_input(volume_vs_50d=0.3))
+    def test_above_maximum_fails(self):
+        result = build_explain_payload(_default_input(volume_vs_50d=1.3))
         assert "volume_below_minimum" in result.explain.to_payload()["failed_checks"]
 
     def test_none_passes_permissive(self):
@@ -397,8 +397,9 @@ class TestPreExistingCheckMerge:
             pre_existing_invalidation_flags=("volume_dry_up", "gap_risk"),
         ))
         payload = result.explain.to_payload()
-        assert "volume_dry_up" in payload["invalidation_flags"]
-        assert "gap_risk" in payload["invalidation_flags"]
+        codes = {flag["code"] for flag in payload["invalidation_flags"]}
+        assert "volume_dry_up" in codes
+        assert "gap_risk" in codes
 
     def test_empty_key_levels_produce_empty_dict(self):
         result = build_explain_payload(_default_input())
@@ -420,6 +421,9 @@ def _make_features() -> BreakoutReadinessFeatures:
         rs_line_new_high=True,
         rs_vs_spy_65d=15.6,
         rs_vs_spy_trend_20d=0.003,
+        bb_squeeze=False,
+        quiet_days_10d=2,
+        up_down_volume_ratio_10d=1.4,
     )
 
 

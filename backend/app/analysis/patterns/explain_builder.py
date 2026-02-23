@@ -33,7 +33,7 @@ class ExplainBuilderInput:
     pre_existing_passed_checks: tuple[str, ...]
     pre_existing_failed_checks: tuple[str, ...]
     key_levels: KeyLevels
-    pre_existing_invalidation_flags: tuple[str, ...]
+    pre_existing_invalidation_flags: tuple[object, ...]
 
     # Resolved scores (already synthesized upstream)
     setup_score: float | None
@@ -77,7 +77,7 @@ def build_explain_payload(inp: ExplainBuilderInput) -> ExplainResult:
     - Gate 3 (readiness_floor): readiness_score >= readiness_threshold_pct
     - Gate 4 (early_zone): distance in [min, max] — **non-permissive** (None fails)
     - Gate 5 (ATR14 cap): atr14_pct <= max — **permissive** (None passes)
-    - Gate 6 (volume floor): volume >= min — **permissive** (None passes)
+    - Gate 6 (volume dry-up): volume <= cap — **permissive** (None passes)
     - Gate 7 (RS leadership): rs_vs_spy > 0 or rs_line_new_high — **permissive** (both None passes)
     - Gate 8 (stage): stage in (1, 2) — **semi-permissive** (None passes, 3/4 fail)
     - Gate 9 (MA alignment): ma_alignment_score >= min — **permissive** (None passes)
@@ -133,9 +133,9 @@ def build_explain_payload(inp: ExplainBuilderInput) -> ExplainResult:
         else:
             passed.append("atr14_within_limit")
 
-        # Gate 6: Volume floor (permissive: None -> passes)
+        # Gate 6: Volume dry-up cap (permissive: None -> passes)
         if inp.volume_vs_50d is not None:
-            if inp.volume_vs_50d >= params.volume_vs_50d_min_for_ready:
+            if inp.volume_vs_50d <= params.volume_vs_50d_max_for_ready:
                 passed.append("volume_sufficient")
             else:
                 failed.append("volume_below_minimum")
