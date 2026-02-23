@@ -38,6 +38,7 @@ def test_migration_creates_table_columns_and_indexes():
     assert verification["ok"] is True
     assert verification["missing_columns"] == []
     assert verification["missing_indexes"] == []
+    assert verification["fk_cascade_present"] is True
     assert verification["duplicate_rows"] == 0
     assert verification["invalid_status_rows"] == 0
 
@@ -53,6 +54,7 @@ def test_migration_is_idempotent_on_rerun():
     assert first["table_created"] is True
     assert second["table_created"] is False
     assert second["columns_added"] == []
+    assert second["table_rebuilt"] is False
 
     verification = verify_theme_pipeline_state_schema(engine)
     assert verification["ok"] is True
@@ -99,3 +101,54 @@ def test_verification_fails_when_table_missing():
     assert verification["ok"] is False
     assert verification["table_exists"] is False
 
+
+def test_migration_rebuilds_existing_table_without_fk_and_preserves_rows():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.connect() as conn:
+        _bootstrap_content_items(conn)
+        conn.execute(text("INSERT INTO content_items DEFAULT VALUES"))
+        # Simulate legacy/bad table created without FK/CHECK constraints.
+        conn.execute(
+            text(
+                """
+                CREATE TABLE content_item_pipeline_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_item_id INTEGER NOT NULL,
+                    pipeline TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO content_item_pipeline_state(content_item_id, pipeline, status, attempt_count)
+                VALUES (1, 'technical', 'pending', 2)
+                """
+            )
+        )
+        conn.commit()
+
+    result = migrate_theme_pipeline_state(engine)
+    assert result["table_created"] is False
+    assert result["table_rebuilt"] is True
+
+    verification = verify_theme_pipeline_state_schema(engine)
+    assert verification["ok"] is True
+    assert verification["fk_cascade_present"] is True
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT content_item_id, pipeline, status, attempt_count
+                FROM content_item_pipeline_state
+                """
+            )
+        ).fetchone()
+        assert row[0] == 1
+        assert row[1] == "technical"
+        assert row[2] == "pending"
+        assert row[3] == 2

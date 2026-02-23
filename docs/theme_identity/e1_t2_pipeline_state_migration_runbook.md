@@ -88,7 +88,20 @@ Required indexes:
 - `idx_cips_error_code`
 - `idx_cips_updated_at`
 
-### 4) Duplicate key sanity check
+### 4) Foreign key cascade check
+
+```sql
+PRAGMA foreign_key_list(content_item_pipeline_state);
+```
+
+Expected row includes:
+
+- `table = content_items`
+- `from = content_item_id`
+- `to = id`
+- `on_delete = CASCADE`
+
+### 5) Duplicate key sanity check
 
 ```sql
 SELECT COUNT(*) AS duplicates
@@ -102,7 +115,7 @@ FROM (
 
 Expected: `duplicates = 0`
 
-### 5) Invalid status sanity check
+### 6) Invalid status sanity check
 
 ```sql
 SELECT COUNT(*) AS invalid_status_rows

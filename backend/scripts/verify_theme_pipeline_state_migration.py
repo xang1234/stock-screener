@@ -50,6 +50,7 @@ def main() -> int:
         print(f"missing_indexes: {result['missing_indexes']}")
         print(f"status_check_present: {result['status_check_present']}")
         print(f"pipeline_check_present: {result['pipeline_check_present']}")
+        print(f"fk_cascade_present: {result['fk_cascade_present']}")
         print(f"duplicate_rows: {result['duplicate_rows']}")
         print(f"invalid_status_rows: {result['invalid_status_rows']}")
 

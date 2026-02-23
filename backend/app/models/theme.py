@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
     CheckConstraint,
+    ForeignKey,
     JSON,
 )
 from sqlalchemy.sql import func
@@ -133,11 +134,11 @@ class ContentItemPipelineState(Base):
     __tablename__ = "content_item_pipeline_state"
 
     id = Column(Integer, primary_key=True, index=True)
-    content_item_id = Column(Integer, nullable=False, index=True)
-    pipeline = Column(String(20), nullable=False, index=True)
-    status = Column(String(30), nullable=False, default="pending", index=True)
+    content_item_id = Column(Integer, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False)
+    pipeline = Column(String(20), nullable=False)
+    status = Column(String(30), nullable=False, default="pending")
     attempt_count = Column(Integer, nullable=False, default=0)
-    error_code = Column(String(100), index=True)
+    error_code = Column(String(100))
     error_message = Column(Text)
     last_attempt_at = Column(DateTime(timezone=True))
     processed_at = Column(DateTime(timezone=True))

@@ -62,6 +62,7 @@ def migrate_theme_pipeline_state(engine) -> dict[str, Any]:
     """
     stats: dict[str, Any] = {
         "table_created": False,
+        "table_rebuilt": False,
         "columns_added": [],
         "indexes_ensured": [],
     }
@@ -73,10 +74,15 @@ def migrate_theme_pipeline_state(engine) -> dict[str, Any]:
             stats["table_created"] = True
             logger.info("Created table %s", TABLE_NAME)
         else:
-            added = _add_missing_columns(conn)
-            stats["columns_added"] = added
-            if added:
-                logger.info("Added missing columns to %s: %s", TABLE_NAME, ", ".join(added))
+            if _needs_table_rebuild(conn):
+                _rebuild_pipeline_state_table(conn)
+                stats["table_rebuilt"] = True
+                logger.info("Rebuilt table %s to enforce FK/check constraints", TABLE_NAME)
+            else:
+                added = _add_missing_columns(conn)
+                stats["columns_added"] = added
+                if added:
+                    logger.info("Added missing columns to %s: %s", TABLE_NAME, ", ".join(added))
 
         ensured = _ensure_indexes(conn)
         stats["indexes_ensured"] = ensured
@@ -107,6 +113,7 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
 
         status_check_present = bool(create_sql and "CHECK (status IN" in create_sql)
         pipeline_check_present = bool(create_sql and "CHECK (pipeline IN" in create_sql)
+        fk_cascade_present = _has_required_fk_cascade(conn) if table_exists else False
 
         duplicate_rows = 0
         if table_exists:
@@ -144,6 +151,7 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
             "missing_indexes": missing_indexes,
             "status_check_present": status_check_present,
             "pipeline_check_present": pipeline_check_present,
+            "fk_cascade_present": fk_cascade_present,
             "duplicate_rows": int(duplicate_rows),
             "invalid_status_rows": int(invalid_status_rows),
         }
@@ -153,6 +161,7 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
             and not verification["missing_indexes"]
             and verification["status_check_present"]
             and verification["pipeline_check_present"]
+            and verification["fk_cascade_present"]
             and verification["duplicate_rows"] == 0
             and verification["invalid_status_rows"] == 0
         )
@@ -197,6 +206,110 @@ def _create_pipeline_state_table(conn) -> None:
             """
         )
     )
+
+
+def _create_pipeline_state_table_with_name(conn, table_name: str) -> None:
+    status_values = ", ".join(f"'{v}'" for v in STATUS_VALUES)
+    pipeline_values = ", ".join(f"'{v}'" for v in PIPELINE_VALUES)
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_item_id INTEGER NOT NULL,
+                pipeline TEXT NOT NULL CHECK (pipeline IN ({pipeline_values})),
+                status TEXT NOT NULL CHECK (status IN ({status_values})),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                error_code TEXT,
+                error_message TEXT,
+                last_attempt_at DATETIME,
+                processed_at DATETIME,
+                created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE CASCADE
+            )
+            """
+        )
+    )
+
+
+def _has_required_fk_cascade(conn) -> bool:
+    rows = conn.execute(text(f"PRAGMA foreign_key_list({TABLE_NAME})")).fetchall()
+    for row in rows:
+        # PRAGMA foreign_key_list columns: id, seq, table, from, to, on_update, on_delete, match
+        ref_table = row[2]
+        from_col = row[3]
+        to_col = row[4]
+        on_delete = (row[6] or "").upper()
+        if ref_table == "content_items" and from_col == "content_item_id" and to_col == "id" and on_delete == "CASCADE":
+            return True
+    return False
+
+
+def _needs_table_rebuild(conn) -> bool:
+    create_sql = conn.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:name"),
+        {"name": TABLE_NAME},
+    ).scalar() or ""
+
+    has_status_check = "CHECK (status IN" in create_sql
+    has_pipeline_check = "CHECK (pipeline IN" in create_sql
+    has_fk_cascade = _has_required_fk_cascade(conn)
+    return not (has_status_check and has_pipeline_check and has_fk_cascade)
+
+
+def _rebuild_pipeline_state_table(conn) -> None:
+    old_table = TABLE_NAME
+    new_table = f"{TABLE_NAME}__new"
+
+    existing_cols = _get_table_columns(conn)
+    # Ensure clean temp name in idempotent repeated runs.
+    conn.execute(text(f"DROP TABLE IF EXISTS {new_table}"))
+    _create_pipeline_state_table_with_name(conn, new_table)
+
+    target_cols = [
+        "id",
+        "content_item_id",
+        "pipeline",
+        "status",
+        "attempt_count",
+        "error_code",
+        "error_message",
+        "last_attempt_at",
+        "processed_at",
+        "created_at",
+        "updated_at",
+    ]
+    select_exprs = []
+    for col in target_cols:
+        if col in existing_cols:
+            select_exprs.append(col)
+        elif col == "attempt_count":
+            select_exprs.append("0 AS attempt_count")
+        elif col == "status":
+            select_exprs.append("'pending' AS status")
+        elif col == "created_at":
+            select_exprs.append("CURRENT_TIMESTAMP AS created_at")
+        elif col == "updated_at":
+            select_exprs.append("CURRENT_TIMESTAMP AS updated_at")
+        else:
+            select_exprs.append(f"NULL AS {col}")
+
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        conn.execute(
+            text(
+                f"""
+                INSERT INTO {new_table} ({", ".join(target_cols)})
+                SELECT {", ".join(select_exprs)}
+                FROM {old_table}
+                """
+            )
+        )
+        conn.execute(text(f"DROP TABLE {old_table}"))
+        conn.execute(text(f"ALTER TABLE {new_table} RENAME TO {old_table}"))
+    finally:
+        conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _add_missing_columns(conn) -> list[str]:
