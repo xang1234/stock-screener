@@ -21,6 +21,7 @@ from ...database import get_db
 from ...models.theme import (
     ContentSource,
     ContentItem,
+    ContentItemPipelineState,
     ThemeMention,
     ThemeCluster,
     ThemeConstituent,
@@ -66,55 +67,15 @@ from ...services.theme_extraction_service import ThemeExtractionService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_merging_service import ThemeMergingService
+from ...services.theme_pipeline_state_service import (
+    compute_pipeline_state_health,
+    normalize_pipelines,
+    reconcile_source_pipeline_change,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _update_mentions_for_pipeline_change(
-    db: Session,
-    source_id: int,
-    old_pipelines: list,
-    new_pipelines: list
-) -> int:
-    """
-    Update ThemeMention.pipeline for all content from this source.
-
-    When pipelines are removed, mentions from those pipelines are moved
-    to the first remaining pipeline.
-    """
-    from ..models.theme import ContentItem, ThemeMention
-
-    # Get all content item IDs for this source
-    content_ids = [c[0] for c in db.query(ContentItem.id).filter(
-        ContentItem.source_id == source_id
-    ).all()]
-
-    if not content_ids:
-        return 0
-
-    # Determine which pipelines were removed
-    removed_pipelines = set(old_pipelines) - set(new_pipelines)
-
-    if not removed_pipelines:
-        # Only added pipelines - no updates needed
-        return 0
-
-    # Target pipeline = first in new list
-    target_pipeline = new_pipelines[0] if new_pipelines else "technical"
-
-    # Update mentions that were in removed pipelines
-    updated_count = db.query(ThemeMention).filter(
-        ThemeMention.content_item_id.in_(content_ids),
-        ThemeMention.pipeline.in_(list(removed_pipelines))
-    ).update(
-        {ThemeMention.pipeline: target_pipeline},
-        synchronize_session=False
-    )
-
-    db.commit()
-    return updated_count
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
@@ -384,7 +345,8 @@ async def update_content_source(
         raise HTTPException(status_code=404, detail="Source not found")
 
     # Capture old pipelines BEFORE update for comparison
-    old_pipelines = existing.pipelines or ["technical", "fundamental"]
+    old_pipelines = normalize_pipelines(existing.pipelines)
+    new_pipelines = old_pipelines
 
     # Update fields if provided
     if source.name is not None:
@@ -400,17 +362,21 @@ async def update_content_source(
     if source.is_active is not None:
         existing.is_active = source.is_active
     if source.pipelines is not None:
-        existing.pipelines = source.pipelines
+        new_pipelines = normalize_pipelines(source.pipelines)
+        existing.pipelines = new_pipelines
 
     db.commit()
     db.refresh(existing)
 
-    # Update ThemeMention.pipeline if pipelines changed
-    if source.pipelines is not None and set(old_pipelines) != set(source.pipelines):
-        updated_count = _update_mentions_for_pipeline_change(
-            db, source_id, old_pipelines, source.pipelines
+    # Reconcile pipeline-state rows if assignments changed (non-destructive)
+    if source.pipelines is not None and set(old_pipelines) != set(new_pipelines):
+        reconcile_summary = reconcile_source_pipeline_change(
+            db=db,
+            source_id=source_id,
+            old_pipelines=old_pipelines,
+            new_pipelines=new_pipelines,
         )
-        logger.info(f"Updated {updated_count} mentions for source {source_id} pipeline change")
+        logger.info("Source %s pipeline change reconciled: %s", source_id, reconcile_summary)
 
     return ContentSourceResponse.model_validate(existing)
 
@@ -695,14 +661,20 @@ async def get_failed_items_count(
 
     cutoff = datetime.utcnow() - timedelta(days=30)
 
-    query = db.query(func.count(ContentItem.id)).filter(
-        ContentItem.is_processed == True,
-        ContentItem.extraction_error != None,
+    query = db.query(func.count(ContentItemPipelineState.id)).join(
+        ContentItem,
+        ContentItem.id == ContentItemPipelineState.content_item_id,
+    ).filter(
+        ContentItemPipelineState.status == "failed_retryable",
         ContentItem.published_at >= cutoff,
     )
 
-    # Filter by pipeline sources if specified
+    # Filter by pipeline and active source assignments if specified
     if pipeline:
+        if pipeline not in {"technical", "fundamental"}:
+            raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
+
+        query = query.filter(ContentItemPipelineState.pipeline == pipeline)
         import json as json_lib
         source_ids = []
         sources = db.query(ContentSource).filter(ContentSource.is_active == True).all()
@@ -717,9 +689,37 @@ async def get_failed_items_count(
                 source_ids.append(source.id)
         if source_ids:
             query = query.filter(ContentItem.source_id.in_(source_ids))
+        else:
+            return {"failed_count": 0, "max_age_days": 30}
 
     count = query.scalar()
     return {"failed_count": count, "max_age_days": 30}
+
+
+@router.get("/pipeline/state-health")
+async def get_pipeline_state_health(
+    pipeline: Optional[str] = Query(None, description="Pipeline: technical or fundamental"),
+    window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
+    db: Session = Depends(get_db),
+):
+    """
+    Pipeline-state health and drift metrics for operational triage.
+
+    Includes:
+    - pending/in-progress/processed/retryable/terminal counts
+    - pending age percentiles
+    - retry queue growth (last 24h vs previous 24h)
+    - parse-failure rate
+    - processed-without-mentions ratio
+    """
+    if pipeline and pipeline not in {"technical", "fundamental"}:
+        raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
+
+    return compute_pipeline_state_health(
+        db=db,
+        pipeline=pipeline,
+        max_age_days=window_days,
+    )
 
 
 # ==================== Content Item Browser (MUST be before /{theme_id}) ====================

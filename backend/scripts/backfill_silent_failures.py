@@ -48,17 +48,24 @@ def main():
             if args.dry_run:
                 # For dry run, query without resetting
                 from datetime import datetime, timedelta
-                from app.models.theme import ContentItem, ThemeMention
+                from sqlalchemy import and_
+                from app.models.theme import ContentItem, ContentItemPipelineState, ThemeMention
 
                 cutoff = datetime.utcnow() - timedelta(days=args.max_age_days)
                 pipeline_source_ids = service._get_pipeline_source_ids()
 
-                mentioned_ids = db.query(ThemeMention.content_item_id).distinct().subquery()
+                mentioned_ids = db.query(ThemeMention.content_item_id).filter(
+                    ThemeMention.pipeline == pipeline
+                ).distinct().subquery()
 
-                query = db.query(ContentItem).filter(
-                    ContentItem.is_processed == True,
-                    ContentItem.extraction_error == None,
-                    ContentItem.processed_at != None,
+                query = db.query(ContentItem).join(
+                    ContentItemPipelineState,
+                    and_(
+                        ContentItemPipelineState.content_item_id == ContentItem.id,
+                        ContentItemPipelineState.pipeline == pipeline,
+                    ),
+                ).filter(
+                    ContentItemPipelineState.status == "processed",
                     ContentItem.published_at >= cutoff,
                     ~ContentItem.id.in_(db.query(mentioned_ids.c.content_item_id)),
                 )
