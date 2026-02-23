@@ -57,6 +57,21 @@ def run_scan_feature_run_migration():
         print(f"Warning: Scan feature_run_id migration failed (non-fatal): {e}")
 
 
+def run_theme_pipeline_state_migration():
+    """
+    Run idempotent Theme pipeline-state schema migration on startup.
+
+    Creates content_item_pipeline_state and supporting indexes used by
+    pipeline-scoped extraction/reprocessing orchestration.
+    """
+    from .db_migrations.theme_pipeline_state_migration import migrate_theme_pipeline_state
+
+    try:
+        migrate_theme_pipeline_state(engine)
+    except Exception as e:
+        print(f"Warning: Theme pipeline-state migration failed (non-fatal): {e}")
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -128,6 +143,7 @@ async def lifespan(app: FastAPI):
     run_universe_migration()
     run_feature_store_migration()
     run_scan_feature_run_migration()
+    run_theme_pipeline_state_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

@@ -9,6 +9,7 @@ from .stock_universe import StockUniverse
 from .theme import (
     ContentSource,
     ContentItem,
+    ContentItemPipelineState,
     ThemeMention,
     ThemeCluster,
     ThemeConstituent,
@@ -55,6 +56,7 @@ __all__ = [
     # Theme discovery models
     "ContentSource",
     "ContentItem",
+    "ContentItemPipelineState",
     "ThemeMention",
     "ThemeCluster",
     "ThemeConstituent",

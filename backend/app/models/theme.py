@@ -1,5 +1,18 @@
 """Theme discovery models for tracking market themes from unstructured sources"""
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Text, Boolean, Index, UniqueConstraint, JSON
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    Date,
+    DateTime,
+    Text,
+    Boolean,
+    Index,
+    UniqueConstraint,
+    CheckConstraint,
+    JSON,
+)
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -111,6 +124,40 @@ class ThemeMention(Base):
         Index("idx_theme_mention_date", "canonical_theme", "mentioned_at"),
         Index("idx_mention_cluster", "theme_cluster_id", "mentioned_at"),
         Index("idx_theme_mentions_pipeline", "pipeline"),
+    )
+
+
+class ContentItemPipelineState(Base):
+    """Per-pipeline processing state for each content item."""
+
+    __tablename__ = "content_item_pipeline_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content_item_id = Column(Integer, nullable=False, index=True)
+    pipeline = Column(String(20), nullable=False, index=True)
+    status = Column(String(30), nullable=False, default="pending", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(100), index=True)
+    error_message = Column(Text)
+    last_attempt_at = Column(DateTime(timezone=True))
+    processed_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("content_item_id", "pipeline", name="uix_cips_content_item_pipeline"),
+        CheckConstraint(
+            "pipeline IN ('technical', 'fundamental')",
+            name="ck_cips_pipeline_values",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'processed', 'failed_retryable', 'failed_terminal')",
+            name="ck_cips_status_values",
+        ),
+        Index("idx_cips_pipeline_status_last_attempt", "pipeline", "status", "last_attempt_at"),
+        Index("idx_cips_pipeline_status_created", "pipeline", "status", "created_at"),
+        Index("idx_cips_content_item_pipeline_status", "content_item_id", "pipeline", "status"),
+        Index("idx_cips_updated_at", "updated_at"),
     )
 
 
