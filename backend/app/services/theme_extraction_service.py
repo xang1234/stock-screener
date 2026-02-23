@@ -13,7 +13,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models.theme import (
@@ -469,36 +470,71 @@ Example themes for this pipeline: {examples_str}
         This method retains legacy commit semantics for direct callers. Batch
         orchestration uses pipeline-state-aware transactional handling instead.
         """
-        mention_count = self._extract_and_store_mentions(content_item)
-
-        # Mark content as processed
-        content_item.is_processed = True
-        content_item.processed_at = datetime.utcnow()
-        content_item.extraction_error = None
-
-        self.db.commit()
+        processed, mention_count = self._process_item_transactional(content_item.id)
+        if not processed:
+            logger.info(
+                "Skipped content item %s for pipeline %s due to non-processable state",
+                content_item.id,
+                self.pipeline,
+            )
+            return 0
 
         logger.info(f"Extracted {mention_count} theme mentions from content item {content_item.id}")
         return mention_count
 
-    def _get_or_create_pipeline_state(self, content_item_id: int) -> ContentItemPipelineState:
-        """Get or lazily create per-pipeline processing state for a content item."""
-        state = self.db.query(ContentItemPipelineState).filter(
+    def _load_pipeline_state(self, content_item_id: int) -> Optional[ContentItemPipelineState]:
+        """Load per-pipeline processing state for a content item."""
+        return self.db.query(ContentItemPipelineState).filter(
             ContentItemPipelineState.content_item_id == content_item_id,
             ContentItemPipelineState.pipeline == self.pipeline,
         ).first()
-        if state:
-            return state
 
-        state = ContentItemPipelineState(
-            content_item_id=content_item_id,
-            pipeline=self.pipeline,
-            status="pending",
-            attempt_count=0,
+    def _claim_item_for_processing(self, item_id: int) -> bool:
+        """
+        Atomically claim a content item for this pipeline.
+
+        Returns True only when this worker successfully transitions state to
+        in_progress and can safely proceed with extraction.
+        """
+        now = datetime.utcnow()
+        update_count = self.db.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == item_id,
+            ContentItemPipelineState.pipeline == self.pipeline,
+            ContentItemPipelineState.status.in_(list(self.PROCESSABLE_STATUSES)),
+        ).update(
+            {
+                ContentItemPipelineState.status: "in_progress",
+                ContentItemPipelineState.attempt_count: func.coalesce(ContentItemPipelineState.attempt_count, 0) + 1,
+                ContentItemPipelineState.last_attempt_at: now,
+                ContentItemPipelineState.error_code: None,
+                ContentItemPipelineState.error_message: None,
+            },
+            synchronize_session=False,
         )
-        self.db.add(state)
-        self.db.flush()
-        return state
+        if update_count == 1:
+            self.db.commit()
+            return True
+        self.db.rollback()
+
+        existing = self._load_pipeline_state(item_id)
+        if existing:
+            return False
+
+        try:
+            self.db.add(
+                ContentItemPipelineState(
+                    content_item_id=item_id,
+                    pipeline=self.pipeline,
+                    status="in_progress",
+                    attempt_count=1,
+                    last_attempt_at=now,
+                )
+            )
+            self.db.commit()
+            return True
+        except IntegrityError:
+            self.db.rollback()
+            return False
 
     def _classify_failure_status(self, error: Exception) -> str:
         """Classify failures into retryable or terminal pipeline-state buckets."""
@@ -539,23 +575,21 @@ Example themes for this pipeline: {examples_str}
         if not item:
             return False, 0
 
+        if not self._claim_item_for_processing(item_id):
+            return False, 0
+
         try:
-            state = self._get_or_create_pipeline_state(item_id)
-            if state.status not in self.PROCESSABLE_STATUSES:
-                return False, 0
-
-            now = datetime.utcnow()
-            state.status = "in_progress"
-            state.attempt_count = (state.attempt_count or 0) + 1
-            state.last_attempt_at = now
-            state.error_code = None
-            state.error_message = None
-
             mention_count = self._extract_and_store_mentions(item)
+            state = self._load_pipeline_state(item_id)
+            if state is None:
+                self.db.rollback()
+                return False, 0
 
             processed_at = datetime.utcnow()
             state.status = "processed"
             state.processed_at = processed_at
+            state.error_code = None
+            state.error_message = None
 
             # Compatibility writes (global fields remain populated during cutover)
             item.is_processed = True
@@ -571,9 +605,18 @@ Example themes for this pipeline: {examples_str}
             if item_for_failure is None:
                 return False, 0
 
-            failure_state = self._get_or_create_pipeline_state(item_id)
+            failure_state = self._load_pipeline_state(item_id)
+            if failure_state is None:
+                failure_state = ContentItemPipelineState(
+                    content_item_id=item_id,
+                    pipeline=self.pipeline,
+                    status="in_progress",
+                    attempt_count=1,
+                    last_attempt_at=datetime.utcnow(),
+                )
+                self.db.add(failure_state)
+
             failure_state.status = self._classify_failure_status(error)
-            failure_state.attempt_count = (failure_state.attempt_count or 0) + 1
             failure_state.last_attempt_at = datetime.utcnow()
             failure_state.error_code = self._failure_code(error)
             failure_state.error_message = str(error)[:4000]
@@ -808,9 +851,9 @@ Example themes for this pipeline: {examples_str}
 
     def reprocess_failed_items(self, limit: int = 500) -> dict:
         """
-        Reprocess content items that previously failed LLM extraction.
+        Reprocess content items that previously failed extraction for this pipeline.
 
-        Finds items with extraction_error set, resets them to unprocessed,
+        Finds pipeline-state rows in failed_retryable, resets them to pending,
         then delegates to process_batch() for retry.
 
         Returns dict with reprocessing statistics.
@@ -851,14 +894,13 @@ Example themes for this pipeline: {examples_str}
         item_ids = [item.id for item in failed_items]
         logger.info(f"[{self.pipeline}] Resetting {len(failed_items)} failed items for reprocessing")
         for item in failed_items:
-            state = self._get_or_create_pipeline_state(item.id)
+            state = self._load_pipeline_state(item.id)
+            if state is None:
+                continue
             state.status = "pending"
             state.error_code = None
             state.error_message = None
             state.processed_at = None
-            item.is_processed = False
-            item.extraction_error = None
-            item.processed_at = None
         self.db.commit()
 
         # Delegate to process_batch() with specific IDs — only retries these items
@@ -868,13 +910,10 @@ Example themes for this pipeline: {examples_str}
 
     def identify_silent_failures(self, max_age_days: int = None) -> dict:
         """
-        Identify content items that silently failed LLM extraction.
+        Identify content items that silently failed extraction in this pipeline.
 
-        These are items marked as processed (is_processed=True, extraction_error=NULL)
-        but have NO associated theme_mentions — meaning extract_from_content() returned []
-        due to an error that was silently caught.
-
-        Resets them to unprocessed so the next process_batch() picks them up.
+        These are items with pipeline state marked processed but no mentions for
+        the same pipeline. Resets pipeline state back to pending.
 
         Returns dict with count and list of reset item IDs.
         """
@@ -914,11 +953,11 @@ Example themes for this pipeline: {examples_str}
         logger.info(f"[{self.pipeline}] Found {len(silent_failures)} silent failures, resetting for reprocessing")
 
         for item in silent_failures:
-            state = self._get_or_create_pipeline_state(item.id)
+            state = self._load_pipeline_state(item.id)
+            if state is None:
+                continue
             state.status = "pending"
             state.processed_at = None
-            item.is_processed = False
-            item.processed_at = None
         self.db.commit()
 
         return {"reset_count": len(item_ids), "items": item_ids}

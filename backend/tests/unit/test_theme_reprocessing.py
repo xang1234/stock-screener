@@ -377,10 +377,13 @@ class TestIdentifySilentFailures:
         assert silent_fail.id in result["items"]
         assert legit_item.id not in result["items"]
 
-        # Verify silent_fail was reset
+        # Verify silent_fail pipeline state was reset
         db_session.refresh(silent_fail)
-        assert silent_fail.is_processed is False
-        assert silent_fail.processed_at is None
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == silent_fail.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state.status == "pending"
 
         # Verify legit_item was NOT reset
         db_session.refresh(legit_item)
@@ -424,4 +427,93 @@ class TestPipelineStateDrivenBatching:
             ContentItemPipelineState.content_item_id == item.id,
             ContentItemPipelineState.pipeline == "technical",
         ).first()
+        assert state.status == "processed"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_claim_is_atomic_for_in_progress_rows(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """Once claimed, a second claim attempt should fail for the same pipeline row."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(db_session, pipeline_source, external_id="claim-atomic-1")
+        _set_pipeline_state(db_session, item.id, "technical", "pending", attempt_count=0)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        assert service._claim_item_for_processing(item.id) is True
+        assert service._claim_item_for_processing(item.id) is False
+
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == item.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state.status == "in_progress"
+        assert state.attempt_count == 1
+
+
+class TestCompatibilityWrites:
+    """Verify compatibility field updates do not clobber cross-pipeline state."""
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_reprocess_reset_does_not_flip_global_processed_flag(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """Resetting one pipeline retry state should not force global is_processed to False."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(
+            db_session,
+            pipeline_source,
+            external_id="compat-keep-processed",
+            is_processed=True,
+            processed_at=datetime.utcnow() - timedelta(hours=2),
+            extraction_error="technical failed",
+        )
+        _set_pipeline_state(db_session, item.id, "technical", "failed_retryable", attempt_count=2)
+        _set_pipeline_state(db_session, item.id, "fundamental", "processed", attempt_count=1)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(service, "process_batch", return_value={"processed": 0, "total_mentions": 0, "errors": 0, "pipeline": "technical"}):
+            service.reprocess_failed_items(limit=10)
+
+        db_session.refresh(item)
+        assert item.is_processed is True
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_process_content_item_updates_pipeline_state(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """Direct process_content_item() should still maintain pipeline-state transitions."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(db_session, pipeline_source, external_id="direct-api-state")
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(service, "_extract_and_store_mentions", return_value=1):
+            mentions = service.process_content_item(item)
+
+        assert mentions == 1
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == item.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state is not None
         assert state.status == "processed"
