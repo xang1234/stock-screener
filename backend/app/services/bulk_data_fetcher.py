@@ -3,6 +3,9 @@ Bulk Data Fetcher using yfinance.Tickers() for efficient batch operations.
 
 Fetches multiple stocks in a single operation to reduce API overhead
 and improve throughput for large-scale scanning operations.
+
+Canonical price contract ADR:
+docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
 from typing import List, Dict, Optional, Any

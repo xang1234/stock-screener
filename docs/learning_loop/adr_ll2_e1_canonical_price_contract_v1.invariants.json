@@ -1,0 +1,63 @@
+{
+  "contract_id": "LL2-E1-Canonical-Price-v1",
+  "version": "v1",
+  "adr": "docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md",
+  "invariants": [
+    {
+      "id": "PRICE-INV-001",
+      "severity": "critical",
+      "description": "Adj close must never be a blind alias of close across the entire dataset.",
+      "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE close IS NOT NULL AND adj_close IS NOT NULL AND adj_close = close;",
+      "compliance_rule": "violations must be materially lower than total rows and explainable by factor==1 windows, never by default fill."
+    },
+    {
+      "id": "PRICE-INV-002",
+      "severity": "critical",
+      "description": "Rows must be upsert-correctable by (symbol, date); stale same-day values cannot persist due to insert-only behavior.",
+      "sql_check": "SELECT COUNT(*) AS duplicate_rows FROM stock_prices GROUP BY symbol, date HAVING COUNT(*) > 1;",
+      "compliance_rule": "duplicate_rows result set must be empty and write path must support replacement of same-day values."
+    },
+    {
+      "id": "PRICE-INV-003",
+      "severity": "high",
+      "description": "Adjustment factor must be positive and finite whenever raw and adjusted close are present.",
+      "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE close IS NOT NULL AND close != 0 AND adj_close IS NOT NULL AND (adj_close / close) <= 0;",
+      "compliance_rule": "violations must be zero."
+    },
+    {
+      "id": "PRICE-INV-004",
+      "severity": "high",
+      "description": "Daily OHLC relationship must be internally valid for raw fields.",
+      "sql_check": "SELECT COUNT(*) AS violations FROM stock_prices WHERE open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL AND (high < low OR high < open OR high < close OR low > open OR low > close);",
+      "compliance_rule": "violations must be zero."
+    },
+    {
+      "id": "PRICE-INV-005",
+      "severity": "high",
+      "description": "Fetch mode must be explicit: auto_adjust=False and actions=True for daily Yahoo ingestions.",
+      "sql_check": "SELECT 0 AS violations;",
+      "compliance_rule": "enforced via code review and unit tests that inspect ingestion call sites."
+    },
+    {
+      "id": "PRICE-INV-006",
+      "severity": "medium",
+      "description": "Stale intraday rows must be replaced after close buffer.",
+      "sql_check": "SELECT 0 AS violations;",
+      "compliance_rule": "enforced by refresh job checks and write-path upsert behavior."
+    },
+    {
+      "id": "PRICE-INV-007",
+      "severity": "medium",
+      "description": "Corporate-action context must be preserved or derivable for auditability.",
+      "sql_check": "SELECT 0 AS violations;",
+      "compliance_rule": "split/dividend provenance must be available in persisted schema or derivation table."
+    },
+    {
+      "id": "PRICE-INV-008",
+      "severity": "medium",
+      "description": "Outcome analytics must use adjusted series and avoid raw-vs-adjusted mixing.",
+      "sql_check": "SELECT 0 AS violations;",
+      "compliance_rule": "enforced by outcome-layer integration tests and review of return expressions."
+    }
+  ]
+}

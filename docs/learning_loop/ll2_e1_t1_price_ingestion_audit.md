@@ -3,6 +3,7 @@
 Date: 2026-02-24  
 Issue: `StockScreenClaude-ofh.1.1`  
 Scope: yfinance ingestion, bulk fetch paths, cache/database write semantics, stale-data edge windows.
+Follow-on ADR: `docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md`
 
 ## 1. Audit Goal
 

@@ -1,5 +1,8 @@
 """
 yfinance service wrapper for fetching stock data.
+
+Canonical price contract ADR:
+docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import yfinance as yf
 import pandas as pd

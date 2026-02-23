@@ -6,6 +6,9 @@ to minimize API calls. Uses Redis for hot cache and database for persistence.
 
 Includes intraday staleness detection to handle data fetched during market
 hours that becomes stale after market close.
+
+Canonical price contract ADR:
+docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import json
 import logging
