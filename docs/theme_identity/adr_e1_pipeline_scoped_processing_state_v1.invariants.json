@@ -1,0 +1,120 @@
+{
+  "version": "v1",
+  "invariants": [
+    {
+      "id": "E1-INV-001",
+      "severity": "critical",
+      "check_kind": "repo",
+      "description": "ADR artifact for pipeline-scoped processing state contract exists.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "Pipeline-Scoped Processing State and Migration Contract (v1)",
+          "UNIQUE(content_item_id, pipeline)"
+        ]
+      },
+      "compliance_rule": "Non-compliant if ADR file is missing or required literals are absent."
+    },
+    {
+      "id": "E1-INV-002",
+      "severity": "critical",
+      "check_kind": "repo",
+      "description": "Invariant spec for this ADR exists and includes all required IDs.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.invariants.json"
+        ],
+        "required_literals": [
+          "E1-INV-001",
+          "E1-INV-007"
+        ]
+      },
+      "compliance_rule": "Non-compliant if invariant spec is missing or malformed."
+    },
+    {
+      "id": "E1-INV-003",
+      "severity": "high",
+      "check_kind": "repo",
+      "description": "ADR defines explicit allowed state transitions and disallowed shortcuts.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "Allowed transitions:",
+          "Disallowed direct transitions:"
+        ]
+      },
+      "compliance_rule": "Non-compliant if transition policy is missing or underspecified."
+    },
+    {
+      "id": "E1-INV-004",
+      "severity": "high",
+      "check_kind": "repo",
+      "description": "ADR requires explicit retryable failure semantics for parse/provider errors.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "Parse failures and transient LLM/provider failures are not success states.",
+          "Retry policy uses bounded attempts with backoff."
+        ]
+      },
+      "compliance_rule": "Non-compliant if parse/provider failure handling does not require retryable state semantics."
+    },
+    {
+      "id": "E1-INV-005",
+      "severity": "high",
+      "check_kind": "repo",
+      "description": "ADR defines compatibility strategy for existing ContentItem fields and staged cutover.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "Compatibility and staged cutover",
+          "Existing `ContentItem` fields remain populated"
+        ]
+      },
+      "compliance_rule": "Non-compliant if migration/cutover contract is absent."
+    },
+    {
+      "id": "E1-INV-006",
+      "severity": "medium",
+      "check_kind": "repo",
+      "description": "ADR includes observability requirements for per-pipeline health.",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "Per-pipeline metrics are required:",
+          "processed-without-mentions ratio"
+        ]
+      },
+      "compliance_rule": "Non-compliant if operator-observable metrics are not specified."
+    },
+    {
+      "id": "E1-INV-007",
+      "severity": "critical",
+      "check_kind": "repo",
+      "description": "ADR is referenced by all E1 implementation tasks (E1-T2 through E1-T6).",
+      "repo_check": {
+        "paths": [
+          "docs/theme_identity/adr_e1_pipeline_scoped_processing_state_v1.md"
+        ],
+        "required_literals": [
+          "StockScreenClaude-bv9.1.2",
+          "StockScreenClaude-bv9.1.3",
+          "StockScreenClaude-bv9.1.4",
+          "StockScreenClaude-bv9.1.5",
+          "StockScreenClaude-bv9.1.6"
+        ]
+      },
+      "compliance_rule": "Non-compliant if downstream E1 task references are incomplete."
+    }
+  ]
+}
