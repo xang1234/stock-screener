@@ -182,6 +182,18 @@ describe('SetupEngineDrawer — no explain / malformed explain', () => {
     );
     expect(container.innerHTML).toBe('');
   });
+
+  it('shows loading state while setup payload is being fetched', () => {
+    renderWithProviders(
+      <SetupEngineDrawer
+        {...defaultProps}
+        stockData={noExplainStock}
+        isLoading={true}
+      />
+    );
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText(/Setup details not available/)).not.toBeInTheDocument();
+  });
 });
 
 describe('SetupEngineDrawer — interactions', () => {

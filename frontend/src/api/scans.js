@@ -63,6 +63,22 @@ export const cancelScan = async (scanId) => {
  */
 export const getScanResults = async (scanId, params = {}) => {
   const response = await apiClient.get(`/v1/scans/${scanId}/results`, {
+    params: {
+      detail_level: 'table',
+      ...params,
+    },
+  });
+  return response.data;
+};
+
+/**
+ * Get lightweight filtered symbols for chart navigation
+ * @param {string} scanId - Scan ID
+ * @param {Object} params - Query parameters (filters/sort/passes_only)
+ * @returns {Promise<Object>} Symbol list response with total + symbols
+ */
+export const getScanSymbols = async (scanId, params = {}) => {
+  const response = await apiClient.get(`/v1/scans/${scanId}/symbols`, {
     params,
   });
   return response.data;
@@ -136,10 +152,27 @@ export const exportScanResults = async (scanId, params = {}) => {
  * @param {string} symbol - Stock symbol
  * @returns {Promise<Object>} Single scan result item
  */
-export const getSingleResult = async (scanId, symbol) => {
+export const getSingleResult = async (scanId, symbol, params = {}) => {
   const response = await apiClient.get(
-    `/v1/scans/${scanId}/result/${symbol}`
+    `/v1/scans/${scanId}/result/${symbol}`,
+    {
+      params: {
+        detail_level: 'core',
+        ...params,
+      },
+    }
   );
+  return response.data;
+};
+
+/**
+ * Get setup-engine explain payload for a single symbol
+ * @param {string} scanId - Scan ID
+ * @param {string} symbol - Stock symbol
+ * @returns {Promise<Object>} Setup details payload
+ */
+export const getSetupDetails = async (scanId, symbol) => {
+  const response = await apiClient.get(`/v1/scans/${scanId}/setup/${symbol}`);
   return response.data;
 };
 
@@ -151,6 +184,15 @@ export const getSingleResult = async (scanId, symbol) => {
  * @returns {Promise<Array<string>>} Complete list of symbols matching filters
  */
 export const getAllFilteredSymbols = async (scanId, params = {}) => {
+  try {
+    const response = await getScanSymbols(scanId, params);
+    if (Array.isArray(response?.symbols)) {
+      return response.symbols;
+    }
+  } catch {
+    // Fallback to paginated /results crawl for backward compatibility.
+  }
+
   // Fetch first page to get total count
   const firstPage = await getScanResults(scanId, {
     ...params,
@@ -165,26 +207,24 @@ export const getAllFilteredSymbols = async (scanId, params = {}) => {
   // If more results exist, fetch remaining pages in batches (rate-limited)
   if (total > 100) {
     const pageCount = Math.ceil(total / 100);
-    const pagePromises = [];
+    const pageTasks = [];
 
     for (let page = 2; page <= pageCount; page++) {
-      pagePromises.push(
-        getScanResults(scanId, {
+      pageTasks.push(() => getScanResults(scanId, {
           ...params,
           page,
           per_page: 100,
           include_sparklines: false,
-        })
-      );
+        }));
     }
 
     // Fetch in batches of 3 to avoid overwhelming the server
     const BATCH_SIZE = 3;
     const allResults = [];
 
-    for (let i = 0; i < pagePromises.length; i += BATCH_SIZE) {
-      const batch = pagePromises.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(batch);
+    for (let i = 0; i < pageTasks.length; i += BATCH_SIZE) {
+      const batch = pageTasks.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map((task) => task()));
       allResults.push(...batchResults);
     }
 

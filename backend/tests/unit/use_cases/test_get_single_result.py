@@ -182,3 +182,45 @@ class TestFeatureStoreRouting:
 
         with pytest.raises(EntityNotFoundError, match="ScanResult.*ZZZZ"):
             uc.execute(uow, _make_query(scan_id="scan-bound", symbol="ZZZZ"))
+
+
+class TestSetupPayloadFlagForwarding:
+    """detail_level mapping should reach the repository bridge flags."""
+
+    def test_unbound_scan_forwards_include_setup_payload_to_scan_results_repo(self):
+        scan_results = FakeScanResultRepository(items=[make_domain_item("AAPL")])
+        uow = FakeUnitOfWork(scan_results=scan_results)
+        uow.scans.create(scan_id="scan-legacy", status="completed")
+        uc = GetSingleResultUseCase()
+
+        uc.execute(
+            uow,
+            _make_query(
+                scan_id="scan-legacy",
+                symbol="AAPL",
+                include_setup_payload=True,
+            ),
+        )
+
+        assert scan_results.last_get_by_symbol_args["include_setup_payload"] is True
+
+    def test_bound_scan_forwards_include_setup_payload_to_feature_store_repo(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(uow, feature_store, scan_id="scan-bound", run_id=3)
+        uc = GetSingleResultUseCase()
+
+        uc.execute(
+            uow,
+            _make_query(
+                scan_id="scan-bound",
+                symbol="AAPL",
+                include_setup_payload=True,
+            ),
+        )
+
+        assert feature_store.last_get_by_symbol_for_run_args is not None
+        assert (
+            feature_store.last_get_by_symbol_for_run_args["include_setup_payload"]
+            is True
+        )

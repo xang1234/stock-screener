@@ -3,8 +3,9 @@ Celery tasks for bulk stock scanning.
 
 Handles background processing of large-scale stock scans.
 
-All data-fetching tasks use the @serialized_data_fetch decorator
-to ensure only one task fetches external data at a time.
+User scan execution runs on the dedicated `user_scans` queue and is
+intentionally decoupled from the global `data_fetch` lock used by
+maintenance jobs.
 """
 import logging
 from typing import List, Dict, Optional
@@ -15,7 +16,6 @@ from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..models.scan_result import Scan, ScanResult
 from ..config import settings
-from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +287,6 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
 
 
 @celery_app.task(bind=True, name='app.tasks.scan_tasks.run_bulk_scan')
-@serialized_data_fetch('run_bulk_scan')
 def run_bulk_scan(self, scan_id: str, symbol_list: List[str], criteria: dict = None):
     """Scan multiple stocks in background via RunBulkScanUseCase."""
     return _run_bulk_scan_via_use_case(self, scan_id, symbol_list, criteria)

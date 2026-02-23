@@ -215,6 +215,24 @@ class TestUnboundScanFallback:
         assert scan_results.last_query_args is not None
         assert scan_results.last_query_args["scan_id"] == "scan-legacy"
 
+    def test_unbound_scan_forwards_setup_payload_flag(self):
+        items = [make_domain_item("AAPL")]
+        scan_results = FakeScanResultRepository(items=items)
+        uow = FakeUnitOfWork(scan_results=scan_results)
+        uow.scans.create(scan_id="scan-legacy", status="completed")
+        uc = GetScanResultsUseCase()
+
+        uc.execute(
+            uow,
+            _make_query(
+                scan_id="scan-legacy",
+                include_setup_payload=True,
+            ),
+        )
+
+        assert scan_results.last_query_args is not None
+        assert scan_results.last_query_args["include_setup_payload"] is True
+
 
 class TestFeatureStoreRouting:
     """Verify the use case queries the feature store correctly."""
@@ -256,3 +274,23 @@ class TestFeatureStoreRouting:
 
         with pytest.raises(EntityNotFoundError, match="FeatureRun"):
             uc.execute(uow, _make_query(scan_id="scan-orphan"))
+
+    def test_bound_scan_forwards_setup_payload_flag(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(uow, feature_store, scan_id="scan-bound")
+        uc = GetScanResultsUseCase()
+
+        uc.execute(
+            uow,
+            _make_query(
+                scan_id="scan-bound",
+                include_setup_payload=True,
+            ),
+        )
+
+        assert feature_store.last_query_run_as_scan_results_args is not None
+        assert (
+            feature_store.last_query_run_as_scan_results_args["include_setup_payload"]
+            is True
+        )

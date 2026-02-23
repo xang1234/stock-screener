@@ -5,7 +5,7 @@ paginated results, filter options, and score explanations.
 """
 
 from datetime import datetime
-from typing import List, Optional, Self
+from typing import Any, List, Optional, Self
 
 from pydantic import BaseModel, Field
 
@@ -185,7 +185,12 @@ class ScanResultItem(BaseModel):
     screeners_run: Optional[List[str]] = None
 
     @classmethod
-    def from_domain(cls, item: ScanResultItemDomain) -> Self:
+    def from_domain(
+        cls,
+        item: ScanResultItemDomain,
+        *,
+        include_setup_payload: bool = True,
+    ) -> Self:
         """Map a domain scan result to the HTTP response model.
 
         This is the canonical domain-to-HTTP mapper.  All field unpacking
@@ -229,8 +234,8 @@ class ScanResultItem(BaseModel):
             se_pivot_date=ef.get("se_pivot_date"),
             se_timeframe=ef.get("se_timeframe"),
             se_atr14_pct=ef.get("se_atr14_pct"),
-            se_explain=ef.get("se_explain"),
-            se_candidates=ef.get("se_candidates"),
+            se_explain=ef.get("se_explain") if include_setup_payload else None,
+            se_candidates=ef.get("se_candidates") if include_setup_payload else None,
             # Minervini fields
             rs_rating=ef.get("rs_rating"),
             rs_rating_1m=ef.get("rs_rating_1m"),
@@ -292,6 +297,26 @@ class ScanResultsResponse(BaseModel):
     per_page: int
     pages: int
     results: List[ScanResultItem]
+
+
+class ScanSymbolsResponse(BaseModel):
+    """Response model for lightweight filtered symbol lists."""
+
+    scan_id: str
+    total: int
+    symbols: List[str]
+    page: Optional[int] = None
+    per_page: Optional[int] = None
+    next_cursor: Optional[str] = None
+
+
+class SetupDetailsResponse(BaseModel):
+    """Response model for setup-engine explain drawer payload."""
+
+    scan_id: str
+    symbol: str
+    se_explain: Optional[dict[str, Any]] = None
+    se_candidates: Optional[list[Any]] = None
 
 
 class ScanListItem(BaseModel):

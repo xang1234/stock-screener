@@ -34,6 +34,7 @@ class GetSingleResultQuery:
 
     scan_id: str
     symbol: str
+    include_setup_payload: bool = False
 
     def __post_init__(self) -> None:
         # Business rule: symbols are case-insensitive.
@@ -72,6 +73,7 @@ class GetSingleResultUseCase:
                 item = uow.feature_store.get_by_symbol_for_run(
                     run_id,
                     query.symbol,
+                    include_setup_payload=query.include_setup_payload,
                 )
             else:
                 logger.info(
@@ -82,6 +84,7 @@ class GetSingleResultUseCase:
                 item = uow.scan_results.get_by_symbol(
                     query.scan_id,
                     query.symbol,
+                    include_setup_payload=query.include_setup_payload,
                 )
 
             if item is None:

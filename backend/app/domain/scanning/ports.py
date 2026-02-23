@@ -13,7 +13,7 @@ from __future__ import annotations
 import abc
 from typing import Protocol
 
-from .filter_spec import FilterSpec, QuerySpec, SortSpec
+from .filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
 from .models import FilterOptions, ProgressEvent, ResultPage, ScanResultItemDomain
 
 
@@ -88,6 +88,7 @@ class ScanResultRepository(abc.ABC):
         spec: QuerySpec,
         *,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ResultPage:
         """Return a paginated, filtered, sorted page of scan results.
 
@@ -95,9 +96,30 @@ class ScanResultRepository(abc.ABC):
             scan_id: Scan identifier (must exist — caller validates).
             spec: Domain-level query specification (filters, sort, pagination).
             include_sparklines: Whether to populate sparkline arrays in results.
+            include_setup_payload: Whether to include heavy setup-engine explain
+                payload fields (se_explain, se_candidates).
 
         Returns:
             A :class:`ResultPage` with the matching items and total count.
+        """
+        ...
+
+    @abc.abstractmethod
+    def query_symbols(
+        self,
+        scan_id: str,
+        filters: FilterSpec,
+        sort: SortSpec,
+        *,
+        page: PageSpec | None = None,
+    ) -> tuple[tuple[str, ...], int]:
+        """Return filtered, sorted symbols and total count.
+
+        Args:
+            scan_id: Scan identifier (must exist — caller validates).
+            filters: Filter specification.
+            sort: Sort specification.
+            page: Optional pagination for symbol lists.
         """
         ...
 
@@ -133,7 +155,11 @@ class ScanResultRepository(abc.ABC):
 
     @abc.abstractmethod
     def get_by_symbol(
-        self, scan_id: str, symbol: str
+        self,
+        scan_id: str,
+        symbol: str,
+        *,
+        include_setup_payload: bool = True,
     ) -> ScanResultItemDomain | None:
         """Return a single result by scan_id + symbol, or None.
 
@@ -141,7 +167,16 @@ class ScanResultRepository(abc.ABC):
             scan_id: Scan identifier (caller validates existence).
             symbol: Stock symbol (expected to be already normalised to
                 uppercase).
+            include_setup_payload: Whether to include heavy setup-engine explain
+                payload fields (se_explain, se_candidates).
         """
+        ...
+
+    @abc.abstractmethod
+    def get_setup_payload(
+        self, scan_id: str, symbol: str
+    ) -> dict | None:
+        """Return setup-engine explain payload for a symbol, or None if missing."""
         ...
 
     @abc.abstractmethod
@@ -258,5 +293,7 @@ class StockScanner(Protocol):
         screener_names: list[str],
         criteria: dict | None = ...,
         composite_method: str = ...,
+        pre_merged_requirements: object | None = ...,
+        pre_fetched_data: object | None = ...,
     ) -> dict:
         ...

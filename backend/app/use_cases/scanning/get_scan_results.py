@@ -34,6 +34,7 @@ class GetScanResultsQuery:
     scan_id: str
     query_spec: QuerySpec = field(default_factory=QuerySpec)
     include_sparklines: bool = True
+    include_setup_payload: bool = False
     passes_only: bool = False
 
 
@@ -87,6 +88,7 @@ class GetScanResultsUseCase:
                     run_id,
                     query_spec,
                     include_sparklines=query.include_sparklines,
+                    include_setup_payload=query.include_setup_payload,
                 )
             else:
                 logger.info(
@@ -97,6 +99,7 @@ class GetScanResultsUseCase:
                     query.scan_id,
                     query_spec,
                     include_sparklines=query.include_sparklines,
+                    include_setup_payload=query.include_setup_payload,
                 )
 
         return GetScanResultsResult(page=result_page)

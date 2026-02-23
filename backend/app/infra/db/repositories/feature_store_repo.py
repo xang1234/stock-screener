@@ -214,6 +214,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         spec: QuerySpec,
         *,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ResultPage:
         """Query feature store and return results as ScanResultItemDomain.
 
@@ -237,7 +238,12 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows, total = apply_sort_and_paginate(q, spec.sort, spec.page)
 
         items = tuple(
-            _map_feature_to_scan_result(row, company_name, include_sparklines)
+            _map_feature_to_scan_result(
+                row,
+                company_name,
+                include_sparklines,
+                include_setup_payload=include_setup_payload,
+            )
             for row, company_name in rows
         )
         return ResultPage(
@@ -316,6 +322,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         symbol: str,
         *,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ScanResultItemDomain | None:
         """Look up a single symbol in a feature run.
 
@@ -344,7 +351,12 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             return None
 
         row, company_name = result
-        return _map_feature_to_scan_result(row, company_name, include_sparklines)
+        return _map_feature_to_scan_result(
+            row,
+            company_name,
+            include_sparklines,
+            include_setup_payload=include_setup_payload,
+        )
 
     def get_peers_by_industry_for_run(
         self,
@@ -449,6 +461,56 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             for row, company_name in rows
         )
 
+    def query_run_symbols(
+        self,
+        run_id: int,
+        filters: FilterSpec,
+        sort: SortSpec,
+        page: PageSpec | None = None,
+    ) -> tuple[tuple[str, ...], int]:
+        run = self._session.get(FeatureRun, run_id)
+        if run is None:
+            raise EntityNotFoundError("FeatureRun", run_id)
+
+        q = (
+            self._session.query(StockFeatureDaily.symbol)
+            .filter(StockFeatureDaily.run_id == run_id)
+        )
+        q = apply_filters(q, filters)
+
+        if page is None:
+            rows = apply_sort_all(q, sort)
+            symbols = tuple(symbol for (symbol,) in rows)
+            return symbols, len(symbols)
+
+        rows, total = apply_sort_and_paginate(q, sort, page)
+        symbols = tuple(symbol for (symbol,) in rows)
+        return symbols, total
+
+    def get_setup_payload_for_run(self, run_id: int, symbol: str) -> dict | None:
+        run = self._session.get(FeatureRun, run_id)
+        if run is None:
+            raise EntityNotFoundError("FeatureRun", run_id)
+
+        row = (
+            self._session.query(StockFeatureDaily.details_json)
+            .filter(
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.symbol == symbol,
+            )
+            .first()
+        )
+        if not row:
+            return None
+
+        details = row[0] if isinstance(row[0], dict) else {}
+        se_data = details.get("setup_engine") if isinstance(details, dict) else None
+        se_data = se_data if isinstance(se_data, dict) else {}
+        return {
+            "se_explain": se_data.get("explain"),
+            "se_candidates": se_data.get("candidates"),
+        }
+
     def get_row_by_symbol(self, run_id: int, symbol: str) -> FeatureRow | None:
         row = (
             self._session.query(StockFeatureDaily)
@@ -503,6 +565,8 @@ def _map_feature_to_scan_result(
     row: StockFeatureDaily,
     company_name: str | None,
     include_sparklines: bool,
+    *,
+    include_setup_payload: bool = True,
 ) -> ScanResultItemDomain:
     """Map a feature store ORM row to a ScanResultItemDomain.
 
@@ -603,8 +667,9 @@ def _map_feature_to_scan_result(
     extended["se_pivot_date"] = _se.get("pivot_date")
     extended["se_timeframe"] = _se.get("timeframe")
     extended["se_atr14_pct"] = _se.get("atr14_pct")
-    extended["se_explain"] = _se.get("explain")
-    extended["se_candidates"] = _se.get("candidates")
+    if include_setup_payload:
+        extended["se_explain"] = _se.get("explain")
+        extended["se_candidates"] = _se.get("candidates")
 
     return ScanResultItemDomain(
         symbol=row.symbol,

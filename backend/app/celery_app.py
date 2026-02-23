@@ -104,8 +104,8 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
 
 
-# Task routing: Route all data-fetching tasks to serialized queue
-# Run worker with: celery -A app.celery_app worker -Q celery,data_fetch -c 1
+# Task routing: route background tasks to dedicated queues
+# Run workers with: celery -A app.celery_app worker -Q celery,data_fetch,user_scans -c 1
 celery_app.conf.task_routes = {
     # Cache tasks (yfinance)
     'app.tasks.cache_tasks.daily_cache_warmup': {'queue': 'data_fetch'},
@@ -131,8 +131,8 @@ celery_app.conf.task_routes = {
     'app.tasks.fundamentals_tasks.populate_initial_cache': {'queue': 'data_fetch'},
     'app.tasks.fundamentals_tasks.refresh_fundamentals_yfinance_only': {'queue': 'data_fetch'},
     'app.tasks.fundamentals_tasks.refresh_symbols_hybrid': {'queue': 'data_fetch'},
-    # Scan tasks (yfinance)
-    'app.tasks.scan_tasks.run_bulk_scan': {'queue': 'data_fetch'},
+    # User-initiated scan tasks (isolated from maintenance queue)
+    'app.tasks.scan_tasks.run_bulk_scan': {'queue': 'user_scans'},
     # Universe tasks (finviz)
     'app.tasks.universe_tasks.refresh_stock_universe': {'queue': 'data_fetch'},
     'app.tasks.universe_tasks.refresh_sp500_membership': {'queue': 'data_fetch'},

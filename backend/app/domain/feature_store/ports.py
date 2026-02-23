@@ -219,6 +219,7 @@ class FeatureStoreRepository(abc.ABC):
         run_id: int,
         spec: QuerySpec,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ResultPage:
         """Paginated query of a feature run mapped to scanning-domain models.
 
@@ -233,6 +234,7 @@ class FeatureStoreRepository(abc.ABC):
         run_id: int,
         symbol: str,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ScanResultItemDomain | None:
         """Single symbol lookup from a feature run.
 
@@ -294,6 +296,26 @@ class FeatureStoreRepository(abc.ABC):
         Raises:
             EntityNotFoundError: If *run_id* does not exist.
         """
+        ...
+
+    @abc.abstractmethod
+    def query_run_symbols(
+        self,
+        run_id: int,
+        filters: FilterSpec,
+        sort: SortSpec,
+        page: PageSpec | None = None,
+    ) -> tuple[tuple[str, ...], int]:
+        """Return filtered, sorted symbols and total count for a feature run."""
+        ...
+
+    @abc.abstractmethod
+    def get_setup_payload_for_run(
+        self,
+        run_id: int,
+        symbol: str,
+    ) -> dict | None:
+        """Return setup-engine explain payload for a symbol in a feature run."""
         ...
 
 

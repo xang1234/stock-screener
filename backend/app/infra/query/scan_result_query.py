@@ -155,6 +155,11 @@ def _json_sort_expr(field: str, column, json_path: str, order: SortOrder):
     return order_fn(expr).nullslast()
 
 
+def requires_python_sort(field: str) -> bool:
+    """Return True when a sort field needs in-Python sorting."""
+    return field in _PYTHON_SORT_FIELDS
+
+
 # ── Public API ──────────────────────────────────────────────────────────
 
 
@@ -306,13 +311,13 @@ def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
 
 
 def _sort_in_python(
-    rows: list[tuple],
+    rows: list,
     sort: SortSpec,
-) -> list[tuple]:
-    """Sort (ScanResult, company_name) tuples by a details JSON field."""
+) -> list:
+    """Sort ScanResult rows (or (ScanResult, ...) tuples) by details JSON field."""
 
-    def get_sort_key(row_tuple):
-        result = row_tuple[0]
+    def get_sort_key(row_obj):
+        result = row_obj[0] if isinstance(row_obj, tuple) else row_obj
         detail_value = (
             result.details.get(sort.field) if result.details else None
         )

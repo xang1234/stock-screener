@@ -35,5 +35,12 @@ echo "  Pool: $POOL"
     -Q data_fetch \
     -n datafetch@%h &
 
+# Worker 3: User scan queue (isolated from maintenance tasks)
+./venv/bin/celery -A app.celery_app worker \
+    --loglevel=info \
+    --pool="$POOL" \
+    -Q user_scans \
+    -n userscans@%h &
+
 echo "Workers started. Use 'pkill -f celery' to stop."
 wait

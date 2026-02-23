@@ -9,11 +9,11 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain.scanning.filter_spec import QuerySpec
+from app.domain.scanning.filter_spec import FilterSpec, PageSpec, QuerySpec, SortSpec
 from app.domain.scanning.models import FilterOptions, ResultPage, ScanResultItemDomain
 from app.domain.scanning.ports import ScanResultRepository
-from app.domain.scanning.filter_spec import FilterSpec, SortSpec
 from app.analysis.patterns.report import validate_setup_engine_report_payload
+from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
 from app.infra.serialization import convert_numpy_types
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
@@ -316,6 +316,7 @@ class SqlScanResultRepository(ScanResultRepository):
         spec: QuerySpec,
         *,
         include_sparklines: bool = True,
+        include_setup_payload: bool = True,
     ) -> ResultPage:
         # Base query: LEFT JOIN stock_universe to get company names.
         q = (
@@ -334,7 +335,12 @@ class SqlScanResultRepository(ScanResultRepository):
 
         # Map ORM rows to domain objects.
         items = tuple(
-            _map_row_to_domain(result, company_name, include_sparklines)
+            _map_row_to_domain(
+                result,
+                company_name,
+                include_sparklines,
+                include_setup_payload=include_setup_payload,
+            )
             for result, company_name in rows
         )
 
@@ -344,6 +350,46 @@ class SqlScanResultRepository(ScanResultRepository):
             page=spec.page.page,
             per_page=spec.page.per_page,
         )
+
+    def query_symbols(
+        self,
+        scan_id: str,
+        filters: FilterSpec,
+        sort: SortSpec,
+        *,
+        page: PageSpec | None = None,
+    ) -> tuple[tuple[str, ...], int]:
+        """Return filtered/sorted symbols for navigation."""
+        if scan_result_query.requires_python_sort(sort.field):
+            q = (
+                self._session.query(ScanResult)
+                .filter(ScanResult.scan_id == scan_id)
+            )
+            q = apply_filters(q, filters)
+
+            if page is None:
+                rows = apply_sort_all(q, sort)
+                symbols = tuple(row.symbol for row in rows)
+                return symbols, len(symbols)
+
+            rows, total, _ = apply_sort_and_paginate(q, sort, page)
+            symbols = tuple(row.symbol for row in rows)
+            return symbols, total
+
+        q = (
+            self._session.query(ScanResult.symbol)
+            .filter(ScanResult.scan_id == scan_id)
+        )
+        q = apply_filters(q, filters)
+
+        if page is None:
+            rows = apply_sort_all(q, sort)
+            symbols = tuple(symbol for (symbol,) in rows)
+            return symbols, len(symbols)
+
+        rows, total, _ = apply_sort_and_paginate(q, sort, page)
+        symbols = tuple(symbol for (symbol,) in rows)
+        return symbols, total
 
     def query_all(
         self,
@@ -366,7 +412,11 @@ class SqlScanResultRepository(ScanResultRepository):
         )
 
     def get_by_symbol(
-        self, scan_id: str, symbol: str
+        self,
+        scan_id: str,
+        symbol: str,
+        *,
+        include_setup_payload: bool = True,
     ) -> ScanResultItemDomain | None:
         """Return a single result by scan_id + symbol, or None."""
         row = (
@@ -378,7 +428,12 @@ class SqlScanResultRepository(ScanResultRepository):
         if row is None:
             return None
         result, company_name = row
-        return _map_row_to_domain(result, company_name, include_sparklines=True)
+        return _map_row_to_domain(
+            result,
+            company_name,
+            include_sparklines=True,
+            include_setup_payload=include_setup_payload,
+        )
 
     def get_peers_by_industry(
         self, scan_id: str, ibd_industry_group: str
@@ -427,6 +482,24 @@ class SqlScanResultRepository(ScanResultRepository):
         )
         return row[0] if row else None
 
+    def get_setup_payload(self, scan_id: str, symbol: str) -> dict | None:
+        """Return setup-engine explain payload for a symbol, or None if missing."""
+        row = (
+            self._session.query(ScanResult.details)
+            .filter(ScanResult.scan_id == scan_id, ScanResult.symbol == symbol)
+            .first()
+        )
+        if not row:
+            return None
+
+        details = row[0] if isinstance(row[0], dict) else {}
+        se_data = details.get("setup_engine") if isinstance(details, dict) else None
+        se_data = se_data if isinstance(se_data, dict) else {}
+        return {
+            "se_explain": se_data.get("explain"),
+            "se_candidates": se_data.get("candidates"),
+        }
+
     def get_filter_options(self, scan_id: str) -> FilterOptions:
         """Query distinct categorical values for filter dropdowns."""
 
@@ -455,6 +528,8 @@ def _map_row_to_domain(
     result: ScanResult,
     company_name: str | None,
     include_sparklines: bool,
+    *,
+    include_setup_payload: bool = True,
 ) -> ScanResultItemDomain:
     """Map a ScanResult ORM row to a domain value object."""
     details = result.details or {}
@@ -545,8 +620,9 @@ def _map_row_to_domain(
     extended["se_pivot_date"] = se_data.get("pivot_date")
     extended["se_timeframe"] = se_data.get("timeframe")
     extended["se_atr14_pct"] = se_data.get("atr14_pct")
-    extended["se_explain"] = se_data.get("explain")
-    extended["se_candidates"] = se_data.get("candidates")
+    if include_setup_payload:
+        extended["se_explain"] = se_data.get("explain")
+        extended["se_candidates"] = se_data.get("candidates")
 
     # Clamp score to 0-100 to satisfy domain invariant; legacy data may exceed.
     raw_score = result.composite_score or 0

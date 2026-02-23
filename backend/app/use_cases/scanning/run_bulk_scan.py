@@ -25,7 +25,12 @@ from typing import Iterator, Sequence
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.models import ProgressEvent, ScanStatus
-from app.domain.scanning.ports import CancellationToken, ProgressSink, StockScanner
+from app.domain.scanning.ports import (
+    CancellationToken,
+    ProgressSink,
+    StockDataProvider,
+    StockScanner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +89,13 @@ class RunBulkScanUseCase:
     :class:`CreateScanUseCase`).
     """
 
-    def __init__(self, scanner: StockScanner) -> None:
+    def __init__(
+        self,
+        scanner: StockScanner,
+        data_provider: StockDataProvider | None = None,
+    ) -> None:
         self._scanner = scanner
+        self._data_provider = data_provider
 
     def execute(
         self,
@@ -135,6 +145,23 @@ class RunBulkScanUseCase:
             getattr(scan, "composite_method", None) or "weighted_average"
         )
 
+        merged_requirements = None
+        if self._data_provider is not None:
+            get_requirements = getattr(self._scanner, "get_merged_requirements", None)
+            if callable(get_requirements):
+                try:
+                    merged_requirements = get_requirements(screener_names, cmd.criteria)
+                    logger.info(
+                        "Scan %s: pre-merged data requirements for batch processing",
+                        cmd.scan_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Scan %s: failed to pre-merge data requirements; falling back to per-symbol fetch",
+                        cmd.scan_id,
+                        exc_info=True,
+                    )
+
         # ── Checkpoint: skip already-persisted results ────────────
         already_done = uow.scan_results.count_by_scan_id(cmd.scan_id)
         remaining_symbols = cmd.symbols[already_done:]
@@ -183,18 +210,41 @@ class RunBulkScanUseCase:
                     failed=failed,
                 )
 
+            pre_fetched_data = {}
+            if self._data_provider is not None and merged_requirements is not None:
+                try:
+                    pre_fetched_data = self._data_provider.prepare_data_bulk(
+                        [symbol.upper() for symbol in chunk],
+                        merged_requirements,
+                        allow_partial=True,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Scan %s: bulk data fetch failed for chunk; falling back to per-symbol fetch",
+                        cmd.scan_id,
+                        exc_info=True,
+                    )
+                    pre_fetched_data = {}
+
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []
             for symbol in chunk:
+                sym = symbol.upper()
+                scan_kwargs: dict[str, object] = {}
+                if merged_requirements is not None:
+                    scan_kwargs["pre_merged_requirements"] = merged_requirements
+                if sym in pre_fetched_data:
+                    scan_kwargs["pre_fetched_data"] = pre_fetched_data[sym]
                 try:
                     result = self._scanner.scan_stock_multi(
-                        symbol=symbol.upper(),
+                        symbol=sym,
                         screener_names=screener_names,
                         criteria=cmd.criteria,
                         composite_method=composite_method,
+                        **scan_kwargs,
                     )
                     if result and "error" not in result:
-                        chunk_results.append((symbol.upper(), result))
+                        chunk_results.append((sym, result))
                         if result.get("passes_template"):
                             passed += 1
                     else:

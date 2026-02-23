@@ -137,6 +137,7 @@ cd backend
 # Or manually:
 ./venv/bin/celery -A app.celery_app worker --pool=solo -Q celery -n general@%h
 ./venv/bin/celery -A app.celery_app worker --pool=solo -Q data_fetch -n datafetch@%h
+./venv/bin/celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@%h
 ./venv/bin/celery -A app.celery_app beat --loglevel=info  # Scheduler
 ```
 

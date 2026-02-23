@@ -1,4 +1,4 @@
-import { Alert, Box, Chip, Drawer, IconButton, Typography } from '@mui/material';
+import { Alert, Box, Chip, CircularProgress, Drawer, IconButton, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
@@ -125,7 +125,7 @@ const CheckItem = ({ icon, text, color }) => (
  * @param {Function} props.onClose - Close handler
  * @param {Object} props.stockData - Stock result from scan (needs se_* fields)
  */
-function SetupEngineDrawer({ open, onClose, stockData }) {
+function SetupEngineDrawer({ open, onClose, stockData, isLoading = false }) {
   if (!stockData) return null;
 
   const explain =
@@ -184,7 +184,11 @@ function SetupEngineDrawer({ open, onClose, stockData }) {
 
       {/* Content */}
       <Box sx={{ p: 2, overflow: 'auto', flex: 1 }}>
-        {!explain ? (
+        {isLoading ? (
+          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+            <CircularProgress size={24} />
+          </Box>
+        ) : !explain ? (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 2, textAlign: 'center' }}>
             Setup details not available for this stock.
           </Typography>

@@ -22,6 +22,7 @@ from tests.unit.use_cases.conftest import (
     FakeScanRepository,
     FakeScanResultRepository,
     FakeScanner,
+    FakeStockDataProvider,
     FakeUnitOfWork,
 )
 
@@ -134,6 +135,63 @@ class TestRunBulkScanHappyPath:
         assert len(progress.events) == 3
         assert progress.events[-1].current == 5
         assert progress.events[-1].total == 5
+
+    def test_uses_bulk_data_prep_when_scanner_supports_merged_requirements(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+        data_provider = FakeStockDataProvider()
+
+        class BulkAwareScanner:
+            def __init__(self):
+                self.calls = []
+                self.requirements_calls = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                self.requirements_calls.append((tuple(screener_names), criteria))
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(
+                self,
+                symbol,
+                screener_names,
+                criteria=None,
+                composite_method="weighted_average",
+                pre_merged_requirements=None,
+                pre_fetched_data=None,
+            ):
+                self.calls.append(
+                    {
+                        "symbol": symbol,
+                        "pre_merged_requirements": pre_merged_requirements,
+                        "pre_fetched_data": pre_fetched_data,
+                    }
+                )
+                return {
+                    "composite_score": 82.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        scanner = BulkAwareScanner()
+        uc = RunBulkScanUseCase(scanner=scanner, data_provider=data_provider)
+        result = uc.execute(
+            uow,
+            RunBulkScanCommand(scan_id="s1", symbols=["AAPL", "MSFT"], chunk_size=2),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert data_provider.prepare_calls == ["AAPL", "MSFT"]
+        assert scanner.requirements_calls == [(("minervini",), {})]
+        assert len(scanner.calls) == 2
+        assert all(
+            call["pre_merged_requirements"] == {"needs": "price+fundamentals"}
+            for call in scanner.calls
+        )
+        assert all(call["pre_fetched_data"] is not None for call in scanner.calls)
 
     def test_scan_status_transitions(self):
         scan_repo = FakeScanRepository()

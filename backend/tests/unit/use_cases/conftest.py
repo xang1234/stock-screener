@@ -161,6 +161,9 @@ class FakeScanResultRepository(ScanResultRepository):
         self._items = items or []
         self._persisted_results: list[tuple[str, str, dict]] = []
         self.last_query_args: dict | None = None
+        self.last_get_by_symbol_args: dict | None = None
+        self.last_query_symbols_args: dict | None = None
+        self.last_get_setup_payload_args: dict | None = None
 
     def bulk_insert(self, rows: list[dict]) -> int:
         return len(rows)
@@ -184,11 +187,19 @@ class FakeScanResultRepository(ScanResultRepository):
     def count_by_scan_id(self, scan_id: str) -> int:
         return sum(1 for sid, _, _ in self._persisted_results if sid == scan_id)
 
-    def query(self, scan_id, spec, *, include_sparklines=True):
+    def query(
+        self,
+        scan_id,
+        spec,
+        *,
+        include_sparklines=True,
+        include_setup_payload=True,
+    ):
         self.last_query_args = {
             "scan_id": scan_id,
             "spec": spec,
             "include_sparklines": include_sparklines,
+            "include_setup_payload": include_setup_payload,
         }
         page_items = self._items[spec.page.offset : spec.page.offset + spec.page.limit]
         return ResultPage(
@@ -198,13 +209,36 @@ class FakeScanResultRepository(ScanResultRepository):
             per_page=spec.page.per_page,
         )
 
+    def query_symbols(self, scan_id, filters, sort, *, page=None):
+        self.last_query_symbols_args = {
+            "scan_id": scan_id,
+            "filters": filters,
+            "sort": sort,
+            "page": page,
+        }
+        symbols = tuple(i.symbol for i in self._items)
+        if page is not None:
+            symbols = symbols[page.offset : page.offset + page.limit]
+        return symbols, len(self._items)
+
     def query_all(self, scan_id, filters, sort, *, include_sparklines=False):
         return tuple(self._items)
 
     def get_filter_options(self, scan_id):
         return FilterOptions(ibd_industries=(), gics_sectors=(), ratings=())
 
-    def get_by_symbol(self, scan_id: str, symbol: str) -> ScanResultItemDomain | None:
+    def get_by_symbol(
+        self,
+        scan_id: str,
+        symbol: str,
+        *,
+        include_setup_payload: bool = True,
+    ) -> ScanResultItemDomain | None:
+        self.last_get_by_symbol_args = {
+            "scan_id": scan_id,
+            "symbol": symbol,
+            "include_setup_payload": include_setup_payload,
+        }
         return next((i for i in self._items if i.symbol == symbol), None)
 
     def get_details_by_symbol(self, scan_id: str, symbol: str) -> dict | None:
@@ -222,6 +256,19 @@ class FakeScanResultRepository(ScanResultRepository):
             "screeners_passed": item.screeners_passed,
             "screeners_total": item.screeners_total,
         })
+
+    def get_setup_payload(self, scan_id: str, symbol: str) -> dict | None:
+        self.last_get_setup_payload_args = {
+            "scan_id": scan_id,
+            "symbol": symbol,
+        }
+        item = next((i for i in self._items if i.symbol == symbol), None)
+        if item is None:
+            return None
+        return {
+            "se_explain": item.extended_fields.get("se_explain"),
+            "se_candidates": item.extended_fields.get("se_candidates"),
+        }
 
     def get_peers_by_industry(
         self, scan_id: str, ibd_industry_group: str
@@ -347,6 +394,8 @@ class FakeScanner:
         screener_names: list[str],
         criteria: dict | None = None,
         composite_method: str = "weighted_average",
+        pre_merged_requirements: object | None = None,
+        pre_fetched_data: object | None = None,
     ) -> dict:
         self.calls.append(symbol)
         return self._results.get(
@@ -517,6 +566,10 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
         self._rows: dict[int, list[FeatureRow]] = {}  # run_id -> rows
         self._universe: dict[int, list[str]] = {}
         self._pointer_run_id: int | None = None
+        self.last_query_run_as_scan_results_args: dict | None = None
+        self.last_get_by_symbol_for_run_args: dict | None = None
+        self.last_query_run_symbols_args: dict | None = None
+        self.last_get_setup_payload_for_run_args: dict | None = None
 
     def upsert_snapshot_rows(self, run_id, rows) -> int:
         existing = {r.symbol: r for r in self._rows.get(run_id, [])}
@@ -582,8 +635,21 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             for r in self._rows[run_id]
         }
 
-    def query_run_as_scan_results(self, run_id, spec, *, include_sparklines=True):
+    def query_run_as_scan_results(
+        self,
+        run_id,
+        spec,
+        *,
+        include_sparklines=True,
+        include_setup_payload=True,
+    ):
         """Bridge method for dual-source tests."""
+        self.last_query_run_as_scan_results_args = {
+            "run_id": run_id,
+            "spec": spec,
+            "include_sparklines": include_sparklines,
+            "include_setup_payload": include_setup_payload,
+        }
         if run_id not in self._rows:
             raise EntityNotFoundError("FeatureRun", run_id)
         rows = self._rows[run_id]
@@ -626,8 +692,21 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             ratings=tuple(sorted(ratings)),
         )
 
-    def get_by_symbol_for_run(self, run_id, symbol, *, include_sparklines=True):
+    def get_by_symbol_for_run(
+        self,
+        run_id,
+        symbol,
+        *,
+        include_sparklines=True,
+        include_setup_payload=True,
+    ):
         """Bridge method: look up a single symbol in a run."""
+        self.last_get_by_symbol_for_run_args = {
+            "run_id": run_id,
+            "symbol": symbol,
+            "include_sparklines": include_sparklines,
+            "include_setup_payload": include_setup_payload,
+        }
         if run_id not in self._rows:
             raise EntityNotFoundError("FeatureRun", run_id)
         for r in self._rows[run_id]:
@@ -663,6 +742,38 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
             _make_scan_result_from_feature_row(r)
             for r in self._rows[run_id]
         )
+
+    def query_run_symbols(self, run_id, filters, sort, page=None):
+        self.last_query_run_symbols_args = {
+            "run_id": run_id,
+            "filters": filters,
+            "sort": sort,
+            "page": page,
+        }
+        if run_id not in self._rows:
+            raise EntityNotFoundError("FeatureRun", run_id)
+        symbols = tuple(r.symbol for r in self._rows[run_id])
+        if page is not None:
+            symbols = symbols[page.offset : page.offset + page.limit]
+        return symbols, len(self._rows[run_id])
+
+    def get_setup_payload_for_run(self, run_id, symbol):
+        self.last_get_setup_payload_for_run_args = {
+            "run_id": run_id,
+            "symbol": symbol,
+        }
+        if run_id not in self._rows:
+            raise EntityNotFoundError("FeatureRun", run_id)
+        for row in self._rows[run_id]:
+            if row.symbol == symbol:
+                se = (row.details or {}).get("setup_engine", {}) if isinstance(row.details, dict) else {}
+                if not isinstance(se, dict):
+                    se = {}
+                return {
+                    "se_explain": se.get("explain"),
+                    "se_candidates": se.get("candidates"),
+                }
+        return None
 
     def _build_page(self, run_id: int, page: PageSpec | None) -> FeaturePage:
         p = page or PageSpec()

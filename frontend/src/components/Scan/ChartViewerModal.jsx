@@ -15,7 +15,7 @@ import PeopleIcon from '@mui/icons-material/People';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAllFilteredSymbols, getSingleResult } from '../../api/scans';
+import { getAllFilteredSymbols, getSetupDetails, getSingleResult } from '../../api/scans';
 import { fetchPriceHistory, priceHistoryKeys } from '../../api/priceHistory';
 import { getStockFundamentals } from '../../api/stocks';
 import { getGroupDetail } from '../../api/groups';
@@ -86,17 +86,39 @@ function ChartViewerModal({
     refetchOnMount: 'always', // Always refetch when modal opens to pick up sort changes
   });
 
+  const currentPageSymbols = useMemo(() => {
+    if (!Array.isArray(currentPageResults) || currentPageResults.length === 0) return [];
+    const seen = new Set();
+    const symbols = [];
+    currentPageResults.forEach((row) => {
+      if (row?.symbol && !seen.has(row.symbol)) {
+        seen.add(row.symbol);
+        symbols.push(row.symbol);
+      }
+    });
+    return symbols;
+  }, [currentPageResults]);
+
+  // Make navigation immediately usable from the current page, then
+  // upgrade to the full filtered symbol list when hydration finishes.
+  const navigationSymbols = useMemo(() => {
+    if (Array.isArray(allSymbols) && allSymbols.length > 0) {
+      return allSymbols;
+    }
+    return currentPageSymbols;
+  }, [allSymbols, currentPageSymbols]);
+
   // Use navigation hook
   const { currentIndex, currentSymbol, totalCount, goNext, goPrevious, goToIndex } = useChartNavigation(
-    allSymbols,
+    navigationSymbols,
     initialSymbol,
     open
   );
 
   // Navigate to a specific symbol
   const handleNavigateToSymbol = (symbol) => {
-    if (!allSymbols) return;
-    const index = allSymbols.indexOf(symbol);
+    if (!navigationSymbols) return;
+    const index = navigationSymbols.indexOf(symbol);
     if (index >= 0) {
       goToIndex(index);
     }
@@ -117,6 +139,36 @@ function ChartViewerModal({
   });
 
   const finalStockData = stockData || fetchedStockData;
+  const hasInlineSetupPayload =
+    finalStockData?.se_explain != null ||
+    finalStockData?.se_candidates != null;
+
+  // Lazy-load heavy setup explain payload only when the drawer opens.
+  const { data: setupDetails, isLoading: setupDetailsLoading } = useQuery({
+    queryKey: ['setupDetails', scanId, currentSymbol],
+    queryFn: async () => {
+      try {
+        return await getSetupDetails(scanId, currentSymbol);
+      } catch (error) {
+        // Non-setup scans may legitimately return 404 from setup endpoint.
+        if (error?.response?.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: open && setupDrawerOpen && !!scanId && !!currentSymbol && !hasInlineSetupPayload,
+    staleTime: 300000,
+    retry: false,
+  });
+
+  const drawerStockData = useMemo(() => {
+    if (!finalStockData) return finalStockData;
+    if (!setupDetails) return finalStockData;
+    return {
+      ...finalStockData,
+      se_explain: setupDetails.se_explain ?? null,
+      se_candidates: setupDetails.se_candidates ?? null,
+    };
+  }, [finalStockData, setupDetails]);
 
   // Fetch fundamentals for current symbol
   const { data: fundamentals } = useQuery({
@@ -128,6 +180,7 @@ function ChartViewerModal({
 
   // Fetch group ranking for current stock's industry group
   const industryGroup = finalStockData?.ibd_industry_group;
+  const adrValue = finalStockData?.adr_percent ?? fundamentals?.adr_percent ?? null;
   const {
     data: groupRankData,
     isLoading: isGroupRankLoading,
@@ -160,11 +213,9 @@ function ChartViewerModal({
         return;
       }
 
-      // D to toggle setup drawer (only when explain data exists)
+      // D to toggle setup drawer
       if (e.key === 'd' || e.key === 'D') {
-        if (finalStockData?.se_explain) {
-          setSetupDrawerOpen((prev) => !prev);
-        }
+        setSetupDrawerOpen((prev) => !prev);
         return;
       }
 
@@ -181,7 +232,7 @@ function ChartViewerModal({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, goNext, goPrevious, onClose, setupDrawerOpen, finalStockData]);
+  }, [open, goNext, goPrevious, onClose, setupDrawerOpen]);
 
   // Reset description expansion and setup drawer when symbol changes
   useEffect(() => {
@@ -191,7 +242,7 @@ function ChartViewerModal({
 
   // Prefetch adjacent stocks for smooth navigation with staggered timing
   useEffect(() => {
-    if (!open || !currentSymbol || !allSymbols) return;
+    if (!open || !currentSymbol || !navigationSymbols) return;
 
     const prefetchSymbol = (symbol) => {
       // Prefetch price history
@@ -219,8 +270,8 @@ function ChartViewerModal({
     const timeouts = [];
 
     // Get next 5 and previous 5 stocks
-    const nextSymbols = allSymbols.slice(currentIndex + 1, currentIndex + 6);
-    const prevSymbols = allSymbols.slice(Math.max(0, currentIndex - 5), currentIndex).reverse();
+    const nextSymbols = navigationSymbols.slice(currentIndex + 1, currentIndex + 6);
+    const prevSymbols = navigationSymbols.slice(Math.max(0, currentIndex - 5), currentIndex).reverse();
 
     // High priority: Immediate next/prev (fetch now)
     if (nextSymbols[0]) prefetchSymbol(nextSymbols[0]);
@@ -242,7 +293,7 @@ function ChartViewerModal({
     return () => {
       timeouts.forEach(clearTimeout);
     };
-  }, [open, currentSymbol, currentIndex, allSymbols, queryClient, scanId]);
+  }, [open, currentSymbol, currentIndex, navigationSymbols, queryClient, scanId]);
 
   const chartHeight = window.innerHeight - 60; // Full height minus header
 
@@ -314,21 +365,21 @@ function ChartViewerModal({
                 )}
 
                 {/* ADR Box */}
-                {(finalStockData?.adr_percent != null || fundamentals?.adr_percent != null) && (
+                {adrValue != null && (
                   <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <Box sx={{
                       borderRadius: 1,
                       px: 1.5,
                       py: 0.5,
                       textAlign: 'center',
-                      bgcolor: (finalStockData?.adr_percent ?? fundamentals?.adr_percent) >= 4
+                      bgcolor: Number(adrValue) >= 4
                         ? 'success.main'
-                        : (finalStockData?.adr_percent ?? fundamentals?.adr_percent) >= 2
+                        : Number(adrValue) >= 2
                           ? 'warning.main'
                           : 'error.main',
                     }}>
                       <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', color: 'white', fontWeight: 'bold' }}>
-                        {(finalStockData?.adr_percent ?? fundamentals?.adr_percent).toFixed(1)}%
+                        {Number(adrValue).toFixed(1)}%
                       </Typography>
                     </Box>
                     <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
@@ -514,7 +565,7 @@ function ChartViewerModal({
             >
               <Chip icon={<KeyboardIcon />} label="Space: Next Stock" size="small" variant="outlined" />
               <Chip icon={<KeyboardIcon />} label="Shift+Space: Previous" size="small" variant="outlined" />
-              {finalStockData?.se_explain && (
+              {currentSymbol && (
                 <Chip icon={<KeyboardIcon />} label="D: Setup Details" size="small" variant="outlined" />
               )}
               <Chip icon={<KeyboardIcon />} label="Esc: Close" size="small" variant="outlined" />
@@ -539,7 +590,8 @@ function ChartViewerModal({
       <SetupEngineDrawer
         open={setupDrawerOpen}
         onClose={() => setSetupDrawerOpen(false)}
-        stockData={finalStockData}
+        stockData={drawerStockData}
+        isLoading={setupDetailsLoading}
       />
     </>
   );

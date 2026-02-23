@@ -183,6 +183,16 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
     );
   }
 
+  const showSetupSection =
+    stockData?.se_setup_score != null ||
+    stockData?.se_quality_score != null ||
+    stockData?.se_readiness_score != null ||
+    stockData?.se_pattern_primary != null ||
+    stockData?.se_setup_ready != null ||
+    stockData?.se_explain != null ||
+    (Array.isArray(stockData?.se_candidates) && stockData.se_candidates.length > 0) ||
+    stockData?.screeners_run?.includes('setup_engine');
+
   return (
     <Box
       sx={{
@@ -377,7 +387,7 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
       )}
 
       {/* Setup Engine - Conditional, 2 column grid */}
-      {stockData.se_setup_score != null && (
+      {showSetupSection && (
         <>
           <Divider />
           <Box>
@@ -413,7 +423,7 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
                 <BoolIndicator value={stockData.se_setup_ready} />
               </Box>
             </Box>
-            {stockData.se_explain && onViewSetupDetails && (
+            {onViewSetupDetails && (
               <Button
                 variant="outlined"
                 size="small"

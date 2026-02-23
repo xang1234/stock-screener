@@ -5,7 +5,7 @@ Handles creating scans, checking progress, and retrieving results.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import ValidationError
 import logging
 
@@ -18,7 +18,9 @@ from ...schemas.scanning import (
     ScanListResponse,
     ScanResultItem,
     ScanResultsResponse,
+    ScanSymbolsResponse,
     ScanStatusResponse,
+    SetupDetailsResponse,
 )
 from ...schemas.universe import UniverseDefinition
 from ...wiring.bootstrap import (
@@ -26,7 +28,9 @@ from ...wiring.bootstrap import (
     get_create_scan_use_case,
     get_get_filter_options_use_case,
     get_get_scan_results_use_case,
+    get_get_scan_symbols_use_case,
     get_get_single_result_use_case,
+    get_get_setup_details_use_case,
     get_get_peers_use_case,
     get_export_scan_results_use_case,
     get_explain_stock_use_case,
@@ -37,6 +41,8 @@ from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery, Ex
 from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
 from ...use_cases.scanning.get_peers import GetPeersQuery, GetPeersUseCase
 from ...use_cases.scanning.get_scan_results import GetScanResultsQuery, GetScanResultsUseCase
+from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery, GetScanSymbolsUseCase
+from ...use_cases.scanning.get_setup_details import GetSetupDetailsQuery, GetSetupDetailsUseCase
 from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
 from ...infra.db.uow import SqlUnitOfWork
 from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
@@ -129,6 +135,19 @@ def _build_universe_def(request: ScanCreateRequest) -> UniverseDefinition:
         return UniverseDefinition.from_legacy(request.universe, request.symbols)
     except (ValueError, ValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _build_optional_page_spec(
+    page: int | None,
+    per_page: int | None,
+) -> PageSpec | None:
+    """Build optional pagination settings for symbol-list endpoints."""
+    if page is None and per_page is None:
+        return None
+    return PageSpec(
+        page=page or 1,
+        per_page=per_page or 100,
+    )
 
 
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)
@@ -237,6 +256,10 @@ async def get_scan_results(
     scan_id: str,
     passes_only: bool = Query(False, description="Show only stocks passing template"),
     include_sparklines: bool = Query(True, description="Include sparkline data"),
+    detail_level: Literal["table", "full"] = Query(
+        "table",
+        description="Response detail level. 'table' excludes heavy setup-engine payload fields.",
+    ),
     filters: FilterSpec = Depends(parse_scan_filters),
     sort: SortSpec = Depends(parse_scan_sort),
     page: PageSpec = Depends(parse_page_spec),
@@ -249,6 +272,7 @@ async def get_scan_results(
             scan_id=scan_id,
             query_spec=QuerySpec(filters=filters, sort=sort, page=page),
             include_sparklines=include_sparklines,
+            include_setup_payload=(detail_level == "full"),
             passes_only=passes_only,
         )
         result = use_case.execute(uow, query)
@@ -264,7 +288,53 @@ async def get_scan_results(
         page=result.page.page,
         per_page=result.page.per_page,
         pages=result.page.total_pages,
-        results=[ScanResultItem.from_domain(item) for item in result.page.items],
+        results=[
+            ScanResultItem.from_domain(
+                item,
+                include_setup_payload=(detail_level == "full"),
+            )
+            for item in result.page.items
+        ],
+    )
+
+
+@router.get("/{scan_id}/symbols", response_model=ScanSymbolsResponse)
+async def get_scan_symbols(
+    scan_id: str,
+    passes_only: bool = Query(False, description="Show only stocks passing template"),
+    page: int | None = Query(None, ge=1, description="Optional page number"),
+    per_page: int | None = Query(None, ge=1, le=100, description="Optional results per page"),
+    filters: FilterSpec = Depends(parse_scan_filters),
+    sort: SortSpec = Depends(parse_scan_sort),
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: GetScanSymbolsUseCase = Depends(get_get_scan_symbols_use_case),
+):
+    """Get a lightweight, filtered symbol list for chart navigation."""
+    try:
+        page_spec = _build_optional_page_spec(page, per_page)
+        result = use_case.execute(
+            uow,
+            GetScanSymbolsQuery(
+                scan_id=scan_id,
+                filters=filters,
+                sort=sort,
+                page=page_spec,
+                passes_only=passes_only,
+            ),
+        )
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting scan symbols: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting scan symbols: {str(e)}")
+
+    return ScanSymbolsResponse(
+        scan_id=scan_id,
+        total=result.total,
+        symbols=list(result.symbols),
+        page=result.page,
+        per_page=result.per_page,
+        next_cursor=None,
     )
 
 
@@ -367,6 +437,10 @@ async def get_filter_options(
 async def get_single_result(
     scan_id: str,
     symbol: str,
+    detail_level: Literal["core", "full"] = Query(
+        "core",
+        description="Response detail level. 'core' excludes heavy setup-engine payload fields.",
+    ),
     uow: SqlUnitOfWork = Depends(get_uow),
     use_case: GetSingleResultUseCase = Depends(get_get_single_result_use_case),
 ):
@@ -378,14 +452,49 @@ async def get_single_result(
     """
     try:
         result = use_case.execute(
-            uow, GetSingleResultQuery(scan_id=scan_id, symbol=symbol)
+            uow,
+            GetSingleResultQuery(
+                scan_id=scan_id,
+                symbol=symbol,
+                include_setup_payload=(detail_level == "full"),
+            ),
         )
     except EntityNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting single result: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error getting single result: {str(e)}")
-    return ScanResultItem.from_domain(result.item)
+    return ScanResultItem.from_domain(
+        result.item,
+        include_setup_payload=(detail_level == "full"),
+    )
+
+
+@router.get("/{scan_id}/setup/{symbol}", response_model=SetupDetailsResponse)
+async def get_setup_details(
+    scan_id: str,
+    symbol: str,
+    uow: SqlUnitOfWork = Depends(get_uow),
+    use_case: GetSetupDetailsUseCase = Depends(get_get_setup_details_use_case),
+):
+    """Get setup-engine explain payload for a single symbol."""
+    try:
+        result = use_case.execute(
+            uow,
+            GetSetupDetailsQuery(scan_id=scan_id, symbol=symbol),
+        )
+    except EntityNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error getting setup details: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting setup details: {str(e)}")
+
+    return SetupDetailsResponse(
+        scan_id=scan_id,
+        symbol=result.symbol,
+        se_explain=result.se_explain,
+        se_candidates=result.se_candidates,
+    )
 
 
 @router.get("/{scan_id}/peers/{symbol}", response_model=List[ScanResultItem])

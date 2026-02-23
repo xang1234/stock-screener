@@ -32,6 +32,7 @@ from app.use_cases.scanning.create_scan import CreateScanUseCase
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
 from app.use_cases.scanning.get_peers import GetPeersUseCase
 from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
+from app.use_cases.scanning.get_scan_symbols import GetScanSymbolsUseCase
 from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
 from app.use_cases.scanning.export_scan_results import ExportScanResultsUseCase
 from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
@@ -41,6 +42,7 @@ from app.use_cases.feature_store.build_daily_snapshot import (
 from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase
 from app.use_cases.feature_store.list_runs import ListFeatureRunsUseCase
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
+from app.use_cases.scanning.get_setup_details import GetSetupDetailsUseCase
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -83,6 +85,11 @@ def get_get_scan_results_use_case() -> GetScanResultsUseCase:
     return GetScanResultsUseCase()
 
 
+def get_get_scan_symbols_use_case() -> GetScanSymbolsUseCase:
+    """Build a GetScanSymbolsUseCase (no extra dependencies — reads via UoW)."""
+    return GetScanSymbolsUseCase()
+
+
 def get_get_filter_options_use_case() -> GetFilterOptionsUseCase:
     """Build a GetFilterOptionsUseCase (no extra dependencies — reads via UoW)."""
     return GetFilterOptionsUseCase()
@@ -91,6 +98,11 @@ def get_get_filter_options_use_case() -> GetFilterOptionsUseCase:
 def get_get_single_result_use_case() -> GetSingleResultUseCase:
     """Build a GetSingleResultUseCase (no extra dependencies — reads via UoW)."""
     return GetSingleResultUseCase()
+
+
+def get_get_setup_details_use_case() -> GetSetupDetailsUseCase:
+    """Build a GetSetupDetailsUseCase (no extra dependencies — reads via UoW)."""
+    return GetSetupDetailsUseCase()
 
 
 def get_get_peers_use_case() -> GetPeersUseCase:
@@ -105,7 +117,10 @@ def get_export_scan_results_use_case() -> ExportScanResultsUseCase:
 
 def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:
     """Build a RunBulkScanUseCase wired with the scan orchestrator."""
-    return RunBulkScanUseCase(scanner=get_scan_orchestrator())
+    return RunBulkScanUseCase(
+        scanner=get_scan_orchestrator(),
+        data_provider=get_stock_data_provider(),
+    )
 
 
 def get_explain_stock_use_case() -> ExplainStockUseCase:

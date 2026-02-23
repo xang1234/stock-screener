@@ -54,6 +54,23 @@ class ScanOrchestrator:
         self._data_provider = data_provider
         self._registry = registry
 
+    def get_merged_requirements(
+        self,
+        screener_names: List[str],
+        criteria: Optional[Dict] = None,
+    ) -> DataRequirements:
+        """Merge data requirements once for a screener set (batch optimization)."""
+        if not settings.setup_engine_enabled:
+            screener_names = [n for n in screener_names if n != "setup_engine"]
+        if not screener_names:
+            return DataRequirements()
+
+        screeners = self._registry.get_multiple(screener_names)
+        return DataRequirements.merge_all([
+            screener.get_data_requirements(criteria)
+            for screener in screeners.values()
+        ])
+
     def scan_stock_multi(
         self,
         symbol: str,
