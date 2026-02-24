@@ -17,6 +17,7 @@ from app.models.theme import (
     ThemeLifecycleTransition,
     ThemeMention,
     ThemeMergeSuggestion,
+    ThemeMetrics,
     ThemeRelationship,
 )
 from app.services.theme_discovery_service import ThemeDiscoveryService
@@ -297,3 +298,194 @@ def test_relationship_inference_corrects_subset_direction_from_merge_suggestion(
     ).one()
     assert edge.source_cluster_id == subset_theme.id
     assert edge.target_cluster_id == superset_theme.id
+
+
+def test_update_all_theme_metrics_applies_lifecycle_rank_weighting(db_session):
+    now = datetime(2026, 2, 24, 18, 0, 0)
+    candidate = _make_theme(
+        db_session,
+        name="Candidate Surge",
+        canonical_key="candidate_surge",
+        state="candidate",
+        now=now,
+    )
+    active = _make_theme(
+        db_session,
+        name="Active Core",
+        canonical_key="active_core",
+        state="active",
+        now=now,
+    )
+    db_session.commit()
+
+    scores = {
+        candidate.id: 90.0,
+        active.id: 80.0,
+    }
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+
+    def _stub_update_theme_metrics(theme_cluster_id: int, as_of_date: datetime | None = None) -> ThemeMetrics:
+        date_value = (as_of_date or now).date()
+        metrics = db_session.query(ThemeMetrics).filter(
+            ThemeMetrics.theme_cluster_id == theme_cluster_id,
+            ThemeMetrics.date == date_value,
+        ).first()
+        if metrics is None:
+            metrics = ThemeMetrics(
+                theme_cluster_id=theme_cluster_id,
+                date=date_value,
+                pipeline="technical",
+            )
+            db_session.add(metrics)
+        metrics.momentum_score = scores[theme_cluster_id]
+        metrics.status = "trending"
+        db_session.commit()
+        return metrics
+
+    service.update_theme_metrics = _stub_update_theme_metrics  # type: ignore[method-assign]
+    result = service.update_all_theme_metrics(as_of_date=now)
+
+    assert result["themes_updated"] == 2
+    assert result["rankings"][0]["theme"] == "Active Core"
+    assert result["rankings"][0]["lifecycle_state"] == "active"
+    assert result["rankings"][1]["theme"] == "Candidate Surge"
+    assert result["rankings"][1]["lifecycle_state"] == "candidate"
+
+
+def test_get_theme_rankings_filters_by_lifecycle_state(db_session):
+    now = datetime(2026, 2, 24, 19, 0, 0)
+    candidate = _make_theme(
+        db_session,
+        name="Candidate Grid",
+        canonical_key="candidate_grid",
+        state="candidate",
+        now=now,
+    )
+    active = _make_theme(
+        db_session,
+        name="Active Grid",
+        canonical_key="active_grid",
+        state="active",
+        now=now,
+    )
+    db_session.add_all(
+        [
+            ThemeMetrics(
+                theme_cluster_id=candidate.id,
+                date=now.date(),
+                pipeline="technical",
+                momentum_score=74.0,
+                rank=2,
+                status="emerging",
+                mentions_7d=5,
+                mention_velocity=1.6,
+            ),
+            ThemeMetrics(
+                theme_cluster_id=active.id,
+                date=now.date(),
+                pipeline="technical",
+                momentum_score=79.0,
+                rank=1,
+                status="trending",
+                mentions_7d=7,
+                mention_velocity=1.8,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    rankings, total = service.get_theme_rankings(lifecycle_states_filter=["candidate"])
+
+    assert total == 1
+    assert len(rankings) == 1
+    assert rankings[0]["theme"] == "Candidate Grid"
+    assert rankings[0]["lifecycle_state"] == "candidate"
+
+
+def test_discover_emerging_themes_suppresses_noisy_candidates_by_lifecycle_gate(db_session):
+    now = datetime.utcnow()
+    source_news = _make_source(db_session, name="News Wire", source_type="news")
+    source_substack = _make_source(db_session, name="Research Letter", source_type="substack")
+
+    noisy_candidate = _make_theme(
+        db_session,
+        name="Noisy Candidate",
+        canonical_key="noisy_candidate",
+        state="candidate",
+        now=now,
+    )
+    valid_active = _make_theme(
+        db_session,
+        name="Valid Active",
+        canonical_key="valid_active",
+        state="active",
+        now=now,
+    )
+    noisy_candidate.first_seen_at = now - timedelta(days=2)
+    valid_active.first_seen_at = now - timedelta(days=2)
+
+    _add_mention(
+        db_session,
+        theme=noisy_candidate,
+        source=source_news,
+        now=now,
+        days_ago=1,
+        confidence=0.85,
+        external_suffix="noisy1",
+    )
+    _add_mention(
+        db_session,
+        theme=noisy_candidate,
+        source=source_news,
+        now=now,
+        days_ago=1,
+        confidence=0.84,
+        external_suffix="noisy2",
+    )
+    _add_mention(
+        db_session,
+        theme=noisy_candidate,
+        source=source_news,
+        now=now,
+        days_ago=2,
+        confidence=0.83,
+        external_suffix="noisy3",
+    )
+
+    _add_mention(
+        db_session,
+        theme=valid_active,
+        source=source_news,
+        now=now,
+        days_ago=1,
+        confidence=0.86,
+        external_suffix="active1",
+    )
+    _add_mention(
+        db_session,
+        theme=valid_active,
+        source=source_substack,
+        now=now,
+        days_ago=2,
+        confidence=0.88,
+        external_suffix="active2",
+    )
+    _add_mention(
+        db_session,
+        theme=valid_active,
+        source=source_substack,
+        now=now,
+        days_ago=3,
+        confidence=0.87,
+        external_suffix="active3",
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    emerging = service.discover_emerging_themes(min_velocity=1.0, min_mentions=3)
+    names = {entry["theme"] for entry in emerging}
+
+    assert "Valid Active" in names
+    assert "Noisy Candidate" not in names

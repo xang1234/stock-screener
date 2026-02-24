@@ -144,6 +144,7 @@ class ThemeRankingItem(BaseModel):
     rank: int
     theme: str
     status: str
+    lifecycle_state: str
     momentum_score: float
     mention_velocity: float
     mentions_7d: int
@@ -170,6 +171,7 @@ class EmergingThemeResponse(BaseModel):
     mentions_7d: int
     velocity: float
     sentiment: float
+    lifecycle_state: str
     tickers: list[str]
 
 

@@ -31,6 +31,15 @@ from .theme_lifecycle_service import apply_lifecycle_transition
 
 logger = logging.getLogger(__name__)
 
+VALID_LIFECYCLE_STATES = {"candidate", "active", "dormant", "reactivated", "retired"}
+LIFECYCLE_RANK_WEIGHTS = {
+    "candidate": 0.78,
+    "active": 1.0,
+    "reactivated": 1.05,
+    "dormant": 0.6,
+    "retired": 0.2,
+}
+
 
 class ThemeDiscoveryService:
     """
@@ -582,8 +591,11 @@ class ThemeDiscoveryService:
                 logger.error(f"Error updating metrics for {cluster.name}: {e}")
                 results["errors"] += 1
 
-        # Calculate rankings (by momentum score) - separate rankings per pipeline
-        metrics_list.sort(key=lambda x: x[1].momentum_score or 0, reverse=True)
+        # Calculate rankings using lifecycle-aware weighting to suppress candidate floods.
+        metrics_list.sort(
+            key=lambda x: (x[1].momentum_score or 0) * self._lifecycle_rank_weight(x[0].lifecycle_state),
+            reverse=True,
+        )
 
         for rank, (cluster, metrics) in enumerate(metrics_list, 1):
             metrics.rank = rank
@@ -592,6 +604,7 @@ class ThemeDiscoveryService:
                 "theme": cluster.name,
                 "score": metrics.momentum_score,
                 "status": metrics.status,
+                "lifecycle_state": cluster.lifecycle_state or "candidate",
             })
 
         self.db.commit()
@@ -603,6 +616,7 @@ class ThemeDiscoveryService:
         limit: int = 20,
         status_filter: Optional[str] = None,
         source_types_filter: Optional[list[str]] = None,
+        lifecycle_states_filter: Optional[list[str]] = None,
         offset: int = 0
     ) -> tuple[list[dict], int]:
         """
@@ -614,6 +628,7 @@ class ThemeDiscoveryService:
             limit: Maximum number of themes to return
             status_filter: Filter by theme status (emerging, trending, fading, dormant)
             source_types_filter: Filter to themes that have mentions from these source types
+            lifecycle_states_filter: Filter by lifecycle states (candidate, active, dormant, reactivated, retired)
             offset: Number of themes to skip for pagination
         """
         # Get latest date with metrics for this pipeline
@@ -633,6 +648,10 @@ class ThemeDiscoveryService:
 
         if status_filter:
             base_query = base_query.filter(ThemeMetrics.status == status_filter)
+
+        normalized_lifecycle_states = self._normalize_lifecycle_states_filter(lifecycle_states_filter)
+        if normalized_lifecycle_states:
+            base_query = base_query.filter(ThemeCluster.lifecycle_state.in_(normalized_lifecycle_states))
 
         # Filter by source types if specified
         if source_types_filter:
@@ -661,6 +680,7 @@ class ThemeDiscoveryService:
                 "rank": metrics.rank,
                 "theme": cluster.name,
                 "status": metrics.status,
+                "lifecycle_state": cluster.lifecycle_state or "candidate",
                 "momentum_score": metrics.momentum_score,
                 "mention_velocity": metrics.mention_velocity,
                 "mentions_7d": metrics.mentions_7d,
@@ -675,7 +695,12 @@ class ThemeDiscoveryService:
 
         return results, total_count
 
-    def discover_emerging_themes(self, min_velocity: float = 1.5, min_mentions: int = 3) -> list[dict]:
+    def discover_emerging_themes(
+        self,
+        min_velocity: float = 1.5,
+        min_mentions: int = 3,
+        lifecycle_states_filter: Optional[list[str]] = None,
+    ) -> list[dict]:
         """
         Find newly emerging themes for this pipeline
 
@@ -685,6 +710,8 @@ class ThemeDiscoveryService:
         - At least min_mentions mentions
         """
         week_ago = datetime.utcnow() - timedelta(days=7)
+        thresholds = self._lifecycle_thresholds()
+        normalized_lifecycle_states = self._normalize_lifecycle_states_filter(lifecycle_states_filter)
 
         emerging = self.db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True,
@@ -694,9 +721,21 @@ class ThemeDiscoveryService:
 
         results = []
         for cluster in emerging:
-            mention_metrics = self.calculate_mention_metrics(cluster.id)
+            if normalized_lifecycle_states and (cluster.lifecycle_state or "candidate") not in normalized_lifecycle_states:
+                continue
 
-            if mention_metrics["mentions_7d"] >= min_mentions and mention_metrics["mention_velocity"] >= min_velocity:
+            mention_metrics = self.calculate_mention_metrics(cluster.id)
+            lifecycle_observation = self._lifecycle_snapshot(cluster.id)
+
+            if (
+                mention_metrics["mentions_7d"] >= min_mentions
+                and mention_metrics["mention_velocity"] >= min_velocity
+                and self._passes_emerging_lifecycle_gate(
+                    cluster=cluster,
+                    observation=lifecycle_observation,
+                    thresholds=thresholds,
+                )
+            ):
                 # Get constituents
                 constituents = self.db.query(ThemeConstituent).filter(
                     ThemeConstituent.theme_cluster_id == cluster.id,
@@ -708,12 +747,54 @@ class ThemeDiscoveryService:
                     "mentions_7d": mention_metrics["mentions_7d"],
                     "velocity": mention_metrics["mention_velocity"],
                     "sentiment": mention_metrics["sentiment_score"],
+                    "lifecycle_state": cluster.lifecycle_state or "candidate",
                     "tickers": [c.symbol for c in constituents],
                 })
 
         # Sort by velocity
         results.sort(key=lambda x: x["velocity"], reverse=True)
         return results
+
+    def _normalize_lifecycle_states_filter(self, lifecycle_states_filter: Optional[list[str]]) -> Optional[list[str]]:
+        if not lifecycle_states_filter:
+            return None
+        normalized = []
+        for state in lifecycle_states_filter:
+            value = (state or "").strip().lower()
+            if value in VALID_LIFECYCLE_STATES and value not in normalized:
+                normalized.append(value)
+        return normalized or None
+
+    def _lifecycle_rank_weight(self, lifecycle_state: str | None) -> float:
+        state = (lifecycle_state or "candidate").strip().lower()
+        return LIFECYCLE_RANK_WEIGHTS.get(state, 1.0)
+
+    def _passes_emerging_lifecycle_gate(
+        self,
+        *,
+        cluster: ThemeCluster,
+        observation: dict[str, float],
+        thresholds: dict[str, float],
+    ) -> bool:
+        state = (cluster.lifecycle_state or "candidate").strip().lower()
+        if state == "retired":
+            return False
+
+        if state == "candidate":
+            return (
+                observation["mentions_7d"] >= thresholds["promotion_min_mentions_7d"]
+                and observation["source_diversity_7d"] >= thresholds["promotion_min_source_diversity_7d"]
+                and observation["persistence_days_7d"] >= thresholds["promotion_min_persistence_days"]
+                and observation["avg_quality_confidence_30d"] >= thresholds["promotion_min_avg_confidence_30d"]
+            )
+
+        if state == "dormant":
+            return (
+                observation["mentions_7d"] >= thresholds["reactivation_min_mentions_7d"]
+                and observation["source_diversity_7d"] >= thresholds["reactivation_min_source_diversity_7d"]
+            )
+
+        return True
 
     def create_alert(
         self,

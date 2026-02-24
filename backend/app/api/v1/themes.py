@@ -175,6 +175,13 @@ def _safe_theme_cluster_response(cluster: ThemeCluster) -> ThemeClusterResponse:
         )
 
 
+def _parse_csv_values(value: Optional[str]) -> Optional[list[str]]:
+    if not value:
+        return None
+    values = [item.strip() for item in value.split(",") if item.strip()]
+    return values or None
+
+
 # ==================== Theme Rankings ====================
 
 @router.get("/pipelines")
@@ -194,6 +201,10 @@ async def get_theme_rankings(
     offset: int = Query(0, ge=0, description="Number of themes to skip for pagination"),
     status: Optional[str] = Query(None, description="Filter by status: emerging, trending, fading, dormant"),
     source_types: Optional[str] = Query(None, description="Comma-separated source types: substack,twitter,news,reddit"),
+    lifecycle_states: Optional[str] = Query(
+        None,
+        description="Comma-separated lifecycle states: candidate,active,dormant,reactivated,retired",
+    ),
     pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
     recalculate: bool = Query(False, description="Force recalculation of metrics"),
     db: Session = Depends(get_db)
@@ -228,15 +239,14 @@ async def get_theme_rankings(
             logger.info(f"Auto-calculating metrics for {themes_without_metrics} themes without metrics")
             service.update_all_theme_metrics()
 
-    # Parse source_types from comma-separated string
-    source_types_list = None
-    if source_types:
-        source_types_list = [t.strip() for t in source_types.split(",") if t.strip()]
+    source_types_list = _parse_csv_values(source_types)
+    lifecycle_states_list = _parse_csv_values(lifecycle_states)
 
     rankings, total_count = service.get_theme_rankings(
         limit=limit,
         status_filter=status,
         source_types_filter=source_types_list,
+        lifecycle_states_filter=lifecycle_states_list,
         offset=offset
     )
 
@@ -259,6 +269,10 @@ async def get_theme_rankings(
 async def get_emerging_themes(
     min_velocity: float = Query(1.5, description="Minimum mention velocity"),
     min_mentions: int = Query(3, description="Minimum mentions in 7 days"),
+    lifecycle_states: Optional[str] = Query(
+        None,
+        description="Comma-separated lifecycle states: candidate,active,dormant,reactivated,retired",
+    ),
     pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
     db: Session = Depends(get_db)
 ):
@@ -269,9 +283,11 @@ async def get_emerging_themes(
     Filtered by pipeline.
     """
     service = ThemeDiscoveryService(db, pipeline=pipeline)
+    lifecycle_states_list = _parse_csv_values(lifecycle_states)
     themes = service.discover_emerging_themes(
         min_velocity=min_velocity,
-        min_mentions=min_mentions
+        min_mentions=min_mentions,
+        lifecycle_states_filter=lifecycle_states_list,
     )
 
     return EmergingThemesResponse(

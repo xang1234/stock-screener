@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.theme import ThemeCluster, ThemeEmbedding
+from app.models.theme import ThemeAlias, ThemeCluster, ThemeEmbedding
 from app.services.theme_embedding_service import ThemeEmbeddingRepository
 from app.services.theme_merging_service import ThemeMergingService
 
@@ -62,6 +62,20 @@ def _make_theme(db_session) -> ThemeCluster:
     db_session.add(theme)
     db_session.commit()
     return theme
+
+
+def _make_embedding(db_session, theme_id: int, *, stale: bool = False) -> ThemeEmbedding:
+    embedding = ThemeEmbedding(
+        theme_cluster_id=theme_id,
+        embedding="[0.5, 0.5]",
+        embedding_model="all-MiniLM-L6-v2",
+        model_version="embedding-v1",
+        content_hash="hash-v1",
+        is_stale=stale,
+    )
+    db_session.add(embedding)
+    db_session.commit()
+    return embedding
 
 
 def test_update_theme_embedding_skips_recompute_when_content_and_model_unchanged(db_session):
@@ -177,3 +191,80 @@ def test_find_similar_themes_refreshes_stale_records_before_similarity(db_sessio
     refreshed_peer = service.embedding_repo.get_for_cluster(peer.id)
     assert refreshed_source is not None and refreshed_source.is_stale is False
     assert refreshed_peer is not None and refreshed_peer.is_stale is False
+
+
+def test_cluster_identity_update_marks_embedding_stale_in_same_commit(db_session):
+    theme = _make_theme(db_session)
+    _make_embedding(db_session, theme.id, stale=False)
+
+    theme.display_name = "AI Infrastructure and Grid"
+    theme.name = "AI Infrastructure and Grid"
+    db_session.commit()
+
+    refreshed = db_session.query(ThemeEmbedding).filter(
+        ThemeEmbedding.theme_cluster_id == theme.id
+    ).one()
+    assert refreshed.is_stale is True
+
+
+def test_alias_insert_marks_embedding_stale(db_session):
+    theme = _make_theme(db_session)
+    _make_embedding(db_session, theme.id, stale=False)
+
+    db_session.add(
+        ThemeAlias(
+            theme_cluster_id=theme.id,
+            pipeline="technical",
+            alias_text="AI Infra Trade",
+            alias_key="ai_infra_trade",
+            source="llm_extraction",
+            confidence=0.82,
+            evidence_count=1,
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    db_session.commit()
+
+    refreshed = db_session.query(ThemeEmbedding).filter(
+        ThemeEmbedding.theme_cluster_id == theme.id
+    ).one()
+    assert refreshed.is_stale is True
+
+
+def test_alias_telemetry_update_does_not_mark_embedding_stale(db_session):
+    theme = _make_theme(db_session)
+    _make_embedding(db_session, theme.id, stale=False)
+
+    alias = ThemeAlias(
+        theme_cluster_id=theme.id,
+        pipeline="technical",
+        alias_text="AI Infra Trade",
+        alias_key="ai_infra_trade",
+        source="llm_extraction",
+        confidence=0.70,
+        evidence_count=1,
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(alias)
+    db_session.commit()
+
+    # Reset to isolate telemetry-only update behavior.
+    embedding = db_session.query(ThemeEmbedding).filter(
+        ThemeEmbedding.theme_cluster_id == theme.id
+    ).one()
+    embedding.is_stale = False
+    db_session.commit()
+
+    alias.confidence = 0.75
+    alias.evidence_count = 2
+    alias.last_seen_at = datetime.utcnow()
+    db_session.commit()
+
+    refreshed = db_session.query(ThemeEmbedding).filter(
+        ThemeEmbedding.theme_cluster_id == theme.id
+    ).one()
+    assert refreshed.is_stale is False

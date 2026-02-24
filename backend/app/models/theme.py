@@ -13,7 +13,10 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     JSON,
+    event,
+    inspect,
 )
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -543,3 +546,73 @@ class ThemeMergeHistory(Base):
     # Timestamps
     merged_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     merged_by = Column(String(50), default="system")  # 'system' or user identifier
+
+
+_EMBEDDING_STALE_CLUSTER_FIELDS = {
+    "canonical_key",
+    "display_name",
+    "name",
+    "aliases",
+    "description",
+    "category",
+    "pipeline",
+}
+
+_EMBEDDING_STALE_ALIAS_FIELDS = {
+    "theme_cluster_id",
+    "pipeline",
+    "alias_text",
+    "alias_key",
+    "is_active",
+}
+
+
+def _has_changed_fields(entity: object, fields: set[str]) -> bool:
+    state = inspect(entity)
+    for field in fields:
+        attr_state = state.attrs.get(field)
+        if attr_state is not None and attr_state.history.has_changes():
+            return True
+    return False
+
+
+@event.listens_for(Session, "before_flush")
+def _mark_theme_embeddings_stale_for_identity_updates(session, flush_context, instances):
+    stale_cluster_ids: set[int] = set()
+
+    for obj in session.dirty:
+        if isinstance(obj, ThemeCluster) and obj.id is not None and _has_changed_fields(obj, _EMBEDDING_STALE_CLUSTER_FIELDS):
+            stale_cluster_ids.add(int(obj.id))
+
+    for obj in session.new:
+        if isinstance(obj, ThemeAlias) and obj.theme_cluster_id is not None:
+            stale_cluster_ids.add(int(obj.theme_cluster_id))
+
+    for obj in session.dirty:
+        if not isinstance(obj, ThemeAlias):
+            continue
+        if not _has_changed_fields(obj, _EMBEDDING_STALE_ALIAS_FIELDS):
+            continue
+        if obj.theme_cluster_id is not None:
+            stale_cluster_ids.add(int(obj.theme_cluster_id))
+
+        alias_state = inspect(obj)
+        prior_cluster_ids = alias_state.attrs.theme_cluster_id.history.deleted
+        for prior_cluster_id in prior_cluster_ids:
+            if prior_cluster_id is not None:
+                stale_cluster_ids.add(int(prior_cluster_id))
+
+    for obj in session.deleted:
+        if isinstance(obj, ThemeAlias) and obj.theme_cluster_id is not None:
+            stale_cluster_ids.add(int(obj.theme_cluster_id))
+
+    if not stale_cluster_ids:
+        return
+
+    session.query(ThemeEmbedding).filter(
+        ThemeEmbedding.theme_cluster_id.in_(stale_cluster_ids),
+        ThemeEmbedding.is_stale.is_(False),
+    ).update(
+        {ThemeEmbedding.is_stale: True},
+        synchronize_session=False,
+    )
