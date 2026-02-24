@@ -117,6 +117,7 @@ class LLMService:
         self,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
+        allow_fallbacks: bool = True,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = "auto",
         temperature: Optional[float] = None,
@@ -148,6 +149,7 @@ class LLMService:
             return self._completion_stream(
                 messages=messages,
                 model=model,
+                allow_fallbacks=allow_fallbacks,
                 tools=tools,
                 tool_choice=tool_choice,
                 temperature=temperature,
@@ -180,7 +182,7 @@ class LLMService:
             params["response_format"] = response_format
 
         # Build fallback list
-        fallback_models = get_fallback_chain(self.preset)[1:]
+        fallback_models = get_fallback_chain(self.preset)[1:] if allow_fallbacks else []
 
         return await self._call_with_fallbacks(
             params=params,
@@ -348,6 +350,7 @@ class LLMService:
         self,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
+        allow_fallbacks: bool = True,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = "auto",
         temperature: Optional[float] = None,
@@ -378,7 +381,7 @@ class LLMService:
         if response_format:
             params["response_format"] = response_format
 
-        all_models = [params["model"]] + get_fallback_chain(self.preset)[1:]
+        all_models = [params["model"]] + (get_fallback_chain(self.preset)[1:] if allow_fallbacks else [])
         last_error = None
 
         for current_model in all_models:
@@ -413,6 +416,7 @@ class LLMService:
         self,
         messages: List[Dict[str, Any]],
         model: Optional[str] = None,
+        allow_fallbacks: bool = True,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = "auto",
         temperature: Optional[float] = None,
@@ -448,7 +452,7 @@ class LLMService:
         if response_format:
             params["response_format"] = response_format
 
-        all_models = [params["model"]] + get_fallback_chain(self.preset)[1:]
+        all_models = [params["model"]] + (get_fallback_chain(self.preset)[1:] if allow_fallbacks else [])
         last_error = None
 
         for current_model in all_models:

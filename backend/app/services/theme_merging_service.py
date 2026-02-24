@@ -25,6 +25,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, and_
 
+from ..models.app_settings import AppSetting
 from ..models.theme import (
     ThemeCluster,
     ThemeConstituent,
@@ -33,7 +34,6 @@ from ..models.theme import (
     ThemeMergeSuggestion,
     ThemeMergeHistory,
 )
-from ..config import settings
 from .llm import LLMService, LLMError
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
@@ -85,24 +85,42 @@ class ThemeMergingService:
 
     # Embedding model
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    EMBEDDING_MODEL_VERSION = "embedding-v1"
     EMBEDDING_DIM = 384
+    DEFAULT_MERGE_MODEL = "groq/llama-3.3-70b-versatile"
 
     def __init__(self, db: Session):
         self.db = db
         self.embedding_engine = ThemeEmbeddingEngine(self.EMBEDDING_MODEL)
         self.embedding_repo = ThemeEmbeddingRepository(db)
         self.llm = None
+        self.merge_model_id = self.DEFAULT_MERGE_MODEL
+        self._load_merge_model_config()
         self._init_llm_client()
 
         # Rate limiting for LLM calls
         self._last_llm_request = 0
         self._min_llm_interval = 0.5  # seconds
 
+    def _load_merge_model_config(self):
+        """Load merge-model selection from persisted settings."""
+        try:
+            setting = self.db.query(AppSetting).filter(AppSetting.key == "llm_merge_model").first()
+            if setting and setting.value:
+                self.merge_model_id = setting.value
+            if self.merge_model_id.startswith("ollama"):
+                ollama_setting = self.db.query(AppSetting).filter(AppSetting.key == "ollama_api_base").first()
+                if ollama_setting and ollama_setting.value:
+                    os.environ["OLLAMA_API_BASE"] = ollama_setting.value
+            logger.info("Theme merge verification configured model: %s", self.merge_model_id)
+        except Exception as exc:
+            logger.warning("Could not load merge model setting; using default %s (%s)", self.merge_model_id, exc)
+
     def _init_llm_client(self):
         """Initialize LLMService for verification"""
         try:
             self.llm = LLMService(use_case="extraction")
-            logger.info("LLMService initialized for theme merging")
+            logger.info("LLMService initialized for theme merging (model=%s)", self.merge_model_id)
         except Exception as e:
             logger.warning(f"LLMService initialization failed: {e}")
 
@@ -123,11 +141,21 @@ class ThemeMergingService:
         text = self._get_theme_text(theme)
         return self.embedding_engine.encode(text)
 
-    def update_theme_embedding(self, theme: ThemeCluster) -> Optional[ThemeEmbedding]:
-        """Update or create embedding for a theme"""
+    def update_theme_embedding(self, theme: ThemeCluster) -> tuple[Optional[ThemeEmbedding], bool]:
+        """Update or create embedding for a theme."""
+        content_hash = self.embedding_repo.build_theme_content_hash(theme)
+        existing = self.embedding_repo.get_for_cluster(theme.id)
+        if not self.embedding_repo.embedding_needs_refresh(
+            existing,
+            content_hash=content_hash,
+            embedding_model=self.EMBEDDING_MODEL,
+            model_version=self.EMBEDDING_MODEL_VERSION,
+        ):
+            return existing, False
+
         embedding_array = self.generate_theme_embedding(theme)
         if embedding_array is None:
-            return None
+            return None, False
 
         # Serialize embedding as JSON list
         embedding_json = ThemeEmbeddingEngine.serialize(embedding_array)
@@ -137,27 +165,33 @@ class ThemeMergingService:
             embedding_json=embedding_json,
             embedding_text=text,
             embedding_model=self.EMBEDDING_MODEL,
+            content_hash=content_hash,
+            model_version=self.EMBEDDING_MODEL_VERSION,
+            is_stale=False,
         )
         self.db.commit()
-        return record
+        return record, True
 
     def update_all_embeddings(self) -> dict:
         """Update embeddings for all active themes"""
         if self.embedding_engine.get_encoder() is None:
-            return {"error": "Embedding model not available", "updated": 0}
+            return {"error": "Embedding model not available", "updated": 0, "skipped": 0}
 
         themes = self.db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True
         ).all()
 
         updated = 0
+        skipped = 0
         errors = 0
 
         for theme in themes:
             try:
-                result = self.update_theme_embedding(theme)
-                if result:
+                result, refreshed = self.update_theme_embedding(theme)
+                if result and refreshed:
                     updated += 1
+                elif result:
+                    skipped += 1
                 else:
                     errors += 1
             except Exception as e:
@@ -167,6 +201,7 @@ class ThemeMergingService:
         return {
             "total_themes": len(themes),
             "updated": updated,
+            "skipped": skipped,
             "errors": errors,
         }
 
@@ -332,10 +367,19 @@ class ThemeMergingService:
         )
 
         try:
+            logger.info(
+                "Verifying merge with configured model %s (theme1=%s, theme2=%s, similarity=%.3f)",
+                self.merge_model_id,
+                theme1.id,
+                theme2.id,
+                similarity,
+            )
             response = self.llm.completion_sync(
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
+                model=self.merge_model_id,
+                allow_fallbacks=False,
                 temperature=0.1,
                 max_tokens=500,
             )
@@ -549,16 +593,20 @@ class ThemeMergingService:
 
         # 4. Deactivate source theme with explicit lifecycle transition audit.
         if (source.lifecycle_state or "active") != "retired":
-            apply_lifecycle_transition(
-                db=self.db,
-                theme=source,
-                to_state="retired",
-                actor="system",
-                job_name="theme_merge",
-                rule_version="lifecycle-v1",
-                reason=f"merged_into:{target_id}",
-                metadata={"merge_type": merge_type, "target_cluster_id": target_id},
-            )
+            try:
+                apply_lifecycle_transition(
+                    db=self.db,
+                    theme=source,
+                    to_state="retired",
+                    actor="system",
+                    job_name="theme_merge",
+                    rule_version="lifecycle-v1",
+                    reason=f"merged_into:{target_id}",
+                    metadata={"merge_type": merge_type, "target_cluster_id": target_id},
+                )
+            except ValueError as exc:
+                self.db.rollback()
+                return {"error": f"Lifecycle transition failed: {exc}", "success": False}
         else:
             source.is_active = False
 

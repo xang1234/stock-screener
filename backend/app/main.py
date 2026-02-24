@@ -119,6 +119,17 @@ def run_theme_lifecycle_migration():
     migrate_theme_lifecycle(engine)
 
 
+def run_theme_embedding_freshness_migration():
+    """
+    Run idempotent theme embedding freshness migration on startup.
+
+    Adds embedding freshness metadata used to avoid unnecessary recompute.
+    """
+    from .db_migrations.theme_embedding_freshness_migration import migrate_theme_embedding_freshness
+
+    migrate_theme_embedding_freshness(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -195,6 +206,7 @@ async def lifespan(app: FastAPI):
     run_theme_aliases_migration()
     run_theme_match_decision_migration()
     run_theme_lifecycle_migration()
+    run_theme_embedding_freshness_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

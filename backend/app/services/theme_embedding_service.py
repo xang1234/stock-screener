@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -96,6 +97,32 @@ class ThemeEmbeddingRepository:
             parts.append(f"Category: {theme.category}")
         return " | ".join(parts)
 
+    @staticmethod
+    def _normalized_aliases(theme: ThemeCluster) -> list[str]:
+        if not theme.aliases or not isinstance(theme.aliases, list):
+            return []
+        aliases = [str(alias).strip() for alias in theme.aliases if str(alias).strip()]
+        return sorted(dict.fromkeys(aliases))
+
+    @classmethod
+    def build_theme_fingerprint_payload(cls, theme: ThemeCluster) -> dict:
+        """Canonical payload for content hash comparisons."""
+        return {
+            "canonical_key": (theme.canonical_key or "").strip(),
+            "display_name": (theme.display_name or "").strip(),
+            "name": (theme.name or "").strip(),
+            "aliases": cls._normalized_aliases(theme),
+            "description": (theme.description or "").strip(),
+            "category": (theme.category or "").strip(),
+            "pipeline": (theme.pipeline or "technical").strip(),
+        }
+
+    @classmethod
+    def build_theme_content_hash(cls, theme: ThemeCluster) -> str:
+        payload = cls.build_theme_fingerprint_payload(theme)
+        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
     def get_for_cluster(self, theme_cluster_id: int) -> Optional[ThemeEmbedding]:
         return self.db.query(ThemeEmbedding).filter(
             ThemeEmbedding.theme_cluster_id == theme_cluster_id
@@ -107,14 +134,20 @@ class ThemeEmbeddingRepository:
         *,
         embedding_model: str | None = None,
         freshness_cutoff: datetime | None = None,
+        model_version: str | None = None,
+        include_stale: bool = False,
     ) -> dict[int, ThemeEmbedding]:
         if not cluster_ids:
             return {}
         query = self.db.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id.in_(cluster_ids))
         if embedding_model:
             query = query.filter(ThemeEmbedding.embedding_model == embedding_model)
+        if model_version:
+            query = query.filter(ThemeEmbedding.model_version == model_version)
         if freshness_cutoff:
             query = query.filter(or_(ThemeEmbedding.updated_at.is_(None), ThemeEmbedding.updated_at >= freshness_cutoff))
+        if not include_stale:
+            query = query.filter(or_(ThemeEmbedding.is_stale.is_(False), ThemeEmbedding.is_stale.is_(None)))
         rows = query.all()
         return {row.theme_cluster_id: row for row in rows}
 
@@ -128,12 +161,18 @@ class ThemeEmbeddingRepository:
         embedding_json: str,
         embedding_text: str,
         embedding_model: str,
+        content_hash: str,
+        model_version: str,
+        is_stale: bool = False,
     ) -> ThemeEmbedding:
         existing = self.get_for_cluster(theme.id)
         if existing:
             existing.embedding = embedding_json
             existing.embedding_text = embedding_text
             existing.embedding_model = embedding_model
+            existing.content_hash = content_hash
+            existing.model_version = model_version
+            existing.is_stale = is_stale
             existing.updated_at = datetime.utcnow()
             return existing
 
@@ -142,6 +181,29 @@ class ThemeEmbeddingRepository:
             embedding=embedding_json,
             embedding_model=embedding_model,
             embedding_text=embedding_text,
+            content_hash=content_hash,
+            model_version=model_version,
+            is_stale=is_stale,
         )
         self.db.add(record)
         return record
+
+    @staticmethod
+    def embedding_needs_refresh(
+        existing: ThemeEmbedding | None,
+        *,
+        content_hash: str,
+        embedding_model: str,
+        model_version: str,
+    ) -> bool:
+        if existing is None:
+            return True
+        if bool(existing.is_stale):
+            return True
+        if (existing.content_hash or "") != content_hash:
+            return True
+        if (existing.embedding_model or "") != embedding_model:
+            return True
+        if (existing.model_version or "") != model_version:
+            return True
+        return False

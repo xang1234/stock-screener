@@ -443,6 +443,9 @@ class ThemeEmbedding(Base):
     embedding = Column(Text, nullable=False)  # JSON-serialized numpy array
     embedding_model = Column(String(50), default="all-MiniLM-L6-v2")
     embedding_text = Column(Text)  # The text that was embedded (for debugging)
+    content_hash = Column(String(64), index=True)  # SHA-256 of theme identity/content used to build embedding
+    model_version = Column(String(40), default="embedding-v1", index=True)  # Embedding policy/version marker
+    is_stale = Column(Boolean, default=False, nullable=False, index=True)  # Explicit stale flag for deferred refresh
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
