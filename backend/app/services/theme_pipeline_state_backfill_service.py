@@ -15,7 +15,11 @@ from ..models.theme import (
     ContentSource,
     ThemeMention,
 )
-from .theme_pipeline_state_service import VALID_PIPELINES, normalize_pipelines
+from .theme_pipeline_state_service import (
+    VALID_PIPELINES,
+    compute_pipeline_state_health,
+    normalize_pipelines,
+)
 
 
 @dataclass
@@ -191,7 +195,11 @@ class ThemePipelineStateBackfillService:
 
         return result
 
-    def summary_counts(self) -> dict[str, Any]:
+    def summary_counts(
+        self,
+        max_age_days: int = 30,
+        drift_thresholds: dict[str, float | int] | None = None,
+    ) -> dict[str, Any]:
         rows = self.db.query(
             ContentItemPipelineState.pipeline,
             ContentItemPipelineState.status,
@@ -205,4 +213,59 @@ class ThemePipelineStateBackfillService:
         for pipeline, status, count in rows:
             by_pipeline.setdefault(pipeline, {})[status] = int(count)
 
-        return {"by_pipeline_status": by_pipeline}
+        thresholds: dict[str, float | int] = {
+            "processed_without_mentions_ratio_max": 0.1,
+            "parse_failure_rate_max": 0.3,
+            "retryable_growth_ratio_max": 2.0,
+            "retryable_growth_delta_max": 25,
+        }
+        if drift_thresholds:
+            thresholds.update(drift_thresholds)
+
+        health = compute_pipeline_state_health(self.db, pipeline=None, max_age_days=max_age_days)
+        drift_rows: list[dict[str, Any]] = []
+
+        for pipeline_row in health.get("pipelines", []):
+            rates = pipeline_row.get("rates", {})
+            retryable_growth = pipeline_row.get("retryable_growth", {})
+            breaches: list[str] = []
+
+            processed_without_mentions_ratio = float(
+                rates.get("processed_without_mentions_ratio", 0.0)
+            )
+            parse_failure_rate = float(rates.get("parse_failure_rate", 0.0))
+            retryable_growth_ratio = float(retryable_growth.get("ratio", 0.0))
+            retryable_growth_delta = int(retryable_growth.get("delta", 0))
+
+            if processed_without_mentions_ratio > float(
+                thresholds["processed_without_mentions_ratio_max"]
+            ):
+                breaches.append("processed_without_mentions_ratio")
+            if parse_failure_rate > float(thresholds["parse_failure_rate_max"]):
+                breaches.append("parse_failure_rate")
+            if retryable_growth_ratio > float(thresholds["retryable_growth_ratio_max"]):
+                breaches.append("retryable_growth_ratio")
+            if retryable_growth_delta > int(thresholds["retryable_growth_delta_max"]):
+                breaches.append("retryable_growth_delta")
+
+            drift_rows.append(
+                {
+                    "pipeline": pipeline_row.get("pipeline"),
+                    "metrics": {
+                        "processed_without_mentions_ratio": round(processed_without_mentions_ratio, 4),
+                        "parse_failure_rate": round(parse_failure_rate, 4),
+                        "retryable_growth_ratio": round(retryable_growth_ratio, 3),
+                        "retryable_growth_delta": retryable_growth_delta,
+                    },
+                    "breaches": breaches,
+                }
+            )
+
+        return {
+            "by_pipeline_status": by_pipeline,
+            "drift": {
+                "window_days": max_age_days,
+                "thresholds": thresholds,
+                "pipelines": drift_rows,
+            },
+        }

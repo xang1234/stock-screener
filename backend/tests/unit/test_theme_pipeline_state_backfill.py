@@ -157,3 +157,82 @@ def test_backfill_dry_run_does_not_write_rows():
         assert db.query(ContentItemPipelineState).count() == 0
     finally:
         db.close()
+
+
+def test_summary_counts_includes_drift_threshold_evaluation():
+    db = _session()
+    try:
+        source = ContentSource(
+            name="ReportSrc",
+            source_type="news",
+            url="https://example.com/report",
+            pipelines=["technical"],
+            is_active=True,
+        )
+        db.add(source)
+        db.flush()
+
+        now = datetime.utcnow()
+        item_processed_no_mentions = ContentItem(
+            source_id=source.id,
+            source_type=source.source_type,
+            source_name=source.name,
+            title="Processed no mention",
+            content="Legacy processed",
+            published_at=now - timedelta(hours=1),
+            is_processed=True,
+        )
+        item_retryable = ContentItem(
+            source_id=source.id,
+            source_type=source.source_type,
+            source_name=source.name,
+            title="Retryable parse error",
+            content="Legacy parse issue",
+            published_at=now - timedelta(hours=2),
+            is_processed=True,
+        )
+        db.add_all([item_processed_no_mentions, item_retryable])
+        db.flush()
+
+        db.add_all(
+            [
+                ContentItemPipelineState(
+                    content_item_id=item_processed_no_mentions.id,
+                    pipeline="technical",
+                    status="processed",
+                    updated_at=now,
+                ),
+                ContentItemPipelineState(
+                    content_item_id=item_retryable.id,
+                    pipeline="technical",
+                    status="failed_retryable",
+                    error_code="json_parse_error",
+                    updated_at=now,
+                ),
+            ]
+        )
+        db.commit()
+
+        service = ThemePipelineStateBackfillService(db)
+        report = service.summary_counts(
+            max_age_days=30,
+            drift_thresholds={
+                "processed_without_mentions_ratio_max": 0.4,
+                "parse_failure_rate_max": 0.2,
+                "retryable_growth_ratio_max": 10.0,
+                "retryable_growth_delta_max": 999,
+            },
+        )
+
+        assert report["by_pipeline_status"]["technical"]["processed"] == 1
+        assert report["by_pipeline_status"]["technical"]["failed_retryable"] == 1
+        assert report["drift"]["thresholds"]["processed_without_mentions_ratio_max"] == 0.4
+        assert report["drift"]["thresholds"]["parse_failure_rate_max"] == 0.2
+
+        technical_row = next(
+            row for row in report["drift"]["pipelines"] if row["pipeline"] == "technical"
+        )
+        assert "processed_without_mentions_ratio" in technical_row["breaches"]
+        assert "parse_failure_rate" in technical_row["breaches"]
+    finally:
+        db.close()

@@ -30,6 +30,10 @@ def _default_checkpoint_path() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "theme_pipeline_state_backfill_checkpoint.json"
 
 
+def _default_report_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "data" / "theme_pipeline_state_backfill_report.json"
+
+
 def _load_checkpoint(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -63,6 +67,42 @@ def _build_parser() -> argparse.ArgumentParser:
         default=str(_default_checkpoint_path()),
         help="Checkpoint file path",
     )
+    parser.add_argument(
+        "--report-file",
+        type=str,
+        default=str(_default_report_path()),
+        help="JSON report output path",
+    )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=30,
+        help="Observation window for drift metrics (default: 30)",
+    )
+    parser.add_argument(
+        "--threshold-processed-without-mentions-ratio",
+        type=float,
+        default=0.1,
+        help="Drift threshold for processed_without_mentions_ratio",
+    )
+    parser.add_argument(
+        "--threshold-parse-failure-rate",
+        type=float,
+        default=0.3,
+        help="Drift threshold for parse_failure_rate",
+    )
+    parser.add_argument(
+        "--threshold-retryable-growth-ratio",
+        type=float,
+        default=2.0,
+        help="Drift threshold for retryable_growth_ratio",
+    )
+    parser.add_argument(
+        "--threshold-retryable-growth-delta",
+        type=int,
+        default=25,
+        help="Drift threshold for retryable_growth_delta",
+    )
     parser.add_argument("--dry-run", action="store_true", help="No writes, no checkpoint persistence")
     parser.add_argument("--yes", "-y", action="store_true", help="Skip interactive confirmation")
     return parser
@@ -71,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     checkpoint_path = Path(args.checkpoint_file).expanduser()
+    report_path = Path(args.report_file).expanduser()
     resume = not args.no_resume
 
     checkpoint = {}
@@ -149,11 +190,34 @@ def main() -> None:
         print(f"  conflicts: {totals['conflicts']}")
         print(f"  chunks_completed: {totals['chunks_completed']}")
 
-        if not args.dry_run:
-            report = service.summary_counts()
-            print("  by_pipeline_status:")
-            for pipeline, counts in sorted(report["by_pipeline_status"].items()):
-                print(f"    {pipeline}: {counts}")
+        report = {
+            "generated_at": datetime.utcnow().isoformat(),
+            "dry_run": bool(args.dry_run),
+            "cursor_last_content_item_id": cursor,
+            "totals": totals,
+            "report": service.summary_counts(
+                max_age_days=args.max_age_days,
+                drift_thresholds={
+                    "processed_without_mentions_ratio_max": args.threshold_processed_without_mentions_ratio,
+                    "parse_failure_rate_max": args.threshold_parse_failure_rate,
+                    "retryable_growth_ratio_max": args.threshold_retryable_growth_ratio,
+                    "retryable_growth_delta_max": args.threshold_retryable_growth_delta,
+                },
+            ),
+        }
+
+        print("  by_pipeline_status:")
+        for pipeline, counts in sorted(report["report"]["by_pipeline_status"].items()):
+            print(f"    {pipeline}: {counts}")
+
+        print("  drift_thresholds:")
+        print(f"    {report['report']['drift']['thresholds']}")
+        print("  drift_breaches:")
+        for pipeline_row in report["report"]["drift"]["pipelines"]:
+            print(f"    {pipeline_row['pipeline']}: {pipeline_row['breaches']}")
+
+        _save_checkpoint(report_path, report)
+        print(f"\nReport written to {report_path}")
     except Exception as exc:
         db.rollback()
         print(f"Error: {exc}", file=sys.stderr)
