@@ -11,6 +11,7 @@ from app.models.theme import (
     ContentItem,
     ContentItemPipelineState,
     ContentSource,
+    ThemeAlias,
     ThemeMention,
     ThemeCluster,
 )
@@ -558,3 +559,52 @@ class TestThemeClusterLabelPreservation:
         assert got.id == cluster.id
         assert cluster.display_name == "Analyst Preferred Label"
         assert cluster.name == "Analyst Preferred Label"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_get_or_create_cluster_uses_alias_key_exact_match(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        """Alias-key lookup should map a raw alias to an existing cluster without creating duplicates."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.flush()
+        db_session.add(
+            ThemeAlias(
+                theme_cluster_id=cluster.id,
+                pipeline="technical",
+                alias_text="AI Infra",
+                alias_key="ai_infra",
+                source="manual",
+                confidence=0.9,
+                evidence_count=3,
+                first_seen_at=datetime.utcnow(),
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got = service._get_or_create_cluster({"theme": "AI Infra", "confidence": 0.8})
+        cluster_count = db_session.query(ThemeCluster).count()
+
+        assert got.id == cluster.id
+        assert cluster_count == 1

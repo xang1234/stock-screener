@@ -84,6 +84,21 @@ def run_theme_cluster_identity_migration():
     migrate_theme_cluster_identity(engine)
 
 
+def run_theme_aliases_migration():
+    """
+    Run idempotent Theme alias schema migration on startup.
+
+    Creates theme_aliases table and indexes used for extraction-time
+    exact alias matching and alias quality analytics.
+    """
+    from .db_migrations.theme_aliases_migration import migrate_theme_aliases
+
+    try:
+        migrate_theme_aliases(engine)
+    except Exception as e:
+        print(f"Warning: Theme aliases migration failed (non-fatal): {e}")
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -157,6 +172,7 @@ async def lifespan(app: FastAPI):
     run_scan_feature_run_migration()
     run_theme_pipeline_state_migration()
     run_theme_cluster_identity_migration()
+    run_theme_aliases_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

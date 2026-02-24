@@ -17,9 +17,11 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
 from ..models.theme import (
     ContentItem,
     ContentItemPipelineState,
+    ThemeAlias,
     ThemeMention,
     ThemeCluster,
     ThemeConstituent,
@@ -686,14 +688,37 @@ Example themes for this pipeline: {examples_str}
 
     def _get_or_create_cluster(self, mention_data: dict) -> ThemeCluster:
         """Get or create theme cluster for a mention, returns the cluster"""
-        canonical_key = canonical_theme_key(mention_data["theme"])
-        canonical_theme = self._normalize_theme(mention_data["theme"])
+        raw_alias = (mention_data.get("theme") or "").strip()
+        canonical_key = canonical_theme_key(raw_alias)
+        canonical_theme = self._normalize_theme(raw_alias)
+        alias_repo = SqlThemeAliasRepository(self.db)
+
+        alias_match: ThemeAlias | None = None
+        if canonical_key != UNKNOWN_THEME_KEY:
+            alias_match = alias_repo.find_exact(pipeline=self.pipeline, alias_key=canonical_key)
+
+        cluster = None
+        if alias_match:
+            cluster = self.db.query(ThemeCluster).filter(
+                ThemeCluster.id == alias_match.theme_cluster_id,
+                ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == True,
+            ).first()
+            if cluster is None:
+                alias_match.is_active = False
 
         # Find or create theme cluster - only match within same pipeline
-        cluster = self.db.query(ThemeCluster).filter(
-            ThemeCluster.canonical_key == canonical_key,
-            ThemeCluster.pipeline == self.pipeline,
-        ).first()
+        if cluster is None:
+            cluster = self.db.query(ThemeCluster).filter(
+                ThemeCluster.canonical_key == canonical_key,
+                ThemeCluster.pipeline == self.pipeline,
+            ).first()
+        if cluster is None:
+            cluster = self.db.query(ThemeCluster).filter(
+                ThemeCluster.display_name == canonical_theme,
+                ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == True,
+            ).first()
 
         if not cluster:
             cluster = ThemeCluster(
@@ -722,8 +747,18 @@ Example themes for this pipeline: {examples_str}
             # Add alias if new
             if cluster.aliases is None:
                 cluster.aliases = []
-            if mention_data["theme"] not in cluster.aliases:
-                cluster.aliases = cluster.aliases + [mention_data["theme"]]
+            if raw_alias and raw_alias not in cluster.aliases:
+                cluster.aliases = cluster.aliases + [raw_alias]
+
+        if raw_alias and canonical_key != UNKNOWN_THEME_KEY:
+            alias_repo.record_observation(
+                theme_cluster_id=cluster.id,
+                pipeline=self.pipeline,
+                alias_text=raw_alias,
+                source="llm_extraction",
+                confidence=float(mention_data.get("confidence") or 0.5),
+                seen_at=datetime.utcnow(),
+            )
 
         return cluster
 

@@ -237,6 +237,36 @@ class ThemeConstituent(Base):
     )
 
 
+class ThemeAlias(Base):
+    """Alias records that map raw theme text to canonical clusters."""
+
+    __tablename__ = "theme_aliases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    theme_cluster_id = Column(Integer, ForeignKey("theme_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    pipeline = Column(String(20), nullable=False, index=True)
+
+    alias_text = Column(String(200), nullable=False)
+    alias_key = Column(String(96), nullable=False, index=True)
+
+    source = Column(String(30), nullable=False, default="llm_extraction")
+    confidence = Column(Float, nullable=False, default=0.5)
+    evidence_count = Column(Integer, nullable=False, default=1)
+
+    first_seen_at = Column(DateTime(timezone=True))
+    last_seen_at = Column(DateTime(timezone=True))
+
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("pipeline", "alias_key", name="uix_theme_alias_pipeline_alias_key"),
+        Index("idx_theme_alias_cluster_active", "theme_cluster_id", "is_active"),
+        Index("idx_theme_alias_source_confidence", "source", "confidence"),
+    )
+
+
 class ThemeMetrics(Base):
     """Daily metrics for each theme (for ranking and tracking)"""
 
