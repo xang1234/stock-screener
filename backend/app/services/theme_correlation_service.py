@@ -20,6 +20,7 @@ from ..models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics, ThemeAl
 from ..models.stock import StockPrice
 from ..models.industry import IBDIndustryGroup
 from ..models.stock_universe import StockUniverse
+from .theme_identity_normalization import canonical_theme_key, display_theme_name
 
 logger = logging.getLogger(__name__)
 
@@ -433,8 +434,11 @@ class ThemeCorrelationService:
         Create a new theme cluster from a discovered correlation cluster
         """
         # Check if similar theme exists
+        canonical_key = canonical_theme_key(name)
+        display_name = display_theme_name(name)
         existing = self.db.query(ThemeCluster).filter(
-            ThemeCluster.name == name
+            ThemeCluster.canonical_key == canonical_key,
+            ThemeCluster.pipeline == "technical",
         ).first()
 
         if existing:
@@ -443,8 +447,11 @@ class ThemeCorrelationService:
 
         # Create cluster
         cluster = ThemeCluster(
-            name=name,
+            canonical_key=canonical_key,
+            display_name=display_name,
+            name=display_name,
             description=description or f"Theme discovered from price correlation analysis",
+            pipeline="technical",
             discovery_source="correlation_clustering",
             first_seen_at=datetime.utcnow(),
             last_seen_at=datetime.utcnow(),
@@ -469,7 +476,7 @@ class ThemeCorrelationService:
 
         self.db.commit()
 
-        logger.info(f"Created theme '{name}' with {len(symbols)} constituents from correlation cluster")
+        logger.info(f"Created theme '{display_name}' with {len(symbols)} constituents from correlation cluster")
         return cluster
 
     def add_entrants_to_theme(

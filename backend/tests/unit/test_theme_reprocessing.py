@@ -343,6 +343,8 @@ class TestIdentifySilentFailures:
 
         # Create a cluster and mention for the legitimate item
         cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
             name="AI Infrastructure",
             pipeline="technical",
             first_seen_at=datetime.utcnow(),

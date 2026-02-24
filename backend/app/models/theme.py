@@ -170,7 +170,9 @@ class ThemeCluster(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Cluster identity
-    name = Column(String(200), nullable=False, unique=True, index=True)  # Canonical name
+    name = Column(String(200), nullable=False, index=True)  # Legacy name field; mirrors display_name during cutover
+    canonical_key = Column(String(96), nullable=False, index=True)  # Pipeline-scoped canonical identity key
+    display_name = Column(String(200), nullable=False)  # Human-friendly label independent from canonical_key
     aliases = Column(JSON)  # List of alternative names that map to this cluster
     description = Column(Text)  # Auto-generated or manual description
 
@@ -193,6 +195,10 @@ class ThemeCluster(Base):
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("pipeline", "canonical_key", name="uix_theme_clusters_pipeline_canonical_key"),
+    )
 
 
 class ThemeConstituent(Base):

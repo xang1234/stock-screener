@@ -72,6 +72,21 @@ def run_theme_pipeline_state_migration():
         print(f"Warning: Theme pipeline-state migration failed (non-fatal): {e}")
 
 
+def run_theme_cluster_identity_migration():
+    """
+    Run idempotent Theme cluster identity migration on startup.
+
+    Adds canonical_key/display_name and enforces pipeline-scoped uniqueness
+    for theme cluster identity.
+    """
+    from .db_migrations.theme_cluster_identity_migration import migrate_theme_cluster_identity
+
+    try:
+        migrate_theme_cluster_identity(engine)
+    except Exception as e:
+        print(f"Warning: Theme cluster identity migration failed (non-fatal): {e}")
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -144,6 +159,7 @@ async def lifespan(app: FastAPI):
     run_feature_store_migration()
     run_scan_feature_run_migration()
     run_theme_pipeline_state_migration()
+    run_theme_cluster_identity_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

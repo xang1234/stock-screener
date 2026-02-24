@@ -173,7 +173,7 @@ class DatabaseTools:
             query = self.db.query(ThemeCluster)
 
             if theme_name:
-                query = query.filter(ThemeCluster.name.ilike(f"%{theme_name}%"))
+                query = query.filter(ThemeCluster.display_name.ilike(f"%{theme_name}%"))
 
             themes = (
                 query
@@ -202,7 +202,7 @@ class DatabaseTools:
                 )
 
                 result.append({
-                    "name": theme.name,
+                    "name": theme.display_name or theme.name,
                     "description": theme.description,
                     "category": theme.category,
                     "is_emerging": theme.is_emerging,
@@ -248,7 +248,7 @@ class DatabaseTools:
                 theme = self.db.query(ThemeCluster).filter(ThemeCluster.id == metric.theme_cluster_id).first()
                 if theme:
                     result.append({
-                        "name": theme.name,
+                        "name": theme.display_name or theme.name,
                         "description": theme.description,
                         "velocity": metric.mention_velocity,
                         "mention_count": metric.mentions_7d,
@@ -699,7 +699,7 @@ class DatabaseTools:
             theme = (
                 self.db.query(ThemeCluster)
                 .filter(
-                    (func.lower(ThemeCluster.name) == theme_name.lower()) |
+                    (func.lower(ThemeCluster.display_name) == theme_name.lower()) |
                     (ThemeCluster.aliases.contains([theme_name]))
                 )
                 .first()
@@ -709,7 +709,7 @@ class DatabaseTools:
             if not theme:
                 theme = (
                     self.db.query(ThemeCluster)
-                    .filter(ThemeCluster.name.ilike(f"%{theme_name}%"))
+                    .filter(ThemeCluster.display_name.ilike(f"%{theme_name}%"))
                     .order_by(desc(ThemeCluster.last_seen_at))
                     .first()
                 )
@@ -737,7 +737,7 @@ class DatabaseTools:
 
             result = {
                 "theme": {
-                    "name": theme.name,
+                    "name": theme.display_name or theme.name,
                     "aliases": theme.aliases or [],
                     "description": theme.description,
                     "category": theme.category,
@@ -964,7 +964,7 @@ class DatabaseTools:
         theme = (
             self.db.query(ThemeCluster)
             .filter(
-                (func.lower(ThemeCluster.name) == theme_name.lower()) |
+                (func.lower(ThemeCluster.display_name) == theme_name.lower()) |
                 (ThemeCluster.aliases.contains([theme_name]))
             )
             .first()
@@ -973,7 +973,7 @@ class DatabaseTools:
         if not theme:
             theme = (
                 self.db.query(ThemeCluster)
-                .filter(ThemeCluster.name.ilike(f"%{theme_name}%"))
+                .filter(ThemeCluster.display_name.ilike(f"%{theme_name}%"))
                 .first()
             )
 
@@ -1007,7 +1007,7 @@ class DatabaseTools:
         top_tickers = [c.symbol for c in top_constituents]
 
         summary = {
-            "name": theme.name,
+            "name": theme.display_name or theme.name,
             "category": theme.category,
             "is_emerging": theme.is_emerging,
             "top_tickers": top_tickers,

@@ -686,16 +686,19 @@ Example themes for this pipeline: {examples_str}
 
     def _get_or_create_cluster(self, mention_data: dict) -> ThemeCluster:
         """Get or create theme cluster for a mention, returns the cluster"""
+        canonical_key = canonical_theme_key(mention_data["theme"])
         canonical_theme = self._normalize_theme(mention_data["theme"])
 
         # Find or create theme cluster - only match within same pipeline
         cluster = self.db.query(ThemeCluster).filter(
-            ThemeCluster.name == canonical_theme,
+            ThemeCluster.canonical_key == canonical_key,
             ThemeCluster.pipeline == self.pipeline,
         ).first()
 
         if not cluster:
             cluster = ThemeCluster(
+                canonical_key=canonical_key,
+                display_name=canonical_theme,
                 name=canonical_theme,
                 aliases=[mention_data["theme"]],
                 pipeline=self.pipeline,  # Set pipeline from service instance
@@ -710,6 +713,8 @@ Example themes for this pipeline: {examples_str}
             logger.info(f"Discovered new theme cluster: {canonical_theme} (pipeline={self.pipeline})")
 
         else:
+            cluster.display_name = canonical_theme
+            cluster.name = canonical_theme
             cluster.last_seen_at = datetime.utcnow()
             # Add alias if new
             if cluster.aliases is None:

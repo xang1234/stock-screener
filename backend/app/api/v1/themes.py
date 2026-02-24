@@ -831,7 +831,7 @@ def _fetch_content_items_with_themes(
         ThemeMention.sentiment,
         ThemeMention.tickers,
         ThemeCluster.id.label("cluster_id"),
-        ThemeCluster.name.label("cluster_name")
+        ThemeCluster.display_name.label("cluster_name")
     ).outerjoin(
         ThemeCluster, ThemeMention.theme_cluster_id == ThemeCluster.id
     ).filter(
@@ -1195,7 +1195,7 @@ async def get_theme_history(
     ).order_by(ThemeMetrics.date).all()
 
     return {
-        "theme": cluster.name,
+        "theme": cluster.display_name,
         "history": [
             {
                 "date": m.date.isoformat(),
@@ -1238,7 +1238,7 @@ async def get_theme_mentions(
     mentions = mentions_query.all()
 
     return ThemeMentionsResponse(
-        theme_name=cluster.name,
+        theme_name=cluster.display_name,
         theme_id=theme_id,
         total_count=len(mentions),
         mentions=[
@@ -1312,7 +1312,7 @@ async def validate_theme(
     result = service.validate_theme(theme_id, min_correlation)
 
     return ThemeValidationResponse(
-        theme=cluster.name,
+        theme=cluster.display_name,
         **result
     )
 
@@ -1340,7 +1340,7 @@ async def find_theme_entrants(
     )
 
     return {
-        "theme": cluster.name,
+        "theme": cluster.display_name,
         "potential_entrants": entrants
     }
 
@@ -1365,7 +1365,7 @@ async def find_similar_themes(
 
     return SimilarThemesResponse(
         source_theme_id=theme_id,
-        source_theme_name=cluster.name,
+        source_theme_name=cluster.display_name,
         threshold=threshold,
         similar_themes=[SimilarThemeResponse(**s) for s in similar]
     )
@@ -1430,7 +1430,7 @@ async def create_theme_from_cluster(
     return {
         "status": "created",
         "theme_id": cluster.id,
-        "name": cluster.name,
+        "name": cluster.display_name,
         "num_constituents": len(symbols)
     }
 
@@ -1488,4 +1488,4 @@ async def deactivate_theme(
     cluster.is_active = False
     db.commit()
 
-    return {"status": "deactivated", "theme": cluster.name}
+    return {"status": "deactivated", "theme": cluster.display_name}
