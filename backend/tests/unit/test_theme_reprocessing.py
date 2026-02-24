@@ -120,9 +120,9 @@ class TestExtractFromContentBugFix:
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
-    def test_json_decode_error_returns_empty(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
-        """JSON parse errors should still return [] (LLM responded, just bad format)."""
-        from app.services.theme_extraction_service import ThemeExtractionService
+    def test_json_decode_error_reraises_parse_failure(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """JSON parse errors should raise a retryable parse-failure exception."""
+        from app.services.theme_extraction_service import ThemeExtractionParseError, ThemeExtractionService
 
         service = ThemeExtractionService.__new__(ThemeExtractionService)
         service.db = db_session
@@ -142,8 +142,43 @@ class TestExtractFromContentBugFix:
 
         # LLM returns invalid JSON
         with patch.object(service, '_try_generate_litellm', return_value="This is not JSON at all"):
-            result = service.extract_from_content(item)
-            assert result == []
+            with pytest.raises(ThemeExtractionParseError, match="Failed to parse LLM response"):
+                service.extract_from_content(item)
+
+
+class TestParseFailurePipelineSemantics:
+    """Verify parse failures become explicit retryable pipeline-state errors."""
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_parse_failure_marks_retryable_state_with_error_code(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionParseError, ThemeExtractionService
+
+        item = _make_content_item(db_session, pipeline_source, external_id="parse-failure-1")
+        _set_pipeline_state(db_session, item.id, "technical", "pending", attempt_count=0)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(service, "_extract_and_store_mentions", side_effect=ThemeExtractionParseError("bad json")):
+            with pytest.raises(ThemeExtractionParseError, match="bad json"):
+                service.process_content_item(item)
+
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == item.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state is not None
+        assert state.status == "failed_retryable"
+        assert state.attempt_count == 1
+        assert state.error_code == "llm_response_parse_error"
 
 
 class TestReprocessFailedItems:
@@ -644,3 +679,210 @@ class TestThemeClusterLabelPreservation:
         assert got.id == cluster.id
         assert cluster.is_active is True
         assert db_session.query(ThemeCluster).count() == 1
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_emits_alias_decision(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.flush()
+        db_session.add(
+            ThemeAlias(
+                theme_cluster_id=cluster.id,
+                pipeline="technical",
+                alias_text="AI Infra",
+                alias_key="ai_infra",
+                source="manual",
+                confidence=0.9,
+                evidence_count=3,
+                first_seen_at=datetime.utcnow(),
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infra", "confidence": 0.8})
+        assert got_cluster.id == cluster.id
+        assert decision.method == "exact_alias_key"
+        assert decision.score == 1.0
+        assert decision.threshold_version == "match-v1"
+        assert decision.selected_cluster_id == cluster.id
+        assert decision.fallback_reason is None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_clears_fallback_when_alias_target_inactive_but_canonical_exists(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        active_cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        inactive_cluster = ThemeCluster(
+            canonical_key="legacy_ai_infra",
+            display_name="Legacy AI Infra",
+            name="Legacy AI Infra",
+            pipeline="technical",
+            aliases=["Legacy AI Infra"],
+            is_active=False,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([active_cluster, inactive_cluster])
+        db_session.flush()
+        db_session.add(
+            ThemeAlias(
+                theme_cluster_id=inactive_cluster.id,
+                pipeline="technical",
+                alias_text="A.I. Infrastructure",
+                alias_key="ai_infrastructure",
+                source="manual",
+                confidence=0.9,
+                evidence_count=2,
+                first_seen_at=datetime.utcnow(),
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "A.I. Infrastructure", "confidence": 0.8})
+        assert got_cluster.id == active_cluster.id
+        assert decision.method == "exact_canonical_key"
+        assert decision.fallback_reason is None
+        assert decision.best_alternative_cluster_id is None
+        assert decision.best_alternative_score is None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_prefers_canonical_stage_a_before_alias(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        canonical_cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        alias_target_cluster = ThemeCluster(
+            canonical_key="legacy_ai_infra",
+            display_name="Legacy AI Infra",
+            name="Legacy AI Infra",
+            pipeline="technical",
+            aliases=["Legacy AI Infra"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([canonical_cluster, alias_target_cluster])
+        db_session.flush()
+        db_session.add(
+            ThemeAlias(
+                theme_cluster_id=alias_target_cluster.id,
+                pipeline="technical",
+                alias_text="A.I. Infrastructure",
+                alias_key="ai_infrastructure",
+                source="manual",
+                confidence=0.8,
+                evidence_count=2,
+                first_seen_at=datetime.utcnow(),
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructure", "confidence": 0.8})
+        assert got_cluster.id == canonical_cluster.id
+        assert decision.method == "exact_canonical_key"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_extract_and_store_mentions_persists_decision_fields(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(db_session, pipeline_source, source_type="news")
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(
+            service,
+            "extract_from_content",
+            return_value=[
+                {
+                    "theme": "New Theme Idea",
+                    "tickers": ["NVDA"],
+                    "sentiment": "bullish",
+                    "confidence": 0.8,
+                    "excerpt": "example",
+                }
+            ],
+        ):
+            created = service._extract_and_store_mentions(item)
+
+        assert created == 1
+        mention = db_session.query(ThemeMention).filter(ThemeMention.content_item_id == item.id).one()
+        assert mention.match_method == "create_new_cluster"
+        assert mention.match_score == 0.0
+        assert mention.match_threshold == 1.0
+        assert mention.threshold_version == "match-v1"
+        assert mention.match_fallback_reason == "no_existing_cluster_match"

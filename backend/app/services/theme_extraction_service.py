@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
+from ..domain.theme_matching import MatchDecision, MatchThresholdConfig
 from ..models.theme import (
     ContentItem,
     ContentItemPipelineState,
@@ -45,6 +47,10 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
+
+
+class ThemeExtractionParseError(Exception):
+    """Raised when model output cannot be parsed into the extraction schema."""
 
 
 _LEGACY_THEME_CANONICAL_NAME_MAP = {
@@ -153,6 +159,16 @@ class ThemeExtractionService:
         "models/gemini-2.5-flash",
     ]
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
+    MATCH_THRESHOLD_CONFIG = MatchThresholdConfig(
+        version="match-v1",
+        default_threshold=1.0,
+        pipeline_overrides={
+            "technical": 1.0,
+            "fundamental": 1.0,
+        },
+        source_type_overrides={},
+        pipeline_source_type_overrides={},
+    )
 
     def __init__(self, db: Session, pipeline: str = "technical"):
         self.db = db
@@ -467,7 +483,7 @@ Example themes for this pipeline: {examples_str}
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             logger.error(f"Raw response: {response_text[:500] if response_text else 'EMPTY'}")
-            return []  # LLM responded but format was bad — not worth retrying
+            raise ThemeExtractionParseError(f"Failed to parse LLM response: {e}") from e
         except Exception as e:
             logger.error(f"LLM extraction failed (will retry): {e}")
             raise  # Re-raise so process_batch() marks extraction_error
@@ -482,11 +498,19 @@ Example themes for this pipeline: {examples_str}
 
         mention_count = 0
         for mention_data in mentions:
-            cluster = self._get_or_create_cluster(mention_data)
+            cluster, decision = self._resolve_cluster_match(mention_data, source_type=content_item.source_type)
 
             theme_mention = ThemeMention(
                 content_item_id=content_item.id,
                 theme_cluster_id=cluster.id,
+                match_method=decision.method,
+                match_score=decision.score,
+                match_threshold=decision.threshold,
+                threshold_version=decision.threshold_version,
+                match_fallback_reason=decision.fallback_reason,
+                best_alternative_cluster_id=decision.best_alternative_cluster_id,
+                best_alternative_score=decision.best_alternative_score,
+                match_score_margin=decision.score_margin,
                 source_type=content_item.source_type,
                 source_name=content_item.source_name,
                 raw_theme=mention_data["theme"],
@@ -505,6 +529,14 @@ Example themes for this pipeline: {examples_str}
             self._update_theme_constituents(mention_data, cluster)
 
         return mention_count
+
+    def _get_match_threshold_config(self) -> MatchThresholdConfig:
+        config = getattr(self, "match_threshold_config", None)
+        if config is None:
+            # Avoid cross-request mutation by cloning class-level defaults.
+            config = deepcopy(self.MATCH_THRESHOLD_CONFIG)
+            self.match_threshold_config = config
+        return config
 
     def process_content_item(self, content_item: ContentItem) -> int:
         """
@@ -601,6 +633,8 @@ Example themes for this pipeline: {examples_str}
     def _failure_code(self, error: Exception) -> str:
         """Best-effort normalized error code for observability."""
         name = error.__class__.__name__.lower()
+        if isinstance(error, ThemeExtractionParseError):
+            return "llm_response_parse_error"
         if isinstance(error, LLMError):
             return f"llm_{name}"
         if "json" in name:
@@ -687,33 +721,62 @@ Example themes for this pipeline: {examples_str}
         return display_theme_name(theme)
 
     def _get_or_create_cluster(self, mention_data: dict) -> ThemeCluster:
-        """Get or create theme cluster for a mention, returns the cluster"""
+        """Backward-compatible wrapper returning only the resolved cluster."""
+        cluster, _ = self._resolve_cluster_match(mention_data)
+        return cluster
+
+    def _resolve_cluster_match(
+        self,
+        mention_data: dict,
+        source_type: str | None = None,
+    ) -> tuple[ThemeCluster, MatchDecision]:
+        """Resolve cluster assignment plus a typed decision payload."""
         raw_alias = (mention_data.get("theme") or "").strip()
         canonical_key = canonical_theme_key(raw_alias)
         canonical_theme = self._normalize_theme(raw_alias)
         alias_repo = SqlThemeAliasRepository(self.db)
-
-        alias_match: ThemeAlias | None = None
-        if canonical_key != UNKNOWN_THEME_KEY:
-            alias_match = alias_repo.find_exact(pipeline=self.pipeline, alias_key=canonical_key)
+        threshold_config = self._get_match_threshold_config()
+        threshold = threshold_config.resolve_threshold(
+            pipeline=self.pipeline,
+            source_type=source_type,
+        )
+        threshold_version = threshold_config.version
 
         cluster = None
-        if alias_match:
-            cluster = self.db.query(ThemeCluster).filter(
-                ThemeCluster.id == alias_match.theme_cluster_id,
-                ThemeCluster.pipeline == self.pipeline,
-                ThemeCluster.is_active == True,
-            ).first()
-            if cluster is None:
-                alias_match.is_active = False
+        fallback_reason = None
+        method = "create_new_cluster"
+        score = 0.0
+        best_alternative_cluster_id = None
+        best_alternative_score = None
 
-        # Find or create theme cluster - only match within same pipeline
+        # Stage A: pipeline+canonical_key exact matching (indexed, low-latency gate).
         if cluster is None:
             cluster = self.db.query(ThemeCluster).filter(
                 ThemeCluster.canonical_key == canonical_key,
                 ThemeCluster.pipeline == self.pipeline,
                 ThemeCluster.is_active == True,
             ).first()
+            if cluster is not None:
+                method = "exact_canonical_key"
+                score = 1.0
+
+        # Stage B: alias-key exact matching when canonical lookup misses.
+        alias_match: ThemeAlias | None = None
+        if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
+            alias_match = alias_repo.find_exact(pipeline=self.pipeline, alias_key=canonical_key)
+            if alias_match:
+                cluster = self.db.query(ThemeCluster).filter(
+                    ThemeCluster.id == alias_match.theme_cluster_id,
+                    ThemeCluster.pipeline == self.pipeline,
+                    ThemeCluster.is_active == True,
+                ).first()
+                if cluster is None:
+                    best_alternative_cluster_id = alias_match.theme_cluster_id
+                    best_alternative_score = 1.0
+                    alias_match.is_active = False
+                else:
+                    method = "exact_alias_key"
+                    score = 1.0
         if cluster is None:
             inactive_cluster = self.db.query(ThemeCluster).filter(
                 ThemeCluster.canonical_key == canonical_key,
@@ -724,12 +787,19 @@ Example themes for this pipeline: {examples_str}
                 inactive_cluster.is_active = True
                 inactive_cluster.last_seen_at = datetime.utcnow()
                 cluster = inactive_cluster
+                method = "exact_canonical_key"
+                score = 1.0
+                if fallback_reason is None:
+                    fallback_reason = "reactivated_inactive_canonical_match"
         if cluster is None:
             cluster = self.db.query(ThemeCluster).filter(
                 ThemeCluster.display_name == canonical_theme,
                 ThemeCluster.pipeline == self.pipeline,
                 ThemeCluster.is_active == True,
             ).first()
+            if cluster is not None:
+                method = "exact_display_name"
+                score = 1.0
 
         if not cluster:
             cluster = ThemeCluster(
@@ -747,6 +817,10 @@ Example themes for this pipeline: {examples_str}
             self.db.flush()  # Get ID
 
             logger.info(f"Discovered new theme cluster: {canonical_theme} (pipeline={self.pipeline})")
+            method = "create_new_cluster"
+            score = 0.0
+            if fallback_reason is None:
+                fallback_reason = "no_existing_cluster_match"
 
         else:
             # Preserve analyst-managed display labels once a cluster exists.
@@ -771,7 +845,22 @@ Example themes for this pipeline: {examples_str}
                 seen_at=datetime.utcnow(),
             )
 
-        return cluster
+        score_margin = None
+        if best_alternative_score is not None:
+            score_margin = float(score) - float(best_alternative_score)
+
+        decision = MatchDecision(
+            selected_cluster_id=cluster.id,
+            method=method,
+            score=float(score),
+            threshold=float(threshold),
+            threshold_version=threshold_version,
+            fallback_reason=fallback_reason,
+            best_alternative_cluster_id=best_alternative_cluster_id,
+            best_alternative_score=best_alternative_score,
+            score_margin=score_margin,
+        )
+        return cluster, decision
 
     def _update_theme_constituents(self, mention_data: dict, cluster: ThemeCluster):
         """Update theme-to-ticker mapping based on mention"""
