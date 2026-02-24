@@ -43,6 +43,12 @@ SCHEDULED_TASKS = {
         'description': 'Merges duplicate themes via embeddings + LLM',
         'schedule_description': 'Sunday 4:00 AM ET',
     },
+    'daily-theme-stale-embedding-recompute': {
+        'task_function': 'app.tasks.theme_discovery_tasks.recompute_stale_theme_embeddings',
+        'display_name': 'Daily Stale Embedding Refresh',
+        'description': 'Incrementally recomputes stale theme embeddings in bounded batches',
+        'schedule_description': 'Daily 5:10 AM ET',
+    },
 
     # ===== WEEKDAYS (After Market Close) =====
     'auto-refresh-after-close': {

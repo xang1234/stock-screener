@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from ..models.theme import (
     ThemeCluster,
     ThemeConstituent,
+    ThemeLifecycleTransition,
     ThemeMention,
     ThemeMetrics,
     ThemeAlert,
@@ -39,6 +40,7 @@ LIFECYCLE_RANK_WEIGHTS = {
     "dormant": 0.6,
     "retired": 0.2,
 }
+LIFECYCLE_RUNBOOK_URL = "/docs/runbooks/theme-lifecycle.md"
 
 
 class ThemeDiscoveryService:
@@ -825,6 +827,42 @@ class ThemeDiscoveryService:
         self.db.commit()
         return alert
 
+    def _emit_lifecycle_transition_alert(
+        self,
+        *,
+        cluster: ThemeCluster,
+        transition: ThemeLifecycleTransition,
+        reason: str,
+        rule_version: str,
+        observation: dict[str, float] | None = None,
+    ) -> ThemeAlert:
+        title = (
+            f"Lifecycle Transition: {cluster.name} "
+            f"{transition.from_state} -> {transition.to_state}"
+        )
+        reason_text = reason.replace("_", " ")
+        description = (
+            f"Theme '{cluster.name}' transitioned from {transition.from_state} to {transition.to_state}. "
+            f"Reason: {reason_text}. Rule: {rule_version}."
+        )
+        history_path = f"/api/v1/themes/lifecycle-transitions?theme_cluster_id={cluster.id}"
+        return self.create_alert(
+            alert_type=f"lifecycle_{transition.to_state}",
+            title=title,
+            description=description,
+            theme_cluster_id=cluster.id,
+            metrics={
+                "from_state": transition.from_state,
+                "to_state": transition.to_state,
+                "reason": reason,
+                "rule_version": rule_version,
+                "observation": observation or {},
+                "transition_history_path": history_path,
+                "runbook_url": LIFECYCLE_RUNBOOK_URL,
+            },
+            severity="info",
+        )
+
     def check_for_alerts(self) -> list[ThemeAlert]:
         """
         Check for alert conditions and create alerts
@@ -1054,23 +1092,32 @@ class ThemeDiscoveryService:
                 )
 
                 if should_promote:
+                    transition_reason = "candidate_promotion_thresholds_met"
+                    transition_rule_version = "lifecycle-v2"
                     metadata = self._merge_lifecycle_metadata(
                         cluster,
                         observation=observation,
                         counter_field="promotion_count",
-                        reason="candidate_promotion_thresholds_met",
+                        reason=transition_reason,
                         now=now,
                     )
-                    apply_lifecycle_transition(
+                    transition = apply_lifecycle_transition(
                         db=self.db,
                         theme=cluster,
                         to_state="active",
                         actor="system",
                         job_name="promote_candidate_themes",
-                        rule_version="lifecycle-v2",
-                        reason="candidate_promotion_thresholds_met",
+                        rule_version=transition_rule_version,
+                        reason=transition_reason,
                         metadata=metadata,
                         transitioned_at=now,
+                    )
+                    self._emit_lifecycle_transition_alert(
+                        cluster=cluster,
+                        transition=transition,
+                        reason=transition_reason,
+                        rule_version=transition_rule_version,
+                        observation=observation,
                     )
                     result["promoted"] += 1
                 else:
@@ -1166,16 +1213,24 @@ class ThemeDiscoveryService:
                     reason=reason,
                     now=now,
                 )
-                apply_lifecycle_transition(
+                transition_rule_version = "lifecycle-v2"
+                transition = apply_lifecycle_transition(
                     db=self.db,
                     theme=cluster,
                     to_state=to_state,
                     actor="system",
                     job_name="apply_lifecycle_policies",
-                    rule_version="lifecycle-v2",
+                    rule_version=transition_rule_version,
                     reason=reason,
                     metadata=metadata,
                     transitioned_at=now,
+                )
+                self._emit_lifecycle_transition_alert(
+                    cluster=cluster,
+                    transition=transition,
+                    reason=reason,
+                    rule_version=transition_rule_version,
+                    observation=observation,
                 )
                 if to_state == "dormant":
                     result["to_dormant"] += 1
@@ -1188,6 +1243,48 @@ class ThemeDiscoveryService:
                 logger.error("Dormancy/reactivation policy failed for theme %s: %s", cluster.id, exc)
 
         return result
+
+    def get_lifecycle_transition_history(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        theme_cluster_id: int | None = None,
+        to_state: str | None = None,
+    ) -> tuple[list[dict], int]:
+        query = self.db.query(ThemeLifecycleTransition, ThemeCluster).join(
+            ThemeCluster, ThemeCluster.id == ThemeLifecycleTransition.theme_cluster_id
+        ).filter(ThemeCluster.pipeline == self.pipeline)
+
+        if theme_cluster_id is not None:
+            query = query.filter(ThemeLifecycleTransition.theme_cluster_id == theme_cluster_id)
+        if to_state:
+            query = query.filter(ThemeLifecycleTransition.to_state == to_state)
+
+        total_count = query.count()
+        rows = query.order_by(ThemeLifecycleTransition.transitioned_at.desc()).offset(offset).limit(limit).all()
+
+        history = []
+        for transition, cluster in rows:
+            history.append(
+                {
+                    "id": transition.id,
+                    "theme_cluster_id": cluster.id,
+                    "theme_name": cluster.name,
+                    "pipeline": cluster.pipeline,
+                    "from_state": transition.from_state,
+                    "to_state": transition.to_state,
+                    "actor": transition.actor,
+                    "job_name": transition.job_name,
+                    "rule_version": transition.rule_version,
+                    "reason": transition.reason,
+                    "transition_metadata": transition.transition_metadata if isinstance(transition.transition_metadata, dict) else {},
+                    "transitioned_at": transition.transitioned_at.isoformat() if transition.transitioned_at else None,
+                    "transition_history_path": f"/api/v1/themes/lifecycle-transitions?theme_cluster_id={cluster.id}",
+                    "runbook_url": LIFECYCLE_RUNBOOK_URL,
+                }
+            )
+        return history, total_count
 
     def _canonicalize_relationship_edge(
         self,

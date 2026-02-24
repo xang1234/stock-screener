@@ -341,6 +341,93 @@ def calculate_theme_metrics(pipeline: str = None):
         db.close()
 
 
+@celery_app.task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+    name='app.tasks.theme_discovery_tasks.recompute_stale_theme_embeddings',
+)
+def recompute_stale_theme_embeddings(
+    self,
+    pipeline: str = None,
+    batch_size: int = 100,
+    max_batches: int = 20,
+):
+    """
+    Incrementally recompute stale theme embeddings in bounded batches.
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: Recompute Stale Theme Embeddings")
+    logger.info("Pipeline: %s | batch_size=%s | max_batches=%s", pipeline or "all", batch_size, max_batches)
+    logger.info("=" * 60)
+
+    from ..services.theme_merging_service import ThemeMergingService
+
+    db = SessionLocal()
+    start_time = time.time()
+    last_progress: dict[str, object] = {}
+
+    try:
+        service = ThemeMergingService(db)
+
+        def _on_batch(progress: dict):
+            nonlocal last_progress
+            last_progress = dict(progress)
+            total = int(progress.get("stale_total_before") or 0)
+            remaining = int(progress.get("stale_remaining") or 0)
+            done = max(0, total - remaining)
+            percent = float(done / total * 100.0) if total > 0 else 100.0
+            self.update_state(
+                state="PROGRESS",
+                meta={
+                    "current": done,
+                    "total": total,
+                    "percent": round(percent, 2),
+                    "message": (
+                        f"Processed {progress.get('processed', 0)} stale candidates "
+                        f"across {progress.get('batches_processed', 0)} batches"
+                    ),
+                    "batch": progress.get("batch"),
+                    "failed": progress.get("failed", 0),
+                    "remaining": remaining,
+                },
+            )
+
+        result = service.recompute_stale_embeddings(
+            pipeline=pipeline,
+            batch_size=batch_size,
+            max_batches=max_batches,
+            on_batch=_on_batch,
+        )
+
+        duration = time.time() - start_time
+        logger.info("Stale embedding recompute complete in %.2fs", duration)
+        logger.info(
+            "  stale_before=%s processed=%s refreshed=%s failed=%s remaining=%s",
+            result.get("stale_total_before", 0),
+            result.get("processed", 0),
+            result.get("refreshed", 0),
+            result.get("failed", 0),
+            result.get("stale_remaining_after", 0),
+        )
+        logger.info("=" * 60)
+        return {
+            "status": "completed",
+            "summary": result,
+            "progress": last_progress,
+            "duration_seconds": round(duration, 2),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name='app.tasks.theme_discovery_tasks.promote_candidate_themes')
 def promote_candidate_themes(pipeline: str = None, limit: int = 1000):
     """

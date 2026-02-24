@@ -317,6 +317,17 @@ if settings.cache_warmup_enabled:
             ),
         },
 
+        # Incremental stale embedding refresh to avoid full-table recomputes.
+        # Runs after lifecycle updates so freshness catches identity transitions quickly.
+        'daily-theme-stale-embedding-recompute': {
+            'task': 'app.tasks.theme_discovery_tasks.recompute_stale_theme_embeddings',
+            'schedule': crontab(
+                hour=5,
+                minute=10,
+            ),
+            'kwargs': {'batch_size': 100, 'max_batches': 20},
+        },
+
         # Daily semantic relationship edge inference for theme analysis UX.
         # Runs after lifecycle updates and merge suggestion generation windows.
         'daily-theme-relationship-inference': {

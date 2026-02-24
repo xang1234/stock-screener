@@ -45,6 +45,8 @@ from ...schemas.theme import (
     EmergingThemeResponse,
     AlertsResponse,
     ThemeAlertResponse,
+    ThemeLifecycleTransitionHistoryResponse,
+    ThemeLifecycleTransitionResponse,
     ThemeMentionsResponse,
     ThemeMentionDetailResponse,
     CorrelationDiscoveryResponse,
@@ -325,6 +327,35 @@ async def get_alerts(
         total=len(alerts),
         unread=unread_count,
         alerts=[ThemeAlertResponse.model_validate(a) for a in alerts]
+    )
+
+
+@router.get("/lifecycle-transitions", response_model=ThemeLifecycleTransitionHistoryResponse)
+async def get_lifecycle_transitions(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
+    theme_cluster_id: Optional[int] = Query(None, description="Optional theme cluster ID filter"),
+    to_state: Optional[str] = Query(
+        None,
+        description="Optional target lifecycle state filter: candidate,active,dormant,reactivated,retired",
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Get lifecycle transition audit history with decision context.
+    """
+    service = ThemeDiscoveryService(db, pipeline=pipeline)
+    history, total_count = service.get_lifecycle_transition_history(
+        limit=limit,
+        offset=offset,
+        theme_cluster_id=theme_cluster_id,
+        to_state=to_state,
+    )
+
+    return ThemeLifecycleTransitionHistoryResponse(
+        total=total_count,
+        transitions=[ThemeLifecycleTransitionResponse(**row) for row in history],
     )
 
 

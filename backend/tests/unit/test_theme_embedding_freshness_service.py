@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import MethodType
 
 import numpy as np
 import pytest
@@ -268,3 +269,80 @@ def test_alias_telemetry_update_does_not_mark_embedding_stale(db_session):
         ThemeEmbedding.theme_cluster_id == theme.id
     ).one()
     assert refreshed.is_stale is False
+
+
+def test_recompute_stale_embeddings_processes_bounded_batches_with_progress(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    theme_a = _make_theme(db_session)
+    theme_b = ThemeCluster(
+        canonical_key="grid_modernization",
+        display_name="Grid Modernization",
+        name="Grid Modernization",
+        aliases=["Grid Upgrade"],
+        description="Utility capex cycle",
+        category="utilities",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(theme_b)
+    db_session.commit()
+    _make_embedding(db_session, theme_a.id, stale=True)
+    _make_embedding(db_session, theme_b.id, stale=True)
+
+    progress = []
+    result = service.recompute_stale_embeddings(
+        batch_size=1,
+        max_batches=2,
+        on_batch=lambda payload: progress.append(dict(payload)),
+    )
+
+    assert result["stale_total_before"] == 2
+    assert result["processed"] == 2
+    assert result["refreshed"] == 2
+    assert result["failed"] == 0
+    assert result["stale_remaining_after"] == 0
+    assert result["has_more"] is False
+    assert len(progress) == 2
+
+
+def test_recompute_stale_embeddings_prevents_failed_row_starvation_in_run(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    theme_a = _make_theme(db_session)
+    theme_b = ThemeCluster(
+        canonical_key="ai_datacenter_power",
+        display_name="AI Datacenter Power",
+        name="AI Datacenter Power",
+        aliases=["AI Power"],
+        description="Power demand for datacenters",
+        category="technology",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(theme_b)
+    db_session.commit()
+    _make_embedding(db_session, theme_a.id, stale=True)
+    _make_embedding(db_session, theme_b.id, stale=True)
+
+    original_update = service.update_theme_embedding
+
+    def _patched_update(self, theme):
+        if theme.id == theme_a.id:
+            raise RuntimeError("simulated-encode-failure")
+        return original_update(theme)
+
+    service.update_theme_embedding = MethodType(_patched_update, service)
+
+    result = service.recompute_stale_embeddings(batch_size=1, max_batches=2)
+
+    assert result["processed"] == 2
+    assert result["failed"] == 1
+    assert result["refreshed"] == 1
+    assert result["stale_remaining_after"] == 1
+    assert result["has_more"] is True
+    assert any(item["theme_cluster_id"] == theme_a.id for item in result["failed_clusters"])

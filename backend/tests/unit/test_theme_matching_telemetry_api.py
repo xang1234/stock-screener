@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.themes import get_matching_telemetry, get_theme_rankings
+from app.api.v1.themes import get_lifecycle_transitions, get_matching_telemetry, get_theme_rankings
 from app.database import Base
-from app.models.theme import ThemeMention
+from app.models.theme import ThemeCluster, ThemeLifecycleTransition, ThemeMention
 
 
 @pytest.fixture
@@ -258,3 +258,50 @@ async def test_rankings_empty_response_preserves_requested_pipeline(db_session):
     assert payload.pipeline == "fundamental"
     assert payload.total_themes == 0
     assert payload.rankings == []
+
+
+@pytest.mark.asyncio
+async def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
+    now = datetime.utcnow()
+    cluster = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai_infrastructure",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="active",
+    )
+    db_session.add(cluster)
+    db_session.flush()
+    db_session.add(
+        ThemeLifecycleTransition(
+            theme_cluster_id=cluster.id,
+            from_state="candidate",
+            to_state="active",
+            actor="system",
+            job_name="promote_candidate_themes",
+            rule_version="lifecycle-v2",
+            reason="candidate_promotion_thresholds_met",
+            transition_metadata={"foo": "bar"},
+            transitioned_at=now,
+        )
+    )
+    db_session.commit()
+
+    payload = await get_lifecycle_transitions(
+        limit=20,
+        offset=0,
+        pipeline="technical",
+        theme_cluster_id=cluster.id,
+        to_state="active",
+        db=db_session,
+    )
+
+    assert payload.total == 1
+    assert len(payload.transitions) == 1
+    row = payload.transitions[0]
+    assert row.theme_cluster_id == cluster.id
+    assert row.from_state == "candidate"
+    assert row.to_state == "active"
+    assert row.transition_metadata == {"foo": "bar"}
+    assert row.transition_history_path.endswith(f"theme_cluster_id={cluster.id}")

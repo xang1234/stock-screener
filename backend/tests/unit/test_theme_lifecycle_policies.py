@@ -12,6 +12,7 @@ from app.database import Base
 from app.models.theme import (
     ContentItem,
     ContentSource,
+    ThemeAlert,
     ThemeCluster,
     ThemeConstituent,
     ThemeLifecycleTransition,
@@ -146,6 +147,15 @@ def test_candidate_promotion_policy_promotes_theme_with_persistent_diverse_evide
     assert transitions[0].from_state == "candidate"
     assert transitions[0].to_state == "active"
 
+    alerts = db_session.query(ThemeAlert).filter(
+        ThemeAlert.theme_cluster_id == theme.id,
+        ThemeAlert.alert_type == "lifecycle_active",
+    ).all()
+    assert len(alerts) == 1
+    assert alerts[0].metrics["reason"] == "candidate_promotion_thresholds_met"
+    assert "transition_history_path" in alerts[0].metrics
+    assert "runbook_url" in alerts[0].metrics
+
 
 def test_dormancy_and_reactivation_policies_increment_counters(db_session):
     now = datetime(2026, 2, 24, 16, 0, 0)
@@ -180,6 +190,14 @@ def test_dormancy_and_reactivation_policies_increment_counters(db_session):
     assert theme.lifecycle_state == "reactivated"
     assert theme.lifecycle_state_metadata["reactivation_count"] == 1
     assert theme.lifecycle_state_metadata["continuity_id"] == "technical:grid_modernization"
+
+    alerts = db_session.query(ThemeAlert).filter(
+        ThemeAlert.theme_cluster_id == theme.id,
+        ThemeAlert.alert_type.in_(["lifecycle_dormant", "lifecycle_reactivated"]),
+    ).all()
+    alert_types = {a.alert_type for a in alerts}
+    assert "lifecycle_dormant" in alert_types
+    assert "lifecycle_reactivated" in alert_types
 
 
 def test_relationship_inference_writes_merge_and_overlap_edges(db_session):
@@ -588,3 +606,34 @@ def test_discover_emerging_themes_dormant_requires_confidence_threshold(db_sessi
 
     assert "High Quality Dormant" in names
     assert "Low Quality Dormant" not in names
+
+
+def test_get_lifecycle_transition_history_returns_context_rows(db_session):
+    now = datetime(2026, 2, 24, 21, 0, 0)
+    source = _make_source(db_session, name="History Wire", source_type="news")
+    source_two = _make_source(db_session, name="History Letter", source_type="substack")
+    theme = _make_theme(
+        db_session,
+        name="History Theme",
+        canonical_key="history_theme",
+        state="candidate",
+        now=now,
+    )
+    _add_mention(db_session, theme=theme, source=source, now=now, days_ago=1, confidence=0.92, external_suffix="1")
+    _add_mention(db_session, theme=theme, source=source_two, now=now, days_ago=2, confidence=0.91, external_suffix="2")
+    _add_mention(db_session, theme=theme, source=source, now=now, days_ago=3, confidence=0.93, external_suffix="3")
+    _add_mention(db_session, theme=theme, source=source_two, now=now, days_ago=4, confidence=0.90, external_suffix="4")
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    service.promote_candidate_themes(now=now)
+
+    rows, total = service.get_lifecycle_transition_history(theme_cluster_id=theme.id, limit=10, offset=0)
+    assert total == 1
+    assert len(rows) == 1
+    assert rows[0]["theme_cluster_id"] == theme.id
+    assert rows[0]["from_state"] == "candidate"
+    assert rows[0]["to_state"] == "active"
+    assert rows[0]["reason"] == "candidate_promotion_thresholds_met"
+    assert "transition_history_path" in rows[0]
+    assert "runbook_url" in rows[0]

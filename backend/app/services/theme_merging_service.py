@@ -14,7 +14,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 # Disable MPS/Metal before importing PyTorch to avoid fork() issues on macOS
 # This must be set before any PyTorch imports
@@ -203,6 +203,116 @@ class ThemeMergingService:
             "updated": updated,
             "skipped": skipped,
             "errors": errors,
+        }
+
+    def recompute_stale_embeddings(
+        self,
+        *,
+        pipeline: str | None = None,
+        batch_size: int = 100,
+        max_batches: int = 20,
+        on_batch: Callable[[dict], None] | None = None,
+    ) -> dict:
+        """
+        Recompute only stale embeddings in bounded batches.
+
+        Ordering oldest stale rows first plus single-run attempted-id exclusion
+        prevents long-lived stale failures from starving newer stale rows.
+        """
+        bounded_batch_size = max(1, int(batch_size or 1))
+        bounded_max_batches = max(1, int(max_batches or 1))
+        base_filters = [
+            ThemeEmbedding.is_stale.is_(True),
+            ThemeCluster.is_active == True,
+        ]
+        if pipeline:
+            base_filters.append(ThemeCluster.pipeline == pipeline)
+
+        stale_total_before = self.db.query(func.count(ThemeEmbedding.id)).join(
+            ThemeCluster, ThemeCluster.id == ThemeEmbedding.theme_cluster_id
+        ).filter(*base_filters).scalar() or 0
+
+        processed = 0
+        refreshed = 0
+        unchanged = 0
+        failed = 0
+        batches_processed = 0
+        attempted_cluster_ids: set[int] = set()
+        failed_clusters: list[dict[str, object]] = []
+
+        for batch_index in range(1, bounded_max_batches + 1):
+            query = self.db.query(ThemeCluster).join(
+                ThemeEmbedding, ThemeEmbedding.theme_cluster_id == ThemeCluster.id
+            ).filter(*base_filters)
+            if attempted_cluster_ids:
+                query = query.filter(~ThemeCluster.id.in_(attempted_cluster_ids))
+            clusters = query.order_by(
+                func.coalesce(ThemeEmbedding.updated_at, ThemeEmbedding.created_at).asc(),
+                ThemeEmbedding.id.asc(),
+            ).limit(bounded_batch_size).all()
+            if not clusters:
+                break
+
+            batches_processed += 1
+            for cluster in clusters:
+                attempted_cluster_ids.add(cluster.id)
+                processed += 1
+                try:
+                    record, was_refreshed = self.update_theme_embedding(cluster)
+                    if record is None:
+                        failed += 1
+                        failed_clusters.append({"theme_cluster_id": cluster.id, "theme": cluster.name})
+                    elif was_refreshed:
+                        refreshed += 1
+                    else:
+                        unchanged += 1
+                except Exception as exc:
+                    self.db.rollback()
+                    failed += 1
+                    failed_clusters.append(
+                        {
+                            "theme_cluster_id": cluster.id,
+                            "theme": cluster.name,
+                            "error": str(exc),
+                        }
+                    )
+                    logger.error("Failed stale embedding recompute for cluster %s: %s", cluster.id, exc)
+
+            stale_remaining = self.db.query(func.count(ThemeEmbedding.id)).join(
+                ThemeCluster, ThemeCluster.id == ThemeEmbedding.theme_cluster_id
+            ).filter(*base_filters).scalar() or 0
+
+            if on_batch is not None:
+                on_batch(
+                    {
+                        "batch": batch_index,
+                        "batches_processed": batches_processed,
+                        "processed": processed,
+                        "refreshed": refreshed,
+                        "unchanged": unchanged,
+                        "failed": failed,
+                        "stale_remaining": stale_remaining,
+                        "stale_total_before": stale_total_before,
+                    }
+                )
+
+        stale_remaining_after = self.db.query(func.count(ThemeEmbedding.id)).join(
+            ThemeCluster, ThemeCluster.id == ThemeEmbedding.theme_cluster_id
+        ).filter(*base_filters).scalar() or 0
+
+        return {
+            "pipeline": pipeline,
+            "batch_size": bounded_batch_size,
+            "max_batches": bounded_max_batches,
+            "batches_processed": batches_processed,
+            "stale_total_before": stale_total_before,
+            "processed": processed,
+            "refreshed": refreshed,
+            "unchanged": unchanged,
+            "failed": failed,
+            "stale_remaining_after": stale_remaining_after,
+            "has_more": stale_remaining_after > 0,
+            "failed_clusters": failed_clusters[:25],
         }
 
     def _load_embedding(self, embedding_record: ThemeEmbedding) -> np.ndarray:

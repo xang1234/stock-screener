@@ -202,6 +202,28 @@ class AlertsResponse(BaseModel):
     alerts: list[ThemeAlertResponse]
 
 
+class ThemeLifecycleTransitionResponse(BaseModel):
+    id: int
+    theme_cluster_id: int
+    theme_name: str
+    pipeline: str
+    from_state: str
+    to_state: str
+    actor: str
+    job_name: Optional[str]
+    rule_version: Optional[str]
+    reason: Optional[str]
+    transition_metadata: dict = Field(default_factory=dict)
+    transitioned_at: Optional[str]
+    transition_history_path: str
+    runbook_url: str
+
+
+class ThemeLifecycleTransitionHistoryResponse(BaseModel):
+    total: int
+    transitions: list[ThemeLifecycleTransitionResponse]
+
+
 # Theme Mentions Schemas (for viewing news sources)
 class ThemeMentionDetailResponse(BaseModel):
     mention_id: int
