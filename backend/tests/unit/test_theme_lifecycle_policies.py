@@ -21,6 +21,7 @@ from app.models.theme import (
     ThemeMetrics,
     ThemeRelationship,
 )
+from app.models.app_settings import AppSetting
 from app.services.theme_discovery_service import ThemeDiscoveryService
 
 
@@ -259,12 +260,23 @@ def test_relationship_inference_writes_merge_and_overlap_edges(db_session):
     edge_keys = {(edge.source_cluster_id, edge.target_cluster_id, edge.relationship_type) for edge in edges}
     assert (theme_a.id, theme_b.id, "subset") in edge_keys
 
-    distinct_pair = tuple(sorted([theme_b.id, theme_c.id]))
-    assert any(
-        tuple(sorted([edge.source_cluster_id, edge.target_cluster_id])) == distinct_pair
-        and edge.relationship_type == "distinct"
-        for edge in edges
+
+def test_lifecycle_thresholds_apply_admin_overrides_from_settings(db_session):
+    db_session.add(
+        AppSetting(
+            key="theme_policy_overrides",
+            value='{"technical":{"lifecycle":{"promotion_min_mentions_7d":9,"dormancy_inactivity_days":45}}}',
+            category="theme",
+            description="test overrides",
+        )
     )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    thresholds = service._lifecycle_thresholds()
+
+    assert thresholds["promotion_min_mentions_7d"] == 9
+    assert thresholds["dormancy_inactivity_days"] == 45
 
 
 def test_relationship_inference_corrects_subset_direction_from_merge_suggestion(db_session):

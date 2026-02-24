@@ -2,6 +2,15 @@
  * API client for Theme Discovery endpoints.
  */
 import apiClient from './client';
+import {
+  adaptCandidateQueueResponse,
+  adaptCandidateReviewResponse,
+  adaptLifecycleTransitionsResponse,
+  adaptMergeActionResponse,
+  adaptMergeHistoryResponse,
+  adaptMergeSuggestionsResponse,
+  adaptRelationshipGraphResponse,
+} from './themeAdapters';
 
 /**
  * Get available pipelines.
@@ -352,7 +361,7 @@ export const getMergeSuggestions = async (status = 'pending', limit = 50) => {
   const response = await apiClient.get('/v1/themes/merge-suggestions', {
     params: { status, limit }
   });
-  return response.data;
+  return adaptMergeSuggestionsResponse(response.data);
 };
 
 /**
@@ -363,7 +372,7 @@ export const getMergeSuggestions = async (status = 'pending', limit = 50) => {
  */
 export const approveMergeSuggestion = async (suggestionId) => {
   const response = await apiClient.post(`/v1/themes/merge-suggestions/${suggestionId}/approve`);
-  return response.data;
+  return adaptMergeActionResponse(response.data);
 };
 
 /**
@@ -374,7 +383,7 @@ export const approveMergeSuggestion = async (suggestionId) => {
  */
 export const rejectMergeSuggestion = async (suggestionId) => {
   const response = await apiClient.post(`/v1/themes/merge-suggestions/${suggestionId}/reject`);
-  return response.data;
+  return adaptMergeActionResponse(response.data);
 };
 
 /**
@@ -387,7 +396,89 @@ export const getMergeHistory = async (limit = 50) => {
   const response = await apiClient.get('/v1/themes/merge-history', {
     params: { limit }
   });
-  return response.data;
+  return adaptMergeHistoryResponse(response.data);
+};
+
+/**
+ * Get lifecycle transition audit history.
+ *
+ * @param {Object} params - Optional query filters
+ * @param {number} [params.limit=100] - Max rows (1-500)
+ * @param {number} [params.offset=0] - Pagination offset
+ * @param {string} [params.pipeline='technical'] - technical|fundamental
+ * @param {number|null} [params.themeClusterId=null] - Optional theme filter
+ * @param {string|null} [params.toState=null] - Optional to_state filter
+ * @returns {Promise<Object>} Normalized lifecycle transition response
+ */
+export const getLifecycleTransitions = async ({
+  limit = 100,
+  offset = 0,
+  pipeline = 'technical',
+  themeClusterId = null,
+  toState = null,
+} = {}) => {
+  const params = { limit, offset, pipeline };
+  if (themeClusterId != null) params.theme_cluster_id = themeClusterId;
+  if (toState) params.to_state = toState;
+  const response = await apiClient.get('/v1/themes/lifecycle-transitions', { params });
+  return adaptLifecycleTransitionsResponse(response.data);
+};
+
+/**
+ * Get candidate-theme analyst review queue.
+ *
+ * @param {Object} params - Optional query filters
+ * @param {number} [params.limit=100] - Max queue rows
+ * @param {number} [params.offset=0] - Pagination offset
+ * @param {string} [params.pipeline='technical'] - technical|fundamental
+ * @returns {Promise<Object>} Normalized candidate queue payload
+ */
+export const getCandidateThemeQueue = async ({
+  limit = 100,
+  offset = 0,
+  pipeline = 'technical',
+} = {}) => {
+  const response = await apiClient.get('/v1/themes/candidates/queue', {
+    params: { limit, offset, pipeline },
+  });
+  return adaptCandidateQueueResponse(response.data);
+};
+
+/**
+ * Submit candidate-theme review action(s).
+ *
+ * @param {Object} payload - Review payload
+ * @param {Array<number>} payload.theme_cluster_ids - Candidate IDs
+ * @param {string} payload.action - promote|reject
+ * @param {string} [payload.actor='analyst'] - Optional reviewer id
+ * @param {string|null} [payload.note=null] - Optional note
+ * @param {string} [pipeline='technical'] - technical|fundamental
+ * @returns {Promise<Object>} Normalized review result payload
+ */
+export const reviewCandidateThemes = async (payload, pipeline = 'technical') => {
+  const response = await apiClient.post('/v1/themes/candidates/review', payload, {
+    params: { pipeline },
+  });
+  return adaptCandidateReviewResponse(response.data);
+};
+
+/**
+ * Fetch relationship graph centered on a theme.
+ *
+ * @param {number} themeClusterId - Root theme id
+ * @param {Object} params - Optional query params
+ * @param {string} [params.pipeline='technical'] - technical|fundamental
+ * @param {number} [params.limit=120] - Max graph edges/nodes scope
+ * @returns {Promise<Object>} Normalized relationship graph payload
+ */
+export const getThemeRelationshipGraph = async (themeClusterId, {
+  pipeline = 'technical',
+  limit = 120,
+} = {}) => {
+  const response = await apiClient.get('/v1/themes/relationship-graph', {
+    params: { theme_cluster_id: themeClusterId, pipeline, limit },
+  });
+  return adaptRelationshipGraphResponse(response.data);
 };
 
 /**
@@ -491,5 +582,82 @@ export const updateOllamaSettings = async (apiBase) => {
  */
 export const getOllamaModels = async () => {
   const response = await apiClient.get('/v1/config/ollama/models');
+  return response.data;
+};
+
+/**
+ * Get theme policy config (defaults/overrides/effective/history) for a pipeline.
+ *
+ * @param {string} pipeline - technical|fundamental
+ * @param {string|null} adminKey - Optional admin key for config endpoints
+ * @returns {Promise<Object>} Theme policy config payload
+ */
+export const getThemePolicyConfig = async (pipeline = 'technical', adminKey = null) => {
+  const headers = adminKey ? { 'X-Admin-Key': adminKey } : undefined;
+  const response = await apiClient.get('/v1/config/theme-policies', {
+    params: { pipeline },
+    headers,
+  });
+  return response.data;
+};
+
+/**
+ * Update theme policy with preview/stage/apply mode.
+ *
+ * @param {Object} payload - Theme policy update payload
+ * @param {string|null} adminKey - Optional admin key for config endpoints
+ * @param {string|null} adminActor - Optional actor label for audit trail
+ * @returns {Promise<Object>} Update response with status/version/diff
+ */
+export const updateThemePolicy = async (payload, adminKey = null, adminActor = null) => {
+  const headers = {};
+  if (adminKey) headers['X-Admin-Key'] = adminKey;
+  if (adminActor) headers['X-Admin-Actor'] = adminActor;
+  const response = await apiClient.post('/v1/config/theme-policies', payload, {
+    headers: Object.keys(headers).length ? headers : undefined,
+  });
+  return response.data;
+};
+
+/**
+ * Promote staged theme policy to active.
+ *
+ * @param {string} pipeline - technical|fundamental
+ * @param {string|null} note - Optional promotion note
+ * @param {string|null} adminKey - Optional admin key
+ * @param {string|null} adminActor - Optional actor label
+ * @returns {Promise<Object>} Apply response
+ */
+export const promoteStagedThemePolicy = async (
+  pipeline,
+  note = null,
+  adminKey = null,
+  adminActor = null,
+) => {
+  const headers = {};
+  if (adminKey) headers['X-Admin-Key'] = adminKey;
+  if (adminActor) headers['X-Admin-Actor'] = adminActor;
+  const response = await apiClient.post('/v1/config/theme-policies/promote-staged', null, {
+    params: { pipeline, note },
+    headers: Object.keys(headers).length ? headers : undefined,
+  });
+  return response.data;
+};
+
+/**
+ * Revert to previous theme policy snapshot from history.
+ *
+ * @param {Object} payload - { pipeline, version_id, note? }
+ * @param {string|null} adminKey - Optional admin key
+ * @param {string|null} adminActor - Optional actor label
+ * @returns {Promise<Object>} Apply response
+ */
+export const revertThemePolicy = async (payload, adminKey = null, adminActor = null) => {
+  const headers = {};
+  if (adminKey) headers['X-Admin-Key'] = adminKey;
+  if (adminActor) headers['X-Admin-Actor'] = adminActor;
+  const response = await apiClient.post('/v1/config/theme-policies/revert', payload, {
+    headers: Object.keys(headers).length ? headers : undefined,
+  });
   return response.data;
 };

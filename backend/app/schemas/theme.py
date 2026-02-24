@@ -1,7 +1,7 @@
 """Pydantic schemas for Theme Discovery API"""
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # Content Source Schemas
@@ -224,6 +224,56 @@ class ThemeLifecycleTransitionHistoryResponse(BaseModel):
     transitions: list[ThemeLifecycleTransitionResponse]
 
 
+class CandidateThemeQueueItemResponse(BaseModel):
+    theme_cluster_id: int
+    theme_name: str
+    theme_display_name: str
+    candidate_since_at: Optional[str]
+    avg_confidence_30d: float
+    confidence_band: str
+    mentions_7d: int
+    source_diversity_7d: int
+    persistence_days_7d: int
+    momentum_score: Optional[float]
+    queue_reason: str
+    evidence: dict = Field(default_factory=dict)
+
+
+class CandidateThemeQueueSummaryBandResponse(BaseModel):
+    band: str
+    count: int
+
+
+class CandidateThemeQueueResponse(BaseModel):
+    total: int
+    items: list[CandidateThemeQueueItemResponse]
+    confidence_bands: list[CandidateThemeQueueSummaryBandResponse]
+
+
+class CandidateThemeReviewRequest(BaseModel):
+    theme_cluster_ids: list[int]
+    action: str = Field(..., pattern=r"^(promote|reject)$")
+    actor: Optional[str] = "analyst"
+    note: Optional[str] = None
+
+
+class CandidateThemeReviewItemResult(BaseModel):
+    theme_cluster_id: int
+    theme_name: Optional[str] = None
+    status: str
+    reason: Optional[str] = None
+    to_state: Optional[str] = None
+
+
+class CandidateThemeReviewResponse(BaseModel):
+    success: bool
+    action: str
+    updated: int
+    skipped: int
+    results: list[CandidateThemeReviewItemResult]
+    error: Optional[str] = None
+
+
 # Theme Mentions Schemas (for viewing news sources)
 class ThemeMentionDetailResponse(BaseModel):
     mention_id: int
@@ -410,6 +460,269 @@ class ThemeMergeHistoryListResponse(BaseModel):
     history: list[ThemeMergeHistoryResponse]
 
 
+class MergePlanPairResponse(BaseModel):
+    theme1_id: int
+    theme1_name: str
+    theme2_id: int
+    theme2_name: str
+    similarity: float
+    llm_confidence: float
+    relationship: str
+    should_merge: bool
+    confidence_tier: str
+    risk_bucket: str
+    recommendation: str
+
+
+class MergePlanGroupResponse(BaseModel):
+    group_id: str
+    confidence_tier: str
+    theme_ids: list[int]
+    theme_names: list[str]
+    pair_count: int
+    rationale: str
+
+
+class MergePlanWaveResponse(BaseModel):
+    wave: int
+    title: str
+    confidence_tier: str
+    group_ids: list[str]
+    pair_count: int
+    recommendation: str
+
+
+class MergePlanConfidenceBucketResponse(BaseModel):
+    tier: str
+    count: int
+
+
+class MergePlanDryRunResponse(BaseModel):
+    timestamp: str
+    total_pairs_analyzed: int
+    confidence_distribution: list[MergePlanConfidenceBucketResponse]
+    merge_groups: list[MergePlanGroupResponse]
+    waves: list[MergePlanWaveResponse]
+    ambiguity_clusters: list[MergePlanPairResponse]
+    do_not_merge: list[MergePlanPairResponse]
+    manual_review_recommendations: list[str]
+
+
+class StrictAutoMergeSkipReasonResponse(BaseModel):
+    reason: str
+    count: int
+
+
+class StrictAutoMergeActionResponse(BaseModel):
+    theme1_id: int
+    theme1_name: str
+    theme2_id: int
+    theme2_name: str
+    similarity: float
+    llm_confidence: float
+    relationship: str
+    should_merge: bool
+    decision: str
+    reason: Optional[str] = None
+    target_cluster_id: Optional[int] = None
+    source_cluster_id: Optional[int] = None
+
+
+class StrictAutoMergePolicyResponse(BaseModel):
+    allowed_relationship: str
+    excluded_relationships: list[str]
+    min_similarity: float
+    min_llm_confidence: float
+
+
+class StrictAutoMergeReconciliationResponse(BaseModel):
+    active_themes_before: int
+    active_themes_after: int
+    active_themes_delta: int
+    merge_suggestions_before: int
+    merge_suggestions_after: int
+    merge_suggestions_delta: int
+    merge_history_before: int
+    merge_history_after: int
+    merge_history_delta: int
+
+
+class WaveReassignmentStatsResponse(BaseModel):
+    merges_applied: int
+    constituents_reassigned_total: int
+    mentions_reassigned_total: int
+
+
+class WaveRollbackReferenceResponse(BaseModel):
+    merge_history_id: int
+    source_cluster_id: Optional[int] = None
+    target_cluster_id: Optional[int] = None
+    source_cluster_name: Optional[str] = None
+    target_cluster_name: Optional[str] = None
+    merged_at: Optional[str] = None
+    merged_by: Optional[str] = None
+    rollback_reference: str
+
+
+class WaveReconciliationPackageResponse(BaseModel):
+    package_version: str
+    wave_name: str
+    pipeline: Optional[str]
+    dry_run: bool
+    started_at: str
+    completed_at: str
+    before_counts: dict[str, int]
+    after_counts: dict[str, int]
+    delta_counts: dict[str, int]
+    reassignment_stats: WaveReassignmentStatsResponse
+    rollback_references: list[WaveRollbackReferenceResponse]
+    artifact_hash: str
+    artifact_id: str
+    sealed_at: str
+
+
+class StrictAutoMergeWaveResponse(BaseModel):
+    timestamp: str
+    pipeline: Optional[str]
+    dry_run: bool
+    candidate_pairs: int
+    eligible_pairs: int
+    processed_pairs: int
+    auto_merged: int
+    errors: list[str]
+    skip_reasons: list[StrictAutoMergeSkipReasonResponse]
+    merge_actions: list[StrictAutoMergeActionResponse]
+    precision_policy: StrictAutoMergePolicyResponse
+    reconciliation: StrictAutoMergeReconciliationResponse
+    reconciliation_package: WaveReconciliationPackageResponse
+
+
+class ManualReviewDecisionRequest(BaseModel):
+    suggestion_id: int
+    action: str = Field(..., pattern=r"^(approve|reject)$")
+    reviewer: str = Field(..., min_length=1, max_length=64)
+    note: Optional[str] = None
+
+
+class ManualReviewWaveRequest(BaseModel):
+    decisions: list[ManualReviewDecisionRequest]
+    sla_target_hours: float = Field(24.0, ge=0.1, le=168.0)
+    queue_limit: int = Field(500, ge=1, le=2000)
+    dry_run: bool = False
+
+
+class ManualReviewWaveMetricsResponse(BaseModel):
+    throughput_per_hour: float
+    agreement_rate: float
+    disagreement_rate: float
+    sla_breaches: int
+    sla_breach_rate: float
+
+
+class ManualReviewAuditTrailResponse(BaseModel):
+    suggestion_id: int
+    source_cluster_id: Optional[int] = None
+    target_cluster_id: Optional[int] = None
+    reviewer: str
+    action: str
+    note: Optional[str] = None
+    llm_recommended_merge: Optional[bool] = None
+    reviewed_at: Optional[str] = None
+    turnaround_hours: Optional[float] = None
+    status: str
+    reason: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ManualReviewWaveResponse(BaseModel):
+    timestamp: str
+    pipeline: Optional[str]
+    dry_run: bool
+    sla_target_hours: float
+    queue_size: int
+    reviewed: int
+    approved: int
+    rejected: int
+    skipped: int
+    errors: int
+    queue_closed: bool
+    pending_after: int
+    metrics: ManualReviewWaveMetricsResponse
+    audit_trail: list[ManualReviewAuditTrailResponse]
+    error_messages: list[str]
+    reconciliation: StrictAutoMergeReconciliationResponse
+    reconciliation_package: WaveReconciliationPackageResponse
+
+
+class EmbeddingRefreshCampaignMetricsResponse(BaseModel):
+    pipeline: Optional[str]
+    total_active_themes: int
+    themes_with_embedding: int
+    themes_needing_refresh: int
+    stale_embeddings: int
+    version_mismatch_embeddings: int
+    coverage_ratio: float
+    freshness_ratio: float
+    version_consistency_ratio: float
+
+
+class EmbeddingRefreshCampaignRetryClusterResponse(BaseModel):
+    theme_cluster_id: int
+    theme: str
+    attempts: int
+    last_error: Optional[str] = None
+
+
+class EmbeddingRefreshCampaignErrorBucketResponse(BaseModel):
+    error: str
+    count: int
+
+
+class EmbeddingRefreshCampaignRetryTrackingResponse(BaseModel):
+    failed_attempts: int
+    retry_queue_size: int
+    retry_clusters: list[EmbeddingRefreshCampaignRetryClusterResponse]
+    error_buckets: list[EmbeddingRefreshCampaignErrorBucketResponse]
+
+
+class EmbeddingRefreshCampaignGatesResponse(BaseModel):
+    min_coverage_ratio: float
+    min_freshness_ratio: float
+    coverage_met: bool
+    freshness_met: bool
+    ready_for_merge_waves: bool
+
+
+class EmbeddingRefreshCampaignPassResponse(BaseModel):
+    pass_number: int = Field(..., alias="pass")
+    refresh_candidates: int
+    refresh_processed: int
+    refresh_refreshed: int
+    refresh_unchanged: int
+    refresh_failed: int
+    stale_result: dict
+    metrics: EmbeddingRefreshCampaignMetricsResponse
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class EmbeddingRefreshCampaignResponse(BaseModel):
+    timestamp: str
+    pipeline: Optional[str]
+    embedding_model: str
+    embedding_model_version: str
+    refresh_batch_size: int
+    stale_batch_size: int
+    stale_max_batches_per_pass: int
+    max_passes: int
+    passes_executed: int
+    initial_metrics: EmbeddingRefreshCampaignMetricsResponse
+    passes: list[EmbeddingRefreshCampaignPassResponse]
+    final_metrics: EmbeddingRefreshCampaignMetricsResponse
+    retry_tracking: EmbeddingRefreshCampaignRetryTrackingResponse
+    gates: EmbeddingRefreshCampaignGatesResponse
+
+
 class SimilarThemeResponse(BaseModel):
     theme_id: int
     name: str
@@ -423,6 +736,34 @@ class SimilarThemesResponse(BaseModel):
     source_theme_name: str
     threshold: float
     similar_themes: list[SimilarThemeResponse]
+
+
+class ThemeRelationshipGraphNodeResponse(BaseModel):
+    theme_cluster_id: int
+    theme_name: str
+    theme_display_name: str
+    lifecycle_state: str
+    is_root: bool
+
+
+class ThemeRelationshipGraphEdgeResponse(BaseModel):
+    relation_id: int
+    source_theme_id: int
+    source_theme_name: Optional[str]
+    target_theme_id: int
+    target_theme_name: Optional[str]
+    relationship_type: str = Field(..., pattern=r"^(subset|related|distinct)$")
+    confidence: float
+    provenance: Optional[str] = None
+    evidence: dict = Field(default_factory=dict)
+
+
+class ThemeRelationshipGraphResponse(BaseModel):
+    theme_cluster_id: int
+    total_nodes: int
+    total_edges: int
+    nodes: list[ThemeRelationshipGraphNodeResponse]
+    edges: list[ThemeRelationshipGraphEdgeResponse]
 
 
 class ConsolidationResultResponse(BaseModel):

@@ -53,6 +53,20 @@ const getConfidenceColor = (score) => {
   return 'error';
 };
 
+const getSimilarityTooltip = (score) => {
+  if (!Number.isFinite(score)) return 'Similarity unavailable.';
+  if (score >= 95) return 'Very high lexical/embedding overlap. Candidate duplicate.';
+  if (score >= 85) return 'High overlap. Requires confidence + relationship validation.';
+  return 'Lower overlap. Merge only with strong supporting reasoning.';
+};
+
+const getConfidenceTooltip = (score) => {
+  if (!Number.isFinite(score)) return 'Model confidence unavailable.';
+  if (score >= 90) return 'High confidence. Safe to fast-track when relationship is identical.';
+  if (score >= 70) return 'Medium confidence. Review reasoning and aliases before action.';
+  return 'Low confidence. Prefer reject or defer for additional evidence.';
+};
+
 const getRelationshipColor = (relationship) => {
   switch (relationship) {
     case 'identical':
@@ -140,22 +154,26 @@ function SuggestionRow({ suggestion, onReject, isRejecting, checked, onToggle, d
           </Box>
         </TableCell>
         <TableCell align="center">
-          <Chip
-            label={hasSimilarity ? `${similarityPercent}%` : 'N/A'}
-            size="small"
-            color={hasSimilarity ? getSimilarityColor(parseFloat(similarityPercent)) : 'default'}
-            variant="filled"
-            sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
-          />
+          <Tooltip title={getSimilarityTooltip(parseFloat(similarityPercent))}>
+            <Chip
+              label={hasSimilarity ? `${similarityPercent}%` : 'N/A'}
+              size="small"
+              color={hasSimilarity ? getSimilarityColor(parseFloat(similarityPercent)) : 'default'}
+              variant="filled"
+              sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
+            />
+          </Tooltip>
         </TableCell>
         <TableCell align="center">
-          <Chip
-            label={hasConfidence ? `${confidencePercent}%` : 'N/A'}
-            size="small"
-            color={hasConfidence ? getConfidenceColor(parseFloat(confidencePercent)) : 'default'}
-            variant="filled"
-            sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
-          />
+          <Tooltip title={getConfidenceTooltip(parseFloat(confidencePercent))}>
+            <Chip
+              label={hasConfidence ? `${confidencePercent}%` : 'N/A'}
+              size="small"
+              color={hasConfidence ? getConfidenceColor(parseFloat(confidencePercent)) : 'default'}
+              variant="filled"
+              sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
+            />
+          </Tooltip>
         </TableCell>
         <TableCell align="center">
           <Tooltip title={getRelationshipTooltip(relationshipType)}>
@@ -420,13 +438,17 @@ function ThemeMergeReviewModal({ open, onClose }) {
       setActioningId(id);
       setActionType('reject');
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result?.success) {
+        setError(result?.error || 'Failed to reject suggestion');
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['mergeSuggestions'] });
       queryClient.invalidateQueries({ queryKey: ['mergeHistory'] });
       setError(null);
     },
     onError: (err) => {
-      setError(err.response?.data?.detail || 'Failed to reject suggestion');
+      setError(err.response?.data?.detail || err.message || 'Failed to reject suggestion');
     },
     onSettled: () => {
       setActioningId(null);
@@ -481,6 +503,10 @@ function ThemeMergeReviewModal({ open, onClose }) {
             {successMessage}
           </Alert>
         )}
+        <Alert severity="info" sx={{ m: 2, mb: 0 }}>
+          Decision guide: prioritize merges when <strong>Relationship=identical</strong> and <strong>Confidence is high</strong>.
+          For <strong>subset/related</strong>, verify intent before approving.
+        </Alert>
 
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>

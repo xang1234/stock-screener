@@ -8,9 +8,17 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.themes import get_lifecycle_transitions, get_matching_telemetry, get_theme_rankings
+from app.api.v1.themes import (
+    get_candidate_theme_queue,
+    get_lifecycle_transitions,
+    get_matching_telemetry,
+    get_relationship_graph,
+    get_theme_rankings,
+    review_candidate_themes,
+)
 from app.database import Base
-from app.models.theme import ThemeCluster, ThemeLifecycleTransition, ThemeMention
+from app.models.theme import ThemeCluster, ThemeLifecycleTransition, ThemeMention, ThemeRelationship
+from app.schemas.theme import CandidateThemeReviewRequest
 
 
 @pytest.fixture
@@ -305,3 +313,203 @@ async def test_get_lifecycle_transitions_returns_rows_with_context(db_session):
     assert row.to_state == "active"
     assert row.transition_metadata == {"foo": "bar"}
     assert row.transition_history_path.endswith(f"theme_cluster_id={cluster.id}")
+
+
+@pytest.mark.asyncio
+async def test_get_candidate_theme_queue_returns_evidence_and_bands(db_session):
+    now = datetime.utcnow()
+    candidate = ThemeCluster(
+        name="AI Grid",
+        canonical_key="ai_grid",
+        display_name="AI Grid",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=3),
+        first_seen_at=now - timedelta(days=5),
+        lifecycle_state_metadata={"reason": "candidate_review_pending"},
+    )
+    db_session.add(candidate)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ThemeMention(
+                source_type="news",
+                source_name="news",
+                raw_theme="AI Grid",
+                canonical_theme="ai_grid",
+                theme_cluster_id=candidate.id,
+                pipeline="technical",
+                tickers=[],
+                ticker_count=0,
+                sentiment="neutral",
+                confidence=0.82,
+                mentioned_at=now - timedelta(days=1),
+            ),
+            ThemeMention(
+                source_type="substack",
+                source_name="substack",
+                raw_theme="AI Grid",
+                canonical_theme="ai_grid",
+                theme_cluster_id=candidate.id,
+                pipeline="technical",
+                tickers=[],
+                ticker_count=0,
+                sentiment="neutral",
+                confidence=0.78,
+                mentioned_at=now - timedelta(days=2),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = await get_candidate_theme_queue(limit=20, offset=0, pipeline="technical", db=db_session)
+
+    assert payload.total == 1
+    assert len(payload.items) == 1
+    row = payload.items[0]
+    assert row.theme_cluster_id == candidate.id
+    assert row.evidence["mentions_7d"] >= 2
+    assert row.confidence_band in {"0.70-0.84", "0.85-1.00"}
+    assert payload.confidence_bands[0].count >= 1
+
+
+@pytest.mark.asyncio
+async def test_get_candidate_theme_queue_band_summary_is_global_not_page_scoped(db_session):
+    now = datetime.utcnow()
+    candidate_a = ThemeCluster(
+        name="Grid Compute",
+        canonical_key="grid_compute",
+        display_name="Grid Compute",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=3),
+        first_seen_at=now - timedelta(days=10),
+    )
+    candidate_b = ThemeCluster(
+        name="Power Cooling",
+        canonical_key="power_cooling",
+        display_name="Power Cooling",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        candidate_since_at=now - timedelta(days=2),
+        first_seen_at=now - timedelta(days=9),
+    )
+    db_session.add_all([candidate_a, candidate_b])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ThemeMention(
+                source_type="news",
+                source_name="news",
+                raw_theme="Grid Compute",
+                canonical_theme="grid_compute",
+                theme_cluster_id=candidate_a.id,
+                pipeline="technical",
+                tickers=[],
+                ticker_count=0,
+                sentiment="neutral",
+                confidence=0.92,
+                mentioned_at=now - timedelta(days=1),
+            ),
+            ThemeMention(
+                source_type="substack",
+                source_name="substack",
+                raw_theme="Power Cooling",
+                canonical_theme="power_cooling",
+                theme_cluster_id=candidate_b.id,
+                pipeline="technical",
+                tickers=[],
+                ticker_count=0,
+                sentiment="neutral",
+                confidence=0.45,
+                mentioned_at=now - timedelta(days=1),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = await get_candidate_theme_queue(limit=1, offset=0, pipeline="technical", db=db_session)
+
+    assert payload.total == 2
+    assert len(payload.items) == 1
+    assert sum(bucket.count for bucket in payload.confidence_bands) == 2
+
+
+@pytest.mark.asyncio
+async def test_review_candidate_themes_promote_transitions_to_active(db_session):
+    candidate = ThemeCluster(
+        name="Grid Load",
+        canonical_key="grid_load",
+        display_name="Grid Load",
+        pipeline="technical",
+        is_active=True,
+        lifecycle_state="candidate",
+        first_seen_at=datetime.utcnow() - timedelta(days=10),
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    payload = CandidateThemeReviewRequest(theme_cluster_ids=[candidate.id], action="promote", actor="analyst:test")
+    result = await review_candidate_themes(payload=payload, pipeline="technical", db=db_session)
+
+    assert result.success is True
+    assert result.updated == 1
+    refreshed = db_session.query(ThemeCluster).filter(ThemeCluster.id == candidate.id).one()
+    assert refreshed.lifecycle_state == "active"
+    assert refreshed.is_active is True
+    transition = db_session.query(ThemeLifecycleTransition).filter(
+        ThemeLifecycleTransition.theme_cluster_id == candidate.id
+    ).one()
+    assert transition.to_state == "active"
+    assert transition.actor == "analyst:test"
+
+
+@pytest.mark.asyncio
+async def test_get_relationship_graph_returns_nodes_and_edges(db_session):
+    source = ThemeCluster(
+        name="Power Infrastructure",
+        canonical_key="power_infra",
+        display_name="Power Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    peer = ThemeCluster(
+        name="Utilities Capex",
+        canonical_key="utilities_capex",
+        display_name="Utilities Capex",
+        pipeline="technical",
+        lifecycle_state="active",
+        is_active=True,
+    )
+    db_session.add_all([source, peer])
+    db_session.flush()
+    db_session.add(
+        ThemeRelationship(
+            source_cluster_id=source.id,
+            target_cluster_id=peer.id,
+            pipeline="technical",
+            relationship_type="related",
+            confidence=0.83,
+            provenance="test_fixture",
+            evidence={"overlap_count": 4},
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = await get_relationship_graph(
+        theme_cluster_id=source.id,
+        pipeline="technical",
+        limit=50,
+        db=db_session,
+    )
+
+    assert payload.theme_cluster_id == source.id
+    assert payload.total_nodes >= 2
+    assert payload.total_edges >= 1
+    assert any(node.theme_cluster_id == source.id and node.is_root for node in payload.nodes)
+    assert any(edge.relationship_type == "related" for edge in payload.edges)

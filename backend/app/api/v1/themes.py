@@ -47,6 +47,12 @@ from ...schemas.theme import (
     ThemeAlertResponse,
     ThemeLifecycleTransitionHistoryResponse,
     ThemeLifecycleTransitionResponse,
+    CandidateThemeQueueResponse,
+    CandidateThemeQueueItemResponse,
+    CandidateThemeQueueSummaryBandResponse,
+    CandidateThemeReviewRequest,
+    CandidateThemeReviewResponse,
+    CandidateThemeReviewItemResult,
     ThemeMentionsResponse,
     ThemeMentionDetailResponse,
     CorrelationDiscoveryResponse,
@@ -59,8 +65,20 @@ from ...schemas.theme import (
     ThemeMergeSuggestionResponse,
     ThemeMergeSuggestionsResponse,
     ThemeMergeHistoryListResponse,
+    MergePlanDryRunResponse,
+    MergePlanPairResponse,
+    MergePlanGroupResponse,
+    MergePlanWaveResponse,
+    MergePlanConfidenceBucketResponse,
+    StrictAutoMergeWaveResponse,
+    ManualReviewWaveRequest,
+    ManualReviewWaveResponse,
+    EmbeddingRefreshCampaignResponse,
     SimilarThemesResponse,
     SimilarThemeResponse,
+    ThemeRelationshipGraphResponse,
+    ThemeRelationshipGraphNodeResponse,
+    ThemeRelationshipGraphEdgeResponse,
     ConsolidationResultResponse,
     MergeActionResponse,
     ContentItemsListResponse,
@@ -143,7 +161,7 @@ def _safe_theme_cluster_response(cluster: ThemeCluster) -> ThemeClusterResponse:
         raw_canonical_key = str(getattr(cluster, "canonical_key", "") or "").strip()
         canonical_key = canonical_theme_key(raw_canonical_key or display_name)
         if canonical_key == UNKNOWN_THEME_KEY:
-            canonical_key = canonical_theme_key(display_name or name)
+            canonical_key = canonical_theme_key(display_name)
         name = raw_name or display_name
 
         logger.warning(
@@ -1258,6 +1276,170 @@ async def run_theme_consolidation_async(
         "status": "queued",
         "message": f"Theme consolidation queued (dry_run={dry_run})"
     }
+
+
+@router.get("/merge-plan/dry-run", response_model=MergePlanDryRunResponse)
+async def get_merge_plan_dry_run(
+    limit_pairs: int = Query(120, ge=1, le=500, description="Max similar pairs to analyze"),
+    pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a non-mutating duplicate-analysis merge plan with confidence tiers and wave recommendations.
+    """
+    service = ThemeMergingService(db)
+    result = service.generate_dry_run_merge_plan(limit_pairs=limit_pairs, pipeline=pipeline)
+    return MergePlanDryRunResponse(
+        timestamp=result["timestamp"],
+        total_pairs_analyzed=result["total_pairs_analyzed"],
+        confidence_distribution=[MergePlanConfidenceBucketResponse(**row) for row in result["confidence_distribution"]],
+        merge_groups=[MergePlanGroupResponse(**row) for row in result["merge_groups"]],
+        waves=[MergePlanWaveResponse(**row) for row in result["waves"]],
+        ambiguity_clusters=[MergePlanPairResponse(**row) for row in result["ambiguity_clusters"]],
+        do_not_merge=[MergePlanPairResponse(**row) for row in result["do_not_merge"]],
+        manual_review_recommendations=result["manual_review_recommendations"],
+    )
+
+
+@router.post("/embeddings/refresh-campaign", response_model=EmbeddingRefreshCampaignResponse)
+async def run_embedding_refresh_campaign(
+    pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
+    refresh_batch_size: int = Query(100, ge=1, le=1000, description="Missing/outdated refresh batch size per pass"),
+    stale_batch_size: int = Query(100, ge=1, le=1000, description="Stale recompute batch size"),
+    stale_max_batches_per_pass: int = Query(10, ge=1, le=100, description="Max stale batches executed per pass"),
+    max_passes: int = Query(6, ge=1, le=50, description="Max bounded passes for campaign"),
+    min_coverage_ratio: float = Query(0.98, ge=0.0, le=1.0, description="Pre-merge coverage gate threshold"),
+    min_freshness_ratio: float = Query(0.95, ge=0.0, le=1.0, description="Pre-merge freshness gate threshold"),
+    db: Session = Depends(get_db),
+):
+    """
+    Execute bounded embedding refresh + stale recompute campaign with gate reporting.
+    """
+    service = ThemeMergingService(db)
+    result = service.run_embedding_refresh_campaign(
+        pipeline=pipeline,
+        refresh_batch_size=refresh_batch_size,
+        stale_batch_size=stale_batch_size,
+        stale_max_batches_per_pass=stale_max_batches_per_pass,
+        max_passes=max_passes,
+        min_coverage_ratio=min_coverage_ratio,
+        min_freshness_ratio=min_freshness_ratio,
+    )
+    return EmbeddingRefreshCampaignResponse(**result)
+
+
+@router.post("/merge-wave/strict-auto", response_model=StrictAutoMergeWaveResponse)
+async def run_strict_auto_merge_wave(
+    pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
+    limit_pairs: int = Query(200, ge=1, le=1000, description="Maximum candidate pairs to evaluate"),
+    dry_run: bool = Query(False, description="If true, evaluate strict eligibility without mutating data"),
+    db: Session = Depends(get_db),
+):
+    """
+    Run Wave-1 strict auto-merge for only highest-confidence identical pairs.
+    """
+    service = ThemeMergingService(db)
+    result = service.run_strict_auto_merge_wave(
+        pipeline=pipeline,
+        limit_pairs=limit_pairs,
+        dry_run=dry_run,
+    )
+    return StrictAutoMergeWaveResponse(**result)
+
+
+@router.post("/merge-wave/manual-review", response_model=ManualReviewWaveResponse)
+async def run_manual_review_wave(
+    payload: ManualReviewWaveRequest,
+    pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
+    db: Session = Depends(get_db),
+):
+    """
+    Run Wave-2 moderated manual-review processing with SLA and agreement tracking.
+    """
+    service = ThemeMergingService(db)
+    result = service.run_manual_review_wave(
+        decisions=[row.model_dump() for row in payload.decisions],
+        pipeline=pipeline,
+        sla_target_hours=payload.sla_target_hours,
+        queue_limit=payload.queue_limit,
+        dry_run=payload.dry_run,
+    )
+    return ManualReviewWaveResponse(**result)
+
+
+@router.get("/candidates/queue", response_model=CandidateThemeQueueResponse)
+async def get_candidate_theme_queue(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
+    db: Session = Depends(get_db),
+):
+    """List candidate themes queued for analyst lifecycle review."""
+    service = ThemeDiscoveryService(db, pipeline=pipeline)
+    queue_rows, total_count = service.get_candidate_theme_queue(limit=limit, offset=offset)
+    confidence_bands = [
+        CandidateThemeQueueSummaryBandResponse(**row)
+        for row in service.get_candidate_theme_confidence_bands()
+    ]
+    return CandidateThemeQueueResponse(
+        total=total_count,
+        items=[CandidateThemeQueueItemResponse(**row) for row in queue_rows],
+        confidence_bands=confidence_bands,
+    )
+
+
+@router.post("/candidates/review", response_model=CandidateThemeReviewResponse)
+async def review_candidate_themes(
+    payload: CandidateThemeReviewRequest,
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk analyst triage for candidate themes.
+
+    - `promote` transitions candidate -> active
+    - `reject` transitions candidate -> retired
+    """
+    service = ThemeDiscoveryService(db, pipeline=pipeline)
+    result = service.review_candidate_themes(
+        theme_cluster_ids=payload.theme_cluster_ids,
+        action=payload.action,
+        actor=payload.actor or "analyst",
+        note=payload.note,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Candidate review failed"))
+    return CandidateThemeReviewResponse(
+        success=True,
+        action=result["action"],
+        updated=result["updated"],
+        skipped=result["skipped"],
+        results=[CandidateThemeReviewItemResult(**row) for row in result["results"]],
+    )
+
+
+@router.get("/relationship-graph", response_model=ThemeRelationshipGraphResponse)
+async def get_relationship_graph(
+    theme_cluster_id: int = Query(..., ge=1, description="Root theme cluster id"),
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
+    limit: int = Query(120, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Return relationship graph nodes/edges centered on the requested theme."""
+    cluster = db.query(ThemeCluster).filter(ThemeCluster.id == theme_cluster_id).first()
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Theme not found")
+    if (cluster.pipeline or "technical") != pipeline:
+        raise HTTPException(status_code=404, detail="Theme not found for selected pipeline")
+    service = ThemeDiscoveryService(db, pipeline=pipeline)
+    graph = service.get_theme_relationship_graph(theme_cluster_id, limit=limit)
+    return ThemeRelationshipGraphResponse(
+        theme_cluster_id=theme_cluster_id,
+        total_nodes=len(graph["nodes"]),
+        total_edges=len(graph["edges"]),
+        nodes=[ThemeRelationshipGraphNodeResponse(**node) for node in graph["nodes"]],
+        edges=[ThemeRelationshipGraphEdgeResponse(**edge) for edge in graph["edges"]],
+    )
 
 
 # ==================== Theme Details (parameterized routes - MUST be after static ones) ====================

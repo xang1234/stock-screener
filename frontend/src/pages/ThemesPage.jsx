@@ -67,7 +67,9 @@ import {
   getAlerts,
   dismissAlert,
   runPipelineAsync,
+  getCandidateThemeQueue,
   getMergeSuggestions,
+  getThemeRelationshipGraph,
   getFailedItemsCount,
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
@@ -75,6 +77,8 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import ManageSourcesModal from '../components/Themes/ManageSourcesModal';
 import ThemeSourcesModal from '../components/Themes/ThemeSourcesModal';
 import ThemeMergeReviewModal from '../components/Themes/ThemeMergeReviewModal';
+import ThemeCandidateReviewModal from '../components/Themes/ThemeCandidateReviewModal';
+import ThemePolicySettingsModal from '../components/Themes/ThemePolicySettingsModal';
 import ArticleBrowserModal from '../components/Themes/ArticleBrowserModal';
 import ModelSettingsModal from '../components/Themes/ModelSettingsModal';
 import { usePipeline } from '../contexts/PipelineContext';
@@ -303,7 +307,7 @@ const AlertsCard = ({ alerts, isLoading, onDismiss, dismissingId }) => {
 };
 
 // Theme Detail Modal
-const ThemeDetailModal = ({ themeId, themeName, open, onClose }) => {
+const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline }) => {
   const { data: detail, isLoading: isLoadingDetail } = useQuery({
     queryKey: ['themeDetail', themeId],
     queryFn: () => getThemeDetail(themeId),
@@ -316,7 +320,13 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose }) => {
     enabled: !!themeId && open,
   });
 
-  const isLoading = isLoadingDetail || isLoadingHistory;
+  const { data: relationshipGraph, isLoading: isLoadingGraph } = useQuery({
+    queryKey: ['themeRelationshipGraph', themeId, selectedPipeline],
+    queryFn: () => getThemeRelationshipGraph(themeId, { pipeline: selectedPipeline, limit: 120 }),
+    enabled: !!themeId && open,
+  });
+
+  const isLoading = isLoadingDetail || isLoadingHistory || isLoadingGraph;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
@@ -529,17 +539,27 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose }) => {
                             />
                           </TableCell>
                           <TableCell>
-                            <Chip
-                              size="small"
-                              label={rel.relationship_type}
-                              color={
+                            <Tooltip
+                              title={
                                 rel.relationship_type === 'subset'
-                                  ? 'warning'
+                                  ? 'Subset: one theme is mostly contained by another. Review before merging.'
                                   : rel.relationship_type === 'related'
-                                    ? 'info'
-                                    : 'default'
+                                    ? 'Related: topical overlap exists, but themes can still be distinct.'
+                                    : 'Distinct: themes should remain separate unless new evidence appears.'
                               }
-                            />
+                            >
+                              <Chip
+                                size="small"
+                                label={rel.relationship_type}
+                                color={
+                                  rel.relationship_type === 'subset'
+                                    ? 'warning'
+                                    : rel.relationship_type === 'related'
+                                      ? 'info'
+                                      : 'default'
+                                }
+                              />
+                            </Tooltip>
                           </TableCell>
                           <TableCell sx={{ fontWeight: 600 }}>
                             {rel.peer_theme_display_name || rel.peer_theme_name || '-'}
@@ -549,6 +569,60 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose }) => {
                           </TableCell>
                           <TableCell sx={{ fontSize: '10px', color: 'text.secondary', fontFamily: 'monospace' }}>
                             {rel.provenance || '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
+
+            {relationshipGraph?.edges?.length > 0 && (
+              <Box mt={3}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+                  <Box sx={{ fontSize: '12px', fontWeight: 600 }}>
+                    Relationship Graph Context
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                    <Chip size="small" label={`${relationshipGraph.total_nodes} nodes`} variant="outlined" />
+                    <Chip size="small" label={`${relationshipGraph.total_edges} edges`} variant="outlined" />
+                  </Box>
+                </Box>
+                <TableContainer sx={{ maxHeight: 220 }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Source</TableCell>
+                        <TableCell>Relation</TableCell>
+                        <TableCell>Target</TableCell>
+                        <TableCell align="right">Conf</TableCell>
+                        <TableCell>Provenance</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {relationshipGraph.edges.slice(0, 100).map((edge) => (
+                        <TableRow key={edge.relation_id} hover>
+                          <TableCell sx={{ fontWeight: 600 }}>{edge.source_theme_name || edge.source_theme_id}</TableCell>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={edge.relationship_type}
+                              color={
+                                edge.relationship_type === 'subset'
+                                  ? 'warning'
+                                  : edge.relationship_type === 'related'
+                                    ? 'info'
+                                    : 'default'
+                              }
+                            />
+                          </TableCell>
+                          <TableCell sx={{ fontWeight: 600 }}>{edge.target_theme_name || edge.target_theme_id}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
+                            {(Math.max(0, Math.min(1, edge.confidence || 0)) * 100).toFixed(0)}%
+                          </TableCell>
+                          <TableCell sx={{ fontSize: '10px', color: 'text.secondary', fontFamily: 'monospace' }}>
+                            {edge.provenance || '-'}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -581,8 +655,10 @@ function ThemesPage() {
     SOURCE_TYPES.map(s => s.value)  // All selected by default
   );
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
+  const [candidateModalOpen, setCandidateModalOpen] = useState(false);
   const [articleBrowserOpen, setArticleBrowserOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [policySettingsOpen, setPolicySettingsOpen] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState('technical');
   const [page, setPage] = useState(0);
 
@@ -691,6 +767,11 @@ function ThemesPage() {
   const { data: pendingMerges } = useQuery({
     queryKey: ['mergeSuggestions', 'pending'],
     queryFn: () => getMergeSuggestions('pending', 100),
+  });
+
+  const { data: candidateQueueSummary } = useQuery({
+    queryKey: ['candidateThemeQueue', selectedPipeline, 'summary'],
+    queryFn: () => getCandidateThemeQueue({ limit: 1, offset: 0, pipeline: selectedPipeline }),
   });
 
   // Fetch failed items count for retry badge
@@ -804,6 +885,21 @@ function ThemesPage() {
               Review Merges
             </Button>
           </Badge>
+          <Badge
+            badgeContent={candidateQueueSummary?.total || 0}
+            color="info"
+            max={99}
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<AutoAwesomeIcon />}
+              onClick={() => setCandidateModalOpen(true)}
+              sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
+            >
+              Review Candidates
+            </Button>
+          </Badge>
           <Button
             size="small"
             variant="outlined"
@@ -812,6 +908,15 @@ function ThemesPage() {
             sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
           >
             Browse Articles
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<SettingsIcon />}
+            onClick={() => setPolicySettingsOpen(true)}
+            sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
+          >
+            Policy Controls
           </Button>
           <Button
             size="small"
@@ -1191,6 +1296,7 @@ function ThemesPage() {
         <ThemeDetailModal
           themeId={selectedTheme.id}
           themeName={selectedTheme.name}
+          selectedPipeline={selectedPipeline}
           open={!!selectedTheme}
           onClose={() => setSelectedTheme(null)}
         />
@@ -1218,6 +1324,12 @@ function ThemesPage() {
         onClose={() => setMergeModalOpen(false)}
       />
 
+      <ThemeCandidateReviewModal
+        open={candidateModalOpen}
+        onClose={() => setCandidateModalOpen(false)}
+        pipeline={selectedPipeline}
+      />
+
       {/* Article Browser Modal */}
       <ArticleBrowserModal
         open={articleBrowserOpen}
@@ -1228,6 +1340,12 @@ function ThemesPage() {
       <ModelSettingsModal
         open={modelSettingsOpen}
         onClose={() => setModelSettingsOpen(false)}
+      />
+
+      <ThemePolicySettingsModal
+        open={policySettingsOpen}
+        onClose={() => setPolicySettingsOpen(false)}
+        pipeline={selectedPipeline}
       />
     </Container>
   );

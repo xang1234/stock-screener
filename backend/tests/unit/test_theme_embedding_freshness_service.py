@@ -433,6 +433,112 @@ def test_recompute_stale_embeddings_prevents_cross_run_starvation(db_session):
     assert refreshed_b.is_stale is False
 
 
+def test_run_embedding_refresh_campaign_meets_coverage_and_freshness_gates(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    theme_a = _make_theme(db_session)
+    theme_b = ThemeCluster(
+        canonical_key="ai_grid_scaling",
+        display_name="AI Grid Scaling",
+        name="AI Grid Scaling",
+        aliases=["Grid Scaling"],
+        description="Transmission and substations for AI demand",
+        category="utilities",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(theme_b)
+    db_session.commit()
+    _make_embedding(db_session, theme_b.id, stale=True)
+
+    result = service.run_embedding_refresh_campaign(
+        pipeline="technical",
+        refresh_batch_size=1,
+        stale_batch_size=1,
+        stale_max_batches_per_pass=2,
+        max_passes=3,
+        min_coverage_ratio=1.0,
+        min_freshness_ratio=1.0,
+    )
+
+    assert result["passes_executed"] >= 1
+    assert result["final_metrics"]["coverage_ratio"] == 1.0
+    assert result["final_metrics"]["freshness_ratio"] == 1.0
+    assert result["final_metrics"]["themes_needing_refresh"] == 0
+    assert result["retry_tracking"]["retry_queue_size"] == 0
+    assert result["gates"]["ready_for_merge_waves"] is True
+
+    emb_a = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_a.id).one()
+    emb_b = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_b.id).one()
+    assert emb_a.is_stale is False
+    assert emb_b.is_stale is False
+
+
+def test_run_embedding_refresh_campaign_tracks_retry_pockets_for_failures(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    theme_a = _make_theme(db_session)
+
+    def _always_fail_refresh(self, theme):
+        if theme.id == theme_a.id:
+            raise RuntimeError("simulated-campaign-refresh-failure")
+        return ThemeMergingService.update_theme_embedding(self, theme)
+
+    service.update_theme_embedding = MethodType(_always_fail_refresh, service)
+
+    result = service.run_embedding_refresh_campaign(
+        pipeline="technical",
+        refresh_batch_size=1,
+        stale_batch_size=1,
+        stale_max_batches_per_pass=1,
+        max_passes=2,
+        min_coverage_ratio=1.0,
+        min_freshness_ratio=1.0,
+    )
+
+    assert result["gates"]["ready_for_merge_waves"] is False
+    assert result["retry_tracking"]["failed_attempts"] >= 1
+    assert result["retry_tracking"]["retry_queue_size"] == 1
+    retry_cluster = result["retry_tracking"]["retry_clusters"][0]
+    assert retry_cluster["theme_cluster_id"] == theme_a.id
+    assert "simulated-campaign-refresh-failure" in (retry_cluster["last_error"] or "")
+    assert result["final_metrics"]["themes_needing_refresh"] == 1
+
+
+def test_run_embedding_refresh_campaign_clears_retry_queue_after_recovery(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    _make_theme(db_session)
+    attempts = {"count": 0}
+    original_update = service.update_theme_embedding
+
+    def _fail_once_then_recover(self, theme):
+        if attempts["count"] == 0:
+            attempts["count"] += 1
+            raise RuntimeError("transient-refresh-failure")
+        return original_update(theme)
+
+    service.update_theme_embedding = MethodType(_fail_once_then_recover, service)
+
+    result = service.run_embedding_refresh_campaign(
+        pipeline="technical",
+        refresh_batch_size=1,
+        stale_batch_size=1,
+        stale_max_batches_per_pass=1,
+        max_passes=3,
+        min_coverage_ratio=1.0,
+        min_freshness_ratio=1.0,
+    )
+
+    assert result["retry_tracking"]["failed_attempts"] == 1
+    assert result["retry_tracking"]["retry_queue_size"] == 0
+    assert result["retry_tracking"]["retry_clusters"] == []
+    assert result["final_metrics"]["themes_needing_refresh"] == 0
+    assert result["gates"]["ready_for_merge_waves"] is True
+
+
 def test_find_all_similar_pairs_uses_blocking_and_top_k(db_session):
     engine = _StubEmbeddingEngine()
     service = _make_service(db_session, engine)

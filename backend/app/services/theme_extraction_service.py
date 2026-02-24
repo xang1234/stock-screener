@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import replace
 from copy import deepcopy
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -30,6 +31,7 @@ from ..models.theme import (
     ThemeCluster,
     ThemeConstituent,
 )
+from ..models.app_settings import AppSetting
 from ..config import settings
 from .llm import LLMService, LLMError
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
@@ -232,6 +234,7 @@ class ThemeExtractionService:
         self._load_configured_model()
         self._init_client()
         self._load_reprocessing_config()
+        self.theme_policy_overrides = self._load_theme_policy_overrides()
 
         # Known ticker patterns for validation
         self.ticker_pattern = re.compile(r'^[A-Z]{1,5}$')
@@ -242,6 +245,33 @@ class ThemeExtractionService:
         # Rate limiting
         self._last_request_time = 0
         self._min_request_interval = 0.5  # 0.5 seconds for most providers
+
+    def _load_theme_policy_overrides(self) -> dict:
+        setting = self.db.query(AppSetting).filter(AppSetting.key == "theme_policy_overrides").first()
+        if not setting or not setting.value:
+            return {}
+        try:
+            all_overrides = json.loads(setting.value)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(all_overrides, dict):
+            return {}
+        pipeline_overrides = all_overrides.get(self.pipeline, {})
+        if not isinstance(pipeline_overrides, dict):
+            return {}
+        return pipeline_overrides
+
+    def _matcher_policy_value(self, key: str, fallback: float) -> float:
+        matcher = self.theme_policy_overrides.get("matcher", {}) if isinstance(self.theme_policy_overrides, dict) else {}
+        if not isinstance(matcher, dict):
+            return float(fallback)
+        value = matcher.get(key)
+        if value is None:
+            return float(fallback)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(fallback)
 
     def _load_pipeline_config(self):
         """Load pipeline-specific configuration"""
@@ -585,7 +615,11 @@ Example themes for this pipeline: {examples_str}
         config = getattr(self, "match_threshold_config", None)
         if config is None:
             # Avoid cross-request mutation by cloning class-level defaults.
-            config = deepcopy(self.MATCH_THRESHOLD_CONFIG)
+            base = deepcopy(self.MATCH_THRESHOLD_CONFIG)
+            config = replace(
+                base,
+                default_threshold=self._matcher_policy_value("match_default_threshold", base.default_threshold),
+            )
             self.match_threshold_config = config
         return config
 
@@ -654,6 +688,10 @@ Example themes for this pipeline: {examples_str}
         )
         review_threshold = min(review_threshold, attach_threshold)
         ambiguity_margin = max(0.0, ambiguity_margin)
+        attach_threshold = self._matcher_policy_value("fuzzy_attach_threshold", attach_threshold)
+        review_threshold = self._matcher_policy_value("fuzzy_review_threshold", review_threshold)
+        ambiguity_margin = max(0.0, self._matcher_policy_value("fuzzy_ambiguity_margin", ambiguity_margin))
+        review_threshold = min(review_threshold, attach_threshold)
         return attach_threshold, review_threshold, ambiguity_margin
 
     def _normalize_lexical_text(self, text: str) -> str:
@@ -728,6 +766,10 @@ Example themes for this pipeline: {examples_str}
         )
         review_threshold = min(review_threshold, attach_threshold)
         ambiguity_margin = max(0.0, ambiguity_margin)
+        attach_threshold = self._matcher_policy_value("embedding_attach_threshold", attach_threshold)
+        review_threshold = self._matcher_policy_value("embedding_review_threshold", review_threshold)
+        ambiguity_margin = max(0.0, self._matcher_policy_value("embedding_ambiguity_margin", ambiguity_margin))
+        review_threshold = min(review_threshold, attach_threshold)
         return attach_threshold, review_threshold, ambiguity_margin
 
     def _get_embedding_encoder(self):
