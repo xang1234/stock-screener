@@ -246,3 +246,54 @@ def test_relationship_inference_writes_merge_and_overlap_edges(db_session):
         and edge.relationship_type == "distinct"
         for edge in edges
     )
+
+
+def test_relationship_inference_corrects_subset_direction_from_merge_suggestion(db_session):
+    now = datetime.utcnow()
+    subset_theme = _make_theme(
+        db_session,
+        name="AI Chips",
+        canonical_key="ai_chips",
+        state="active",
+        now=now,
+    )
+    superset_theme = _make_theme(
+        db_session,
+        name="AI Infrastructure",
+        canonical_key="ai_infrastructure",
+        state="active",
+        now=now,
+    )
+    db_session.add_all(
+        [
+            ThemeConstituent(theme_cluster_id=subset_theme.id, symbol="NVDA", is_active=True),
+            ThemeConstituent(theme_cluster_id=subset_theme.id, symbol="AMD", is_active=True),
+            ThemeConstituent(theme_cluster_id=superset_theme.id, symbol="NVDA", is_active=True),
+            ThemeConstituent(theme_cluster_id=superset_theme.id, symbol="AMD", is_active=True),
+            ThemeConstituent(theme_cluster_id=superset_theme.id, symbol="AVGO", is_active=True),
+        ]
+    )
+    # Intentionally reversed direction in suggestion payload.
+    db_session.add(
+        ThemeMergeSuggestion(
+            source_cluster_id=superset_theme.id,
+            target_cluster_id=subset_theme.id,
+            embedding_similarity=0.90,
+            llm_confidence=0.94,
+            llm_relationship="subset",
+            llm_reasoning="AI Chips is a narrower part of AI Infrastructure.",
+            status="pending",
+        )
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    result = service.infer_theme_relationships(max_merge_suggestions=20)
+    assert result["merge_edges_written"] >= 1
+
+    edge = db_session.query(ThemeRelationship).filter(
+        ThemeRelationship.relationship_type == "subset",
+        ThemeRelationship.pipeline == "technical",
+    ).one()
+    assert edge.source_cluster_id == subset_theme.id
+    assert edge.target_cluster_id == superset_theme.id

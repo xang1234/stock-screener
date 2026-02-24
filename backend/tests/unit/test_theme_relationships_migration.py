@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine, text
 
 from app.db_migrations.theme_relationships_migration import (
@@ -110,3 +111,36 @@ def test_theme_relationships_migration_removes_self_edges_and_normalizes_type():
             text("SELECT source_cluster_id, target_cluster_id, relationship_type FROM theme_relationships")
         ).fetchall()
     assert rows == [(1, 2, "related")]
+
+
+def test_theme_relationships_migration_enforces_constraints_with_triggers():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.connect() as conn:
+        _create_theme_clusters(conn)
+
+    migrate_theme_relationships(engine)
+
+    with engine.connect() as conn:
+        with pytest.raises(Exception):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO theme_relationships(
+                        source_cluster_id, target_cluster_id, pipeline, relationship_type, confidence
+                    )
+                    VALUES (1, 1, 'technical', 'subset', 0.9)
+                    """
+                )
+            )
+
+        with pytest.raises(Exception):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO theme_relationships(
+                        source_cluster_id, target_cluster_id, pipeline, relationship_type, confidence
+                    )
+                    VALUES (1, 2, 'technical', 'invalid_type', 0.9)
+                    """
+                )
+            )

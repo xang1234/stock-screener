@@ -1261,6 +1261,42 @@ class ThemeDiscoveryService:
             "updated": updated,
         }
 
+    def _active_constituent_symbols_by_cluster(self, cluster_ids: list[int]) -> dict[int, set[str]]:
+        if not cluster_ids:
+            return {}
+        rows = self.db.query(ThemeConstituent.theme_cluster_id, ThemeConstituent.symbol).filter(
+            ThemeConstituent.is_active == True,
+            ThemeConstituent.theme_cluster_id.in_(cluster_ids),
+        ).all()
+        by_cluster: dict[int, set[str]] = defaultdict(set)
+        for cluster_id, symbol in rows:
+            by_cluster[cluster_id].add(symbol)
+        return by_cluster
+
+    def _resolve_subset_direction_from_constituents(
+        self,
+        *,
+        source_cluster_id: int,
+        target_cluster_id: int,
+        constituent_sets: dict[int, set[str]],
+    ) -> tuple[int, int, str] | None:
+        source_set = constituent_sets.get(source_cluster_id, set())
+        target_set = constituent_sets.get(target_cluster_id, set())
+        if not source_set or not target_set:
+            return None
+
+        if source_set < target_set:
+            return source_cluster_id, target_cluster_id, "strict_subset_set_comparison"
+        if target_set < source_set:
+            return target_cluster_id, source_cluster_id, "strict_subset_set_comparison"
+
+        # If strict subset isn't available, keep directional hint only when set sizes differ.
+        if len(source_set) < len(target_set):
+            return source_cluster_id, target_cluster_id, "size_heuristic"
+        if len(target_set) < len(source_set):
+            return target_cluster_id, source_cluster_id, "size_heuristic"
+        return None
+
     def infer_theme_relationships(
         self,
         *,
@@ -1290,6 +1326,7 @@ class ThemeDiscoveryService:
                 cluster.id: cluster
                 for cluster in self.db.query(ThemeCluster).filter(ThemeCluster.pipeline == self.pipeline).all()
             }
+            constituent_sets = self._active_constituent_symbols_by_cluster(list(cluster_lookup.keys()))
 
             for suggestion in merge_suggestions:
                 source = cluster_lookup.get(suggestion.source_cluster_id)
@@ -1304,10 +1341,26 @@ class ThemeDiscoveryService:
                     if suggestion.llm_confidence is not None
                     else (suggestion.embedding_similarity or 0.5)
                 )
+                relationship_type = str(suggestion.llm_relationship or "related").strip().lower()
+                inferred_source_id = source.id
+                inferred_target_id = target.id
+                direction_resolution = "as_recorded"
+                if relationship_type == "subset":
+                    resolved = self._resolve_subset_direction_from_constituents(
+                        source_cluster_id=source.id,
+                        target_cluster_id=target.id,
+                        constituent_sets=constituent_sets,
+                    )
+                    if resolved is None:
+                        relationship_type = "related"
+                        direction_resolution = "downgraded_to_related_ambiguous_subset_direction"
+                    else:
+                        inferred_source_id, inferred_target_id, direction_resolution = resolved
+
                 _, inserted = self.upsert_theme_relationship(
-                    source_cluster_id=source.id,
-                    target_cluster_id=target.id,
-                    relationship_type=str(suggestion.llm_relationship or "related"),
+                    source_cluster_id=inferred_source_id,
+                    target_cluster_id=inferred_target_id,
+                    relationship_type=relationship_type,
                     confidence=confidence,
                     provenance="merge_suggestion_llm",
                     evidence={
@@ -1315,6 +1368,7 @@ class ThemeDiscoveryService:
                         "status": suggestion.status,
                         "embedding_similarity": suggestion.embedding_similarity,
                         "llm_confidence": suggestion.llm_confidence,
+                        "direction_resolution": direction_resolution,
                     },
                     pipeline=self.pipeline,
                 )
