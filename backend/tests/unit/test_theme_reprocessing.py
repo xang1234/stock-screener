@@ -756,6 +756,59 @@ class TestThemeClusterLabelPreservation:
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_blocks_low_quality_alias_auto_attach(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        legacy_cluster = ThemeCluster(
+            canonical_key="legacy_ai_theme",
+            display_name="Legacy AI Theme",
+            name="Legacy AI Theme",
+            pipeline="technical",
+            aliases=["Legacy AI Theme"],
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(legacy_cluster)
+        db_session.flush()
+        alias_row = ThemeAlias(
+            theme_cluster_id=legacy_cluster.id,
+            pipeline="technical",
+            alias_text="AI Neoinfra",
+            alias_key="ai_neoinfra",
+            source="llm_extraction",
+            confidence=0.6,
+            evidence_count=1,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+            is_active=True,
+        )
+        db_session.add(alias_row)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Neoinfra", "confidence": 0.8})
+        db_session.refresh(alias_row)
+
+        assert got_cluster.id != legacy_cluster.id
+        assert decision.method == "create_new_cluster"
+        assert decision.fallback_reason == "alias_match_below_auto_attach_threshold"
+        assert decision.best_alternative_cluster_id == legacy_cluster.id
+        assert decision.best_alternative_score is not None
+        # Alias telemetry still accrues even when Stage B does not auto-attach.
+        assert alias_row.evidence_count == 2
+        assert alias_row.confidence > 0.6
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
     def test_resolve_cluster_match_clears_fallback_when_alias_target_inactive_but_canonical_exists(
         self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
     ):

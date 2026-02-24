@@ -169,6 +169,14 @@ class ThemeExtractionService:
         source_type_overrides={},
         pipeline_source_type_overrides={},
     )
+    ALIAS_SOURCE_TRUST = {
+        "manual": 1.0,
+        "correlation": 0.85,
+        "backfill": 0.7,
+        "llm_extraction": 0.45,
+    }
+    ALIAS_AUTO_ATTACH_MIN_SCORE = 0.70
+    ALIAS_AUTO_ATTACH_MIN_EVIDENCE = 2
 
     def __init__(self, db: Session, pipeline: str = "technical"):
         self.db = db
@@ -538,6 +546,23 @@ Example themes for this pipeline: {examples_str}
             self.match_threshold_config = config
         return config
 
+    def _alias_quality_score(self, alias: ThemeAlias) -> float:
+        """Blend source trust, confidence, and evidence for Stage B auto-attach."""
+        source = (alias.source or "").strip().lower()
+        trust_score = float(self.ALIAS_SOURCE_TRUST.get(source, 0.5))
+        confidence_score = max(0.0, min(1.0, float(alias.confidence or 0.0)))
+        evidence_count = max(1, int(alias.evidence_count or 1))
+        evidence_score = min(1.0, evidence_count / 4.0)
+        score = (0.5 * trust_score) + (0.3 * confidence_score) + (0.2 * evidence_score)
+        return max(0.0, min(1.0, score))
+
+    def _can_auto_attach_alias(self, alias: ThemeAlias) -> bool:
+        """Gate exact alias-key attachment to reduce low-trust alias poisoning."""
+        evidence_count = max(1, int(alias.evidence_count or 1))
+        if evidence_count < self.ALIAS_AUTO_ATTACH_MIN_EVIDENCE:
+            return False
+        return self._alias_quality_score(alias) >= self.ALIAS_AUTO_ATTACH_MIN_SCORE
+
     def process_content_item(self, content_item: ContentItem) -> int:
         """
         Backward-compatible single-item processing API.
@@ -772,6 +797,7 @@ Example themes for this pipeline: {examples_str}
         if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
             alias_match = alias_repo.find_exact(pipeline=self.pipeline, alias_key=canonical_key)
             if alias_match:
+                alias_score = self._alias_quality_score(alias_match)
                 cluster = self.db.query(ThemeCluster).filter(
                     ThemeCluster.id == alias_match.theme_cluster_id,
                     ThemeCluster.pipeline == self.pipeline,
@@ -779,8 +805,16 @@ Example themes for this pipeline: {examples_str}
                 ).first()
                 if cluster is None:
                     best_alternative_cluster_id = alias_match.theme_cluster_id
-                    best_alternative_score = 1.0
+                    best_alternative_score = alias_score
                     alias_match.is_active = False
+                    if fallback_reason is None:
+                        fallback_reason = "alias_target_inactive"
+                elif not self._can_auto_attach_alias(alias_match):
+                    best_alternative_cluster_id = alias_match.theme_cluster_id
+                    best_alternative_score = alias_score
+                    cluster = None
+                    if fallback_reason is None:
+                        fallback_reason = "alias_match_below_auto_attach_threshold"
                 else:
                     method = "exact_alias_key"
                     score = 1.0
