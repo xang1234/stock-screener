@@ -1,0 +1,134 @@
+{
+  "version": "v1",
+  "key_regex": "^[a-z0-9]+(?:_[a-z0-9]+)*$",
+  "max_length": 96,
+  "default_fallback_key": "unknown_theme",
+  "cases": [
+    {
+      "id": "E2-CASE-001",
+      "category": "acronym",
+      "raw": "AI Infrastructure",
+      "expected_key": "ai_infrastructure"
+    },
+    {
+      "id": "E2-CASE-002",
+      "category": "acronym",
+      "raw": "A.I. infrastructure",
+      "expected_key": "ai_infrastructure"
+    },
+    {
+      "id": "E2-CASE-003",
+      "category": "punctuation",
+      "raw": "AI-infrastructure",
+      "expected_key": "ai_infrastructure"
+    },
+    {
+      "id": "E2-CASE-004",
+      "category": "numeric",
+      "raw": "GLP-1 weight loss",
+      "expected_key": "glp1_weight_loss"
+    },
+    {
+      "id": "E2-CASE-005",
+      "category": "numeric",
+      "raw": "GLP1 Weight-Loss",
+      "expected_key": "glp1_weight_loss"
+    },
+    {
+      "id": "E2-CASE-006",
+      "category": "numeric",
+      "raw": "5G infrastructure",
+      "expected_key": "5g_infrastructure"
+    },
+    {
+      "id": "E2-CASE-007",
+      "category": "numeric",
+      "raw": "3D printing",
+      "expected_key": "3d_printing"
+    },
+    {
+      "id": "E2-CASE-008",
+      "category": "stopword",
+      "raw": "The Future of AI",
+      "expected_key": "future_ai"
+    },
+    {
+      "id": "E2-CASE-009",
+      "category": "stopword",
+      "raw": "AI for the enterprise",
+      "expected_key": "ai_enterprise"
+    },
+    {
+      "id": "E2-CASE-010",
+      "category": "unicode",
+      "raw": "Cafe robotics",
+      "expected_key": "cafe_robotic"
+    },
+    {
+      "id": "E2-CASE-011",
+      "category": "unicode",
+      "raw": "Cafe\u0301 robotics",
+      "expected_key": "cafe_robotic"
+    },
+    {
+      "id": "E2-CASE-012",
+      "category": "unicode",
+      "raw": "Reneweble Enerji",
+      "expected_key": "reneweble_enerji"
+    },
+    {
+      "id": "E2-CASE-013",
+      "category": "symbol",
+      "raw": "Crypto & Bitcoin",
+      "expected_key": "crypto_and_bitcoin"
+    },
+    {
+      "id": "E2-CASE-014",
+      "category": "symbol",
+      "raw": "C++ tooling",
+      "expected_key": "c_plus_plus_tooling"
+    },
+    {
+      "id": "E2-CASE-015",
+      "category": "plural",
+      "raw": "EVs and batteries",
+      "expected_key": "ev_and_batterie"
+    },
+    {
+      "id": "E2-CASE-016",
+      "category": "plural",
+      "raw": "GPU chips",
+      "expected_key": "gpu_chip"
+    },
+    {
+      "id": "E2-CASE-017",
+      "category": "protected",
+      "raw": "US defense tech",
+      "expected_key": "us_defense_tech"
+    },
+    {
+      "id": "E2-CASE-018",
+      "category": "protected",
+      "raw": "non-gaap software",
+      "expected_key": "non_gaap_software"
+    },
+    {
+      "id": "E2-CASE-019",
+      "category": "near_collision",
+      "raw": "AI data center buildout",
+      "expected_key": "ai_data_center_buildout"
+    },
+    {
+      "id": "E2-CASE-020",
+      "category": "near_collision",
+      "raw": "AI datacenter buildout",
+      "expected_key": "ai_datacenter_buildout"
+    },
+    {
+      "id": "E2-CASE-021",
+      "category": "fallback",
+      "raw": "the of for to",
+      "expected_key": "unknown_theme"
+    }
+  ]
+}
