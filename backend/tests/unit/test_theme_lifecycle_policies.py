@@ -489,3 +489,102 @@ def test_discover_emerging_themes_suppresses_noisy_candidates_by_lifecycle_gate(
 
     assert "Valid Active" in names
     assert "Noisy Candidate" not in names
+
+
+def test_get_theme_rankings_invalid_lifecycle_filter_returns_empty(db_session):
+    now = datetime(2026, 2, 24, 20, 0, 0)
+    active = _make_theme(
+        db_session,
+        name="Active Compute",
+        canonical_key="active_compute",
+        state="active",
+        now=now,
+    )
+    db_session.add(
+        ThemeMetrics(
+            theme_cluster_id=active.id,
+            date=now.date(),
+            pipeline="technical",
+            momentum_score=82.0,
+            rank=1,
+            status="trending",
+            mentions_7d=8,
+            mention_velocity=1.7,
+        )
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    rankings, total = service.get_theme_rankings(lifecycle_states_filter=["not_a_state"])
+
+    assert total == 0
+    assert rankings == []
+
+
+def test_discover_emerging_themes_dormant_requires_confidence_threshold(db_session):
+    now = datetime.utcnow()
+    source_news = _make_source(db_session, name="Dormancy Wire", source_type="news")
+    source_substack = _make_source(db_session, name="Dormancy Letter", source_type="substack")
+
+    low_quality_dormant = _make_theme(
+        db_session,
+        name="Low Quality Dormant",
+        canonical_key="low_quality_dormant",
+        state="dormant",
+        now=now,
+    )
+    high_quality_dormant = _make_theme(
+        db_session,
+        name="High Quality Dormant",
+        canonical_key="high_quality_dormant",
+        state="dormant",
+        now=now,
+    )
+    low_quality_dormant.first_seen_at = now - timedelta(days=2)
+    high_quality_dormant.first_seen_at = now - timedelta(days=2)
+
+    _add_mention(
+        db_session,
+        theme=low_quality_dormant,
+        source=source_news,
+        now=now,
+        days_ago=1,
+        confidence=0.20,
+        external_suffix="low1",
+    )
+    _add_mention(
+        db_session,
+        theme=low_quality_dormant,
+        source=source_substack,
+        now=now,
+        days_ago=2,
+        confidence=0.18,
+        external_suffix="low2",
+    )
+
+    _add_mention(
+        db_session,
+        theme=high_quality_dormant,
+        source=source_news,
+        now=now,
+        days_ago=1,
+        confidence=0.87,
+        external_suffix="high1",
+    )
+    _add_mention(
+        db_session,
+        theme=high_quality_dormant,
+        source=source_substack,
+        now=now,
+        days_ago=2,
+        confidence=0.86,
+        external_suffix="high2",
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    emerging = service.discover_emerging_themes(min_velocity=1.0, min_mentions=2)
+    names = {entry["theme"] for entry in emerging}
+
+    assert "High Quality Dormant" in names
+    assert "Low Quality Dormant" not in names

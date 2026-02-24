@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.v1.themes import get_matching_telemetry
+from app.api.v1.themes import get_matching_telemetry, get_theme_rankings
 from app.database import Base
 from app.models.theme import ThemeMention
 
@@ -240,3 +240,21 @@ async def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_ses
     assert payload.attach_count == 0
     assert payload.new_cluster_rate == 0.5
     assert payload.attach_rate == 0.0
+
+
+@pytest.mark.asyncio
+async def test_rankings_empty_response_preserves_requested_pipeline(db_session):
+    payload = await get_theme_rankings(
+        limit=20,
+        offset=0,
+        status=None,
+        source_types=None,
+        lifecycle_states=None,
+        pipeline="fundamental",
+        recalculate=False,
+        db=db_session,
+    )
+
+    assert payload.pipeline == "fundamental"
+    assert payload.total_themes == 0
+    assert payload.rankings == []

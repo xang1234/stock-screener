@@ -650,6 +650,8 @@ class ThemeDiscoveryService:
             base_query = base_query.filter(ThemeMetrics.status == status_filter)
 
         normalized_lifecycle_states = self._normalize_lifecycle_states_filter(lifecycle_states_filter)
+        if lifecycle_states_filter is not None and not normalized_lifecycle_states:
+            return [], 0
         if normalized_lifecycle_states:
             base_query = base_query.filter(ThemeCluster.lifecycle_state.in_(normalized_lifecycle_states))
 
@@ -712,6 +714,8 @@ class ThemeDiscoveryService:
         week_ago = datetime.utcnow() - timedelta(days=7)
         thresholds = self._lifecycle_thresholds()
         normalized_lifecycle_states = self._normalize_lifecycle_states_filter(lifecycle_states_filter)
+        if lifecycle_states_filter is not None and not normalized_lifecycle_states:
+            return []
 
         emerging = self.db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True,
@@ -756,7 +760,7 @@ class ThemeDiscoveryService:
         return results
 
     def _normalize_lifecycle_states_filter(self, lifecycle_states_filter: Optional[list[str]]) -> Optional[list[str]]:
-        if not lifecycle_states_filter:
+        if lifecycle_states_filter is None:
             return None
         normalized = []
         for state in lifecycle_states_filter:
@@ -792,6 +796,7 @@ class ThemeDiscoveryService:
             return (
                 observation["mentions_7d"] >= thresholds["reactivation_min_mentions_7d"]
                 and observation["source_diversity_7d"] >= thresholds["reactivation_min_source_diversity_7d"]
+                and observation["avg_quality_confidence_30d"] >= thresholds["reactivation_min_avg_confidence_30d"]
             )
 
         return True

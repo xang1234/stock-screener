@@ -254,6 +254,7 @@ async def get_theme_rankings(
         return ThemeRankingsResponse(
             date=None,
             total_themes=total_count,
+            pipeline=pipeline,
             rankings=[]
         )
 
