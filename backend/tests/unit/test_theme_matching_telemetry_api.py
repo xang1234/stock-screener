@@ -25,10 +25,10 @@ def db_session():
 
 def _mention(
     *,
-    source_type: str,
+    source_type: str | None,
     pipeline: str,
-    method: str,
-    threshold_version: str,
+    method: str | None,
+    threshold_version: str | None,
     confidence: float | None,
     score: float | None,
     fallback_reason: str | None = None,
@@ -109,8 +109,6 @@ async def test_matching_telemetry_aggregates_method_source_and_threshold_breakdo
     payload = await get_matching_telemetry(
         days=30,
         pipeline="technical",
-        source_type=None,
-        threshold_version=None,
         db=db_session,
     )
 
@@ -172,3 +170,73 @@ async def test_matching_telemetry_supports_source_and_threshold_filters(db_sessi
     assert payload.by_threshold_version[0].key == "embedding-v1"
     assert payload.by_source_type[0].key == "substack"
     assert all(item.method in {"embedding_similarity", "create_new_cluster"} for item in payload.method_distribution)
+
+
+@pytest.mark.asyncio
+async def test_matching_telemetry_unknown_threshold_filter_maps_to_null_column(db_session):
+    db_session.add_all(
+        [
+            _mention(
+                source_type="news",
+                pipeline="technical",
+                method="create_new_cluster",
+                threshold_version=None,
+                confidence=0.5,
+                score=0.0,
+            ),
+            _mention(
+                source_type="news",
+                pipeline="technical",
+                method="fuzzy_lexical",
+                threshold_version="match-v1",
+                confidence=0.8,
+                score=0.9,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = await get_matching_telemetry(
+        days=30,
+        pipeline="technical",
+        source_type="news",
+        threshold_version="unknown",
+        db=db_session,
+    )
+
+    assert payload.total_mentions == 1
+    assert payload.by_source_type[0].key == "news"
+    assert payload.by_threshold_version[0].key == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_matching_telemetry_does_not_count_unknown_method_as_attach(db_session):
+    db_session.add_all(
+        [
+            _mention(
+                source_type="news",
+                pipeline="technical",
+                method="create_new_cluster",
+                threshold_version="match-v1",
+                confidence=0.3,
+                score=0.0,
+            ),
+            _mention(
+                source_type="news",
+                pipeline="technical",
+                method=None,
+                threshold_version="match-v1",
+                confidence=0.7,
+                score=0.5,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = await get_matching_telemetry(days=30, pipeline="technical", db=db_session)
+
+    assert payload.total_mentions == 2
+    assert payload.new_cluster_count == 1
+    assert payload.attach_count == 0
+    assert payload.new_cluster_rate == 0.5
+    assert payload.attach_rate == 0.0

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Annotated, Optional
 
 from ...database import get_db
 from ...models.theme import (
@@ -1252,7 +1252,11 @@ def _build_band_buckets(
         bucket_rows = grouped[band]
         bucket_total = len(bucket_rows)
         new_cluster_count = sum(1 for r in bucket_rows if r["match_method"] == "create_new_cluster")
-        attach_count = bucket_total - new_cluster_count
+        attach_count = sum(
+            1
+            for r in bucket_rows
+            if r["match_method"] not in {"create_new_cluster", "unknown"}
+        )
         output.append(
             ThemeMatchBandBucketResponse(
                 band=band,
@@ -1268,7 +1272,11 @@ def _build_band_buckets(
 def _build_match_slice(key: str, rows: list[dict[str, object]]) -> ThemeMatchTelemetrySliceResponse:
     total = len(rows)
     new_cluster_count = sum(1 for row in rows if row["match_method"] == "create_new_cluster")
-    attach_count = total - new_cluster_count
+    attach_count = sum(
+        1
+        for row in rows
+        if row["match_method"] not in {"create_new_cluster", "unknown"}
+    )
 
     method_counter = Counter(str(row["match_method"] or "unknown") for row in rows)
     method_distribution = [
@@ -1309,10 +1317,10 @@ def _build_match_slice(key: str, rows: list[dict[str, object]]) -> ThemeMatchTel
 
 @router.get("/matching/telemetry", response_model=ThemeMatchTelemetryResponse)
 async def get_matching_telemetry(
-    days: int = Query(30, ge=1, le=365, description="Rolling window in days"),
-    pipeline: Optional[str] = Query(None, description="Filter by pipeline: technical or fundamental"),
-    source_type: Optional[str] = Query(None, description="Filter by source type"),
-    threshold_version: Optional[str] = Query(None, description="Filter by threshold version"),
+    days: Annotated[int, Query(ge=1, le=365, description="Rolling window in days")] = 30,
+    pipeline: Annotated[Optional[str], Query(description="Filter by pipeline: technical or fundamental")] = None,
+    source_type: Annotated[Optional[str], Query(description="Filter by source type")] = None,
+    threshold_version: Annotated[Optional[str], Query(description="Filter by threshold version")] = None,
     db: Session = Depends(get_db),
 ):
     """Aggregate matcher telemetry for ops/model tuning dashboards."""
@@ -1333,17 +1341,20 @@ async def get_matching_telemetry(
     if source_type:
         query = query.filter(ThemeMention.source_type == source_type)
     if threshold_version:
-        query = query.filter(ThemeMention.threshold_version == threshold_version)
+        if threshold_version == "unknown":
+            query = query.filter(ThemeMention.threshold_version.is_(None))
+        else:
+            query = query.filter(ThemeMention.threshold_version == threshold_version)
 
     records = query.all()
     rows: list[dict[str, object]] = [
         {
-            "match_method": record.match_method,
+            "match_method": record.match_method or "unknown",
             "match_fallback_reason": record.match_fallback_reason,
             "match_score": record.match_score,
             "confidence": record.confidence,
             "threshold_version": record.threshold_version or "unknown",
-            "source_type": record.source_type or "unknown",
+            "source_type": record.source_type,
             "mentioned_at": record.mentioned_at,
         }
         for record in records
