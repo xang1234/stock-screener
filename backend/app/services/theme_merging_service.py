@@ -216,6 +216,19 @@ class ThemeMergingService:
         """Calculate cosine similarity between two vectors"""
         return ThemeEmbeddingEngine.cosine_similarity(a, b)
 
+    def _embedding_record_needs_refresh(
+        self,
+        theme: ThemeCluster,
+        record: ThemeEmbedding | None,
+    ) -> bool:
+        content_hash = self.embedding_repo.build_theme_content_hash(theme)
+        return self.embedding_repo.embedding_needs_refresh(
+            record,
+            content_hash=content_hash,
+            embedding_model=self.EMBEDDING_MODEL,
+            model_version=self.EMBEDDING_MODEL_VERSION,
+        )
+
     def find_similar_themes(
         self,
         theme_id: int,
@@ -225,44 +238,48 @@ class ThemeMergingService:
         if threshold is None:
             threshold = self.EMBEDDING_THRESHOLD
 
-        # Get source theme embedding
+        source_theme = self.db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
+        if not source_theme:
+            return []
+
+        # Get source theme embedding (refresh when missing/stale/outdated)
         source_embedding_record = self.embedding_repo.get_for_cluster(theme_id)
-
-        if not source_embedding_record:
-            # Try to generate it
-            theme = self.db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
-            if theme:
-                self.update_theme_embedding(theme)
-                source_embedding_record = self.embedding_repo.get_for_cluster(theme_id)
-
+        if self._embedding_record_needs_refresh(source_theme, source_embedding_record):
+            source_embedding_record, _ = self.update_theme_embedding(source_theme)
         if not source_embedding_record:
             return []
 
         source_embedding = self._load_embedding(source_embedding_record)
 
-        # Get all other embeddings
-        other_embeddings = [
-            row for row in self.embedding_repo.list_all() if row.theme_cluster_id != theme_id
-        ]
+        other_themes = self.db.query(ThemeCluster).filter(
+            ThemeCluster.id != theme_id,
+            ThemeCluster.is_active == True,
+        ).all()
 
         # Calculate similarities
         similar = []
-        for other in other_embeddings:
-            other_vec = self._load_embedding(other)
+        for theme in other_themes:
+            other_record = self.embedding_repo.get_for_cluster(theme.id)
+            if self._embedding_record_needs_refresh(theme, other_record):
+                other_record, _ = self.update_theme_embedding(theme)
+            if not other_record:
+                continue
+
+            try:
+                other_vec = self._load_embedding(other_record)
+            except Exception:
+                continue
+
             similarity = self._cosine_similarity(source_embedding, other_vec)
 
             if similarity >= threshold:
-                theme = self.db.query(ThemeCluster).filter(
-                    ThemeCluster.id == other.theme_cluster_id
-                ).first()
-                if theme and theme.is_active:
-                    similar.append({
-                        "theme_id": theme.id,
-                        "name": theme.name,
-                        "similarity": round(similarity, 4),
-                        "aliases": theme.aliases,
-                        "category": theme.category,
-                    })
+                similar.append({
+                    "theme_id": theme.id,
+                    "name": theme.name,
+                    "similarity": round(similarity, 4),
+                    "aliases": theme.aliases,
+                    "category": theme.category,
+                })
 
         # Sort by similarity descending
         similar.sort(key=lambda x: x["similarity"], reverse=True)
@@ -293,6 +310,12 @@ class ThemeMergingService:
         # Build lookup with pipeline info
         theme_data = []
         for emb in embeddings:
+            if emb.is_stale:
+                continue
+            if (emb.embedding_model or "") != self.EMBEDDING_MODEL:
+                continue
+            if (emb.model_version or "") != self.EMBEDDING_MODEL_VERSION:
+                continue
             theme = self.db.query(ThemeCluster).filter(
                 ThemeCluster.id == emb.theme_cluster_id
             ).first()

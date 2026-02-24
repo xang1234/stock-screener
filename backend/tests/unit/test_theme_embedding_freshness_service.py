@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.theme import ThemeCluster
+from app.models.theme import ThemeCluster, ThemeEmbedding
 from app.services.theme_embedding_service import ThemeEmbeddingRepository
 from app.services.theme_merging_service import ThemeMergingService
 
@@ -116,3 +116,64 @@ def test_update_theme_embedding_recomputes_when_marked_stale(db_session):
     assert stale_refreshed is True
     assert stale_refresh_record.is_stale is False
     assert engine.calls == 2
+
+
+def test_find_similar_themes_refreshes_stale_records_before_similarity(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+
+    source = ThemeCluster(
+        canonical_key="ai_infrastructure",
+        display_name="AI Infrastructure",
+        name="AI Infrastructure",
+        aliases=["AI Infra"],
+        description="Compute + power infra",
+        category="technology",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    peer = ThemeCluster(
+        canonical_key="ai_datacenter_power",
+        display_name="AI Datacenter Power",
+        name="AI Datacenter Power",
+        aliases=["AI Power"],
+        description="Datacenter power demand",
+        category="technology",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add_all([source, peer])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ThemeEmbedding(
+                theme_cluster_id=source.id,
+                embedding="[0.0, 1.0]",
+                embedding_model="all-MiniLM-L6-v2",
+                model_version="embedding-v1",
+                is_stale=True,
+            ),
+            ThemeEmbedding(
+                theme_cluster_id=peer.id,
+                embedding="[1.0, 0.0]",
+                embedding_model="all-MiniLM-L6-v2",
+                model_version="embedding-v1",
+                is_stale=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    similar = service.find_similar_themes(source.id, threshold=0.0)
+
+    assert engine.calls >= 2
+    assert any(item["theme_id"] == peer.id for item in similar)
+
+    refreshed_source = service.embedding_repo.get_for_cluster(source.id)
+    refreshed_peer = service.embedding_repo.get_for_cluster(peer.id)
+    assert refreshed_source is not None and refreshed_source.is_stale is False
+    assert refreshed_peer is not None and refreshed_peer.is_stale is False

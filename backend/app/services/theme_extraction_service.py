@@ -1119,11 +1119,25 @@ Example themes for this pipeline: {examples_str}
             candidate_ids = [candidate.id for candidate in embedding_pool if candidate.id is not None]
             if candidate_ids:
                 freshness_cutoff = datetime.utcnow() - timedelta(days=self.EMBEDDING_MAX_AGE_DAYS)
-                embeddings_by_cluster = self._get_embedding_repo().get_by_cluster_ids(
+                embedding_repo = self._get_embedding_repo()
+                embeddings_by_cluster = embedding_repo.get_by_cluster_ids(
                     candidate_ids,
                     embedding_model=self.EMBEDDING_MATCH_MODEL,
                     freshness_cutoff=freshness_cutoff,
+                    model_version=self.EMBEDDING_MATCH_POLICY_VERSION,
+                    include_stale=False,
                 )
+                # Preserve Stage D coverage when rollout/migration has not refreshed all embeddings yet.
+                if len(embeddings_by_cluster) < len(candidate_ids):
+                    fallback_embeddings = embedding_repo.get_by_cluster_ids(
+                        candidate_ids,
+                        embedding_model=self.EMBEDDING_MATCH_MODEL,
+                        freshness_cutoff=freshness_cutoff,
+                        model_version=self.EMBEDDING_MATCH_POLICY_VERSION,
+                        include_stale=True,
+                    )
+                    for cluster_id, record in fallback_embeddings.items():
+                        embeddings_by_cluster.setdefault(cluster_id, record)
                 if embeddings_by_cluster:
                     encoder = self._get_embedding_encoder()
                     if encoder is not None:
