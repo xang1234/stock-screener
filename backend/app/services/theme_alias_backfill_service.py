@@ -54,32 +54,25 @@ class ThemeAliasBackfillService:
         self.db = db
 
     def run(self, *, dry_run: bool = False, mention_limit: int = 0) -> dict[str, Any]:
-        clusters = self.db.query(ThemeCluster).order_by(ThemeCluster.id.asc()).all()
-        cluster_map = {cluster.id: cluster for cluster in clusters}
-
-        mention_query = (
-            self.db.query(ThemeMention)
-            .filter(ThemeMention.theme_cluster_id.isnot(None))
-            .order_by(ThemeMention.id.asc())
-        )
-        if mention_limit and mention_limit > 0:
-            mention_query = mention_query.limit(int(mention_limit))
-        mentions = mention_query.all()
-
-        existing_alias_rows = self.db.query(ThemeAlias).order_by(ThemeAlias.id.asc()).all()
-        existing_by_key: dict[tuple[str, str], ThemeAlias] = {
-            (row.pipeline, row.alias_key): row for row in existing_alias_rows
-        }
-
-        candidates: dict[tuple[str, str, int], _CandidateAggregate] = {}
+        cluster_map: dict[int, dict[str, str]] = {}
         stats = {
-            "clusters_scanned": len(clusters),
-            "mentions_scanned": len(mentions),
+            "clusters_scanned": 0,
+            "mentions_scanned": 0,
             "candidate_observations": 0,
             "unknown_key_observations": 0,
             "skipped_missing_cluster_mentions": 0,
             "pipeline_mismatch_mentions": 0,
         }
+        existing_by_key: dict[tuple[str, str], dict[str, Any]] = {
+            (pipeline, alias_key): {"theme_cluster_id": int(theme_cluster_id)}
+            for pipeline, alias_key, theme_cluster_id in (
+                self.db.query(ThemeAlias.pipeline, ThemeAlias.alias_key, ThemeAlias.theme_cluster_id)
+                .order_by(ThemeAlias.id.asc())
+                .yield_per(1000)
+            )
+        }
+
+        candidates: dict[tuple[str, str, int], _CandidateAggregate] = {}
         collisions: list[dict[str, Any]] = []
 
         def observe(*, pipeline: str, theme_cluster_id: int, alias_text: str, source: str) -> None:
@@ -99,48 +92,72 @@ class ThemeAliasBackfillService:
             aggregate.observe(alias_text=alias_text.strip(), source=source)
             stats["candidate_observations"] += 1
 
-        for cluster in clusters:
+        for cluster_id, pipeline, display_name, name, aliases in (
+            self.db.query(
+                ThemeCluster.id,
+                ThemeCluster.pipeline,
+                ThemeCluster.display_name,
+                ThemeCluster.name,
+                ThemeCluster.aliases,
+            )
+            .order_by(ThemeCluster.id.asc())
+            .yield_per(1000)
+        ):
+            stats["clusters_scanned"] += 1
+            cluster_id = int(cluster_id)
+            cluster_pipeline = (pipeline or "technical").strip()
+            cluster_map[cluster_id] = {"pipeline": cluster_pipeline}
             observe(
-                pipeline=cluster.pipeline or "technical",
-                theme_cluster_id=cluster.id,
-                alias_text=(cluster.display_name or cluster.name or ""),
+                pipeline=cluster_pipeline,
+                theme_cluster_id=cluster_id,
+                alias_text=(display_name or name or ""),
                 source="cluster_display_name",
             )
-            if cluster.name:
+            if name:
                 observe(
-                    pipeline=cluster.pipeline or "technical",
-                    theme_cluster_id=cluster.id,
-                    alias_text=cluster.name,
+                    pipeline=cluster_pipeline,
+                    theme_cluster_id=cluster_id,
+                    alias_text=name,
                     source="cluster_name",
                 )
-            if isinstance(cluster.aliases, list):
-                for alias in cluster.aliases:
+            if isinstance(aliases, list):
+                for alias in aliases:
                     if isinstance(alias, str) and alias.strip():
                         observe(
-                            pipeline=cluster.pipeline or "technical",
-                            theme_cluster_id=cluster.id,
+                            pipeline=cluster_pipeline,
+                            theme_cluster_id=cluster_id,
                             alias_text=alias,
                             source="cluster_alias",
                         )
 
-        for mention in mentions:
-            cluster_id = int(mention.theme_cluster_id)
-            cluster = cluster_map.get(cluster_id)
-            if cluster is None:
+        mention_query = self.db.query(
+            ThemeMention.id,
+            ThemeMention.theme_cluster_id,
+            ThemeMention.pipeline,
+            ThemeMention.raw_theme,
+        ).filter(ThemeMention.theme_cluster_id.isnot(None)).order_by(ThemeMention.id.asc())
+        if mention_limit and mention_limit > 0:
+            mention_query = mention_query.limit(int(mention_limit))
+
+        for mention_id, mention_cluster_id, mention_pipeline_raw, mention_raw_theme in mention_query.yield_per(1000):
+            stats["mentions_scanned"] += 1
+            cluster_id = int(mention_cluster_id)
+            cluster_meta = cluster_map.get(cluster_id)
+            if cluster_meta is None:
                 stats["skipped_missing_cluster_mentions"] += 1
                 continue
 
-            mention_pipeline = (mention.pipeline or "").strip()
-            cluster_pipeline = (cluster.pipeline or "technical").strip()
+            mention_pipeline = (mention_pipeline_raw or "").strip()
+            cluster_pipeline = cluster_meta["pipeline"]
             if mention_pipeline and mention_pipeline != cluster_pipeline:
                 stats["pipeline_mismatch_mentions"] += 1
                 collisions.append(
                     {
                         "bucket": "pipeline_mismatch",
                         "pipeline": mention_pipeline,
-                        "alias_key": canonical_theme_key(mention.raw_theme or ""),
+                        "alias_key": canonical_theme_key(mention_raw_theme or ""),
                         "theme_cluster_id": cluster_id,
-                        "mention_id": mention.id,
+                        "mention_id": mention_id,
                         "remediation_action": (
                             "Review mention pipeline mismatch and reassign mention or cluster pipeline before alias import."
                         ),
@@ -151,7 +168,7 @@ class ThemeAliasBackfillService:
             observe(
                 pipeline=cluster_pipeline,
                 theme_cluster_id=cluster_id,
-                alias_text=(mention.raw_theme or ""),
+                alias_text=(mention_raw_theme or ""),
                 source="mention_raw_theme",
             )
 
@@ -178,7 +195,7 @@ class ThemeAliasBackfillService:
                             }
                             for a in sorted(aggregates, key=lambda row: row.theme_cluster_id)
                         ],
-                        "existing_theme_cluster_id": existing_row.theme_cluster_id if existing_row else None,
+                        "existing_theme_cluster_id": existing_row["theme_cluster_id"] if existing_row else None,
                         "remediation_action": (
                             "Queue for manual merge review; keep aliases unchanged until a canonical winner is approved."
                         ),
@@ -188,7 +205,7 @@ class ThemeAliasBackfillService:
 
             aggregate = aggregates[0]
             if existing_row is not None:
-                if int(existing_row.theme_cluster_id) == int(aggregate.theme_cluster_id):
+                if int(existing_row["theme_cluster_id"]) == int(aggregate.theme_cluster_id):
                     existing_matches += 1
                     continue
                 collisions.append(
@@ -196,7 +213,7 @@ class ThemeAliasBackfillService:
                         "bucket": "existing_alias_conflict",
                         "pipeline": pipeline,
                         "alias_key": alias_key,
-                        "existing_theme_cluster_id": int(existing_row.theme_cluster_id),
+                        "existing_theme_cluster_id": int(existing_row["theme_cluster_id"]),
                         "candidate_theme_cluster_id": int(aggregate.theme_cluster_id),
                         "candidate_alias_text": aggregate.representative_text(),
                         "remediation_action": (
@@ -224,8 +241,9 @@ class ThemeAliasBackfillService:
         if not dry_run and planned_inserts:
             self.db.add_all(planned_inserts)
             self.db.commit()
-        elif dry_run:
-            self.db.rollback()
+        elif not dry_run:
+            # Keep transaction boundaries explicit for callers even when no inserts are required.
+            self.db.commit()
 
         collision_buckets = Counter(item["bucket"] for item in collisions)
         remediation_actions = [

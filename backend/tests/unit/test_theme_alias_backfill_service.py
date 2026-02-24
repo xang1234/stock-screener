@@ -114,3 +114,26 @@ def test_backfill_reports_collisions_and_keeps_existing_mapping():
         assert report["remediation_actions"]
     finally:
         db.close()
+
+
+def test_dry_run_does_not_rollback_unrelated_pending_session_changes():
+    db = _make_session()
+    try:
+        pending_cluster = ThemeCluster(
+            name="Pending Theme",
+            canonical_key="pending_theme",
+            display_name="Pending Theme",
+            aliases=[],
+            pipeline="technical",
+        )
+        db.add(pending_cluster)
+        db.flush()
+
+        report = ThemeAliasBackfillService(db).run(dry_run=True)
+        assert report["dry_run"] is True
+
+        db.commit()
+        persisted = db.query(ThemeCluster).filter(ThemeCluster.id == pending_cluster.id).one_or_none()
+        assert persisted is not None
+    finally:
+        db.close()
