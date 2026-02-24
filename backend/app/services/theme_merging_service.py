@@ -9,6 +9,7 @@ This implements a hybrid approach:
 4. Queue moderate-confidence pairs for human review
 """
 import json
+import importlib.util
 import logging
 import os
 import re
@@ -35,15 +36,11 @@ from ..models.theme import (
 )
 from ..config import settings
 from .llm import LLMService, LLMError
-from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
+from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
 
-# Optional imports
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    SentenceTransformer = None
+# Optional imports (lazy-loaded to avoid importing torch at module import time)
+SENTENCE_TRANSFORMERS_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
+SentenceTransformer = None
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +103,17 @@ class ThemeMergingService:
 
     def _init_embedding_model(self):
         """Initialize sentence-transformers model"""
+        global SentenceTransformer
+
         if not SENTENCE_TRANSFORMERS_AVAILABLE:
             logger.warning("sentence-transformers not available. Install with: pip install sentence-transformers")
             return
 
         try:
+            if SentenceTransformer is None:
+                from sentence_transformers import SentenceTransformer as _SentenceTransformer
+
+                SentenceTransformer = _SentenceTransformer
             # Force CPU to avoid MPS/Metal issues with Celery fork() on macOS
             self.embedding_model = SentenceTransformer(self.EMBEDDING_MODEL, device='cpu')
             logger.info(f"Loaded embedding model: {self.EMBEDDING_MODEL} (device=cpu)")
@@ -128,9 +131,10 @@ class ThemeMergingService:
     def _normalize_suggested_name(self, suggested_name: str | None) -> str | None:
         if not suggested_name or not suggested_name.strip():
             return None
-        if canonical_theme_key(suggested_name) == UNKNOWN_THEME_KEY:
+        candidate = " ".join(suggested_name.strip().split())
+        if canonical_theme_key(candidate) == UNKNOWN_THEME_KEY:
             return None
-        return display_theme_name(suggested_name)
+        return candidate[:200]
 
     def _get_theme_text(self, theme: ThemeCluster) -> str:
         """Generate text representation of theme for embedding"""

@@ -129,7 +129,12 @@ def _replace_separators(text: str) -> str:
     if not text:
         return text
     text = text.replace("&", " and ")
-    text = text.replace("+", " plus ")
+    text = re.sub(
+        r"(?<=[a-z0-9])\++",
+        lambda m: " " + " ".join(["plus"] * len(m.group(0))) + " ",
+        text,
+    )
+    text = text.replace("+", " ")
     text = re.sub(r"[\/\\|\-_\.,:;\(\)\[\]\{\}'\"]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text

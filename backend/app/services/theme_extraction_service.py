@@ -26,7 +26,7 @@ from ..models.theme import (
 )
 from ..config import settings
 from .llm import LLMService, LLMError
-from .theme_identity_normalization import canonical_theme_key, display_theme_name
+from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 
 # Optional Gemini import for fallback
 # Suppress Pydantic warnings from google-genai library (third-party issue)
@@ -443,12 +443,17 @@ Example themes for this pipeline: {examples_str}
             for mention in mentions:
                 if not mention.get("theme"):
                     continue
+                raw_theme = mention["theme"].strip()
+                if not raw_theme:
+                    continue
+                if canonical_theme_key(raw_theme) == UNKNOWN_THEME_KEY:
+                    continue
 
                 # Clean tickers
                 tickers = self._clean_tickers(mention.get("tickers", []))
 
                 cleaned_mentions.append({
-                    "theme": mention["theme"].strip(),
+                    "theme": raw_theme,
                     "tickers": tickers,
                     "sentiment": mention.get("sentiment", "neutral"),
                     "confidence": min(1.0, max(0.0, float(mention.get("confidence", 0.5)))),

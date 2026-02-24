@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services.theme_extraction_service import ThemeExtractionService
 from app.services.theme_identity_normalization import (
@@ -13,6 +15,7 @@ from app.services.theme_identity_normalization import (
     canonical_theme_key,
     display_theme_name,
 )
+from app.services.theme_merging_service import ThemeMergingService
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -56,8 +59,46 @@ def test_display_theme_name_formats_acronyms_and_numeric_tokens():
     assert display_theme_name("   the of for to   ") == "Unknown Theme"
 
 
+def test_plus_normalization_respects_token_context():
+    assert canonical_theme_key("C++ tooling") == "c_plus_plus_tooling"
+    assert canonical_theme_key("+AI infrastructure") == "ai_infrastructure"
+    assert canonical_theme_key("AI+Infrastructure") == "ai_plus_infrastructure"
+
+
 def test_extraction_service_normalize_theme_uses_legacy_map_and_fallback():
     service = ThemeExtractionService.__new__(ThemeExtractionService)
     assert service._normalize_theme("AI infra") == "AI Infrastructure"
     assert service._normalize_theme("Quantum tech") == "Quantum Computing"
     assert service._normalize_theme("A.I. datacenter buildout") == "AI Datacenter Buildout"
+
+
+def test_extract_from_content_filters_empty_and_unknown_themes():
+    service = ThemeExtractionService.__new__(ThemeExtractionService)
+    service.provider = "litellm"
+    service.gemini_client = None
+    service._rate_limit = lambda: None
+    service._clean_tickers = lambda _tickers: []
+    service._try_generate_litellm = lambda _prompt: json.dumps(
+        [
+            {"theme": "   ", "tickers": [], "sentiment": "neutral", "confidence": 0.5, "excerpt": ""},
+            {"theme": "the of for to", "tickers": [], "sentiment": "neutral", "confidence": 0.5, "excerpt": ""},
+            {"theme": "AI infrastructure", "tickers": [], "sentiment": "bullish", "confidence": 0.9, "excerpt": "x"},
+        ]
+    )
+    content_item = SimpleNamespace(
+        content="body",
+        source_name="src",
+        source_type="news",
+        published_at=datetime.utcnow(),
+        title="title",
+    )
+
+    mentions = service.extract_from_content(content_item)
+    assert len(mentions) == 1
+    assert mentions[0]["theme"] == "AI infrastructure"
+
+
+def test_merging_service_preserves_valid_suggested_name_text():
+    service = ThemeMergingService.__new__(ThemeMergingService)
+    assert service._normalize_suggested_name("  GLP-1 Weight Loss Drugs  ") == "GLP-1 Weight Loss Drugs"
+    assert service._normalize_suggested_name("the of for to") is None
