@@ -12,6 +12,7 @@ import re
 import time
 from copy import deepcopy
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Optional
 
 from sqlalchemy import and_, func, or_
@@ -177,6 +178,24 @@ class ThemeExtractionService:
     }
     ALIAS_AUTO_ATTACH_MIN_SCORE = 0.70
     ALIAS_AUTO_ATTACH_MIN_EVIDENCE = 2
+    FUZZY_ATTACH_THRESHOLD_DEFAULT = 0.90
+    FUZZY_REVIEW_THRESHOLD_DEFAULT = 0.78
+    FUZZY_AMBIGUITY_MARGIN_DEFAULT = 0.04
+    FUZZY_ATTACH_THRESHOLD_PIPELINE_OVERRIDES = {
+        "technical": 0.91,
+        "fundamental": 0.88,
+    }
+    FUZZY_ATTACH_THRESHOLD_SOURCE_TYPE_OVERRIDES = {
+        "news": 0.89,
+        "substack": 0.91,
+    }
+    FUZZY_ATTACH_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
+    FUZZY_REVIEW_THRESHOLD_PIPELINE_OVERRIDES = {}
+    FUZZY_REVIEW_THRESHOLD_SOURCE_TYPE_OVERRIDES = {}
+    FUZZY_REVIEW_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
+    FUZZY_AMBIGUITY_MARGIN_PIPELINE_OVERRIDES = {}
+    FUZZY_AMBIGUITY_MARGIN_SOURCE_TYPE_OVERRIDES = {}
+    FUZZY_AMBIGUITY_MARGIN_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
 
     def __init__(self, db: Session, pipeline: str = "technical"):
         self.db = db
@@ -563,6 +582,101 @@ Example themes for this pipeline: {examples_str}
             return False
         return self._alias_quality_score(alias) >= self.ALIAS_AUTO_ATTACH_MIN_SCORE
 
+    def _resolve_threshold_with_overrides(
+        self,
+        *,
+        default: float,
+        pipeline: str,
+        source_type: str | None,
+        pipeline_overrides: dict[str, float],
+        source_type_overrides: dict[str, float],
+        pipeline_source_type_overrides: dict[str, dict[str, float]],
+    ) -> float:
+        normalized_pipeline = (pipeline or "").strip().lower()
+        normalized_source_type = (source_type or "").strip().lower()
+        pipeline_source = pipeline_source_type_overrides.get(normalized_pipeline, {})
+        if normalized_source_type and normalized_source_type in pipeline_source:
+            return float(pipeline_source[normalized_source_type])
+        if normalized_pipeline in pipeline_overrides:
+            return float(pipeline_overrides[normalized_pipeline])
+        if normalized_source_type and normalized_source_type in source_type_overrides:
+            return float(source_type_overrides[normalized_source_type])
+        return float(default)
+
+    def _resolve_fuzzy_thresholds(self, source_type: str | None) -> tuple[float, float, float]:
+        attach_threshold = self._resolve_threshold_with_overrides(
+            default=self.FUZZY_ATTACH_THRESHOLD_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.FUZZY_ATTACH_THRESHOLD_PIPELINE_OVERRIDES,
+            source_type_overrides=self.FUZZY_ATTACH_THRESHOLD_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.FUZZY_ATTACH_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        review_threshold = self._resolve_threshold_with_overrides(
+            default=self.FUZZY_REVIEW_THRESHOLD_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.FUZZY_REVIEW_THRESHOLD_PIPELINE_OVERRIDES,
+            source_type_overrides=self.FUZZY_REVIEW_THRESHOLD_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.FUZZY_REVIEW_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        ambiguity_margin = self._resolve_threshold_with_overrides(
+            default=self.FUZZY_AMBIGUITY_MARGIN_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.FUZZY_AMBIGUITY_MARGIN_PIPELINE_OVERRIDES,
+            source_type_overrides=self.FUZZY_AMBIGUITY_MARGIN_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.FUZZY_AMBIGUITY_MARGIN_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        review_threshold = min(review_threshold, attach_threshold)
+        ambiguity_margin = max(0.0, ambiguity_margin)
+        return attach_threshold, review_threshold, ambiguity_margin
+
+    def _normalize_lexical_text(self, text: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+        return normalized
+
+    def _fuzzy_similarity(self, left: str, right: str) -> float:
+        if not left or not right:
+            return 0.0
+        return float(SequenceMatcher(a=left, b=right).ratio())
+
+    def _cluster_fuzzy_score(
+        self,
+        *,
+        raw_alias: str,
+        canonical_key: str,
+        canonical_theme: str,
+        cluster: ThemeCluster,
+    ) -> float:
+        query_terms = {
+            self._normalize_lexical_text(raw_alias),
+            self._normalize_lexical_text(canonical_theme),
+            self._normalize_lexical_text(canonical_key.replace("_", " ")),
+        }
+        query_terms = {term for term in query_terms if term}
+        if not query_terms:
+            return 0.0
+
+        variants = {
+            self._normalize_lexical_text(cluster.display_name or ""),
+            self._normalize_lexical_text(cluster.name or ""),
+            self._normalize_lexical_text((cluster.canonical_key or "").replace("_", " ")),
+        }
+        aliases = cluster.aliases if isinstance(cluster.aliases, list) else []
+        variants.update(self._normalize_lexical_text(str(alias)) for alias in aliases)
+        variants = {variant for variant in variants if variant}
+        if not variants:
+            return 0.0
+
+        best = 0.0
+        for query in query_terms:
+            for variant in variants:
+                similarity = self._fuzzy_similarity(query, variant)
+                if similarity > best:
+                    best = similarity
+        return best
+
     def process_content_item(self, content_item: ContentItem) -> int:
         """
         Backward-compatible single-item processing API.
@@ -781,6 +895,8 @@ Example themes for this pipeline: {examples_str}
         best_alternative_cluster_id = None
         best_alternative_score = None
         blocked_alias_key_for_counter: str | None = None
+        fuzzy_secondary_cluster_id: int | None = None
+        fuzzy_secondary_score: float | None = None
 
         # Stage A: pipeline+canonical_key exact matching (indexed, low-latency gate).
         if cluster is None:
@@ -843,6 +959,46 @@ Example themes for this pipeline: {examples_str}
             if cluster is not None:
                 method = "exact_display_name"
                 score = 1.0
+        if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
+            fuzzy_candidates: list[tuple[ThemeCluster, float]] = []
+            candidate_clusters = self.db.query(ThemeCluster).filter(
+                ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == True,
+            ).all()
+            for candidate in candidate_clusters:
+                candidate_score = self._cluster_fuzzy_score(
+                    raw_alias=raw_alias,
+                    canonical_key=canonical_key,
+                    canonical_theme=canonical_theme,
+                    cluster=candidate,
+                )
+                if candidate_score > 0.0:
+                    fuzzy_candidates.append((candidate, candidate_score))
+
+            if fuzzy_candidates:
+                fuzzy_candidates.sort(key=lambda item: (item[1], -(item[0].id or 0)), reverse=True)
+                top_cluster, top_score = fuzzy_candidates[0]
+                if len(fuzzy_candidates) > 1:
+                    second_cluster, second_score = fuzzy_candidates[1]
+                    fuzzy_secondary_cluster_id = second_cluster.id
+                    fuzzy_secondary_score = second_score
+                attach_threshold, review_threshold, ambiguity_margin = self._resolve_fuzzy_thresholds(source_type)
+                fuzzy_margin = top_score - (fuzzy_secondary_score or 0.0)
+                if top_score >= attach_threshold and fuzzy_margin >= ambiguity_margin:
+                    cluster = top_cluster
+                    method = "fuzzy_lexical"
+                    score = float(top_score)
+                    threshold = float(attach_threshold)
+                    best_alternative_cluster_id = fuzzy_secondary_cluster_id
+                    best_alternative_score = fuzzy_secondary_score
+                elif top_score >= review_threshold:
+                    best_alternative_cluster_id = top_cluster.id
+                    best_alternative_score = float(top_score)
+                    threshold = float(attach_threshold)
+                    if fuzzy_margin < ambiguity_margin:
+                        fallback_reason = "fuzzy_ambiguous_review"
+                    else:
+                        fallback_reason = "fuzzy_low_confidence_review"
 
         if not cluster:
             cluster = ThemeCluster(

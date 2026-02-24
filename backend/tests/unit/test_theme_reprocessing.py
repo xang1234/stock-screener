@@ -926,6 +926,132 @@ class TestThemeClusterLabelPreservation:
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_uses_fuzzy_lexical_for_clear_high_score(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        target = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        distractor = ThemeCluster(
+            canonical_key="quantum_computing",
+            display_name="Quantum Computing",
+            name="Quantum Computing",
+            pipeline="technical",
+            aliases=["Quantum Computing"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([target, distractor])
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructur", "confidence": 0.8})
+        assert got_cluster.id == target.id
+        assert decision.method == "fuzzy_lexical"
+        assert decision.score >= decision.threshold
+        assert decision.threshold_version == "match-v1"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_uses_ambiguous_review_mode(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        candidate_a = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        candidate_b = ThemeCluster(
+            canonical_key="ai_infrastructures",
+            display_name="AI Infrastructures",
+            name="AI Infrastructures",
+            pipeline="technical",
+            aliases=["AI Infrastructures"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([candidate_a, candidate_b])
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructur", "confidence": 0.8})
+        assert got_cluster.id not in {candidate_a.id, candidate_b.id}
+        assert decision.method == "create_new_cluster"
+        assert decision.fallback_reason == "fuzzy_ambiguous_review"
+        assert decision.best_alternative_cluster_id in {candidate_a.id, candidate_b.id}
+        assert decision.best_alternative_score is not None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_uses_low_confidence_review_mode(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        candidate = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(candidate)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got_cluster, decision = service._resolve_cluster_match(
+            {"theme": "AI infrastructure cycle", "confidence": 0.8}
+        )
+        assert got_cluster.id != candidate.id
+        assert decision.method == "create_new_cluster"
+        assert decision.fallback_reason == "fuzzy_low_confidence_review"
+        assert decision.best_alternative_cluster_id == candidate.id
+        assert decision.best_alternative_score is not None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
     def test_extract_and_store_mentions_persists_decision_fields(
         self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
     ):
