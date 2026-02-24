@@ -88,6 +88,8 @@ class ThemeMergingService:
     EMBEDDING_MODEL_VERSION = "embedding-v1"
     EMBEDDING_DIM = 384
     DEFAULT_MERGE_MODEL = "groq/llama-3.3-70b-versatile"
+    CANDIDATE_TOP_K = 16
+    CANDIDATE_BLOCK_MAX = 96
 
     def __init__(self, db: Session):
         self.db = db
@@ -408,7 +410,8 @@ class ThemeMergingService:
     def find_all_similar_pairs(
         self,
         threshold: float = None,
-        pipeline: str = None
+        pipeline: str = None,
+        top_k: int | None = None,
     ) -> list[dict]:
         """
         Find all pairs of similar themes above threshold.
@@ -427,7 +430,8 @@ class ThemeMergingService:
         if len(embeddings) < 2:
             return []
 
-        # Build lookup with pipeline info
+        effective_top_k = max(1, int(top_k or self.CANDIDATE_TOP_K))
+        # Build lookup with pipeline + lexical keys used for blocking.
         theme_data = []
         for emb in embeddings:
             if emb.is_stale:
@@ -447,35 +451,109 @@ class ThemeMergingService:
                 theme_data.append({
                     "id": emb.theme_cluster_id,
                     "pipeline": theme_pipeline,
+                    "canonical_key": (theme.canonical_key or "").strip().lower(),
+                    "category": (theme.category or "").strip().lower(),
                     "vector": self._load_embedding(emb),
                 })
 
         if len(theme_data) < 2:
             return []
 
-        # Calculate pairwise similarities - ONLY within same pipeline
-        pairs = []
-        n = len(theme_data)
-        for i in range(n):
-            for j in range(i + 1, n):
-                # Block cross-pipeline pairs
-                if theme_data[i]["pipeline"] != theme_data[j]["pipeline"]:
-                    continue
+        by_pipeline: dict[str, list[dict]] = {}
+        for row in theme_data:
+            by_pipeline.setdefault(row["pipeline"], []).append(row)
 
-                similarity = self._cosine_similarity(
-                    theme_data[i]["vector"],
-                    theme_data[j]["vector"]
-                )
-                if similarity >= threshold:
-                    pairs.append({
-                        "theme1_id": theme_data[i]["id"],
-                        "theme2_id": theme_data[j]["id"],
+        pair_scores: dict[tuple[int, int], dict] = {}
+        similarity_cache: dict[tuple[int, int], float] = {}
+        compared_count = 0
+
+        for pipeline_key, rows in by_pipeline.items():
+            id_to_row = {int(row["id"]): row for row in rows}
+            token_to_ids: dict[str, set[int]] = {}
+            first_token_to_ids: dict[str, set[int]] = {}
+            category_to_ids: dict[str, set[int]] = {}
+            all_ids = sorted(id_to_row.keys())
+
+            for row in rows:
+                row_id = int(row["id"])
+                key = str(row["canonical_key"] or "")
+                tokens = [token for token in key.split("_") if token]
+                row["lexical_tokens"] = set(tokens)
+                row["first_token"] = tokens[0] if tokens else ""
+                for token in row["lexical_tokens"]:
+                    token_to_ids.setdefault(token, set()).add(row_id)
+                if row["first_token"]:
+                    first_token_to_ids.setdefault(row["first_token"], set()).add(row_id)
+                if row["category"]:
+                    category_to_ids.setdefault(str(row["category"]), set()).add(row_id)
+
+            for source in rows:
+                source_id = int(source["id"])
+                source_tokens = set(source.get("lexical_tokens") or set())
+                source_first = str(source.get("first_token") or "")
+                source_category = str(source.get("category") or "")
+
+                candidate_ids: set[int] = set()
+                for token in source_tokens:
+                    candidate_ids.update(token_to_ids.get(token, set()))
+                if source_first:
+                    candidate_ids.update(first_token_to_ids.get(source_first, set()))
+                if source_category:
+                    candidate_ids.update(category_to_ids.get(source_category, set()))
+                candidate_ids.discard(source_id)
+
+                if not candidate_ids:
+                    candidate_ids = {value for value in all_ids if value != source_id}
+
+                scored_candidates: list[tuple[int, int]] = []
+                for candidate_id in candidate_ids:
+                    candidate_row = id_to_row.get(candidate_id)
+                    if candidate_row is None:
+                        continue
+                    candidate_tokens = set(candidate_row.get("lexical_tokens") or set())
+                    shared_tokens = len(source_tokens & candidate_tokens)
+                    first_token_match = 1 if source_first and source_first == str(candidate_row.get("first_token") or "") else 0
+                    category_match = 1 if source_category and source_category == str(candidate_row.get("category") or "") else 0
+                    lexical_score = (shared_tokens * 4) + (first_token_match * 2) + category_match
+                    scored_candidates.append((candidate_id, lexical_score))
+
+                scored_candidates.sort(key=lambda item: (-item[1], item[0]))
+                source_matches: list[tuple[int, float]] = []
+                for candidate_id, _lexical_score in scored_candidates[: self.CANDIDATE_BLOCK_MAX]:
+                    pair_key = (source_id, candidate_id) if source_id < candidate_id else (candidate_id, source_id)
+                    similarity = similarity_cache.get(pair_key)
+                    if similarity is None:
+                        left = id_to_row[pair_key[0]]
+                        right = id_to_row[pair_key[1]]
+                        similarity = self._cosine_similarity(left["vector"], right["vector"])
+                        similarity_cache[pair_key] = similarity
+                        compared_count += 1
+                    if similarity < threshold:
+                        continue
+                    source_matches.append((candidate_id, similarity))
+
+                source_matches.sort(key=lambda item: item[1], reverse=True)
+                for candidate_id, similarity in source_matches[:effective_top_k]:
+                    pair_key = (source_id, candidate_id) if source_id < candidate_id else (candidate_id, source_id)
+                    existing = pair_scores.get(pair_key)
+                    payload = {
+                        "theme1_id": pair_key[0],
+                        "theme2_id": pair_key[1],
                         "similarity": round(similarity, 4),
-                        "pipeline": theme_data[i]["pipeline"],
-                    })
+                        "pipeline": pipeline_key,
+                    }
+                    if existing is None or payload["similarity"] > existing["similarity"]:
+                        pair_scores[pair_key] = payload
 
-        # Sort by similarity descending
-        pairs.sort(key=lambda x: x["similarity"], reverse=True)
+        pairs = sorted(pair_scores.values(), key=lambda x: x["similarity"], reverse=True)
+
+        logger.info(
+            "find_all_similar_pairs optimized path: themes=%s compared_pairs=%s matched_pairs=%s top_k=%s",
+            len(theme_data),
+            compared_count,
+            len(pairs),
+            effective_top_k,
+        )
         return pairs
 
     def verify_merge_with_llm(

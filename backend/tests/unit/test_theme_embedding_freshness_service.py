@@ -79,6 +79,43 @@ def _make_embedding(db_session, theme_id: int, *, stale: bool = False) -> ThemeE
     return embedding
 
 
+def _make_theme_with_embedding(
+    db_session,
+    *,
+    canonical_key: str,
+    name: str,
+    category: str,
+    vector: str,
+    pipeline: str = "technical",
+) -> ThemeCluster:
+    theme = ThemeCluster(
+        canonical_key=canonical_key,
+        display_name=name,
+        name=name,
+        aliases=[name],
+        description=f"{name} description",
+        category=category,
+        pipeline=pipeline,
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(theme)
+    db_session.flush()
+    db_session.add(
+        ThemeEmbedding(
+            theme_cluster_id=theme.id,
+            embedding=vector,
+            embedding_model="all-MiniLM-L6-v2",
+            model_version="embedding-v1",
+            content_hash=f"hash-{canonical_key}",
+            is_stale=False,
+        )
+    )
+    db_session.commit()
+    return theme
+
+
 def test_update_theme_embedding_skips_recompute_when_content_and_model_unchanged(db_session):
     engine = _StubEmbeddingEngine()
     service = _make_service(db_session, engine)
@@ -394,3 +431,61 @@ def test_recompute_stale_embeddings_prevents_cross_run_starvation(db_session):
     refreshed_b = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_b.id).one()
     assert refreshed_a.is_stale is True
     assert refreshed_b.is_stale is False
+
+
+def test_find_all_similar_pairs_uses_blocking_and_top_k(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+
+    _make_theme_with_embedding(
+        db_session,
+        canonical_key="ai_infrastructure",
+        name="AI Infrastructure",
+        category="technology",
+        vector="[1.0, 0.0]",
+    )
+    _make_theme_with_embedding(
+        db_session,
+        canonical_key="ai_chips",
+        name="AI Chips",
+        category="technology",
+        vector="[0.99, 0.01]",
+    )
+    _make_theme_with_embedding(
+        db_session,
+        canonical_key="ai_power",
+        name="AI Power",
+        category="technology",
+        vector="[0.98, 0.02]",
+    )
+    _make_theme_with_embedding(
+        db_session,
+        canonical_key="defense_primes",
+        name="Defense Primes",
+        category="industrials",
+        vector="[0.0, 1.0]",
+    )
+    _make_theme_with_embedding(
+        db_session,
+        canonical_key="defense_budget",
+        name="Defense Budget",
+        category="industrials",
+        vector="[0.01, 0.99]",
+    )
+
+    calls = {"count": 0}
+    original_cosine = service._cosine_similarity
+
+    def _counting_cosine(a, b):
+        calls["count"] += 1
+        return original_cosine(a, b)
+
+    service._cosine_similarity = _counting_cosine
+
+    pairs = service.find_all_similar_pairs(threshold=0.90, top_k=1, pipeline="technical")
+
+    # Brute force for 5 themes would be 10 pairwise comparisons; optimized path should do fewer.
+    assert calls["count"] < 10
+    # At least one strong AI pair and one strong defense pair should remain discoverable.
+    pair_ids = {(row["theme1_id"], row["theme2_id"]) for row in pairs}
+    assert len(pair_ids) >= 2
