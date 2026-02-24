@@ -12,6 +12,7 @@ from app.models.theme import (
     ContentItemPipelineState,
     ContentSource,
     ThemeAlias,
+    ThemeEmbedding,
     ThemeMention,
     ThemeCluster,
 )
@@ -1047,6 +1048,188 @@ class TestThemeClusterLabelPreservation:
         assert decision.fallback_reason == "fuzzy_low_confidence_review"
         assert decision.best_alternative_cluster_id == candidate.id
         assert decision.best_alternative_score is not None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_uses_embedding_similarity_for_stage_d_attach(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        class _StubEncoder:
+            def encode(self, _text, convert_to_numpy=True):
+                _ = convert_to_numpy
+                return [1.0, 0.0]
+
+        target = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        distractor = ThemeCluster(
+            canonical_key="nuclear_energy",
+            display_name="Nuclear Energy",
+            name="Nuclear Energy",
+            pipeline="technical",
+            aliases=["Nuclear Energy"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([target, distractor])
+        db_session.flush()
+        db_session.add_all(
+            [
+                ThemeEmbedding(
+                    theme_cluster_id=target.id,
+                    embedding="[1.0, 0.0]",
+                    embedding_model="all-MiniLM-L6-v2",
+                ),
+                ThemeEmbedding(
+                    theme_cluster_id=distractor.id,
+                    embedding="[0.0, 1.0]",
+                    embedding_model="all-MiniLM-L6-v2",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service._embedding_encoder = None
+
+        with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
+            got_cluster, decision = service._resolve_cluster_match({"theme": "Compute Fabric Demand", "confidence": 0.8})
+
+        assert got_cluster.id == target.id
+        assert decision.method == "embedding_similarity"
+        assert decision.score >= decision.threshold
+        assert decision.score_model == "all-MiniLM-L6-v2"
+        assert decision.score_model_version == "embedding-v1"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_embedding_stage_skips_stale_or_model_mismatch(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        candidate = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(candidate)
+        db_session.flush()
+        db_session.add(
+            ThemeEmbedding(
+                theme_cluster_id=candidate.id,
+                embedding="[1.0, 0.0]",
+                embedding_model="different-model-v9",
+                updated_at=datetime.utcnow() - timedelta(days=180),
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service._embedding_encoder = None
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "Rates and Liquidity Inflection", "confidence": 0.8})
+
+        assert got_cluster.id != candidate.id
+        assert decision.method == "create_new_cluster"
+        assert decision.score_model is None
+        assert decision.score_model_version is None
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_embedding_stage_sets_ambiguous_review_reason(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        class _StubEncoder:
+            def encode(self, _text, convert_to_numpy=True):
+                _ = convert_to_numpy
+                return [1.0, 0.0]
+
+        candidate_a = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        candidate_b = ThemeCluster(
+            canonical_key="ai_datacenter_power",
+            display_name="AI Datacenter Power",
+            name="AI Datacenter Power",
+            pipeline="technical",
+            aliases=["AI Datacenter Power"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add_all([candidate_a, candidate_b])
+        db_session.flush()
+        db_session.add_all(
+            [
+                ThemeEmbedding(
+                    theme_cluster_id=candidate_a.id,
+                    embedding="[0.8, 0.6]",
+                    embedding_model="all-MiniLM-L6-v2",
+                ),
+                ThemeEmbedding(
+                    theme_cluster_id=candidate_b.id,
+                    embedding="[0.79, 0.613]",
+                    embedding_model="all-MiniLM-L6-v2",
+                ),
+            ]
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service._embedding_encoder = None
+
+        with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
+            got_cluster, decision = service._resolve_cluster_match({"theme": "AI Compute Fabric Demand", "confidence": 0.8})
+
+        assert got_cluster.id not in {candidate_a.id, candidate_b.id}
+        assert decision.method == "create_new_cluster"
+        assert decision.fallback_reason == "embedding_ambiguous_review"
+        assert decision.best_alternative_cluster_id in {candidate_a.id, candidate_b.id}
+        assert decision.score_model == "all-MiniLM-L6-v2"
+        assert decision.score_model_version == "embedding-v1"
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")

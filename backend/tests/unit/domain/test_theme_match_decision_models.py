@@ -34,3 +34,5 @@ def test_match_decision_is_typed_and_immutable():
     assert decision.selected_cluster_id == 10
     assert decision.method == "exact_alias_key"
     assert decision.threshold_version == "match-v1"
+    assert decision.score_model is None
+    assert decision.score_model_version is None

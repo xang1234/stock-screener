@@ -6,15 +6,17 @@ This is the core intelligence layer that identifies market themes from text.
 Falls back to Google Gemini if LiteLLM providers are unavailable.
 """
 import json
+import importlib.util
 import logging
 import os
 import re
 import time
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Optional
 
+import numpy as np
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -28,6 +30,7 @@ from ..models.theme import (
     ThemeMention,
     ThemeCluster,
     ThemeConstituent,
+    ThemeEmbedding,
 )
 from ..config import settings
 from .llm import LLMService, LLMError
@@ -48,6 +51,8 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
+SENTENCE_TRANSFORMERS_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
+SentenceTransformer = None
 
 
 class ThemeExtractionParseError(Exception):
@@ -196,6 +201,25 @@ class ThemeExtractionService:
     FUZZY_AMBIGUITY_MARGIN_PIPELINE_OVERRIDES = {}
     FUZZY_AMBIGUITY_MARGIN_SOURCE_TYPE_OVERRIDES = {}
     FUZZY_AMBIGUITY_MARGIN_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_MATCH_POLICY_VERSION = "embedding-v1"
+    EMBEDDING_MATCH_MODEL = "all-MiniLM-L6-v2"
+    EMBEDDING_MATCH_MAX_CANDIDATES = 24
+    EMBEDDING_MAX_AGE_DAYS = 30
+    EMBEDDING_ATTACH_THRESHOLD_DEFAULT = 0.84
+    EMBEDDING_REVIEW_THRESHOLD_DEFAULT = 0.76
+    EMBEDDING_AMBIGUITY_MARGIN_DEFAULT = 0.03
+    EMBEDDING_ATTACH_THRESHOLD_PIPELINE_OVERRIDES = {
+        "technical": 0.85,
+        "fundamental": 0.82,
+    }
+    EMBEDDING_ATTACH_THRESHOLD_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_ATTACH_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_REVIEW_THRESHOLD_PIPELINE_OVERRIDES = {}
+    EMBEDDING_REVIEW_THRESHOLD_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_REVIEW_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_AMBIGUITY_MARGIN_PIPELINE_OVERRIDES = {}
+    EMBEDDING_AMBIGUITY_MARGIN_SOURCE_TYPE_OVERRIDES = {}
+    EMBEDDING_AMBIGUITY_MARGIN_PIPELINE_SOURCE_TYPE_OVERRIDES = {}
 
     def __init__(self, db: Session, pipeline: str = "technical"):
         self.db = db
@@ -677,6 +701,99 @@ Example themes for this pipeline: {examples_str}
                     best = similarity
         return best
 
+    def _resolve_embedding_thresholds(self, source_type: str | None) -> tuple[float, float, float]:
+        attach_threshold = self._resolve_threshold_with_overrides(
+            default=self.EMBEDDING_ATTACH_THRESHOLD_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.EMBEDDING_ATTACH_THRESHOLD_PIPELINE_OVERRIDES,
+            source_type_overrides=self.EMBEDDING_ATTACH_THRESHOLD_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.EMBEDDING_ATTACH_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        review_threshold = self._resolve_threshold_with_overrides(
+            default=self.EMBEDDING_REVIEW_THRESHOLD_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.EMBEDDING_REVIEW_THRESHOLD_PIPELINE_OVERRIDES,
+            source_type_overrides=self.EMBEDDING_REVIEW_THRESHOLD_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.EMBEDDING_REVIEW_THRESHOLD_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        ambiguity_margin = self._resolve_threshold_with_overrides(
+            default=self.EMBEDDING_AMBIGUITY_MARGIN_DEFAULT,
+            pipeline=self.pipeline,
+            source_type=source_type,
+            pipeline_overrides=self.EMBEDDING_AMBIGUITY_MARGIN_PIPELINE_OVERRIDES,
+            source_type_overrides=self.EMBEDDING_AMBIGUITY_MARGIN_SOURCE_TYPE_OVERRIDES,
+            pipeline_source_type_overrides=self.EMBEDDING_AMBIGUITY_MARGIN_PIPELINE_SOURCE_TYPE_OVERRIDES,
+        )
+        review_threshold = min(review_threshold, attach_threshold)
+        ambiguity_margin = max(0.0, ambiguity_margin)
+        return attach_threshold, review_threshold, ambiguity_margin
+
+    def _get_embedding_encoder(self):
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            return None
+        model = getattr(self, "_embedding_encoder", None)
+        if model is not None:
+            return model
+        global SentenceTransformer
+        try:
+            if SentenceTransformer is None:
+                from sentence_transformers import SentenceTransformer as _SentenceTransformer
+
+                SentenceTransformer = _SentenceTransformer
+            model = SentenceTransformer(self.EMBEDDING_MATCH_MODEL, device="cpu")
+            self._embedding_encoder = model
+            return model
+        except Exception as exc:
+            logger.warning("Embedding encoder unavailable for Stage D matching: %s", exc)
+            self._embedding_encoder = None
+            return None
+
+    def _embedding_similarity(self, left: np.ndarray, right: np.ndarray) -> float:
+        left_norm = np.linalg.norm(left)
+        right_norm = np.linalg.norm(right)
+        if left_norm == 0 or right_norm == 0:
+            return 0.0
+        return float(np.dot(left, right) / (left_norm * right_norm))
+
+    def _build_embedding_query_text(self, *, raw_alias: str, canonical_theme: str, canonical_key: str) -> str:
+        key_text = canonical_key.replace("_", " ")
+        return " | ".join(part for part in (raw_alias, canonical_theme, key_text) if part)
+
+    def _embedding_candidate_pool(
+        self,
+        *,
+        fuzzy_candidates: list[tuple[ThemeCluster, float]],
+        max_candidates: int,
+    ) -> list[ThemeCluster]:
+        seen: set[int] = set()
+        ranked: list[ThemeCluster] = []
+        for candidate, _score in fuzzy_candidates:
+            if candidate.id is None or candidate.id in seen:
+                continue
+            seen.add(candidate.id)
+            ranked.append(candidate)
+            if len(ranked) >= max_candidates:
+                return ranked
+
+        if len(ranked) < max_candidates:
+            fallback_clusters = self.db.query(ThemeCluster).filter(
+                ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == True,
+            ).order_by(
+                ThemeCluster.last_seen_at.desc(),
+                ThemeCluster.id.desc(),
+            ).limit(max_candidates * 2).all()
+            for candidate in fallback_clusters:
+                if candidate.id is None or candidate.id in seen:
+                    continue
+                seen.add(candidate.id)
+                ranked.append(candidate)
+                if len(ranked) >= max_candidates:
+                    break
+        return ranked
+
     def process_content_item(self, content_item: ContentItem) -> int:
         """
         Backward-compatible single-item processing API.
@@ -897,6 +1014,9 @@ Example themes for this pipeline: {examples_str}
         blocked_alias_key_for_counter: str | None = None
         fuzzy_secondary_cluster_id: int | None = None
         fuzzy_secondary_score: float | None = None
+        score_model: str | None = None
+        score_model_version: str | None = None
+        fuzzy_candidates: list[tuple[ThemeCluster, float]] = []
 
         # Stage A: pipeline+canonical_key exact matching (indexed, low-latency gate).
         if cluster is None:
@@ -960,7 +1080,6 @@ Example themes for this pipeline: {examples_str}
                 method = "exact_display_name"
                 score = 1.0
         if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
-            fuzzy_candidates: list[tuple[ThemeCluster, float]] = []
             candidate_clusters = self.db.query(ThemeCluster).filter(
                 ThemeCluster.pipeline == self.pipeline,
                 ThemeCluster.is_active == True,
@@ -999,6 +1118,84 @@ Example themes for this pipeline: {examples_str}
                         fallback_reason = "fuzzy_ambiguous_review"
                     else:
                         fallback_reason = "fuzzy_low_confidence_review"
+        if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
+            embedding_pool = self._embedding_candidate_pool(
+                fuzzy_candidates=fuzzy_candidates,
+                max_candidates=self.EMBEDDING_MATCH_MAX_CANDIDATES,
+            )
+            candidate_ids = [candidate.id for candidate in embedding_pool if candidate.id is not None]
+            if candidate_ids:
+                freshness_cutoff = datetime.utcnow() - timedelta(days=self.EMBEDDING_MAX_AGE_DAYS)
+                embeddings = self.db.query(ThemeEmbedding).filter(
+                    ThemeEmbedding.theme_cluster_id.in_(candidate_ids),
+                    ThemeEmbedding.embedding_model == self.EMBEDDING_MATCH_MODEL,
+                    or_(ThemeEmbedding.updated_at.is_(None), ThemeEmbedding.updated_at >= freshness_cutoff),
+                ).all()
+                embeddings_by_cluster = {record.theme_cluster_id: record for record in embeddings}
+                if embeddings_by_cluster:
+                    encoder = self._get_embedding_encoder()
+                    if encoder is not None:
+                        query_text = self._build_embedding_query_text(
+                            raw_alias=raw_alias,
+                            canonical_theme=canonical_theme,
+                            canonical_key=canonical_key,
+                        )
+                        try:
+                            query_vector = encoder.encode(query_text, convert_to_numpy=True)
+                        except Exception as exc:
+                            logger.warning("Stage D query embedding generation failed: %s", exc)
+                            query_vector = None
+                        if query_vector is not None:
+                            embedding_candidates: list[tuple[ThemeCluster, float]] = []
+                            for candidate in embedding_pool:
+                                embedding_record = embeddings_by_cluster.get(candidate.id)
+                                if embedding_record is None:
+                                    continue
+                                try:
+                                    candidate_vector = np.array(json.loads(embedding_record.embedding))
+                                except Exception:
+                                    continue
+                                similarity = self._embedding_similarity(query_vector, candidate_vector)
+                                embedding_candidates.append((candidate, similarity))
+                            if embedding_candidates:
+                                embedding_candidates.sort(
+                                    key=lambda item: (item[1], -(item[0].id or 0)),
+                                    reverse=True,
+                                )
+                                top_cluster, top_score = embedding_candidates[0]
+                                embedding_second_cluster = None
+                                embedding_second_score = None
+                                if len(embedding_candidates) > 1:
+                                    embedding_second_cluster, embedding_second_score = embedding_candidates[1]
+                                attach_threshold, review_threshold, ambiguity_margin = (
+                                    self._resolve_embedding_thresholds(source_type)
+                                )
+                                embedding_margin = top_score - (embedding_second_score or 0.0)
+                                if top_score >= attach_threshold and embedding_margin >= ambiguity_margin:
+                                    cluster = top_cluster
+                                    method = "embedding_similarity"
+                                    score = float(top_score)
+                                    threshold = float(attach_threshold)
+                                    best_alternative_cluster_id = (
+                                        embedding_second_cluster.id if embedding_second_cluster else None
+                                    )
+                                    best_alternative_score = (
+                                        float(embedding_second_score)
+                                        if embedding_second_score is not None
+                                        else None
+                                    )
+                                    score_model = self.EMBEDDING_MATCH_MODEL
+                                    score_model_version = self.EMBEDDING_MATCH_POLICY_VERSION
+                                elif top_score >= review_threshold:
+                                    best_alternative_cluster_id = top_cluster.id
+                                    best_alternative_score = float(top_score)
+                                    threshold = float(attach_threshold)
+                                    score_model = self.EMBEDDING_MATCH_MODEL
+                                    score_model_version = self.EMBEDDING_MATCH_POLICY_VERSION
+                                    if embedding_margin < ambiguity_margin:
+                                        fallback_reason = "embedding_ambiguous_review"
+                                    else:
+                                        fallback_reason = "embedding_low_confidence_review"
 
         if not cluster:
             cluster = ThemeCluster(
@@ -1065,6 +1262,8 @@ Example themes for this pipeline: {examples_str}
             best_alternative_cluster_id=best_alternative_cluster_id,
             best_alternative_score=best_alternative_score,
             score_margin=score_margin,
+            score_model=score_model,
+            score_model_version=score_model_version,
         )
         return cluster, decision
 

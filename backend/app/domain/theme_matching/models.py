@@ -43,4 +43,5 @@ class MatchDecision:
     best_alternative_cluster_id: int | None = None
     best_alternative_score: float | None = None
     score_margin: float | None = None
-
+    score_model: str | None = None
+    score_model_version: str | None = None
