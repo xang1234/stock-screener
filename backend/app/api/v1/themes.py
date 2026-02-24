@@ -11,6 +11,7 @@ Provides access to:
 import csv
 import io
 import logging
+from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -67,6 +68,7 @@ from ...services.theme_extraction_service import ThemeExtractionService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_merging_service import ThemeMergingService
+from ...services.theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from ...services.theme_pipeline_state_service import (
     compute_pipeline_state_health,
     normalize_pipelines,
@@ -77,6 +79,7 @@ from ...services.theme_pipeline_state_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_VALID_THEME_PIPELINES = {"technical", "fundamental"}
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
@@ -105,6 +108,57 @@ def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
 
     # If provided type exists, use it; otherwise default to news
     return provided_type or "news"
+
+
+def _normalize_aliases(value: object) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(alias).strip() for alias in value if str(alias).strip()]
+    alias = str(value).strip()
+    return [alias] if alias else None
+
+
+def _safe_theme_cluster_response(cluster: ThemeCluster) -> ThemeClusterResponse:
+    """Return schema-valid cluster responses, normalizing legacy invalid identity rows."""
+    try:
+        return ThemeClusterResponse.model_validate(cluster)
+    except ValidationError:
+        raw_pipeline = str(getattr(cluster, "pipeline", "") or "").strip().lower()
+        pipeline = raw_pipeline if raw_pipeline in _VALID_THEME_PIPELINES else "technical"
+
+        raw_name = str(getattr(cluster, "name", "") or "").strip()
+        raw_display = str(getattr(cluster, "display_name", "") or "").strip()
+        seed_label = raw_display or raw_name or str(getattr(cluster, "canonical_key", "") or "").strip()
+        display_name = display_theme_name(seed_label)
+        raw_canonical_key = str(getattr(cluster, "canonical_key", "") or "").strip()
+        canonical_key = canonical_theme_key(raw_canonical_key or display_name)
+        if canonical_key == UNKNOWN_THEME_KEY:
+            canonical_key = canonical_theme_key(display_name or name)
+        name = raw_name or display_name
+
+        logger.warning(
+            "Theme cluster id=%s has invalid identity fields; serving normalized response values",
+            getattr(cluster, "id", None),
+        )
+
+        return ThemeClusterResponse.model_validate(
+            {
+                "id": cluster.id,
+                "name": name,
+                "canonical_key": canonical_key,
+                "display_name": display_name,
+                "aliases": _normalize_aliases(getattr(cluster, "aliases", None)),
+                "description": getattr(cluster, "description", None),
+                "pipeline": pipeline,
+                "category": getattr(cluster, "category", None),
+                "is_emerging": bool(getattr(cluster, "is_emerging", False)),
+                "is_validated": bool(getattr(cluster, "is_validated", False)),
+                "discovery_source": getattr(cluster, "discovery_source", None),
+                "first_seen_at": getattr(cluster, "first_seen_at", None),
+                "last_seen_at": getattr(cluster, "last_seen_at", None),
+            }
+        )
 
 
 # ==================== Theme Rankings ====================
@@ -1166,7 +1220,7 @@ async def get_theme_detail(
     ).order_by(ThemeMetrics.date.desc()).first()
 
     return ThemeDetailResponse(
-        theme=ThemeClusterResponse.model_validate(cluster),
+        theme=_safe_theme_cluster_response(cluster),
         constituents=[ThemeConstituentResponse.model_validate(c) for c in constituents],
         metrics=ThemeMetricsResponse.model_validate(latest_metrics) if latest_metrics else None
     )

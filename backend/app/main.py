@@ -96,6 +96,18 @@ def run_theme_aliases_migration():
     migrate_theme_aliases(engine)
 
 
+def run_theme_match_decision_migration():
+    """
+    Run idempotent theme mention match-decision migration on startup.
+
+    Adds decision telemetry fields used by extraction-time matching
+    observability and threshold governance.
+    """
+    from .db_migrations.theme_match_decision_migration import migrate_theme_match_decision
+
+    migrate_theme_match_decision(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -170,6 +182,7 @@ async def lifespan(app: FastAPI):
     run_theme_pipeline_state_migration()
     run_theme_cluster_identity_migration()
     run_theme_aliases_migration()
+    run_theme_match_decision_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

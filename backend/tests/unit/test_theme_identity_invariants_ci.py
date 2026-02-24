@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db_migrations.theme_aliases_migration import migrate_theme_aliases
 from app.db_migrations.theme_cluster_identity_migration import migrate_theme_cluster_identity
+from app.api.v1.themes import _safe_theme_cluster_response
 from app.infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
 from app.models.theme import ThemeCluster
 from app.schemas.theme import ThemeClusterResponse
@@ -143,3 +145,29 @@ def test_theme_cluster_response_contract_rejects_null_or_invalid_identity_fields
                 "last_seen_at": None,
             }
         )
+
+
+def test_safe_theme_cluster_response_normalizes_legacy_invalid_identity_values():
+    cluster = SimpleNamespace(
+        id=42,
+        name="AI Infrastructure",
+        canonical_key="AI Infrastructure!!",
+        display_name="",
+        aliases="AI Infra",
+        description=None,
+        pipeline="macro",
+        category=None,
+        is_emerging=True,
+        is_validated=False,
+        discovery_source="legacy_import",
+        first_seen_at=None,
+        last_seen_at=None,
+    )
+
+    response = _safe_theme_cluster_response(cluster)
+
+    assert response.id == 42
+    assert response.pipeline == "technical"
+    assert response.canonical_key == "ai_infrastructure"
+    assert response.display_name == "AI Infrastructure"
+    assert response.aliases == ["AI Infra"]

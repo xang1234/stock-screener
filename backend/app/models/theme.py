@@ -102,6 +102,14 @@ class ThemeMention(Base):
     raw_theme = Column(String(200), nullable=False)  # Original theme text from LLM
     canonical_theme = Column(String(200), index=True)  # Normalized theme name
     theme_cluster_id = Column(Integer, index=True)  # FK to theme_clusters (assigned after clustering)
+    match_method = Column(String(40), index=True)  # exact_canonical_key, exact_alias_key, exact_display_name, create_new_cluster
+    match_score = Column(Float)  # Decision score for selected cluster
+    match_threshold = Column(Float)  # Effective threshold used for the decision
+    threshold_version = Column(String(40), index=True)  # Threshold config version used
+    match_fallback_reason = Column(String(120))  # Why fallback path was used
+    best_alternative_cluster_id = Column(Integer, index=True)  # Best rejected candidate cluster (if any)
+    best_alternative_score = Column(Float)  # Score for best rejected candidate
+    match_score_margin = Column(Float)  # selected_score - best_alternative_score
 
     # Pipeline assignment - which pipeline extracted this mention
     pipeline = Column(String(20), index=True)  # technical or fundamental

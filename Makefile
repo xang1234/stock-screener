@@ -1,12 +1,12 @@
 # ═══════════════════════════════════════════════════════════════════
 # Setup Engine Quality Gates
 #
-# Five gates ordered by diagnostic severity — if Gate 1 fails,
+# Quality gates ordered by diagnostic severity — if Gate 1 fails,
 # later gates are less meaningful.
 #
 #   make help          Show all targets
 #   make gates         Run all 5 gates
-#   make all           Full CI (gate-check + backend + frontend)
+#   make all           Full CI (gate-check + identity + backend + frontend)
 # ═══════════════════════════════════════════════════════════════════
 
 .PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
