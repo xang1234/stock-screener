@@ -434,6 +434,9 @@ class MergeActionResponse(BaseModel):
     target_name: Optional[str] = None
     constituents_merged: Optional[int] = None
     mentions_merged: Optional[int] = None
+    idempotency_key: Optional[str] = None
+    idempotent_replay: Optional[bool] = None
+    warning: Optional[str] = None
 
 
 # ==================== Content Item Browser Schemas ====================

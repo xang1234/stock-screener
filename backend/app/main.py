@@ -141,6 +141,17 @@ def run_theme_embedding_freshness_migration():
     migrate_theme_embedding_freshness(engine)
 
 
+def run_theme_merge_suggestion_safety_migration():
+    """
+    Run idempotent merge-suggestion safety migration on startup.
+
+    Adds canonical pair identity columns and strict approval idempotency fields.
+    """
+    from .db_migrations.theme_merge_suggestion_safety_migration import migrate_theme_merge_suggestion_safety
+
+    migrate_theme_merge_suggestion_safety(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -219,6 +230,7 @@ async def lifespan(app: FastAPI):
     run_theme_lifecycle_migration()
     run_theme_relationships_migration()
     run_theme_embedding_freshness_migration()
+    run_theme_merge_suggestion_safety_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

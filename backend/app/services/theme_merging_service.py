@@ -24,6 +24,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import numpy as np
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, and_
+from sqlalchemy.exc import IntegrityError
 
 from ..models.app_settings import AppSetting
 from ..models.theme import (
@@ -167,6 +168,72 @@ class ThemeMergingService:
         if canonical_theme_key(candidate) == UNKNOWN_THEME_KEY:
             return None
         return candidate[:200]
+
+    def _maybe_with_for_update(self, query):
+        """Apply row-level locking on databases that support it."""
+        bind = self.db.get_bind()
+        if bind is not None and bind.dialect.name != "sqlite":
+            return query.with_for_update()
+        return query
+
+    @staticmethod
+    def _canonical_pair_ids(cluster_a_id: int, cluster_b_id: int) -> tuple[int, int]:
+        if cluster_a_id <= cluster_b_id:
+            return cluster_a_id, cluster_b_id
+        return cluster_b_id, cluster_a_id
+
+    def _get_suggestion_for_pair(self, cluster_a_id: int, cluster_b_id: int) -> ThemeMergeSuggestion | None:
+        pair_min_id, pair_max_id = self._canonical_pair_ids(cluster_a_id, cluster_b_id)
+        return self.db.query(ThemeMergeSuggestion).filter(
+            ThemeMergeSuggestion.pair_min_cluster_id == pair_min_id,
+            ThemeMergeSuggestion.pair_max_cluster_id == pair_max_id,
+        ).first()
+
+    def _load_replay_result(
+        self,
+        suggestion: ThemeMergeSuggestion,
+        *,
+        idempotency_key: str,
+    ) -> dict | None:
+        if suggestion.approval_idempotency_key != idempotency_key:
+            return None
+        payload = suggestion.approval_result_json
+        if not payload:
+            return None
+        try:
+            result = json.loads(payload)
+        except (TypeError, ValueError):
+            logger.warning("Invalid approval_result_json for suggestion %s", suggestion.id)
+            return None
+        if not isinstance(result, dict):
+            return None
+        result["success"] = True
+        result["idempotent_replay"] = True
+        result["idempotency_key"] = idempotency_key
+        return result
+
+    def _build_success_result(
+        self,
+        *,
+        source_name: str,
+        target_name: str,
+        constituents_merged: int,
+        mentions_merged: int,
+        idempotency_key: str | None,
+        warning: str | None = None,
+    ) -> dict:
+        result = {
+            "success": True,
+            "source_name": source_name,
+            "target_name": target_name,
+            "constituents_merged": constituents_merged,
+            "mentions_merged": mentions_merged,
+        }
+        if idempotency_key:
+            result["idempotency_key"] = idempotency_key
+        if warning:
+            result["warning"] = warning
+        return result
 
     def _get_theme_text(self, theme: ThemeCluster) -> str:
         """Generate text representation of theme for embedding"""
@@ -755,23 +822,14 @@ class ThemeMergingService:
         llm_result: dict = None
     ) -> Optional[ThemeMergeSuggestion]:
         """Create a merge suggestion record"""
-        # Check if suggestion already exists
-        existing = self.db.query(ThemeMergeSuggestion).filter(
-            or_(
-                and_(
-                    ThemeMergeSuggestion.source_cluster_id == source_id,
-                    ThemeMergeSuggestion.target_cluster_id == target_id
-                ),
-                and_(
-                    ThemeMergeSuggestion.source_cluster_id == target_id,
-                    ThemeMergeSuggestion.target_cluster_id == source_id
-                )
-            )
-        ).first()
+        pair_min_id, pair_max_id = self._canonical_pair_ids(source_id, target_id)
+        existing = self._get_suggestion_for_pair(source_id, target_id)
 
         if existing:
             # Update existing suggestion
             existing.embedding_similarity = similarity
+            existing.pair_min_cluster_id = pair_min_id
+            existing.pair_max_cluster_id = pair_max_id
             if llm_result:
                 existing.llm_confidence = llm_result.get("confidence")
                 existing.llm_reasoning = llm_result.get("reasoning")
@@ -786,6 +844,8 @@ class ThemeMergingService:
         suggestion = ThemeMergeSuggestion(
             source_cluster_id=source_id,
             target_cluster_id=target_id,
+            pair_min_cluster_id=pair_min_id,
+            pair_max_cluster_id=pair_max_id,
             embedding_similarity=similarity,
             llm_confidence=llm_result.get("confidence") if llm_result else None,
             llm_reasoning=llm_result.get("reasoning") if llm_result else None,
@@ -796,7 +856,26 @@ class ThemeMergingService:
             status="pending",
         )
         self.db.add(suggestion)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            # Concurrent workers may race to insert the same pair. Re-load and update.
+            self.db.rollback()
+            existing = self._get_suggestion_for_pair(source_id, target_id)
+            if not existing:
+                raise
+            existing.embedding_similarity = similarity
+            existing.pair_min_cluster_id = pair_min_id
+            existing.pair_max_cluster_id = pair_max_id
+            if llm_result:
+                existing.llm_confidence = llm_result.get("confidence")
+                existing.llm_reasoning = llm_result.get("reasoning")
+                existing.llm_relationship = llm_result.get("relationship")
+                existing.suggested_canonical_name = self._normalize_suggested_name(
+                    llm_result.get("canonical_name")
+                )
+            self.db.commit()
+            return existing
         return suggestion
 
     def execute_merge(
@@ -804,160 +883,231 @@ class ThemeMergingService:
         source_id: int,
         target_id: int,
         merge_type: str = "manual",
-        suggestion: ThemeMergeSuggestion = None
+        suggestion: ThemeMergeSuggestion = None,
+        expected_suggestion_status: str | None = None,
+        final_suggestion_status: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict:
         """Execute a theme merge: merge source INTO target"""
-        source = self.db.query(ThemeCluster).filter(ThemeCluster.id == source_id).first()
-        target = self.db.query(ThemeCluster).filter(ThemeCluster.id == target_id).first()
+        try:
+            if source_id == target_id:
+                return {"error": "Source and target theme must be different", "success": False}
+            ordered_theme_ids = sorted({source_id, target_id})
+            locked_themes = self._maybe_with_for_update(
+                self.db.query(ThemeCluster)
+                .filter(ThemeCluster.id.in_(ordered_theme_ids))
+                .order_by(ThemeCluster.id.asc())
+            ).all()
+            themes_by_id = {theme.id: theme for theme in locked_themes}
+            source = themes_by_id.get(source_id)
+            target = themes_by_id.get(target_id)
 
-        if not source or not target:
-            return {"error": "Theme not found", "success": False}
+            if not source or not target:
+                return {"error": "Theme not found", "success": False}
 
-        if not source.is_active:
-            return {"error": "Source theme already deactivated", "success": False}
+            if not source.is_active:
+                return {"error": "Source theme already deactivated", "success": False}
 
-        # Block cross-pipeline merges
-        source_pipeline = source.pipeline or "technical"
-        target_pipeline = target.pipeline or "technical"
-        if source_pipeline != target_pipeline:
-            return {
-                "error": f"Cross-pipeline merge not allowed: source is '{source_pipeline}', target is '{target_pipeline}'",
-                "success": False
-            }
+            # Block cross-pipeline merges
+            source_pipeline = source.pipeline or "technical"
+            target_pipeline = target.pipeline or "technical"
+            if source_pipeline != target_pipeline:
+                return {
+                    "error": f"Cross-pipeline merge not allowed: source is '{source_pipeline}', target is '{target_pipeline}'",
+                    "success": False
+                }
 
-        # Track counts
-        constituents_merged = 0
-        mentions_merged = 0
+            locked_suggestion = None
+            if suggestion:
+                locked_suggestion = self._maybe_with_for_update(
+                    self.db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion.id)
+                ).first()
+                if not locked_suggestion:
+                    return {"error": "Suggestion not found", "success": False}
+                if idempotency_key and locked_suggestion.approval_idempotency_key:
+                    if locked_suggestion.approval_idempotency_key != idempotency_key:
+                        return {"error": "Idempotency key mismatch for suggestion approval", "success": False}
+                if expected_suggestion_status and locked_suggestion.status != expected_suggestion_status:
+                    if idempotency_key:
+                        replay = self._load_replay_result(locked_suggestion, idempotency_key=idempotency_key)
+                        if replay:
+                            return replay
+                    return {
+                        "error": f"Suggestion status changed to {locked_suggestion.status}",
+                        "success": False,
+                    }
 
-        # 1. Merge aliases
-        target_aliases = target.aliases or []
-        if isinstance(target_aliases, str):
-            target_aliases = json.loads(target_aliases)
+            # Track counts
+            constituents_merged = 0
 
-        # Add source name and its aliases to target aliases
-        if source.name not in target_aliases:
-            target_aliases.append(source.name)
+            # 1. Merge aliases
+            target_aliases = target.aliases or []
+            if isinstance(target_aliases, str):
+                target_aliases = json.loads(target_aliases)
 
-        source_aliases = source.aliases or []
-        if isinstance(source_aliases, str):
-            source_aliases = json.loads(source_aliases)
+            # Add source name and its aliases to target aliases
+            if source.name not in target_aliases:
+                target_aliases.append(source.name)
 
-        for alias in source_aliases:
-            if alias not in target_aliases:
-                target_aliases.append(alias)
+            source_aliases = source.aliases or []
+            if isinstance(source_aliases, str):
+                source_aliases = json.loads(source_aliases)
 
-        target.aliases = target_aliases
+            for alias in source_aliases:
+                if alias not in target_aliases:
+                    target_aliases.append(alias)
 
-        # 2. Reassign constituents
-        source_constituents = self.db.query(ThemeConstituent).filter(
-            ThemeConstituent.theme_cluster_id == source_id
-        ).all()
+            target.aliases = target_aliases
 
-        for constituent in source_constituents:
-            # Check if target already has this symbol
-            existing = self.db.query(ThemeConstituent).filter(
-                ThemeConstituent.theme_cluster_id == target_id,
-                ThemeConstituent.symbol == constituent.symbol
-            ).first()
+            # 2. Reassign constituents
+            source_constituents = self.db.query(ThemeConstituent).filter(
+                ThemeConstituent.theme_cluster_id == source_id
+            ).all()
 
-            if existing:
-                # Update existing with higher values
-                existing.mention_count = max(
-                    existing.mention_count or 0,
-                    constituent.mention_count or 0
-                )
-                existing.confidence = max(
-                    existing.confidence or 0,
-                    constituent.confidence or 0
-                )
-                if constituent.first_mentioned_at:
-                    if not existing.first_mentioned_at or constituent.first_mentioned_at < existing.first_mentioned_at:
-                        existing.first_mentioned_at = constituent.first_mentioned_at
-                if constituent.last_mentioned_at:
-                    if not existing.last_mentioned_at or constituent.last_mentioned_at > existing.last_mentioned_at:
-                        existing.last_mentioned_at = constituent.last_mentioned_at
-                # Delete the source constituent
-                self.db.delete(constituent)
+            for constituent in source_constituents:
+                # Check if target already has this symbol
+                existing = self.db.query(ThemeConstituent).filter(
+                    ThemeConstituent.theme_cluster_id == target_id,
+                    ThemeConstituent.symbol == constituent.symbol
+                ).first()
+
+                if existing:
+                    # Update existing with higher values
+                    existing.mention_count = max(
+                        existing.mention_count or 0,
+                        constituent.mention_count or 0
+                    )
+                    existing.confidence = max(
+                        existing.confidence or 0,
+                        constituent.confidence or 0
+                    )
+                    if constituent.first_mentioned_at:
+                        if not existing.first_mentioned_at or constituent.first_mentioned_at < existing.first_mentioned_at:
+                            existing.first_mentioned_at = constituent.first_mentioned_at
+                    if constituent.last_mentioned_at:
+                        if not existing.last_mentioned_at or constituent.last_mentioned_at > existing.last_mentioned_at:
+                            existing.last_mentioned_at = constituent.last_mentioned_at
+                    # Delete the source constituent
+                    self.db.delete(constituent)
+                else:
+                    # Move constituent to target
+                    constituent.theme_cluster_id = target_id
+                constituents_merged += 1
+
+            # 3. Reassign mentions
+            self.db.query(ThemeMention).filter(
+                ThemeMention.theme_cluster_id == source_id
+            ).update(
+                {ThemeMention.theme_cluster_id: target_id},
+                synchronize_session=False
+            )
+            mentions_merged = self.db.query(ThemeMention).filter(
+                ThemeMention.theme_cluster_id == target_id
+            ).count()
+
+            # 4. Deactivate source theme with explicit lifecycle transition audit.
+            if (source.lifecycle_state or "active") != "retired":
+                try:
+                    apply_lifecycle_transition(
+                        db=self.db,
+                        theme=source,
+                        to_state="retired",
+                        actor="system",
+                        job_name="theme_merge",
+                        rule_version="lifecycle-v1",
+                        reason=f"merged_into:{target_id}",
+                        metadata={"merge_type": merge_type, "target_cluster_id": target_id},
+                    )
+                except ValueError as exc:
+                    self.db.rollback()
+                    return {"error": f"Lifecycle transition failed: {exc}", "success": False}
             else:
-                # Move constituent to target
-                constituent.theme_cluster_id = target_id
-            constituents_merged += 1
+                source.is_active = False
 
-        # 3. Reassign mentions
-        self.db.query(ThemeMention).filter(
-            ThemeMention.theme_cluster_id == source_id
-        ).update(
-            {ThemeMention.theme_cluster_id: target_id},
-            synchronize_session=False
-        )
-        mentions_merged = self.db.query(ThemeMention).filter(
-            ThemeMention.theme_cluster_id == target_id
-        ).count()
+            # 5. Delete source embedding
+            self.db.query(ThemeEmbedding).filter(
+                ThemeEmbedding.theme_cluster_id == source_id
+            ).delete()
 
-        # 4. Deactivate source theme with explicit lifecycle transition audit.
-        if (source.lifecycle_state or "active") != "retired":
-            try:
-                apply_lifecycle_transition(
-                    db=self.db,
-                    theme=source,
-                    to_state="retired",
-                    actor="system",
-                    job_name="theme_merge",
-                    rule_version="lifecycle-v1",
-                    reason=f"merged_into:{target_id}",
-                    metadata={"merge_type": merge_type, "target_cluster_id": target_id},
+            # 6. Update target's first/last seen dates
+            if source.first_seen_at:
+                if not target.first_seen_at or source.first_seen_at < target.first_seen_at:
+                    target.first_seen_at = source.first_seen_at
+            if source.last_seen_at:
+                if not target.last_seen_at or source.last_seen_at > target.last_seen_at:
+                    target.last_seen_at = source.last_seen_at
+
+            # 7. Create audit record
+            history = ThemeMergeHistory(
+                source_cluster_id=source_id,
+                source_cluster_name=source.name,
+                target_cluster_id=target_id,
+                target_cluster_name=target.name,
+                merge_type=merge_type,
+                embedding_similarity=locked_suggestion.embedding_similarity if locked_suggestion else None,
+                llm_confidence=locked_suggestion.llm_confidence if locked_suggestion else None,
+                llm_reasoning=locked_suggestion.llm_reasoning if locked_suggestion else None,
+                constituents_merged=constituents_merged,
+                mentions_merged=mentions_merged,
+            )
+            self.db.add(history)
+            self.db.flush()
+
+            result_payload = self._build_success_result(
+                source_name=source.name,
+                target_name=target.name,
+                constituents_merged=constituents_merged,
+                mentions_merged=mentions_merged,
+                idempotency_key=idempotency_key,
+            )
+
+            # 8. Atomically transition suggestion status if provided.
+            if locked_suggestion:
+                from_status = expected_suggestion_status or locked_suggestion.status
+                to_status = final_suggestion_status or ("approved" if merge_type == "manual" else "auto_merged")
+                status_filter = [
+                    ThemeMergeSuggestion.id == locked_suggestion.id,
+                    ThemeMergeSuggestion.status == from_status,
+                ]
+                if idempotency_key:
+                    status_filter.append(
+                        or_(
+                            ThemeMergeSuggestion.approval_idempotency_key.is_(None),
+                            ThemeMergeSuggestion.approval_idempotency_key == idempotency_key,
+                        )
+                    )
+                update_payload = {
+                    ThemeMergeSuggestion.status: to_status,
+                    ThemeMergeSuggestion.reviewed_at: datetime.utcnow(),
+                }
+                if idempotency_key:
+                    update_payload[ThemeMergeSuggestion.approval_idempotency_key] = idempotency_key
+                    update_payload[ThemeMergeSuggestion.approval_result_json] = json.dumps(result_payload)
+                updated_rows = self.db.query(ThemeMergeSuggestion).filter(*status_filter).update(
+                    update_payload,
+                    synchronize_session=False,
                 )
-            except ValueError as exc:
-                self.db.rollback()
-                return {"error": f"Lifecycle transition failed: {exc}", "success": False}
-        else:
-            source.is_active = False
+                if updated_rows != 1:
+                    self.db.rollback()
+                    return {"error": "Suggestion status changed during merge", "success": False}
 
-        # 5. Delete source embedding
-        self.db.query(ThemeEmbedding).filter(
-            ThemeEmbedding.theme_cluster_id == source_id
-        ).delete()
+            self.db.commit()
 
-        # 6. Update target's first/last seen dates
-        if source.first_seen_at:
-            if not target.first_seen_at or source.first_seen_at < target.first_seen_at:
-                target.first_seen_at = source.first_seen_at
-        if source.last_seen_at:
-            if not target.last_seen_at or source.last_seen_at > target.last_seen_at:
-                target.last_seen_at = source.last_seen_at
+            # 9. Update target embedding post-commit. Merge remains successful if refresh fails.
+            embedding_warning = None
+            try:
+                self.update_theme_embedding(target)
+            except Exception as exc:
+                logger.exception("Target embedding refresh failed after merge %s -> %s: %s", source_id, target_id, exc)
+                embedding_warning = str(exc)
 
-        # 7. Create audit record
-        history = ThemeMergeHistory(
-            source_cluster_id=source_id,
-            source_cluster_name=source.name,
-            target_cluster_id=target_id,
-            target_cluster_name=target.name,
-            merge_type=merge_type,
-            embedding_similarity=suggestion.embedding_similarity if suggestion else None,
-            llm_confidence=suggestion.llm_confidence if suggestion else None,
-            llm_reasoning=suggestion.llm_reasoning if suggestion else None,
-            constituents_merged=constituents_merged,
-            mentions_merged=mentions_merged,
-        )
-        self.db.add(history)
-
-        # 8. Update suggestion status if provided
-        if suggestion:
-            suggestion.status = "approved" if merge_type == "manual" else "auto_merged"
-            suggestion.reviewed_at = datetime.utcnow()
-
-        self.db.commit()
-
-        # 9. Update target embedding
-        self.update_theme_embedding(target)
-
-        return {
-            "success": True,
-            "source_name": source.name,
-            "target_name": target.name,
-            "constituents_merged": constituents_merged,
-            "mentions_merged": mentions_merged,
-        }
+            if embedding_warning:
+                result_payload["warning"] = f"Merged successfully but target embedding refresh failed: {embedding_warning}"
+            return result_payload
+        except Exception as exc:
+            self.db.rollback()
+            logger.exception("Merge transaction failed for %s -> %s", source_id, target_id)
+            return {"error": f"Merge transaction failed: {exc}", "success": False}
 
     def run_consolidation(self, dry_run: bool = True) -> dict:
         """
@@ -1090,7 +1240,13 @@ class ThemeMergingService:
                         source_id, target_id, similarity, llm_result
                     )
                     merge_result = self.execute_merge(
-                        source_id, target_id, "auto", suggestion
+                        source_id,
+                        target_id,
+                        "auto",
+                        suggestion,
+                        expected_suggestion_status="pending",
+                        final_suggestion_status="auto_merged",
+                        idempotency_key=f"auto-merge-suggestion:{suggestion.id}",
                     )
                     if merge_result.get("success"):
                         results["auto_merged"] += 1
@@ -1175,14 +1331,23 @@ class ThemeMergingService:
 
         return results
 
-    def approve_suggestion(self, suggestion_id: int) -> dict:
+    def approve_suggestion(self, suggestion_id: int, idempotency_key: str | None = None) -> dict:
         """Approve and execute a merge suggestion"""
-        suggestion = self.db.query(ThemeMergeSuggestion).filter(
-            ThemeMergeSuggestion.id == suggestion_id
+        operation_key = idempotency_key.strip()[:128] if idempotency_key and idempotency_key.strip() else None
+        suggestion = self._maybe_with_for_update(
+            self.db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion_id)
         ).first()
 
         if not suggestion:
             return {"error": "Suggestion not found", "success": False}
+
+        if operation_key and suggestion.approval_idempotency_key and suggestion.approval_idempotency_key != operation_key:
+            return {"error": "Idempotency key mismatch for suggestion approval", "success": False}
+
+        if operation_key:
+            replay = self._load_replay_result(suggestion, idempotency_key=operation_key)
+            if replay:
+                return replay
 
         if suggestion.status != "pending":
             return {"error": f"Suggestion already {suggestion.status}", "success": False}
@@ -1191,24 +1356,45 @@ class ThemeMergingService:
             suggestion.source_cluster_id,
             suggestion.target_cluster_id,
             "manual",
-            suggestion
+            suggestion,
+            expected_suggestion_status="pending",
+            final_suggestion_status="approved",
+            idempotency_key=operation_key,
         )
+
+        if operation_key and not result.get("success"):
+            refreshed = self.db.query(ThemeMergeSuggestion).filter(
+                ThemeMergeSuggestion.id == suggestion_id
+            ).first()
+            if refreshed:
+                replay_after_failure = self._load_replay_result(refreshed, idempotency_key=operation_key)
+                if replay_after_failure:
+                    return replay_after_failure
 
         return result
 
     def reject_suggestion(self, suggestion_id: int) -> dict:
         """Reject a merge suggestion"""
-        suggestion = self.db.query(ThemeMergeSuggestion).filter(
-            ThemeMergeSuggestion.id == suggestion_id
-        ).first()
+        updated_rows = self.db.query(ThemeMergeSuggestion).filter(
+            ThemeMergeSuggestion.id == suggestion_id,
+            ThemeMergeSuggestion.status == "pending",
+        ).update(
+            {
+                ThemeMergeSuggestion.status: "rejected",
+                ThemeMergeSuggestion.reviewed_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
 
-        if not suggestion:
-            return {"error": "Suggestion not found", "success": False}
+        if updated_rows != 1:
+            suggestion = self.db.query(ThemeMergeSuggestion).filter(
+                ThemeMergeSuggestion.id == suggestion_id
+            ).first()
+            if not suggestion:
+                return {"error": "Suggestion not found", "success": False}
+            return {"error": f"Suggestion already {suggestion.status}", "success": False}
 
-        suggestion.status = "rejected"
-        suggestion.reviewed_at = datetime.utcnow()
         self.db.commit()
-
         return {"success": True, "status": "rejected"}
 
     def get_merge_history(self, limit: int = 50) -> list[dict]:

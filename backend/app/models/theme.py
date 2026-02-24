@@ -500,6 +500,8 @@ class ThemeMergeSuggestion(Base):
     # Theme pair
     source_cluster_id = Column(Integer, nullable=False, index=True)  # Theme to merge FROM
     target_cluster_id = Column(Integer, nullable=False, index=True)  # Theme to merge INTO
+    pair_min_cluster_id = Column(Integer, nullable=True, index=True)  # Canonical pair key (unordered)
+    pair_max_cluster_id = Column(Integer, nullable=True, index=True)  # Canonical pair key (unordered)
 
     # Similarity scores
     embedding_similarity = Column(Float)  # Cosine similarity
@@ -510,6 +512,8 @@ class ThemeMergeSuggestion(Base):
 
     # Status
     status = Column(String(20), default="pending", index=True)  # pending, approved, rejected, auto_merged
+    approval_idempotency_key = Column(String(128), nullable=True, index=True)
+    approval_result_json = Column(Text, nullable=True)
     reviewed_at = Column(DateTime(timezone=True))
 
     # Timestamps
@@ -517,6 +521,7 @@ class ThemeMergeSuggestion(Base):
 
     __table_args__ = (
         UniqueConstraint("source_cluster_id", "target_cluster_id", name="uix_merge_suggestion_pair"),
+        UniqueConstraint("pair_min_cluster_id", "pair_max_cluster_id", name="uix_merge_suggestion_pair_canonical"),
     )
 
 

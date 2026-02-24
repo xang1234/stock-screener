@@ -13,7 +13,7 @@ import io
 import logging
 from collections import Counter, defaultdict
 from pydantic import ValidationError
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -1162,6 +1162,7 @@ async def get_merge_suggestions(
 @router.post("/merge-suggestions/{suggestion_id}/approve", response_model=MergeActionResponse)
 async def approve_merge_suggestion(
     suggestion_id: int,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db)
 ):
     """
@@ -1174,7 +1175,7 @@ async def approve_merge_suggestion(
     - Source theme is deactivated
     """
     service = ThemeMergingService(db)
-    result = service.approve_suggestion(suggestion_id)
+    result = service.approve_suggestion(suggestion_id, idempotency_key=idempotency_key)
     return MergeActionResponse(**result)
 
 
