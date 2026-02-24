@@ -119,6 +119,17 @@ def run_theme_lifecycle_migration():
     migrate_theme_lifecycle(engine)
 
 
+def run_theme_relationships_migration():
+    """
+    Run idempotent theme relationships migration on startup.
+
+    Creates non-destructive semantic relationship edges between theme clusters.
+    """
+    from .db_migrations.theme_relationships_migration import migrate_theme_relationships
+
+    migrate_theme_relationships(engine)
+
+
 def run_theme_embedding_freshness_migration():
     """
     Run idempotent theme embedding freshness migration on startup.
@@ -206,6 +217,7 @@ async def lifespan(app: FastAPI):
     run_theme_aliases_migration()
     run_theme_match_decision_migration()
     run_theme_lifecycle_migration()
+    run_theme_relationships_migration()
     run_theme_embedding_freshness_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings

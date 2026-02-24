@@ -21,6 +21,7 @@ from .theme import (
     ThemeMergeSuggestion,
     ThemeMergeHistory,
     ThemeLifecycleTransition,
+    ThemeRelationship,
 )
 from .task_execution import TaskExecutionHistory
 from .chatbot import Conversation, Message, AgentExecution
@@ -70,6 +71,7 @@ __all__ = [
     "ThemeMergeSuggestion",
     "ThemeMergeHistory",
     "ThemeLifecycleTransition",
+    "ThemeRelationship",
     # Task execution
     "TaskExecutionHistory",
     # Chatbot

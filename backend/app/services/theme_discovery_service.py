@@ -22,9 +22,12 @@ from ..models.theme import (
     ThemeAlert,
     ContentItem,
     ContentSource,
+    ThemeMergeSuggestion,
+    ThemeRelationship,
 )
 from ..models.stock import StockPrice
 from ..models.scan_result import ScanResult
+from .theme_lifecycle_service import apply_lifecycle_transition
 
 logger = logging.getLogger(__name__)
 
@@ -811,3 +814,567 @@ class ThemeDiscoveryService:
                     alerts.append(alert)
 
         return alerts
+
+    def _lifecycle_thresholds(self) -> dict[str, float]:
+        cfg = self.pipeline_config
+        if cfg is None:
+            return {
+                "promotion_min_mentions_7d": 4,
+                "promotion_min_source_diversity_7d": 2,
+                "promotion_min_avg_confidence_30d": 0.60,
+                "promotion_min_persistence_days": 3,
+                "dormancy_inactivity_days": 21,
+                "dormancy_min_mentions_30d": 1,
+                "dormancy_min_silence_days": 10,
+                "reactivation_min_mentions_7d": 2,
+                "reactivation_min_source_diversity_7d": 2,
+                "reactivation_min_avg_confidence_30d": 0.55,
+                "relationship_subset_overlap_ratio": 0.85,
+                "relationship_related_jaccard_threshold": 0.35,
+                "relationship_min_overlap_constituents": 2,
+            }
+        return {
+            "promotion_min_mentions_7d": cfg.promotion_min_mentions_7d,
+            "promotion_min_source_diversity_7d": cfg.promotion_min_source_diversity_7d,
+            "promotion_min_avg_confidence_30d": cfg.promotion_min_avg_confidence_30d,
+            "promotion_min_persistence_days": cfg.promotion_min_persistence_days,
+            "dormancy_inactivity_days": cfg.dormancy_inactivity_days,
+            "dormancy_min_mentions_30d": cfg.dormancy_min_mentions_30d,
+            "dormancy_min_silence_days": cfg.dormancy_min_silence_days,
+            "reactivation_min_mentions_7d": cfg.reactivation_min_mentions_7d,
+            "reactivation_min_source_diversity_7d": cfg.reactivation_min_source_diversity_7d,
+            "reactivation_min_avg_confidence_30d": cfg.reactivation_min_avg_confidence_30d,
+            "relationship_subset_overlap_ratio": cfg.relationship_subset_overlap_ratio,
+            "relationship_related_jaccard_threshold": cfg.relationship_related_jaccard_threshold,
+            "relationship_min_overlap_constituents": cfg.relationship_min_overlap_constituents,
+        }
+
+    def _lifecycle_snapshot(self, theme_cluster_id: int, *, now: datetime | None = None) -> dict[str, float]:
+        now = now or datetime.utcnow()
+        cutoff_7d = now - timedelta(days=7)
+        cutoff_30d = now - timedelta(days=30)
+        source_quality = {
+            "news": 1.00,
+            "substack": 0.95,
+            "twitter": 0.70,
+            "reddit": 0.60,
+        }
+
+        mentions = self.db.query(
+            ThemeMention.mentioned_at,
+            ThemeMention.confidence,
+            ThemeMention.source_type,
+            ThemeMention.source_name,
+        ).filter(
+            ThemeMention.theme_cluster_id == theme_cluster_id,
+            ThemeMention.pipeline == self.pipeline,
+            ThemeMention.mentioned_at >= cutoff_30d,
+            ThemeMention.mentioned_at <= now,
+        ).all()
+
+        mentions_7d = 0
+        mentions_30d = 0
+        sources_7d: set[str] = set()
+        persistence_days_7d: set[str] = set()
+        weighted_conf_sum = 0.0
+        latest_mention_at: datetime | None = None
+
+        for mentioned_at, confidence, source_type, source_name in mentions:
+            seen_at = mentioned_at or now
+            confidence_value = max(0.0, min(1.0, float(confidence or 0.5)))
+            quality_weight = source_quality.get((source_type or "").strip().lower(), 0.75)
+            weighted_conf_sum += confidence_value * quality_weight
+            mentions_30d += 1
+            if latest_mention_at is None or seen_at > latest_mention_at:
+                latest_mention_at = seen_at
+
+            if seen_at >= cutoff_7d:
+                mentions_7d += 1
+                source_marker = (source_name or source_type or "unknown").strip().lower()
+                sources_7d.add(source_marker)
+                persistence_days_7d.add(seen_at.date().isoformat())
+
+        avg_quality_confidence_30d = (weighted_conf_sum / mentions_30d) if mentions_30d else 0.0
+        days_since_last_mention = 9999
+        if latest_mention_at is not None:
+            delta = now - latest_mention_at
+            days_since_last_mention = max(0, int(delta.total_seconds() // 86400))
+
+        return {
+            "mentions_7d": mentions_7d,
+            "mentions_30d": mentions_30d,
+            "source_diversity_7d": len(sources_7d),
+            "persistence_days_7d": len(persistence_days_7d),
+            "avg_quality_confidence_30d": round(avg_quality_confidence_30d, 4),
+            "days_since_last_mention": days_since_last_mention,
+        }
+
+    def _merge_lifecycle_metadata(
+        self,
+        theme: ThemeCluster,
+        *,
+        observation: dict[str, object] | None = None,
+        counter_field: str | None = None,
+        reason: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        current = theme.lifecycle_state_metadata if isinstance(theme.lifecycle_state_metadata, dict) else {}
+        merged = dict(current)
+        merged["policy_version"] = "lifecycle-v2"
+        merged["pipeline"] = self.pipeline
+        merged["continuity_id"] = merged.get("continuity_id") or f"{theme.pipeline}:{theme.canonical_key}"
+        if counter_field:
+            merged[counter_field] = int(merged.get(counter_field) or 0) + 1
+        if reason:
+            merged["last_transition_reason"] = reason
+        if observation is not None:
+            merged["last_observation"] = observation
+        if now is not None:
+            merged["last_evaluated_at"] = now.isoformat()
+        return merged
+
+    def promote_candidate_themes(self, *, now: datetime | None = None, limit: int | None = None) -> dict:
+        """
+        Promote candidate themes to active when evidence exceeds policy thresholds.
+        """
+        now = now or datetime.utcnow()
+        thresholds = self._lifecycle_thresholds()
+
+        query = self.db.query(ThemeCluster).filter(
+            ThemeCluster.pipeline == self.pipeline,
+            ThemeCluster.is_active == True,
+            ThemeCluster.lifecycle_state == "candidate",
+        ).order_by(ThemeCluster.candidate_since_at.asc(), ThemeCluster.id.asc())
+        if limit is not None and limit > 0:
+            query = query.limit(limit)
+        candidates = query.all()
+
+        result = {
+            "pipeline": self.pipeline,
+            "scanned": len(candidates),
+            "promoted": 0,
+            "unchanged": 0,
+            "errors": 0,
+        }
+
+        for cluster in candidates:
+            try:
+                observation = self._lifecycle_snapshot(cluster.id, now=now)
+                should_promote = (
+                    observation["mentions_7d"] >= thresholds["promotion_min_mentions_7d"]
+                    and observation["source_diversity_7d"] >= thresholds["promotion_min_source_diversity_7d"]
+                    and observation["avg_quality_confidence_30d"] >= thresholds["promotion_min_avg_confidence_30d"]
+                    and observation["persistence_days_7d"] >= thresholds["promotion_min_persistence_days"]
+                )
+
+                if should_promote:
+                    metadata = self._merge_lifecycle_metadata(
+                        cluster,
+                        observation=observation,
+                        counter_field="promotion_count",
+                        reason="candidate_promotion_thresholds_met",
+                        now=now,
+                    )
+                    apply_lifecycle_transition(
+                        db=self.db,
+                        theme=cluster,
+                        to_state="active",
+                        actor="system",
+                        job_name="promote_candidate_themes",
+                        rule_version="lifecycle-v2",
+                        reason="candidate_promotion_thresholds_met",
+                        metadata=metadata,
+                        transitioned_at=now,
+                    )
+                    result["promoted"] += 1
+                else:
+                    cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
+                        cluster,
+                        observation=observation,
+                        reason="candidate_promotion_thresholds_not_met",
+                        now=now,
+                    )
+                    result["unchanged"] += 1
+                self.db.commit()
+            except Exception as exc:
+                self.db.rollback()
+                result["errors"] += 1
+                logger.error("Candidate promotion policy failed for theme %s: %s", cluster.id, exc)
+
+        return result
+
+    def apply_dormancy_and_reactivation_policies(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """
+        Apply automatic dormancy and reactivation transitions with telemetry counters.
+        """
+        now = now or datetime.utcnow()
+        thresholds = self._lifecycle_thresholds()
+        query = self.db.query(ThemeCluster).filter(
+            ThemeCluster.pipeline == self.pipeline,
+            ThemeCluster.is_active == True,
+            ThemeCluster.lifecycle_state.in_(["active", "reactivated", "dormant"]),
+        ).order_by(ThemeCluster.lifecycle_state_updated_at.asc(), ThemeCluster.id.asc())
+        if limit is not None and limit > 0:
+            query = query.limit(limit)
+        clusters = query.all()
+
+        result = {
+            "pipeline": self.pipeline,
+            "scanned": len(clusters),
+            "to_dormant": 0,
+            "to_reactivated": 0,
+            "unchanged": 0,
+            "errors": 0,
+        }
+
+        for cluster in clusters:
+            try:
+                observation = self._lifecycle_snapshot(cluster.id, now=now)
+                state = (cluster.lifecycle_state or "candidate").strip()
+
+                to_state: str | None = None
+                reason: str | None = None
+                counter_field: str | None = None
+                if state in {"active", "reactivated"}:
+                    stale_inactive = observation["days_since_last_mention"] >= thresholds["dormancy_inactivity_days"]
+                    low_volume_stale = (
+                        observation["mentions_30d"] <= thresholds["dormancy_min_mentions_30d"]
+                        and observation["days_since_last_mention"] >= thresholds["dormancy_min_silence_days"]
+                    )
+                    if stale_inactive or low_volume_stale:
+                        to_state = "dormant"
+                        reason = "dormancy_inactivity_threshold_met"
+                        counter_field = "dormancy_count"
+
+                elif state == "dormant":
+                    should_reactivate = (
+                        observation["mentions_7d"] >= thresholds["reactivation_min_mentions_7d"]
+                        and observation["source_diversity_7d"] >= thresholds["reactivation_min_source_diversity_7d"]
+                        and observation["avg_quality_confidence_30d"] >= thresholds["reactivation_min_avg_confidence_30d"]
+                    )
+                    if should_reactivate:
+                        to_state = "reactivated"
+                        reason = "reactivation_evidence_threshold_met"
+                        counter_field = "reactivation_count"
+
+                if to_state is None:
+                    cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
+                        cluster,
+                        observation=observation,
+                        reason="lifecycle_policy_no_transition",
+                        now=now,
+                    )
+                    result["unchanged"] += 1
+                    self.db.commit()
+                    continue
+
+                metadata = self._merge_lifecycle_metadata(
+                    cluster,
+                    observation=observation,
+                    counter_field=counter_field,
+                    reason=reason,
+                    now=now,
+                )
+                apply_lifecycle_transition(
+                    db=self.db,
+                    theme=cluster,
+                    to_state=to_state,
+                    actor="system",
+                    job_name="apply_lifecycle_policies",
+                    rule_version="lifecycle-v2",
+                    reason=reason,
+                    metadata=metadata,
+                    transitioned_at=now,
+                )
+                if to_state == "dormant":
+                    result["to_dormant"] += 1
+                elif to_state == "reactivated":
+                    result["to_reactivated"] += 1
+                self.db.commit()
+            except Exception as exc:
+                self.db.rollback()
+                result["errors"] += 1
+                logger.error("Dormancy/reactivation policy failed for theme %s: %s", cluster.id, exc)
+
+        return result
+
+    def _canonicalize_relationship_edge(
+        self,
+        *,
+        source_cluster_id: int,
+        target_cluster_id: int,
+        relationship_type: str,
+    ) -> tuple[int, int]:
+        if source_cluster_id == target_cluster_id:
+            raise ValueError("theme relationship cannot target itself")
+
+        normalized_type = relationship_type.strip().lower()
+        if normalized_type in {"related", "distinct"} and source_cluster_id > target_cluster_id:
+            return target_cluster_id, source_cluster_id
+        return source_cluster_id, target_cluster_id
+
+    def upsert_theme_relationship(
+        self,
+        *,
+        source_cluster_id: int,
+        target_cluster_id: int,
+        relationship_type: str,
+        confidence: float,
+        provenance: str,
+        evidence: dict | None = None,
+        pipeline: str | None = None,
+    ) -> tuple[ThemeRelationship, bool]:
+        relationship_type = relationship_type.strip().lower()
+        if relationship_type not in {"subset", "related", "distinct"}:
+            raise ValueError(f"Unsupported relationship_type: {relationship_type}")
+
+        edge_source, edge_target = self._canonicalize_relationship_edge(
+            source_cluster_id=source_cluster_id,
+            target_cluster_id=target_cluster_id,
+            relationship_type=relationship_type,
+        )
+        edge_pipeline = (pipeline or self.pipeline).strip()
+        edge_confidence = max(0.0, min(1.0, float(confidence or 0.0)))
+
+        existing = self.db.query(ThemeRelationship).filter(
+            ThemeRelationship.source_cluster_id == edge_source,
+            ThemeRelationship.target_cluster_id == edge_target,
+            ThemeRelationship.relationship_type == relationship_type,
+            ThemeRelationship.pipeline == edge_pipeline,
+        ).first()
+
+        if existing:
+            existing.confidence = max(float(existing.confidence or 0.0), edge_confidence)
+            existing.provenance = provenance
+            existing.evidence = evidence
+            existing.is_active = True
+            return existing, False
+
+        relationship = ThemeRelationship(
+            source_cluster_id=edge_source,
+            target_cluster_id=edge_target,
+            relationship_type=relationship_type,
+            pipeline=edge_pipeline,
+            confidence=edge_confidence,
+            provenance=provenance,
+            evidence=evidence,
+            is_active=True,
+        )
+        self.db.add(relationship)
+        return relationship, True
+
+    def _infer_relationships_from_constituent_overlap(self) -> dict[str, int]:
+        thresholds = self._lifecycle_thresholds()
+        min_overlap = int(thresholds["relationship_min_overlap_constituents"])
+        subset_overlap_ratio = float(thresholds["relationship_subset_overlap_ratio"])
+        related_jaccard_threshold = float(thresholds["relationship_related_jaccard_threshold"])
+
+        clusters = self.db.query(ThemeCluster).filter(
+            ThemeCluster.pipeline == self.pipeline,
+            ThemeCluster.is_active == True,
+        ).all()
+        if len(clusters) < 2:
+            return {"pairs_scanned": 0, "subset_edges": 0, "related_edges": 0, "created": 0, "updated": 0}
+
+        constituents = self.db.query(ThemeConstituent).filter(
+            ThemeConstituent.is_active == True,
+            ThemeConstituent.theme_cluster_id.in_([c.id for c in clusters]),
+        ).all()
+        by_cluster: dict[int, set[str]] = defaultdict(set)
+        for row in constituents:
+            by_cluster[row.theme_cluster_id].add(row.symbol)
+
+        created = 0
+        updated = 0
+        pairs_scanned = 0
+        subset_edges = 0
+        related_edges = 0
+
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                left = clusters[i]
+                right = clusters[j]
+                left_set = by_cluster.get(left.id, set())
+                right_set = by_cluster.get(right.id, set())
+                if not left_set or not right_set:
+                    continue
+
+                pairs_scanned += 1
+                overlap = left_set & right_set
+                overlap_count = len(overlap)
+                if overlap_count < min_overlap:
+                    continue
+
+                smaller_size = min(len(left_set), len(right_set))
+                overlap_ratio = overlap_count / smaller_size if smaller_size else 0.0
+                union_size = len(left_set | right_set)
+                jaccard = overlap_count / union_size if union_size else 0.0
+
+                relationship_type: str | None = None
+                source_cluster_id = left.id
+                target_cluster_id = right.id
+                confidence = 0.0
+                if overlap_ratio >= subset_overlap_ratio:
+                    relationship_type = "subset"
+                    subset_edges += 1
+                    if len(left_set) > len(right_set):
+                        source_cluster_id, target_cluster_id = right.id, left.id
+                    confidence = max(overlap_ratio, jaccard)
+                elif jaccard >= related_jaccard_threshold:
+                    relationship_type = "related"
+                    related_edges += 1
+                    confidence = jaccard
+
+                if relationship_type is None:
+                    continue
+
+                _, inserted = self.upsert_theme_relationship(
+                    source_cluster_id=source_cluster_id,
+                    target_cluster_id=target_cluster_id,
+                    relationship_type=relationship_type,
+                    confidence=confidence,
+                    provenance="constituent_overlap_rule",
+                    evidence={
+                        "overlap_count": overlap_count,
+                        "left_size": len(left_set),
+                        "right_size": len(right_set),
+                        "overlap_ratio": round(overlap_ratio, 4),
+                        "jaccard": round(jaccard, 4),
+                    },
+                    pipeline=self.pipeline,
+                )
+                if inserted:
+                    created += 1
+                else:
+                    updated += 1
+
+        return {
+            "pairs_scanned": pairs_scanned,
+            "subset_edges": subset_edges,
+            "related_edges": related_edges,
+            "created": created,
+            "updated": updated,
+        }
+
+    def infer_theme_relationships(
+        self,
+        *,
+        max_merge_suggestions: int = 300,
+    ) -> dict:
+        """
+        Build theme relationship edges from merge analysis + deterministic rules.
+        """
+        result = {
+            "pipeline": self.pipeline,
+            "merge_suggestions_scanned": 0,
+            "merge_edges_written": 0,
+            "rule_pairs_scanned": 0,
+            "rule_edges_written": 0,
+            "created": 0,
+            "updated": 0,
+            "errors": 0,
+        }
+
+        try:
+            merge_suggestions = self.db.query(ThemeMergeSuggestion).filter(
+                ThemeMergeSuggestion.llm_relationship.in_(["subset", "related", "distinct"]),
+            ).order_by(ThemeMergeSuggestion.created_at.desc()).limit(max_merge_suggestions).all()
+            result["merge_suggestions_scanned"] = len(merge_suggestions)
+
+            cluster_lookup = {
+                cluster.id: cluster
+                for cluster in self.db.query(ThemeCluster).filter(ThemeCluster.pipeline == self.pipeline).all()
+            }
+
+            for suggestion in merge_suggestions:
+                source = cluster_lookup.get(suggestion.source_cluster_id)
+                target = cluster_lookup.get(suggestion.target_cluster_id)
+                if source is None or target is None:
+                    continue
+                if (source.pipeline or "") != self.pipeline or (target.pipeline or "") != self.pipeline:
+                    continue
+
+                confidence = float(
+                    suggestion.llm_confidence
+                    if suggestion.llm_confidence is not None
+                    else (suggestion.embedding_similarity or 0.5)
+                )
+                _, inserted = self.upsert_theme_relationship(
+                    source_cluster_id=source.id,
+                    target_cluster_id=target.id,
+                    relationship_type=str(suggestion.llm_relationship or "related"),
+                    confidence=confidence,
+                    provenance="merge_suggestion_llm",
+                    evidence={
+                        "merge_suggestion_id": suggestion.id,
+                        "status": suggestion.status,
+                        "embedding_similarity": suggestion.embedding_similarity,
+                        "llm_confidence": suggestion.llm_confidence,
+                    },
+                    pipeline=self.pipeline,
+                )
+                result["merge_edges_written"] += 1
+                if inserted:
+                    result["created"] += 1
+                else:
+                    result["updated"] += 1
+
+            overlap_result = self._infer_relationships_from_constituent_overlap()
+            result["rule_pairs_scanned"] = overlap_result["pairs_scanned"]
+            result["rule_edges_written"] = overlap_result["subset_edges"] + overlap_result["related_edges"]
+            result["created"] += overlap_result["created"]
+            result["updated"] += overlap_result["updated"]
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            result["errors"] += 1
+            logger.error("Relationship inference failed for pipeline %s: %s", self.pipeline, exc)
+
+        return result
+
+    def get_theme_relationships(self, theme_cluster_id: int, *, limit: int = 50) -> list[dict]:
+        edges = self.db.query(ThemeRelationship).filter(
+            ThemeRelationship.pipeline == self.pipeline,
+            ThemeRelationship.is_active == True,
+            or_(
+                ThemeRelationship.source_cluster_id == theme_cluster_id,
+                ThemeRelationship.target_cluster_id == theme_cluster_id,
+            ),
+        ).order_by(ThemeRelationship.confidence.desc(), ThemeRelationship.created_at.desc()).limit(limit).all()
+
+        if not edges:
+            return []
+
+        related_ids = {
+            edge.source_cluster_id if edge.source_cluster_id != theme_cluster_id else edge.target_cluster_id
+            for edge in edges
+        }
+        related_clusters = {
+            cluster.id: cluster
+            for cluster in self.db.query(ThemeCluster).filter(ThemeCluster.id.in_(list(related_ids))).all()
+        }
+
+        payload = []
+        for edge in edges:
+            is_outgoing = edge.source_cluster_id == theme_cluster_id
+            peer_id = edge.target_cluster_id if is_outgoing else edge.source_cluster_id
+            peer = related_clusters.get(peer_id)
+            payload.append(
+                {
+                    "relation_id": edge.id,
+                    "relationship_type": edge.relationship_type,
+                    "direction": "outgoing" if is_outgoing else "incoming",
+                    "confidence": float(edge.confidence or 0.0),
+                    "provenance": edge.provenance,
+                    "evidence": edge.evidence or {},
+                    "peer_theme_id": peer_id,
+                    "peer_theme_name": peer.name if peer else None,
+                    "peer_theme_display_name": peer.display_name if peer else None,
+                }
+            )
+        return payload

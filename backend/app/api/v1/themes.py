@@ -37,6 +37,7 @@ from ...schemas.theme import (
     ThemeClusterResponse,
     ThemeDetailResponse,
     ThemeConstituentResponse,
+    ThemeRelationshipResponse,
     ThemeMetricsResponse,
     ThemeRankingsResponse,
     ThemeRankingItem,
@@ -1454,10 +1455,14 @@ async def get_theme_detail(
         ThemeMetrics.theme_cluster_id == theme_id
     ).order_by(ThemeMetrics.date.desc()).first()
 
+    service = ThemeDiscoveryService(db, pipeline=cluster.pipeline or "technical")
+    relationships = service.get_theme_relationships(theme_id, limit=50)
+
     return ThemeDetailResponse(
         theme=_safe_theme_cluster_response(cluster),
         constituents=[ThemeConstituentResponse.model_validate(c) for c in constituents],
-        metrics=ThemeMetricsResponse.model_validate(latest_metrics) if latest_metrics else None
+        metrics=ThemeMetricsResponse.model_validate(latest_metrics) if latest_metrics else None,
+        relationships=[ThemeRelationshipResponse(**r) for r in relationships],
     )
 
 

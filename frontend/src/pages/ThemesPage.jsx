@@ -500,6 +500,63 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose }) => {
                 </TableContainer>
               </Box>
             )}
+
+            {detail.relationships?.length > 0 && (
+              <Box mt={3}>
+                <Box sx={{ fontSize: '12px', fontWeight: 600, mb: 0.5 }}>
+                  Theme Relationships ({detail.relationships.length})
+                </Box>
+                <TableContainer sx={{ maxHeight: 220 }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Direction</TableCell>
+                        <TableCell>Type</TableCell>
+                        <TableCell>Theme</TableCell>
+                        <TableCell align="right">Conf</TableCell>
+                        <TableCell>Source</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {detail.relationships.map((rel) => (
+                        <TableRow key={rel.relation_id} hover>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={rel.direction}
+                              color={rel.direction === 'outgoing' ? 'primary' : 'default'}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={rel.relationship_type}
+                              color={
+                                rel.relationship_type === 'subset'
+                                  ? 'warning'
+                                  : rel.relationship_type === 'related'
+                                    ? 'info'
+                                    : 'default'
+                              }
+                            />
+                          </TableCell>
+                          <TableCell sx={{ fontWeight: 600 }}>
+                            {rel.peer_theme_display_name || rel.peer_theme_name || '-'}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
+                            {(Math.max(0, Math.min(1, rel.confidence || 0)) * 100).toFixed(0)}%
+                          </TableCell>
+                          <TableCell sx={{ fontSize: '10px', color: 'text.secondary', fontFamily: 'monospace' }}>
+                            {rel.provenance || '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
           </Box>
         ) : (
           <Typography color="text.secondary">No data available</Typography>

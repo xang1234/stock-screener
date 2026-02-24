@@ -38,6 +38,25 @@ class PipelineConfig:
     fading_max_rs: float = 45.0
     dormant_max_velocity: float = 0.5
 
+    # Lifecycle policy thresholds
+    promotion_min_mentions_7d: int = 4
+    promotion_min_source_diversity_7d: int = 2
+    promotion_min_avg_confidence_30d: float = 0.60
+    promotion_min_persistence_days: int = 3
+
+    dormancy_inactivity_days: int = 21
+    dormancy_min_mentions_30d: int = 1
+    dormancy_min_silence_days: int = 10
+
+    reactivation_min_mentions_7d: int = 2
+    reactivation_min_source_diversity_7d: int = 2
+    reactivation_min_avg_confidence_30d: float = 0.55
+
+    # Relationship inference thresholds
+    relationship_subset_overlap_ratio: float = 0.85
+    relationship_related_jaccard_threshold: float = 0.35
+    relationship_min_overlap_constituents: int = 2
+
 
 # Technical Pipeline Configuration
 TECHNICAL_PIPELINE = PipelineConfig(
@@ -86,6 +105,19 @@ AVOID extracting fundamental-only themes like:
     fading_max_score=40.0,
     fading_max_rs=45.0,
     dormant_max_velocity=0.5,
+    promotion_min_mentions_7d=4,
+    promotion_min_source_diversity_7d=2,
+    promotion_min_avg_confidence_30d=0.62,
+    promotion_min_persistence_days=3,
+    dormancy_inactivity_days=21,
+    dormancy_min_mentions_30d=1,
+    dormancy_min_silence_days=10,
+    reactivation_min_mentions_7d=2,
+    reactivation_min_source_diversity_7d=2,
+    reactivation_min_avg_confidence_30d=0.58,
+    relationship_subset_overlap_ratio=0.85,
+    relationship_related_jaccard_threshold=0.35,
+    relationship_min_overlap_constituents=2,
 )
 
 
@@ -138,6 +170,19 @@ AVOID extracting pure technical themes like:
     fading_max_score=35.0,
     fading_max_rs=42.0,
     dormant_max_velocity=0.4,
+    promotion_min_mentions_7d=3,
+    promotion_min_source_diversity_7d=2,
+    promotion_min_avg_confidence_30d=0.58,
+    promotion_min_persistence_days=2,
+    dormancy_inactivity_days=28,
+    dormancy_min_mentions_30d=1,
+    dormancy_min_silence_days=14,
+    reactivation_min_mentions_7d=2,
+    reactivation_min_source_diversity_7d=2,
+    reactivation_min_avg_confidence_30d=0.55,
+    relationship_subset_overlap_ratio=0.80,
+    relationship_related_jaccard_threshold=0.30,
+    relationship_min_overlap_constituents=2,
 )
 
 

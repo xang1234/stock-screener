@@ -297,6 +297,36 @@ if settings.cache_warmup_enabled:
             'kwargs': {'dry_run': False},
         },
 
+        # Daily candidate promotion pass for theme lifecycle state machine.
+        # Runs at 4:30 AM ET after nightly data refresh jobs.
+        'daily-theme-candidate-promotion': {
+            'task': 'app.tasks.theme_discovery_tasks.promote_candidate_themes',
+            'schedule': crontab(
+                hour=4,
+                minute=30,
+            ),
+        },
+
+        # Daily dormancy/reactivation lifecycle pass for stale/resurgent themes.
+        # Runs immediately after candidate promotion.
+        'daily-theme-lifecycle-policies': {
+            'task': 'app.tasks.theme_discovery_tasks.apply_lifecycle_policies',
+            'schedule': crontab(
+                hour=4,
+                minute=45,
+            ),
+        },
+
+        # Daily semantic relationship edge inference for theme analysis UX.
+        # Runs after lifecycle updates and merge suggestion generation windows.
+        'daily-theme-relationship-inference': {
+            'task': 'app.tasks.theme_discovery_tasks.infer_theme_relationships',
+            'schedule': crontab(
+                hour=5,
+                minute=0,
+            ),
+        },
+
         # Poll content sources based on their fetch_interval_minutes
         # Runs every 15 minutes to check which sources are due for refresh
         # Sources are only fetched if their last_fetched_at + fetch_interval_minutes < now

@@ -341,6 +341,152 @@ def calculate_theme_metrics(pipeline: str = None):
         db.close()
 
 
+@celery_app.task(name='app.tasks.theme_discovery_tasks.promote_candidate_themes')
+def promote_candidate_themes(pipeline: str = None, limit: int = 1000):
+    """
+    Promote candidate themes to active based on evidence thresholds.
+    """
+    pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+    logger.info("=" * 60)
+    logger.info("TASK: Promote Candidate Themes")
+    logger.info(f"Pipelines: {pipelines}")
+    logger.info("=" * 60)
+
+    from ..services.theme_discovery_service import ThemeDiscoveryService
+
+    db = SessionLocal()
+    start_time = time.time()
+    summary = {"pipelines": {}, "promoted_total": 0, "scanned_total": 0, "errors": 0}
+
+    try:
+        for p in pipelines:
+            service = ThemeDiscoveryService(db, pipeline=p)
+            result = service.promote_candidate_themes(limit=limit)
+            summary["pipelines"][p] = result
+            summary["promoted_total"] += result.get("promoted", 0)
+            summary["scanned_total"] += result.get("scanned", 0)
+            summary["errors"] += result.get("errors", 0)
+
+        duration = time.time() - start_time
+        logger.info("Candidate promotion complete in %.2fs", duration)
+        logger.info("  Themes scanned: %s", summary["scanned_total"])
+        logger.info("  Themes promoted: %s", summary["promoted_total"])
+        logger.info("  Errors: %s", summary["errors"])
+        logger.info("=" * 60)
+        return {
+            "status": "completed",
+            "summary": summary,
+            "duration_seconds": round(duration, 2),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error("Error in promote_candidate_themes task: %s", e, exc_info=True)
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+    finally:
+        db.close()
+
+
+@celery_app.task(name='app.tasks.theme_discovery_tasks.apply_lifecycle_policies')
+def apply_lifecycle_policies(pipeline: str = None, limit: int = 1000):
+    """
+    Apply dormancy/reactivation lifecycle policies with explainable counters.
+    """
+    pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+    logger.info("=" * 60)
+    logger.info("TASK: Apply Lifecycle Dormancy/Reactivation Policies")
+    logger.info(f"Pipelines: {pipelines}")
+    logger.info("=" * 60)
+
+    from ..services.theme_discovery_service import ThemeDiscoveryService
+
+    db = SessionLocal()
+    start_time = time.time()
+    summary = {
+        "pipelines": {},
+        "to_dormant_total": 0,
+        "to_reactivated_total": 0,
+        "scanned_total": 0,
+        "errors": 0,
+    }
+
+    try:
+        for p in pipelines:
+            service = ThemeDiscoveryService(db, pipeline=p)
+            result = service.apply_dormancy_and_reactivation_policies(limit=limit)
+            summary["pipelines"][p] = result
+            summary["to_dormant_total"] += result.get("to_dormant", 0)
+            summary["to_reactivated_total"] += result.get("to_reactivated", 0)
+            summary["scanned_total"] += result.get("scanned", 0)
+            summary["errors"] += result.get("errors", 0)
+
+        duration = time.time() - start_time
+        logger.info("Lifecycle policy pass complete in %.2fs", duration)
+        logger.info("  Themes scanned: %s", summary["scanned_total"])
+        logger.info("  Dormant transitions: %s", summary["to_dormant_total"])
+        logger.info("  Reactivated transitions: %s", summary["to_reactivated_total"])
+        logger.info("  Errors: %s", summary["errors"])
+        logger.info("=" * 60)
+        return {
+            "status": "completed",
+            "summary": summary,
+            "duration_seconds": round(duration, 2),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error("Error in apply_lifecycle_policies task: %s", e, exc_info=True)
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+    finally:
+        db.close()
+
+
+@celery_app.task(name='app.tasks.theme_discovery_tasks.infer_theme_relationships')
+def infer_theme_relationships(pipeline: str = None, max_merge_suggestions: int = 300):
+    """
+    Infer theme relationship edges from merge analysis and rule-based overlap checks.
+    """
+    pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+    logger.info("=" * 60)
+    logger.info("TASK: Infer Theme Relationships")
+    logger.info(f"Pipelines: {pipelines}")
+    logger.info("=" * 60)
+
+    from ..services.theme_discovery_service import ThemeDiscoveryService
+
+    db = SessionLocal()
+    start_time = time.time()
+    summary = {"pipelines": {}, "edges_written": 0, "errors": 0}
+
+    try:
+        for p in pipelines:
+            service = ThemeDiscoveryService(db, pipeline=p)
+            result = service.infer_theme_relationships(max_merge_suggestions=max_merge_suggestions)
+            summary["pipelines"][p] = result
+            summary["edges_written"] += (
+                result.get("merge_edges_written", 0) + result.get("rule_edges_written", 0)
+            )
+            summary["errors"] += result.get("errors", 0)
+
+        duration = time.time() - start_time
+        logger.info("Theme relationship inference complete in %.2fs", duration)
+        logger.info("  Edges written/updated: %s", summary["edges_written"])
+        logger.info("  Errors: %s", summary["errors"])
+        logger.info("=" * 60)
+        return {
+            "status": "completed",
+            "summary": summary,
+            "duration_seconds": round(duration, 2),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error("Error in infer_theme_relationships task: %s", e, exc_info=True)
+        return {"error": str(e), "timestamp": datetime.now().isoformat()}
+    finally:
+        db.close()
+
+
 @celery_app.task(name='app.tasks.theme_discovery_tasks.validate_themes')
 def validate_themes(min_correlation: float = 0.5):
     """

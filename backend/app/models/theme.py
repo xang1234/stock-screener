@@ -240,6 +240,41 @@ class ThemeLifecycleTransition(Base):
     transitioned_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
+class ThemeRelationship(Base):
+    """Non-destructive semantic relationship edges between themes."""
+
+    __tablename__ = "theme_relationships"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_cluster_id = Column(Integer, ForeignKey("theme_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_cluster_id = Column(Integer, ForeignKey("theme_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    pipeline = Column(String(20), nullable=False, index=True)
+    relationship_type = Column(String(20), nullable=False, index=True)  # subset, related, distinct
+    confidence = Column(Float, nullable=False, default=0.5)
+    provenance = Column(String(40), nullable=False, default="rule_inference")
+    evidence = Column(JSON)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "relationship_type IN ('subset', 'related', 'distinct')",
+            name="ck_theme_relationship_type",
+        ),
+        CheckConstraint("source_cluster_id != target_cluster_id", name="ck_theme_relationship_not_self"),
+        UniqueConstraint(
+            "source_cluster_id",
+            "target_cluster_id",
+            "relationship_type",
+            "pipeline",
+            name="uix_theme_relationship_edge",
+        ),
+        Index("idx_theme_relationship_source_active", "source_cluster_id", "is_active"),
+        Index("idx_theme_relationship_target_active", "target_cluster_id", "is_active"),
+    )
+
+
 class ThemeConstituent(Base):
     """Stocks that belong to a theme (ticker-to-theme mapping)"""
 

@@ -82,10 +82,23 @@ class ThemeConstituentResponse(BaseModel):
         from_attributes = True
 
 
+class ThemeRelationshipResponse(BaseModel):
+    relation_id: int
+    relationship_type: str = Field(..., pattern=r"^(subset|related|distinct)$")
+    direction: str = Field(..., pattern=r"^(incoming|outgoing)$")
+    confidence: float
+    provenance: Optional[str] = None
+    evidence: Optional[dict] = None
+    peer_theme_id: int
+    peer_theme_name: Optional[str] = None
+    peer_theme_display_name: Optional[str] = None
+
+
 class ThemeDetailResponse(BaseModel):
     theme: ThemeClusterResponse
     constituents: list[ThemeConstituentResponse]
     metrics: Optional["ThemeMetricsResponse"]
+    relationships: list[ThemeRelationshipResponse] = Field(default_factory=list)
 
 
 # Theme Metrics Schemas
