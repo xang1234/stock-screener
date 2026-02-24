@@ -346,3 +346,51 @@ def test_recompute_stale_embeddings_prevents_failed_row_starvation_in_run(db_ses
     assert result["stale_remaining_after"] == 1
     assert result["has_more"] is True
     assert any(item["theme_cluster_id"] == theme_a.id for item in result["failed_clusters"])
+
+
+def test_recompute_stale_embeddings_prevents_cross_run_starvation(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    theme_a = _make_theme(db_session)
+    theme_b = ThemeCluster(
+        canonical_key="ai_power_grid",
+        display_name="AI Power Grid",
+        name="AI Power Grid",
+        aliases=["Power Grid AI"],
+        description="Power grid modernization for AI workloads",
+        category="utilities",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(theme_b)
+    db_session.commit()
+    emb_a = _make_embedding(db_session, theme_a.id, stale=True)
+    emb_b = _make_embedding(db_session, theme_b.id, stale=True)
+    emb_a.updated_at = datetime(2020, 1, 1, 0, 0, 0)
+    emb_b.updated_at = datetime(2021, 1, 1, 0, 0, 0)
+    db_session.commit()
+
+    original_update = service.update_theme_embedding
+
+    def _fail_oldest(self, theme):
+        if theme.id == theme_a.id:
+            raise RuntimeError("simulated-stale-failure")
+        return original_update(theme)
+
+    service.update_theme_embedding = MethodType(_fail_oldest, service)
+    first = service.recompute_stale_embeddings(batch_size=1, max_batches=1)
+    assert first["processed"] == 1
+    assert first["failed"] == 1
+
+    # Next run should process theme_b first because failed theme_a was deferred.
+    service.update_theme_embedding = original_update
+    second = service.recompute_stale_embeddings(batch_size=1, max_batches=1)
+    assert second["processed"] == 1
+    assert second["refreshed"] == 1
+
+    refreshed_a = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_a.id).one()
+    refreshed_b = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_b.id).one()
+    assert refreshed_a.is_stale is True
+    assert refreshed_b.is_stale is False

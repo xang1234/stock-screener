@@ -812,6 +812,8 @@ class ThemeDiscoveryService:
         tickers: Optional[list] = None,
         metrics: Optional[dict] = None,
         severity: str = "info",
+        *,
+        auto_commit: bool = True,
     ) -> ThemeAlert:
         """Create a theme alert"""
         alert = ThemeAlert(
@@ -824,7 +826,8 @@ class ThemeDiscoveryService:
             metrics=metrics or {},
         )
         self.db.add(alert)
-        self.db.commit()
+        if auto_commit:
+            self.db.commit()
         return alert
 
     def _emit_lifecycle_transition_alert(
@@ -861,6 +864,7 @@ class ThemeDiscoveryService:
                 "runbook_url": LIFECYCLE_RUNBOOK_URL,
             },
             severity="info",
+            auto_commit=False,
         )
 
     def check_for_alerts(self) -> list[ThemeAlert]:

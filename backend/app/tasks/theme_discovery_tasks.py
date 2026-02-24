@@ -24,11 +24,47 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import logging
 from datetime import datetime
 import time
+from uuid import uuid4
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
+from ..services.redis_pool import get_redis_client
 
 logger = logging.getLogger(__name__)
+
+_THEME_STALE_EMBED_LOCK_KEY = "theme:stale_embedding_recompute:lock"
+_THEME_STALE_EMBED_LOCK_TTL_SECONDS = 3600
+_LOCK_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+def _acquire_theme_stale_embedding_lock(task_id: str) -> tuple[object | None, str | None]:
+    client = get_redis_client()
+    if client is None:
+        return None, None
+    token = f"{task_id}:{uuid4().hex}"
+    acquired = client.set(
+        _THEME_STALE_EMBED_LOCK_KEY,
+        token,
+        nx=True,
+        ex=_THEME_STALE_EMBED_LOCK_TTL_SECONDS,
+    )
+    if acquired:
+        return client, token
+    return client, None
+
+
+def _release_theme_stale_embedding_lock(client, token: str) -> None:
+    if client is None or not token:
+        return
+    try:
+        client.eval(_LOCK_RELEASE_LUA, 1, _THEME_STALE_EMBED_LOCK_KEY, token)
+    except Exception as exc:
+        logger.warning("Failed to release stale embedding recompute lock: %s", exc)
 
 
 @celery_app.task(name='app.tasks.theme_discovery_tasks.ingest_content')
@@ -366,6 +402,31 @@ def recompute_stale_theme_embeddings(
 
     from ..services.theme_merging_service import ThemeMergingService
 
+    task_id = getattr(getattr(self, "request", None), "id", None) or "unknown"
+    lock_client, lock_token = _acquire_theme_stale_embedding_lock(task_id)
+    if lock_client is None:
+        logger.warning("Redis unavailable; cannot enforce strict stale-embedding task concurrency")
+        return {
+            "status": "skipped",
+            "reason": "lock_unavailable",
+            "message": "Redis lock unavailable; strict single-flight concurrency not satisfied",
+            "timestamp": datetime.now().isoformat(),
+        }
+    if lock_token is None:
+        holder = None
+        try:
+            holder = lock_client.get(_THEME_STALE_EMBED_LOCK_KEY)
+        except Exception:
+            holder = None
+        holder_display = holder.decode() if isinstance(holder, (bytes, bytearray)) else str(holder or "")
+        logger.info("Skipping stale embedding recompute because lock is already held (%s)", holder_display)
+        return {
+            "status": "skipped",
+            "reason": "lock_held",
+            "holder": holder_display,
+            "timestamp": datetime.now().isoformat(),
+        }
+
     db = SessionLocal()
     start_time = time.time()
     last_progress: dict[str, object] = {}
@@ -426,6 +487,7 @@ def recompute_stale_theme_embeddings(
         raise
     finally:
         db.close()
+        _release_theme_stale_embedding_lock(lock_client, lock_token or "")
 
 
 @celery_app.task(name='app.tasks.theme_discovery_tasks.promote_candidate_themes')

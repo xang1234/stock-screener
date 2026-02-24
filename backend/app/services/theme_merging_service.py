@@ -218,6 +218,7 @@ class ThemeMergingService:
 
         Ordering oldest stale rows first plus single-run attempted-id exclusion
         prevents long-lived stale failures from starving newer stale rows.
+        Failed rows are moved to the back of future runs by updating updated_at.
         """
         bounded_batch_size = max(1, int(batch_size or 1))
         bounded_max_batches = max(1, int(max_batches or 1))
@@ -276,6 +277,15 @@ class ThemeMergingService:
                             "error": str(exc),
                         }
                     )
+                    # Cross-run fairness: failed rows should not monopolize oldest-first batches.
+                    # Keep row stale, but move its ordering timestamp forward.
+                    self.db.query(ThemeEmbedding).filter(
+                        ThemeEmbedding.theme_cluster_id == cluster.id
+                    ).update(
+                        {ThemeEmbedding.updated_at: datetime.utcnow()},
+                        synchronize_session=False,
+                    )
+                    self.db.commit()
                     logger.error("Failed stale embedding recompute for cluster %s: %s", cluster.id, exc)
 
             stale_remaining = self.db.query(func.count(ThemeEmbedding.id)).join(
