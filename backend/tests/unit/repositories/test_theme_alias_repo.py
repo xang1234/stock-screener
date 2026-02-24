@@ -199,3 +199,22 @@ class TestLookupAndDeactivate:
         rows = repo.list_for_cluster(theme_cluster_id=cluster.id)
         assert rows[0].id == b.id
         assert {rows[0].id, rows[1].id} == {a.id, b.id}
+
+    def test_record_counter_evidence_degrades_alias_confidence(self, repo: SqlThemeAliasRepository, session: Session):
+        cluster = _make_cluster(session, key="ai_infrastructure", name="AI Infrastructure")
+        row = repo.record_observation(
+            theme_cluster_id=cluster.id,
+            pipeline="technical",
+            alias_text="AI Infrastructure",
+            confidence=0.8,
+        )
+
+        updated = repo.record_counter_evidence(
+            pipeline="technical",
+            alias_key="ai_infrastructure",
+        )
+
+        assert updated is not None
+        assert updated.id == row.id
+        assert updated.evidence_count == 2
+        assert updated.confidence < 0.8

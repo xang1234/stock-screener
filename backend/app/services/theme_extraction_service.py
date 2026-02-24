@@ -780,6 +780,7 @@ Example themes for this pipeline: {examples_str}
         score = 0.0
         best_alternative_cluster_id = None
         best_alternative_score = None
+        blocked_alias_key_for_counter: str | None = None
 
         # Stage A: pipeline+canonical_key exact matching (indexed, low-latency gate).
         if cluster is None:
@@ -812,6 +813,7 @@ Example themes for this pipeline: {examples_str}
                 elif not self._can_auto_attach_alias(alias_match):
                     best_alternative_cluster_id = alias_match.theme_cluster_id
                     best_alternative_score = alias_score
+                    blocked_alias_key_for_counter = alias_match.alias_key
                     cluster = None
                     if fallback_reason is None:
                         fallback_reason = "alias_match_below_auto_attach_threshold"
@@ -877,14 +879,21 @@ Example themes for this pipeline: {examples_str}
                 cluster.aliases = cluster.aliases + [raw_alias]
 
         if raw_alias and canonical_key != UNKNOWN_THEME_KEY:
-            alias_repo.record_observation(
-                theme_cluster_id=cluster.id,
-                pipeline=self.pipeline,
-                alias_text=raw_alias,
-                source="llm_extraction",
-                confidence=float(mention_data.get("confidence") or 0.5),
-                seen_at=datetime.utcnow(),
-            )
+            if blocked_alias_key_for_counter is not None:
+                alias_repo.record_counter_evidence(
+                    pipeline=self.pipeline,
+                    alias_key=blocked_alias_key_for_counter,
+                    seen_at=datetime.utcnow(),
+                )
+            else:
+                alias_repo.record_observation(
+                    theme_cluster_id=cluster.id,
+                    pipeline=self.pipeline,
+                    alias_text=raw_alias,
+                    source="llm_extraction",
+                    confidence=float(mention_data.get("confidence") or 0.5),
+                    seen_at=datetime.utcnow(),
+                )
 
         score_margin = None
         if best_alternative_score is not None:

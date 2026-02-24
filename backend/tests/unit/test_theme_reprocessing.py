@@ -801,9 +801,9 @@ class TestThemeClusterLabelPreservation:
         assert decision.fallback_reason == "alias_match_below_auto_attach_threshold"
         assert decision.best_alternative_cluster_id == legacy_cluster.id
         assert decision.best_alternative_score is not None
-        # Alias telemetry still accrues even when Stage B does not auto-attach.
+        # Blocked Stage B contributes counter-evidence to the old alias mapping.
         assert alias_row.evidence_count == 2
-        assert alias_row.confidence > 0.6
+        assert alias_row.confidence < 0.6
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")

@@ -122,3 +122,40 @@ class SqlThemeAliasRepository:
         row.is_active = False
         self._session.flush()
         return True
+
+    def record_counter_evidence(
+        self,
+        *,
+        pipeline: str,
+        alias_key: str,
+        seen_at: datetime | None = None,
+    ) -> ThemeAlias | None:
+        """Record contradictory evidence against an existing alias mapping."""
+        pipeline = (pipeline or "").strip().lower()
+        if pipeline not in VALID_PIPELINES:
+            raise ValueError(f"Invalid pipeline '{pipeline}'. Allowed values: {sorted(VALID_PIPELINES)}")
+        alias_key = canonical_theme_key(alias_key)
+        if alias_key == UNKNOWN_THEME_KEY:
+            raise ValueError("Cannot record counter evidence with unknown_theme key")
+
+        row = (
+            self._session.query(ThemeAlias)
+            .filter(
+                ThemeAlias.pipeline == pipeline,
+                ThemeAlias.alias_key == alias_key,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+
+        when = seen_at or datetime.utcnow()
+        if row.first_seen_at is None:
+            row.first_seen_at = when
+        row.last_seen_at = when
+        old_count = max(1, row.evidence_count or 1)
+        # Counter-evidence contributes a 0.0 confidence observation.
+        row.confidence = (float(row.confidence or 0.0) * old_count) / (old_count + 1)
+        row.evidence_count = old_count + 1
+        self._session.flush()
+        return row
