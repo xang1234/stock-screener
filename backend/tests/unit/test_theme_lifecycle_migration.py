@@ -85,3 +85,44 @@ def test_theme_lifecycle_migration_is_idempotent():
 
     assert first["transition_table_created"] is True
     assert second["clusters_backfilled"] == 0
+
+
+def test_theme_lifecycle_migration_normalizes_invalid_existing_states():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.connect() as conn:
+        _create_pre_lifecycle_theme_clusters(conn)
+        conn.execute(
+            text(
+                """
+                ALTER TABLE theme_clusters ADD COLUMN lifecycle_state TEXT
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO theme_clusters(name, canonical_key, display_name, is_active, lifecycle_state)
+                VALUES
+                ('Bad Active', 'bad_active', 'Bad Active', 1, 'weird_state'),
+                ('Bad Retired', 'bad_retired', 'Bad Retired', 0, 'unknown_state')
+                """
+            )
+        )
+        conn.commit()
+
+    result = migrate_theme_lifecycle(engine)
+    assert result["clusters_backfilled"] >= 2
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT canonical_key, lifecycle_state
+                FROM theme_clusters
+                ORDER BY id
+                """
+            )
+        ).fetchall()
+
+    assert rows[0][1] == "active"
+    assert rows[1][1] == "retired"

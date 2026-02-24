@@ -64,6 +64,30 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
         )
         stats["clusters_backfilled"] = int(result.rowcount or 0)
 
+        invalid_result = conn.execute(
+            text(
+                """
+                UPDATE theme_clusters
+                SET lifecycle_state = CASE
+                    WHEN is_active = 0 THEN 'retired'
+                    ELSE 'active'
+                END,
+                    lifecycle_state_updated_at = COALESCE(lifecycle_state_updated_at, updated_at, created_at, CURRENT_TIMESTAMP),
+                    candidate_since_at = COALESCE(candidate_since_at, first_seen_at, created_at, CURRENT_TIMESTAMP),
+                    activated_at = CASE
+                        WHEN is_active = 1 THEN COALESCE(activated_at, first_seen_at, created_at, CURRENT_TIMESTAMP)
+                        ELSE activated_at
+                    END,
+                    retired_at = CASE
+                        WHEN is_active = 0 THEN COALESCE(retired_at, updated_at, last_seen_at, CURRENT_TIMESTAMP)
+                        ELSE retired_at
+                    END
+                WHERE lifecycle_state NOT IN ('candidate', 'active', 'dormant', 'reactivated', 'retired')
+                """
+            )
+        )
+        stats["clusters_backfilled"] += int(invalid_result.rowcount or 0)
+
         conn.execute(
             text(
                 """
