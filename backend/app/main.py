@@ -93,10 +93,7 @@ def run_theme_aliases_migration():
     """
     from .db_migrations.theme_aliases_migration import migrate_theme_aliases
 
-    try:
-        migrate_theme_aliases(engine)
-    except Exception as e:
-        print(f"Warning: Theme aliases migration failed (non-fatal): {e}")
+    migrate_theme_aliases(engine)
 
 
 async def trigger_gapfill_on_startup():

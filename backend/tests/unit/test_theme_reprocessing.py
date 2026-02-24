@@ -608,3 +608,39 @@ class TestThemeClusterLabelPreservation:
 
         assert got.id == cluster.id
         assert cluster_count == 1
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_get_or_create_cluster_reactivates_inactive_canonical_match(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        """Canonical-key fallback should reactivate matching inactive clusters instead of creating duplicates."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        cluster = ThemeCluster(
+            canonical_key="ai_infra",
+            display_name="AI Infra",
+            name="AI Infra",
+            pipeline="technical",
+            aliases=["AI Infra"],
+            is_active=False,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got = service._get_or_create_cluster({"theme": "AI Infra", "confidence": 0.8})
+        db_session.refresh(cluster)
+
+        assert got.id == cluster.id
+        assert cluster.is_active is True
+        assert db_session.query(ThemeCluster).count() == 1

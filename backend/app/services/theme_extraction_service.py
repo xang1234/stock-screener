@@ -712,7 +712,18 @@ Example themes for this pipeline: {examples_str}
             cluster = self.db.query(ThemeCluster).filter(
                 ThemeCluster.canonical_key == canonical_key,
                 ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == True,
             ).first()
+        if cluster is None:
+            inactive_cluster = self.db.query(ThemeCluster).filter(
+                ThemeCluster.canonical_key == canonical_key,
+                ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_active == False,
+            ).first()
+            if inactive_cluster is not None:
+                inactive_cluster.is_active = True
+                inactive_cluster.last_seen_at = datetime.utcnow()
+                cluster = inactive_cluster
         if cluster is None:
             cluster = self.db.query(ThemeCluster).filter(
                 ThemeCluster.display_name == canonical_theme,

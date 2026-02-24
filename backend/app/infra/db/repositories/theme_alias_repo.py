@@ -80,9 +80,13 @@ class SqlThemeAliasRepository:
             self._session.flush()
             return row
 
+        was_active = bool(existing.is_active)
         existing.is_active = True
+        if (not was_active) and existing.theme_cluster_id != theme_cluster_id:
+            existing.theme_cluster_id = theme_cluster_id
         existing.alias_text = alias_text or existing.alias_text
-        existing.source = source or existing.source
+        if not existing.source:
+            existing.source = source or "llm_extraction"
         existing.last_seen_at = when
         if existing.first_seen_at is None:
             existing.first_seen_at = when

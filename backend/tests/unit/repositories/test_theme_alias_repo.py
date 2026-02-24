@@ -97,6 +97,31 @@ class TestRecordObservation:
                 alias_text="!!!",
             )
 
+    def test_reactivates_inactive_alias_and_rebinds_cluster(self, repo: SqlThemeAliasRepository, session: Session):
+        cluster_a = _make_cluster(session, key="ai_infrastructure", name="AI Infrastructure")
+        cluster_b = _make_cluster(session, key="ai_semiconductors", name="AI Semiconductors")
+        created = repo.record_observation(
+            theme_cluster_id=cluster_a.id,
+            pipeline="technical",
+            alias_text="AI Infrastructure",
+            source="manual",
+        )
+        created.is_active = False
+        session.flush()
+
+        updated = repo.record_observation(
+            theme_cluster_id=cluster_b.id,
+            pipeline="technical",
+            alias_text="AI Infrastructure",
+            source="llm_extraction",
+            confidence=0.9,
+        )
+
+        assert updated.id == created.id
+        assert updated.is_active is True
+        assert updated.theme_cluster_id == cluster_b.id
+        assert updated.source == "manual"
+
 
 class TestLookupAndDeactivate:
     def test_find_exact_returns_active_row(self, repo: SqlThemeAliasRepository, session: Session):
