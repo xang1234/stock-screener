@@ -482,10 +482,20 @@ def test_find_all_similar_pairs_uses_blocking_and_top_k(db_session):
 
     service._cosine_similarity = _counting_cosine
 
-    pairs = service.find_all_similar_pairs(threshold=0.90, top_k=1, pipeline="technical")
+    pairs = service.find_all_similar_pairs(
+        threshold=0.90,
+        top_k=1,
+        pipeline="technical",
+        recall_sample_size=5,
+    )
 
-    # Brute force for 5 themes would be 10 pairwise comparisons; optimized path should do fewer.
-    assert calls["count"] < 10
+    # Brute force for 5 themes would be 10 pairwise comparisons in candidate generation.
+    # Recall sampling may add extra comparisons, so validate the tracked generation metric.
+    metrics = service._last_pair_generation_metrics
+    assert metrics["compared_pairs"] < 10
     # At least one strong AI pair and one strong defense pair should remain discoverable.
     pair_ids = {(row["theme1_id"], row["theme2_id"]) for row in pairs}
     assert len(pair_ids) >= 2
+    assert metrics["recall_sample_size"] == 5
+    assert metrics["sampled_recall"] is not None
+    assert 0.0 <= metrics["sampled_recall"] <= 1.0

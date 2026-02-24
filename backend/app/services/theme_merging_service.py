@@ -103,6 +103,40 @@ class ThemeMergingService:
         # Rate limiting for LLM calls
         self._last_llm_request = 0
         self._min_llm_interval = 0.5  # seconds
+        self._last_pair_generation_metrics: dict[str, object] = {}
+
+    @staticmethod
+    def _stable_candidate_rank(source_id: int, candidate_id: int) -> int:
+        # Deterministic lightweight rank to avoid id-order bias.
+        return ((candidate_id * 1103515245) ^ (source_id * 12345)) & 0x7FFFFFFF
+
+    def _cap_candidate_ids(self, candidate_ids: set[int], *, source_id: int, limit: int) -> set[int]:
+        if limit <= 0 or len(candidate_ids) <= limit:
+            return set(candidate_ids)
+        ranked = sorted(candidate_ids, key=lambda candidate_id: self._stable_candidate_rank(source_id, candidate_id))
+        return set(ranked[:limit])
+
+    def _fallback_neighbor_ids(self, *, all_ids: list[int], source_id: int, limit: int) -> set[int]:
+        if limit <= 0 or len(all_ids) <= 1:
+            return set()
+        try:
+            idx = all_ids.index(source_id)
+        except ValueError:
+            return set()
+        picked: set[int] = set()
+        step = 1
+        while len(picked) < limit and (idx - step >= 0 or idx + step < len(all_ids)):
+            if idx - step >= 0:
+                picked.add(all_ids[idx - step])
+                if len(picked) >= limit:
+                    break
+            if idx + step < len(all_ids):
+                picked.add(all_ids[idx + step])
+                if len(picked) >= limit:
+                    break
+            step += 1
+        picked.discard(source_id)
+        return picked
 
     def _load_merge_model_config(self):
         """Load merge-model selection from persisted settings."""
@@ -412,6 +446,7 @@ class ThemeMergingService:
         threshold: float = None,
         pipeline: str = None,
         top_k: int | None = None,
+        recall_sample_size: int = 0,
     ) -> list[dict]:
         """
         Find all pairs of similar themes above threshold.
@@ -466,6 +501,7 @@ class ThemeMergingService:
         pair_scores: dict[tuple[int, int], dict] = {}
         similarity_cache: dict[tuple[int, int], float] = {}
         compared_count = 0
+        sampled_recall: float | None = None
 
         for pipeline_key, rows in by_pipeline.items():
             id_to_row = {int(row["id"]): row for row in rows}
@@ -493,17 +529,29 @@ class ThemeMergingService:
                 source_first = str(source.get("first_token") or "")
                 source_category = str(source.get("category") or "")
 
-                candidate_ids: set[int] = set()
+                token_candidate_ids: set[int] = set()
                 for token in source_tokens:
-                    candidate_ids.update(token_to_ids.get(token, set()))
+                    token_candidate_ids.update(token_to_ids.get(token, set()))
+                first_candidate_ids: set[int] = set()
                 if source_first:
-                    candidate_ids.update(first_token_to_ids.get(source_first, set()))
+                    first_candidate_ids.update(first_token_to_ids.get(source_first, set()))
+                category_candidate_ids: set[int] = set()
                 if source_category:
-                    candidate_ids.update(category_to_ids.get(source_category, set()))
+                    category_candidate_ids.update(category_to_ids.get(source_category, set()))
+
+                block_cap = max(1, self.CANDIDATE_BLOCK_MAX // 3)
+                candidate_ids = set()
+                candidate_ids.update(self._cap_candidate_ids(token_candidate_ids, source_id=source_id, limit=block_cap))
+                candidate_ids.update(self._cap_candidate_ids(first_candidate_ids, source_id=source_id, limit=block_cap))
+                candidate_ids.update(self._cap_candidate_ids(category_candidate_ids, source_id=source_id, limit=block_cap))
                 candidate_ids.discard(source_id)
 
                 if not candidate_ids:
-                    candidate_ids = {value for value in all_ids if value != source_id}
+                    candidate_ids = self._fallback_neighbor_ids(
+                        all_ids=all_ids,
+                        source_id=source_id,
+                        limit=self.CANDIDATE_BLOCK_MAX,
+                    )
 
                 scored_candidates: list[tuple[int, int]] = []
                 for candidate_id in candidate_ids:
@@ -517,7 +565,9 @@ class ThemeMergingService:
                     lexical_score = (shared_tokens * 4) + (first_token_match * 2) + category_match
                     scored_candidates.append((candidate_id, lexical_score))
 
-                scored_candidates.sort(key=lambda item: (-item[1], item[0]))
+                scored_candidates.sort(
+                    key=lambda item: (-item[1], self._stable_candidate_rank(source_id, item[0]))
+                )
                 source_matches: list[tuple[int, float]] = []
                 for candidate_id, _lexical_score in scored_candidates[: self.CANDIDATE_BLOCK_MAX]:
                     pair_key = (source_id, candidate_id) if source_id < candidate_id else (candidate_id, source_id)
@@ -545,14 +595,46 @@ class ThemeMergingService:
                     if existing is None or payload["similarity"] > existing["similarity"]:
                         pair_scores[pair_key] = payload
 
+        if recall_sample_size > 1:
+            recall_denominator = 0
+            recall_numerator = 0
+            for pipeline_key, rows in by_pipeline.items():
+                if len(rows) < 2:
+                    continue
+                sample_limit = min(len(rows), max(2, int(recall_sample_size)))
+                sample_rows = sorted(rows, key=lambda row: int(row["id"]))[:sample_limit]
+                sample_ids = {int(row["id"]) for row in sample_rows}
+                for i in range(len(sample_rows)):
+                    left_id = int(sample_rows[i]["id"])
+                    for j in range(i + 1, len(sample_rows)):
+                        right_id = int(sample_rows[j]["id"])
+                        pair_key = (left_id, right_id) if left_id < right_id else (right_id, left_id)
+                        similarity = similarity_cache.get(pair_key)
+                        if similarity is None:
+                            similarity = self._cosine_similarity(sample_rows[i]["vector"], sample_rows[j]["vector"])
+                        if similarity >= threshold:
+                            recall_denominator += 1
+                            if pair_key in pair_scores:
+                                recall_numerator += 1
+            sampled_recall = 1.0 if recall_denominator == 0 else float(recall_numerator / recall_denominator)
+
         pairs = sorted(pair_scores.values(), key=lambda x: x["similarity"], reverse=True)
 
+        self._last_pair_generation_metrics = {
+            "themes_considered": len(theme_data),
+            "compared_pairs": compared_count,
+            "matched_pairs": len(pairs),
+            "top_k": effective_top_k,
+            "recall_sample_size": int(recall_sample_size or 0),
+            "sampled_recall": sampled_recall,
+        }
         logger.info(
-            "find_all_similar_pairs optimized path: themes=%s compared_pairs=%s matched_pairs=%s top_k=%s",
+            "find_all_similar_pairs optimized path: themes=%s compared_pairs=%s matched_pairs=%s top_k=%s sampled_recall=%s",
             len(theme_data),
             compared_count,
             len(pairs),
             effective_top_k,
+            sampled_recall,
         )
         return pairs
 
