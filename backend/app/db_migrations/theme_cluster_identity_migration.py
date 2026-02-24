@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+import json
 from typing import Any
 
 from sqlalchemy import text
@@ -41,6 +42,7 @@ def migrate_theme_cluster_identity(engine) -> dict[str, Any]:
         "table_created": False,
         "table_rebuilt": False,
         "rows_backfilled": 0,
+        "duplicates_resolved": 0,
         "indexes_ensured": [],
     }
 
@@ -51,14 +53,24 @@ def migrate_theme_cluster_identity(engine) -> dict[str, Any]:
             stats["table_created"] = True
         elif _needs_table_rebuild(conn):
             rows = _build_migrated_rows(conn)
-            _assert_no_pipeline_key_duplicates(rows)
+            rows, resolved, duplicate_events = _resolve_pipeline_key_duplicates(rows)
+            stats["duplicates_resolved"] = resolved
             _rebuild_theme_clusters_table(conn, rows)
             stats["table_rebuilt"] = True
             stats["rows_backfilled"] = len(rows)
         else:
             rows = _build_migrated_rows(conn)
-            _assert_no_pipeline_key_duplicates(rows)
+            rows, resolved, duplicate_events = _resolve_pipeline_key_duplicates(rows)
+            stats["duplicates_resolved"] = resolved
             stats["rows_backfilled"] = _backfill_identity_columns(conn, rows)
+
+        if stats["duplicates_resolved"] > 0:
+            sample = "; ".join(duplicate_events[:10])
+            logger.warning(
+                "Resolved %s duplicate theme cluster canonical_key collisions during migration: %s",
+                stats["duplicates_resolved"],
+                sample,
+            )
 
         _ensure_unique_index(conn)
         stats["indexes_ensured"] = [UNIQUE_INDEX_NAME]
@@ -216,22 +228,90 @@ def _build_migrated_rows(conn) -> list[dict[str, Any]]:
     return migrated
 
 
-def _assert_no_pipeline_key_duplicates(rows: list[dict[str, Any]]) -> None:
-    by_key: dict[tuple[str, str], list[int | None]] = defaultdict(list)
-    for row in rows:
-        by_key[(row["pipeline"], row["canonical_key"])].append(row["id"])
+def _parse_aliases(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        text_value = value.strip()
+        if not text_value:
+            return []
+        try:
+            parsed = json.loads(text_value)
+        except Exception:
+            return [text_value]
+        if isinstance(parsed, list):
+            return [str(v).strip() for v in parsed if str(v).strip()]
+        return [str(parsed).strip()] if str(parsed).strip() else []
+    return [str(value).strip()] if str(value).strip() else []
 
-    duplicates = {
-        key: ids
-        for key, ids in by_key.items()
-        if len(ids) > 1
-    }
-    if duplicates:
-        sample = list(duplicates.items())[:5]
-        raise ValueError(
-            "theme_clusters migration blocked by duplicate canonical_key per pipeline: "
-            f"{sample}"
-        )
+
+def _normalize_alias_json(value: Any) -> str | None:
+    aliases = _parse_aliases(value)
+    if not aliases:
+        return None
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases:
+        if alias not in seen:
+            deduped.append(alias)
+            seen.add(alias)
+    return json.dumps(deduped)
+
+
+def _resolve_pipeline_key_duplicates(
+    rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """
+    Resolve duplicate (pipeline, canonical_key) rows deterministically.
+
+    Keeps the first row's canonical key unchanged and rewrites colliding rows to
+    `<canonical_key>_dup_<id>`, preserving row IDs to avoid FK remapping.
+    """
+    by_key: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        row["aliases"] = _normalize_alias_json(row.get("aliases"))
+        by_key[(str(row["pipeline"]), str(row["canonical_key"]))].append(row)
+
+    used_keys = {(str(r["pipeline"]), str(r["canonical_key"])) for r in rows}
+    resolved = 0
+    duplicate_events: list[str] = []
+
+    for (pipeline, canonical_key), group in by_key.items():
+        if len(group) <= 1:
+            continue
+
+        # Stable keeper selection: smallest ID wins.
+        sorted_group = sorted(group, key=lambda item: item.get("id") or 0)
+        keeper = sorted_group[0]
+
+        # Merge alias evidence into keeper from all duplicates.
+        merged_aliases = _parse_aliases(keeper.get("aliases"))
+        merged_aliases.append(str(keeper.get("display_name") or "").strip())
+        merged_aliases.append(str(keeper.get("name") or "").strip())
+        for candidate in sorted_group[1:]:
+            merged_aliases.extend(_parse_aliases(candidate.get("aliases")))
+            merged_aliases.append(str(candidate.get("display_name") or "").strip())
+            merged_aliases.append(str(candidate.get("name") or "").strip())
+        merged_clean = [a for a in merged_aliases if a]
+        keeper["aliases"] = _normalize_alias_json(merged_clean)
+
+        for candidate in sorted_group[1:]:
+            row_id = candidate.get("id") or 0
+            base = f"{canonical_key}_dup_{row_id}"
+            new_key = base
+            counter = 2
+            while (pipeline, new_key) in used_keys:
+                new_key = f"{base}_{counter}"
+                counter += 1
+            used_keys.discard((pipeline, str(candidate["canonical_key"])))
+            candidate["canonical_key"] = new_key
+            used_keys.add((pipeline, new_key))
+            resolved += 1
+            duplicate_events.append(f"{pipeline}:{canonical_key} id={row_id}->{new_key}")
+
+    return rows, resolved, duplicate_events
 
 
 def _create_theme_clusters_table(conn, table_name: str) -> None:
@@ -315,6 +395,9 @@ def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
                     canonical_key IS NULL OR canonical_key = ''
                     OR display_name IS NULL OR display_name = ''
                     OR name IS NULL OR name = ''
+                    OR canonical_key != :canonical_key
+                    OR display_name != :display_name
+                    OR name != :name
                   )
                 """
             ),

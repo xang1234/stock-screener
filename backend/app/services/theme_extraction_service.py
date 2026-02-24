@@ -6,7 +6,6 @@ This is the core intelligence layer that identifies market themes from text.
 Falls back to Google Gemini if LiteLLM providers are unavailable.
 """
 import json
-import importlib.util
 import logging
 import os
 import re
@@ -30,11 +29,12 @@ from ..models.theme import (
     ThemeMention,
     ThemeCluster,
     ThemeConstituent,
-    ThemeEmbedding,
 )
 from ..config import settings
 from .llm import LLMService, LLMError
+from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
+from .theme_lifecycle_service import set_initial_lifecycle_defaults
 
 # Optional Gemini import for fallback
 # Suppress Pydantic warnings from google-genai library (third-party issue)
@@ -51,8 +51,6 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
-SENTENCE_TRANSFORMERS_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
-SentenceTransformer = None
 
 
 class ThemeExtractionParseError(Exception):
@@ -733,35 +731,28 @@ Example themes for this pipeline: {examples_str}
         return attach_threshold, review_threshold, ambiguity_margin
 
     def _get_embedding_encoder(self):
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            return None
-        model = getattr(self, "_embedding_encoder", None)
-        if model is not None:
-            return model
-        global SentenceTransformer
-        try:
-            if SentenceTransformer is None:
-                from sentence_transformers import SentenceTransformer as _SentenceTransformer
-
-                SentenceTransformer = _SentenceTransformer
-            model = SentenceTransformer(self.EMBEDDING_MATCH_MODEL, device="cpu")
-            self._embedding_encoder = model
-            return model
-        except Exception as exc:
-            logger.warning("Embedding encoder unavailable for Stage D matching: %s", exc)
-            self._embedding_encoder = None
-            return None
+        return self._get_embedding_engine().get_encoder()
 
     def _embedding_similarity(self, left: np.ndarray, right: np.ndarray) -> float:
-        left_norm = np.linalg.norm(left)
-        right_norm = np.linalg.norm(right)
-        if left_norm == 0 or right_norm == 0:
-            return 0.0
-        return float(np.dot(left, right) / (left_norm * right_norm))
+        return ThemeEmbeddingEngine.cosine_similarity(left, right)
 
     def _build_embedding_query_text(self, *, raw_alias: str, canonical_theme: str, canonical_key: str) -> str:
         key_text = canonical_key.replace("_", " ")
         return " | ".join(part for part in (raw_alias, canonical_theme, key_text) if part)
+
+    def _get_embedding_engine(self) -> ThemeEmbeddingEngine:
+        engine = getattr(self, "_shared_embedding_engine", None)
+        if engine is None or engine.model_name != self.EMBEDDING_MATCH_MODEL:
+            engine = ThemeEmbeddingEngine(self.EMBEDDING_MATCH_MODEL)
+            self._shared_embedding_engine = engine
+        return engine
+
+    def _get_embedding_repo(self) -> ThemeEmbeddingRepository:
+        repo = getattr(self, "_shared_embedding_repo", None)
+        if repo is None:
+            repo = ThemeEmbeddingRepository(self.db)
+            self._shared_embedding_repo = repo
+        return repo
 
     def _embedding_candidate_pool(
         self,
@@ -1128,12 +1119,11 @@ Example themes for this pipeline: {examples_str}
             candidate_ids = [candidate.id for candidate in embedding_pool if candidate.id is not None]
             if candidate_ids:
                 freshness_cutoff = datetime.utcnow() - timedelta(days=self.EMBEDDING_MAX_AGE_DAYS)
-                embeddings = self.db.query(ThemeEmbedding).filter(
-                    ThemeEmbedding.theme_cluster_id.in_(candidate_ids),
-                    ThemeEmbedding.embedding_model == self.EMBEDDING_MATCH_MODEL,
-                    or_(ThemeEmbedding.updated_at.is_(None), ThemeEmbedding.updated_at >= freshness_cutoff),
-                ).all()
-                embeddings_by_cluster = {record.theme_cluster_id: record for record in embeddings}
+                embeddings_by_cluster = self._get_embedding_repo().get_by_cluster_ids(
+                    candidate_ids,
+                    embedding_model=self.EMBEDDING_MATCH_MODEL,
+                    freshness_cutoff=freshness_cutoff,
+                )
                 if embeddings_by_cluster:
                     encoder = self._get_embedding_encoder()
                     if encoder is not None:
@@ -1153,9 +1143,8 @@ Example themes for this pipeline: {examples_str}
                                 embedding_record = embeddings_by_cluster.get(candidate.id)
                                 if embedding_record is None:
                                     continue
-                                try:
-                                    candidate_vector = np.array(json.loads(embedding_record.embedding))
-                                except Exception:
+                                candidate_vector = ThemeEmbeddingEngine.deserialize(embedding_record.embedding)
+                                if candidate_vector is None:
                                     continue
                                 try:
                                     similarity = self._embedding_similarity(query_vector, candidate_vector)
@@ -1217,6 +1206,7 @@ Example themes for this pipeline: {examples_str}
                 last_seen_at=datetime.utcnow(),
                 is_emerging=True,
             )
+            set_initial_lifecycle_defaults(cluster)
             self.db.add(cluster)
             self.db.flush()  # Get ID
 

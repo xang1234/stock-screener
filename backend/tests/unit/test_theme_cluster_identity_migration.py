@@ -193,7 +193,7 @@ def test_migration_rebuilds_table_when_pipeline_nullable_and_backfills_to_techni
         assert row[0] == "technical"
 
 
-def test_migration_fails_on_legacy_duplicates_that_collapse_to_same_canonical_key():
+def test_migration_resolves_legacy_duplicates_that_collapse_to_same_canonical_key():
     engine = create_engine("sqlite:///:memory:")
     with engine.connect() as conn:
         _create_legacy_theme_clusters(conn)
@@ -208,5 +208,24 @@ def test_migration_fails_on_legacy_duplicates_that_collapse_to_same_canonical_ke
         )
         conn.commit()
 
-    with pytest.raises(ValueError, match="duplicate canonical_key per pipeline"):
-        migrate_theme_cluster_identity(engine)
+    result = migrate_theme_cluster_identity(engine)
+    assert result["duplicates_resolved"] == 1
+
+    verification = verify_theme_cluster_identity_schema(engine)
+    assert verification["ok"] is True
+    assert verification["duplicate_pipeline_keys"] == 0
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT canonical_key
+                FROM theme_clusters
+                WHERE pipeline = 'technical'
+                ORDER BY id
+                """
+            )
+        ).fetchall()
+        keys = [r[0] for r in rows]
+        assert "glp1" in keys
+        assert any(k.startswith("glp1_dup_") for k in keys)

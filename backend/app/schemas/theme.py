@@ -54,6 +54,13 @@ class ThemeClusterResponse(BaseModel):
     category: Optional[str]
     is_emerging: bool
     is_validated: bool
+    lifecycle_state: str = Field(default="candidate", pattern=r"^(candidate|active|dormant|reactivated|retired)$")
+    lifecycle_state_updated_at: Optional[datetime] = None
+    candidate_since_at: Optional[datetime] = None
+    activated_at: Optional[datetime] = None
+    dormant_at: Optional[datetime] = None
+    reactivated_at: Optional[datetime] = None
+    retired_at: Optional[datetime] = None
     discovery_source: Optional[str]
     first_seen_at: Optional[datetime]
     last_seen_at: Optional[datetime]

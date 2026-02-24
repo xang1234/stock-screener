@@ -9,7 +9,6 @@ This implements a hybrid approach:
 4. Queue moderate-confidence pairs for human review
 """
 import json
-import importlib.util
 import logging
 import os
 import re
@@ -36,11 +35,9 @@ from ..models.theme import (
 )
 from ..config import settings
 from .llm import LLMService, LLMError
+from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
-
-# Optional imports (lazy-loaded to avoid importing torch at module import time)
-SENTENCE_TRANSFORMERS_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
-SentenceTransformer = None
+from .theme_lifecycle_service import apply_lifecycle_transition
 
 logger = logging.getLogger(__name__)
 
@@ -92,33 +89,14 @@ class ThemeMergingService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.embedding_model = None
+        self.embedding_engine = ThemeEmbeddingEngine(self.EMBEDDING_MODEL)
+        self.embedding_repo = ThemeEmbeddingRepository(db)
         self.llm = None
-        self._init_embedding_model()
         self._init_llm_client()
 
         # Rate limiting for LLM calls
         self._last_llm_request = 0
         self._min_llm_interval = 0.5  # seconds
-
-    def _init_embedding_model(self):
-        """Initialize sentence-transformers model"""
-        global SentenceTransformer
-
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            logger.warning("sentence-transformers not available. Install with: pip install sentence-transformers")
-            return
-
-        try:
-            if SentenceTransformer is None:
-                from sentence_transformers import SentenceTransformer as _SentenceTransformer
-
-                SentenceTransformer = _SentenceTransformer
-            # Force CPU to avoid MPS/Metal issues with Celery fork() on macOS
-            self.embedding_model = SentenceTransformer(self.EMBEDDING_MODEL, device='cpu')
-            logger.info(f"Loaded embedding model: {self.EMBEDDING_MODEL} (device=cpu)")
-        except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
 
     def _init_llm_client(self):
         """Initialize LLMService for verification"""
@@ -138,34 +116,12 @@ class ThemeMergingService:
 
     def _get_theme_text(self, theme: ThemeCluster) -> str:
         """Generate text representation of theme for embedding"""
-        parts = [theme.name]
-
-        if theme.aliases:
-            aliases = theme.aliases if isinstance(theme.aliases, list) else []
-            if aliases:
-                parts.append(f"Also known as: {', '.join(aliases)}")
-
-        if theme.description:
-            parts.append(theme.description)
-
-        if theme.category:
-            parts.append(f"Category: {theme.category}")
-
-        return " | ".join(parts)
+        return self.embedding_repo.build_theme_text(theme)
 
     def generate_theme_embedding(self, theme: ThemeCluster) -> Optional[np.ndarray]:
         """Generate embedding vector for a theme"""
-        if not self.embedding_model:
-            logger.error("Embedding model not available")
-            return None
-
         text = self._get_theme_text(theme)
-        try:
-            embedding = self.embedding_model.encode(text, convert_to_numpy=True)
-            return embedding
-        except Exception as e:
-            logger.error(f"Failed to generate embedding for theme {theme.name}: {e}")
-            return None
+        return self.embedding_engine.encode(text)
 
     def update_theme_embedding(self, theme: ThemeCluster) -> Optional[ThemeEmbedding]:
         """Update or create embedding for a theme"""
@@ -174,34 +130,20 @@ class ThemeMergingService:
             return None
 
         # Serialize embedding as JSON list
-        embedding_json = json.dumps(embedding_array.tolist())
+        embedding_json = ThemeEmbeddingEngine.serialize(embedding_array)
         text = self._get_theme_text(theme)
-
-        # Check for existing embedding
-        existing = self.db.query(ThemeEmbedding).filter(
-            ThemeEmbedding.theme_cluster_id == theme.id
-        ).first()
-
-        if existing:
-            existing.embedding = embedding_json
-            existing.embedding_text = text
-            existing.updated_at = datetime.utcnow()
-            self.db.commit()
-            return existing
-        else:
-            new_embedding = ThemeEmbedding(
-                theme_cluster_id=theme.id,
-                embedding=embedding_json,
-                embedding_model=self.EMBEDDING_MODEL,
-                embedding_text=text,
-            )
-            self.db.add(new_embedding)
-            self.db.commit()
-            return new_embedding
+        record = self.embedding_repo.upsert_for_theme(
+            theme,
+            embedding_json=embedding_json,
+            embedding_text=text,
+            embedding_model=self.EMBEDDING_MODEL,
+        )
+        self.db.commit()
+        return record
 
     def update_all_embeddings(self) -> dict:
         """Update embeddings for all active themes"""
-        if not self.embedding_model:
+        if self.embedding_engine.get_encoder() is None:
             return {"error": "Embedding model not available", "updated": 0}
 
         themes = self.db.query(ThemeCluster).filter(
@@ -230,15 +172,14 @@ class ThemeMergingService:
 
     def _load_embedding(self, embedding_record: ThemeEmbedding) -> np.ndarray:
         """Load embedding from database record"""
-        return np.array(json.loads(embedding_record.embedding))
+        vector = ThemeEmbeddingEngine.deserialize(embedding_record.embedding)
+        if vector is None:
+            raise ValueError("Invalid embedding payload")
+        return vector
 
     def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
         """Calculate cosine similarity between two vectors"""
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return float(np.dot(a, b) / (norm_a * norm_b))
+        return ThemeEmbeddingEngine.cosine_similarity(a, b)
 
     def find_similar_themes(
         self,
@@ -250,18 +191,14 @@ class ThemeMergingService:
             threshold = self.EMBEDDING_THRESHOLD
 
         # Get source theme embedding
-        source_embedding_record = self.db.query(ThemeEmbedding).filter(
-            ThemeEmbedding.theme_cluster_id == theme_id
-        ).first()
+        source_embedding_record = self.embedding_repo.get_for_cluster(theme_id)
 
         if not source_embedding_record:
             # Try to generate it
             theme = self.db.query(ThemeCluster).filter(ThemeCluster.id == theme_id).first()
             if theme:
                 self.update_theme_embedding(theme)
-                source_embedding_record = self.db.query(ThemeEmbedding).filter(
-                    ThemeEmbedding.theme_cluster_id == theme_id
-                ).first()
+                source_embedding_record = self.embedding_repo.get_for_cluster(theme_id)
 
         if not source_embedding_record:
             return []
@@ -269,9 +206,9 @@ class ThemeMergingService:
         source_embedding = self._load_embedding(source_embedding_record)
 
         # Get all other embeddings
-        other_embeddings = self.db.query(ThemeEmbedding).filter(
-            ThemeEmbedding.theme_cluster_id != theme_id
-        ).all()
+        other_embeddings = [
+            row for row in self.embedding_repo.list_all() if row.theme_cluster_id != theme_id
+        ]
 
         # Calculate similarities
         similar = []
@@ -314,7 +251,7 @@ class ThemeMergingService:
             threshold = self.EMBEDDING_THRESHOLD
 
         # Load all embeddings with their theme pipeline info
-        embeddings = self.db.query(ThemeEmbedding).all()
+        embeddings = self.embedding_repo.list_all()
         if len(embeddings) < 2:
             return []
 
@@ -610,8 +547,20 @@ class ThemeMergingService:
             ThemeMention.theme_cluster_id == target_id
         ).count()
 
-        # 4. Deactivate source theme
-        source.is_active = False
+        # 4. Deactivate source theme with explicit lifecycle transition audit.
+        if (source.lifecycle_state or "active") != "retired":
+            apply_lifecycle_transition(
+                db=self.db,
+                theme=source,
+                to_state="retired",
+                actor="system",
+                job_name="theme_merge",
+                rule_version="lifecycle-v1",
+                reason=f"merged_into:{target_id}",
+                metadata={"merge_type": merge_type, "target_cluster_id": target_id},
+            )
+        else:
+            source.is_active = False
 
         # 5. Delete source embedding
         self.db.query(ThemeEmbedding).filter(
@@ -693,7 +642,7 @@ class ThemeMergingService:
 
         # Step 1: Update all embeddings
         logger.info("Step 1: Updating theme embeddings...")
-        if self.embedding_model:
+        if self.embedding_engine.get_encoder() is not None:
             emb_result = self.update_all_embeddings()
             results["embeddings_updated"] = emb_result.get("updated", 0)
             logger.info(f"  Updated {results['embeddings_updated']} embeddings")

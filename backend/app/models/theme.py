@@ -201,6 +201,14 @@ class ThemeCluster(Base):
     # Status
     is_active = Column(Boolean, default=True, index=True)  # Still being tracked
     is_validated = Column(Boolean, default=False)  # Validated by price correlation
+    lifecycle_state = Column(String(20), nullable=False, default="candidate", index=True)
+    lifecycle_state_updated_at = Column(DateTime(timezone=True))
+    lifecycle_state_metadata = Column(JSON)
+    candidate_since_at = Column(DateTime(timezone=True))
+    activated_at = Column(DateTime(timezone=True))
+    dormant_at = Column(DateTime(timezone=True))
+    reactivated_at = Column(DateTime(timezone=True))
+    retired_at = Column(DateTime(timezone=True))
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -208,7 +216,28 @@ class ThemeCluster(Base):
 
     __table_args__ = (
         UniqueConstraint("pipeline", "canonical_key", name="uix_theme_clusters_pipeline_canonical_key"),
+        CheckConstraint(
+            "lifecycle_state IN ('candidate', 'active', 'dormant', 'reactivated', 'retired')",
+            name="ck_theme_clusters_lifecycle_state",
+        ),
     )
+
+
+class ThemeLifecycleTransition(Base):
+    """Audit trail for lifecycle-state transitions."""
+
+    __tablename__ = "theme_lifecycle_transitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    theme_cluster_id = Column(Integer, ForeignKey("theme_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_state = Column(String(20), nullable=False)
+    to_state = Column(String(20), nullable=False, index=True)
+    actor = Column(String(80), nullable=False, default="system")
+    job_name = Column(String(80))
+    rule_version = Column(String(40))
+    reason = Column(Text)
+    transition_metadata = Column(JSON)
+    transitioned_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
 class ThemeConstituent(Base):
