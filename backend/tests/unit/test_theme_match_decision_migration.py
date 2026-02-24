@@ -51,6 +51,8 @@ def test_migration_adds_columns_and_indexes():
         "match_score",
         "match_threshold",
         "threshold_version",
+        "match_score_model",
+        "match_score_model_version",
         "match_fallback_reason",
         "best_alternative_cluster_id",
         "best_alternative_score",
@@ -74,4 +76,3 @@ def test_migration_is_idempotent():
     assert first["table_exists"] is True
     assert second["table_exists"] is True
     assert second["columns_added"] == []
-

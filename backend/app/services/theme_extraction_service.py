@@ -558,6 +558,8 @@ Example themes for this pipeline: {examples_str}
                 match_score=decision.score,
                 match_threshold=decision.threshold,
                 threshold_version=decision.threshold_version,
+                match_score_model=decision.score_model,
+                match_score_model_version=decision.score_model_version,
                 match_fallback_reason=decision.fallback_reason,
                 best_alternative_cluster_id=decision.best_alternative_cluster_id,
                 best_alternative_score=decision.best_alternative_score,
@@ -1141,7 +1143,7 @@ Example themes for this pipeline: {examples_str}
                             canonical_key=canonical_key,
                         )
                         try:
-                            query_vector = encoder.encode(query_text, convert_to_numpy=True)
+                            query_vector = np.array(encoder.encode(query_text, convert_to_numpy=True))
                         except Exception as exc:
                             logger.warning("Stage D query embedding generation failed: %s", exc)
                             query_vector = None
@@ -1155,7 +1157,11 @@ Example themes for this pipeline: {examples_str}
                                     candidate_vector = np.array(json.loads(embedding_record.embedding))
                                 except Exception:
                                     continue
-                                similarity = self._embedding_similarity(query_vector, candidate_vector)
+                                try:
+                                    similarity = self._embedding_similarity(query_vector, candidate_vector)
+                                except Exception:
+                                    # Keep Stage D best-effort; malformed rows should not fail extraction.
+                                    continue
                                 embedding_candidates.append((candidate, similarity))
                             if embedding_candidates:
                                 embedding_candidates.sort(
@@ -1186,12 +1192,14 @@ Example themes for this pipeline: {examples_str}
                                     )
                                     score_model = self.EMBEDDING_MATCH_MODEL
                                     score_model_version = self.EMBEDDING_MATCH_POLICY_VERSION
+                                    threshold_version = self.EMBEDDING_MATCH_POLICY_VERSION
                                 elif top_score >= review_threshold:
                                     best_alternative_cluster_id = top_cluster.id
                                     best_alternative_score = float(top_score)
                                     threshold = float(attach_threshold)
                                     score_model = self.EMBEDDING_MATCH_MODEL
                                     score_model_version = self.EMBEDDING_MATCH_POLICY_VERSION
+                                    threshold_version = self.EMBEDDING_MATCH_POLICY_VERSION
                                     if embedding_margin < ambiguity_margin:
                                         fallback_reason = "embedding_ambiguous_review"
                                     else:

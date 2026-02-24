@@ -1114,6 +1114,7 @@ class TestThemeClusterLabelPreservation:
         assert got_cluster.id == target.id
         assert decision.method == "embedding_similarity"
         assert decision.score >= decision.threshold
+        assert decision.threshold_version == "embedding-v1"
         assert decision.score_model == "all-MiniLM-L6-v2"
         assert decision.score_model_version == "embedding-v1"
 
@@ -1228,8 +1229,57 @@ class TestThemeClusterLabelPreservation:
         assert decision.method == "create_new_cluster"
         assert decision.fallback_reason == "embedding_ambiguous_review"
         assert decision.best_alternative_cluster_id in {candidate_a.id, candidate_b.id}
+        assert decision.threshold_version == "embedding-v1"
         assert decision.score_model == "all-MiniLM-L6-v2"
         assert decision.score_model_version == "embedding-v1"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_embedding_stage_ignores_malformed_vectors(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        class _StubEncoder:
+            def encode(self, _text, convert_to_numpy=True):
+                _ = convert_to_numpy
+                return [1.0, 0.0]
+
+        candidate = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(candidate)
+        db_session.flush()
+        db_session.add(
+            ThemeEmbedding(
+                theme_cluster_id=candidate.id,
+                embedding="[1.0, 0.0, 0.0]",
+                embedding_model="all-MiniLM-L6-v2",
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service._embedding_encoder = None
+
+        with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
+            got_cluster, decision = service._resolve_cluster_match({"theme": "AI Compute Fabric Demand", "confidence": 0.8})
+
+        assert got_cluster.id != candidate.id
+        assert decision.method == "create_new_cluster"
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -1269,4 +1319,72 @@ class TestThemeClusterLabelPreservation:
         assert mention.match_score == 0.0
         assert mention.match_threshold == 1.0
         assert mention.threshold_version == "match-v1"
+        assert mention.match_score_model is None
+        assert mention.match_score_model_version is None
         assert mention.match_fallback_reason == "no_existing_cluster_match"
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_extract_and_store_mentions_persists_embedding_model_metadata(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.domain.theme_matching import MatchDecision
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item = _make_content_item(db_session, pipeline_source, source_type="news")
+        cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            name="AI Infrastructure",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        with patch.object(
+            service,
+            "extract_from_content",
+            return_value=[
+                {
+                    "theme": "AI Compute Fabric Demand",
+                    "tickers": ["NVDA"],
+                    "sentiment": "bullish",
+                    "confidence": 0.8,
+                    "excerpt": "example",
+                }
+            ],
+        ), patch.object(
+            service,
+            "_resolve_cluster_match",
+            return_value=(
+                cluster,
+                MatchDecision(
+                    selected_cluster_id=cluster.id,
+                    method="embedding_similarity",
+                    score=0.91,
+                    threshold=0.85,
+                    threshold_version="embedding-v1",
+                    score_model="all-MiniLM-L6-v2",
+                    score_model_version="embedding-v1",
+                ),
+            ),
+        ):
+            created = service._extract_and_store_mentions(item)
+
+        assert created == 1
+        mention = db_session.query(ThemeMention).filter(ThemeMention.content_item_id == item.id).one()
+        assert mention.match_method == "embedding_similarity"
+        assert mention.threshold_version == "embedding-v1"
+        assert mention.match_score_model == "all-MiniLM-L6-v2"
+        assert mention.match_score_model_version == "embedding-v1"

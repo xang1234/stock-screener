@@ -106,6 +106,8 @@ class ThemeMention(Base):
     match_score = Column(Float)  # Decision score for selected cluster
     match_threshold = Column(Float)  # Effective threshold used for the decision
     threshold_version = Column(String(40), index=True)  # Threshold config version used
+    match_score_model = Column(String(80), index=True)  # Score/model namespace (e.g. all-MiniLM-L6-v2)
+    match_score_model_version = Column(String(40), index=True)  # Policy/model version used for comparability
     match_fallback_reason = Column(String(120))  # Why fallback path was used
     best_alternative_cluster_id = Column(Integer, index=True)  # Best rejected candidate cluster (if any)
     best_alternative_score = Column(Float)  # Score for best rejected candidate

@@ -15,6 +15,8 @@ REQUIRED_COLUMNS = {
     "match_score",
     "match_threshold",
     "threshold_version",
+    "match_score_model",
+    "match_score_model_version",
     "match_fallback_reason",
     "best_alternative_cluster_id",
     "best_alternative_score",
@@ -24,6 +26,8 @@ REQUIRED_COLUMNS = {
 EXPECTED_INDEXES = {
     "idx_theme_mentions_match_method",
     "idx_theme_mentions_threshold_version",
+    "idx_theme_mentions_match_score_model",
+    "idx_theme_mentions_match_score_model_version",
     "idx_theme_mentions_best_alternative_cluster_id",
 }
 
@@ -90,6 +94,8 @@ def _add_missing_columns(conn) -> list[str]:
         "match_score": "ALTER TABLE theme_mentions ADD COLUMN match_score FLOAT",
         "match_threshold": "ALTER TABLE theme_mentions ADD COLUMN match_threshold FLOAT",
         "threshold_version": "ALTER TABLE theme_mentions ADD COLUMN threshold_version TEXT",
+        "match_score_model": "ALTER TABLE theme_mentions ADD COLUMN match_score_model TEXT",
+        "match_score_model_version": "ALTER TABLE theme_mentions ADD COLUMN match_score_model_version TEXT",
         "match_fallback_reason": "ALTER TABLE theme_mentions ADD COLUMN match_fallback_reason TEXT",
         "best_alternative_cluster_id": "ALTER TABLE theme_mentions ADD COLUMN best_alternative_cluster_id INTEGER",
         "best_alternative_score": "ALTER TABLE theme_mentions ADD COLUMN best_alternative_score FLOAT",
@@ -125,6 +131,26 @@ def _ensure_indexes(conn) -> list[str]:
         )
     )
     ensured.append("idx_theme_mentions_threshold_version")
+
+    conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_theme_mentions_match_score_model
+            ON theme_mentions(match_score_model)
+            """
+        )
+    )
+    ensured.append("idx_theme_mentions_match_score_model")
+
+    conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_theme_mentions_match_score_model_version
+            ON theme_mentions(match_score_model_version)
+            """
+        )
+    )
+    ensured.append("idx_theme_mentions_match_score_model_version")
 
     conn.execute(
         text(
