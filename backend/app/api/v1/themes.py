@@ -11,11 +11,12 @@ Provides access to:
 import csv
 import io
 import logging
+from collections import Counter, defaultdict
 from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ...database import get_db
@@ -62,6 +63,11 @@ from ...schemas.theme import (
     ContentItemsListResponse,
     ContentItemWithThemesResponse,
     ThemeReference,
+    ThemeMatchBandBucketResponse,
+    ThemeMatchDecisionReasonDistributionResponse,
+    ThemeMatchMethodDistributionResponse,
+    ThemeMatchTelemetryResponse,
+    ThemeMatchTelemetrySliceResponse,
 )
 from ...services.content_ingestion_service import ContentIngestionService, seed_default_sources
 from ...services.theme_extraction_service import ThemeExtractionService
@@ -1193,6 +1199,217 @@ async def run_theme_consolidation_async(
 
 
 # ==================== Theme Details (parameterized routes - MUST be after static ones) ====================
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 4)
+
+
+def _confidence_band(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    if value < 0.40:
+        return "0.00-0.39"
+    if value < 0.70:
+        return "0.40-0.69"
+    if value < 0.85:
+        return "0.70-0.84"
+    return "0.85-1.00"
+
+
+def _score_band(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    if value < 0.25:
+        return "0.00-0.24"
+    if value < 0.50:
+        return "0.25-0.49"
+    if value < 0.75:
+        return "0.50-0.74"
+    if value < 0.90:
+        return "0.75-0.89"
+    return "0.90-1.00"
+
+
+def _build_band_buckets(
+    rows: list[dict[str, object]],
+    *,
+    band_selector,
+) -> list[ThemeMatchBandBucketResponse]:
+    if not rows:
+        return []
+
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[band_selector(row)].append(row)
+
+    ordered_bands = sorted(grouped.keys())
+    output: list[ThemeMatchBandBucketResponse] = []
+    total = len(rows)
+    for band in ordered_bands:
+        bucket_rows = grouped[band]
+        bucket_total = len(bucket_rows)
+        new_cluster_count = sum(1 for r in bucket_rows if r["match_method"] == "create_new_cluster")
+        attach_count = bucket_total - new_cluster_count
+        output.append(
+            ThemeMatchBandBucketResponse(
+                band=band,
+                count=bucket_total,
+                pct=_safe_rate(bucket_total, total),
+                new_cluster_rate=_safe_rate(new_cluster_count, bucket_total),
+                attach_rate=_safe_rate(attach_count, bucket_total),
+            )
+        )
+    return output
+
+
+def _build_match_slice(key: str, rows: list[dict[str, object]]) -> ThemeMatchTelemetrySliceResponse:
+    total = len(rows)
+    new_cluster_count = sum(1 for row in rows if row["match_method"] == "create_new_cluster")
+    attach_count = total - new_cluster_count
+
+    method_counter = Counter(str(row["match_method"] or "unknown") for row in rows)
+    method_distribution = [
+        ThemeMatchMethodDistributionResponse(
+            method=method,
+            count=count,
+            pct=_safe_rate(count, total),
+        )
+        for method, count in sorted(method_counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+    reason_counter = Counter(str(row["match_fallback_reason"] or "none") for row in rows)
+    reason_distribution = [
+        ThemeMatchDecisionReasonDistributionResponse(
+            reason=reason,
+            count=count,
+            pct=_safe_rate(count, total),
+        )
+        for reason, count in sorted(reason_counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+    confidence_bands = _build_band_buckets(rows, band_selector=lambda r: _confidence_band(r["confidence"]))
+    score_bands = _build_band_buckets(rows, band_selector=lambda r: _score_band(r["match_score"]))
+
+    return ThemeMatchTelemetrySliceResponse(
+        key=key,
+        total_mentions=total,
+        new_cluster_count=new_cluster_count,
+        attach_count=attach_count,
+        new_cluster_rate=_safe_rate(new_cluster_count, total),
+        attach_rate=_safe_rate(attach_count, total),
+        method_distribution=method_distribution,
+        decision_reason_distribution=reason_distribution,
+        confidence_bands=confidence_bands,
+        score_bands=score_bands,
+    )
+
+
+@router.get("/matching/telemetry", response_model=ThemeMatchTelemetryResponse)
+async def get_matching_telemetry(
+    days: int = Query(30, ge=1, le=365, description="Rolling window in days"),
+    pipeline: Optional[str] = Query(None, description="Filter by pipeline: technical or fundamental"),
+    source_type: Optional[str] = Query(None, description="Filter by source type"),
+    threshold_version: Optional[str] = Query(None, description="Filter by threshold version"),
+    db: Session = Depends(get_db),
+):
+    """Aggregate matcher telemetry for ops/model tuning dashboards."""
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    query = db.query(
+        ThemeMention.match_method,
+        ThemeMention.match_fallback_reason,
+        ThemeMention.match_score,
+        ThemeMention.confidence,
+        ThemeMention.threshold_version,
+        ThemeMention.source_type,
+        ThemeMention.mentioned_at,
+    ).filter(ThemeMention.mentioned_at >= cutoff)
+
+    if pipeline:
+        query = query.filter(ThemeMention.pipeline == pipeline)
+    if source_type:
+        query = query.filter(ThemeMention.source_type == source_type)
+    if threshold_version:
+        query = query.filter(ThemeMention.threshold_version == threshold_version)
+
+    records = query.all()
+    rows: list[dict[str, object]] = [
+        {
+            "match_method": record.match_method,
+            "match_fallback_reason": record.match_fallback_reason,
+            "match_score": record.match_score,
+            "confidence": record.confidence,
+            "threshold_version": record.threshold_version or "unknown",
+            "source_type": record.source_type or "unknown",
+            "mentioned_at": record.mentioned_at,
+        }
+        for record in records
+    ]
+
+    if not rows:
+        return ThemeMatchTelemetryResponse(
+            window_days=days,
+            start_at=None,
+            end_at=None,
+            pipeline=pipeline,
+            source_type=source_type,
+            threshold_version=threshold_version,
+            total_mentions=0,
+            new_cluster_count=0,
+            attach_count=0,
+            new_cluster_rate=0.0,
+            attach_rate=0.0,
+            method_distribution=[],
+            decision_reason_distribution=[],
+            confidence_bands=[],
+            score_bands=[],
+            by_threshold_version=[],
+            by_source_type=[],
+        )
+
+    overall = _build_match_slice("overall", rows)
+
+    by_threshold: dict[str, list[dict[str, object]]] = defaultdict(list)
+    by_source: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        by_threshold[str(row["threshold_version"])].append(row)
+        by_source[str(row["source_type"])].append(row)
+
+    by_threshold_version = [
+        _build_match_slice(key, grouped_rows)
+        for key, grouped_rows in sorted(by_threshold.items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+    by_source_type = [
+        _build_match_slice(key, grouped_rows)
+        for key, grouped_rows in sorted(by_source.items(), key=lambda item: (-len(item[1]), item[0]))
+    ]
+
+    mentioned_at_values = [row["mentioned_at"] for row in rows if row["mentioned_at"] is not None]
+    start_at = min(mentioned_at_values) if mentioned_at_values else None
+    end_at = max(mentioned_at_values) if mentioned_at_values else None
+
+    return ThemeMatchTelemetryResponse(
+        window_days=days,
+        start_at=start_at,
+        end_at=end_at,
+        pipeline=pipeline,
+        source_type=source_type,
+        threshold_version=threshold_version,
+        total_mentions=overall.total_mentions,
+        new_cluster_count=overall.new_cluster_count,
+        attach_count=overall.attach_count,
+        new_cluster_rate=overall.new_cluster_rate,
+        attach_rate=overall.attach_rate,
+        method_distribution=overall.method_distribution,
+        decision_reason_distribution=overall.decision_reason_distribution,
+        confidence_bands=overall.confidence_bands,
+        score_bands=overall.score_bands,
+        by_threshold_version=by_threshold_version,
+        by_source_type=by_source_type,
+    )
 
 @router.get("/{theme_id}", response_model=ThemeDetailResponse)
 async def get_theme_detail(

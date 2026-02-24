@@ -205,6 +205,59 @@ class ThemeMentionsResponse(BaseModel):
     mentions: list[ThemeMentionDetailResponse]
 
 
+class ThemeMatchMethodDistributionResponse(BaseModel):
+    method: str
+    count: int
+    pct: float
+
+
+class ThemeMatchDecisionReasonDistributionResponse(BaseModel):
+    reason: str
+    count: int
+    pct: float
+
+
+class ThemeMatchBandBucketResponse(BaseModel):
+    band: str
+    count: int
+    pct: float
+    new_cluster_rate: float
+    attach_rate: float
+
+
+class ThemeMatchTelemetrySliceResponse(BaseModel):
+    key: str
+    total_mentions: int
+    new_cluster_count: int
+    attach_count: int
+    new_cluster_rate: float
+    attach_rate: float
+    method_distribution: list[ThemeMatchMethodDistributionResponse]
+    decision_reason_distribution: list[ThemeMatchDecisionReasonDistributionResponse]
+    confidence_bands: list[ThemeMatchBandBucketResponse]
+    score_bands: list[ThemeMatchBandBucketResponse]
+
+
+class ThemeMatchTelemetryResponse(BaseModel):
+    window_days: int
+    start_at: Optional[datetime]
+    end_at: Optional[datetime]
+    pipeline: Optional[str]
+    source_type: Optional[str]
+    threshold_version: Optional[str]
+    total_mentions: int
+    new_cluster_count: int
+    attach_count: int
+    new_cluster_rate: float
+    attach_rate: float
+    method_distribution: list[ThemeMatchMethodDistributionResponse]
+    decision_reason_distribution: list[ThemeMatchDecisionReasonDistributionResponse]
+    confidence_bands: list[ThemeMatchBandBucketResponse]
+    score_bands: list[ThemeMatchBandBucketResponse]
+    by_threshold_version: list[ThemeMatchTelemetrySliceResponse]
+    by_source_type: list[ThemeMatchTelemetrySliceResponse]
+
+
 # Correlation Discovery Schemas
 class CorrelationClusterResponse(BaseModel):
     cluster_id: int
