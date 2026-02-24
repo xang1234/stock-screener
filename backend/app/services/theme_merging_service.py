@@ -35,6 +35,7 @@ from ..models.theme import (
 )
 from ..config import settings
 from .llm import LLMService, LLMError
+from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 
 # Optional imports
 try:
@@ -123,6 +124,13 @@ class ThemeMergingService:
             logger.info("LLMService initialized for theme merging")
         except Exception as e:
             logger.warning(f"LLMService initialization failed: {e}")
+
+    def _normalize_suggested_name(self, suggested_name: str | None) -> str | None:
+        if not suggested_name or not suggested_name.strip():
+            return None
+        if canonical_theme_key(suggested_name) == UNKNOWN_THEME_KEY:
+            return None
+        return display_theme_name(suggested_name)
 
     def _get_theme_text(self, theme: ThemeCluster) -> str:
         """Generate text representation of theme for embedding"""
@@ -426,7 +434,7 @@ class ThemeMergingService:
                 "confidence": result.get("confidence", 0.0),
                 "relationship": result.get("relationship", "unknown"),
                 "reasoning": result.get("reasoning", ""),
-                "canonical_name": result.get("canonical_name"),
+                "canonical_name": self._normalize_suggested_name(result.get("canonical_name")),
             }
 
         except json.JSONDecodeError as e:
@@ -480,7 +488,9 @@ class ThemeMergingService:
                 existing.llm_confidence = llm_result.get("confidence")
                 existing.llm_reasoning = llm_result.get("reasoning")
                 existing.llm_relationship = llm_result.get("relationship")
-                existing.suggested_canonical_name = llm_result.get("canonical_name")
+                existing.suggested_canonical_name = self._normalize_suggested_name(
+                    llm_result.get("canonical_name")
+                )
             self.db.commit()
             return existing
 
@@ -492,7 +502,9 @@ class ThemeMergingService:
             llm_confidence=llm_result.get("confidence") if llm_result else None,
             llm_reasoning=llm_result.get("reasoning") if llm_result else None,
             llm_relationship=llm_result.get("relationship") if llm_result else None,
-            suggested_canonical_name=llm_result.get("canonical_name") if llm_result else None,
+            suggested_canonical_name=self._normalize_suggested_name(llm_result.get("canonical_name"))
+            if llm_result
+            else None,
             status="pending",
         )
         self.db.add(suggestion)

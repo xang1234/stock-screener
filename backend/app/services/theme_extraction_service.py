@@ -26,6 +26,7 @@ from ..models.theme import (
 )
 from ..config import settings
 from .llm import LLMService, LLMError
+from .theme_identity_normalization import canonical_theme_key, display_theme_name
 
 # Optional Gemini import for fallback
 # Suppress Pydantic warnings from google-genai library (third-party issue)
@@ -42,6 +43,41 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
+
+
+_LEGACY_THEME_CANONICAL_NAME_MAP = {
+    # AI themes
+    "ai_infrastructure": "AI Infrastructure",
+    "ai_infra": "AI Infrastructure",
+    "ai_datacenter": "AI Infrastructure",
+    "ai_data_center": "AI Infrastructure",
+    "ai_chip": "AI Semiconductors",
+    "ai_semiconductor": "AI Semiconductors",
+    # Healthcare
+    "glp1": "GLP-1 Weight Loss",
+    "weight_loss_drug": "GLP-1 Weight Loss",
+    "obesity_drug": "GLP-1 Weight Loss",
+    # Energy
+    "nuclear_power": "Nuclear Energy",
+    "nuclear_renaissance": "Nuclear Energy",
+    "uranium": "Nuclear Energy",
+    # Defense
+    "defense_drone": "Defense & Drones",
+    "military_drone": "Defense & Drones",
+    "defense_technology": "Defense & Drones",
+    # Quantum
+    "quantum": "Quantum Computing",
+    "quantum_tech": "Quantum Computing",
+    # Manufacturing
+    "reshoring": "Nearshoring & Reshoring",
+    "nearshoring": "Nearshoring & Reshoring",
+    "onshoring": "Nearshoring & Reshoring",
+    # Crypto
+    "bitcoin": "Crypto & Bitcoin",
+    "cryptocurrency": "Crypto & Bitcoin",
+    "bitcoin_mining": "Bitcoin Miners",
+    "crypto_mining": "Bitcoin Miners",
+}
 
 
 # System prompt for theme extraction
@@ -638,52 +674,10 @@ Example themes for this pipeline: {examples_str}
         - "AI infrastructure" = "AI Infra" = "AI Infrastructure buildout"
         - "GLP-1" = "GLP1" = "Weight loss drugs"
         """
-        # Convert to title case and strip
-        theme = theme.strip().title()
-
-        # Common normalizations
-        normalizations = {
-            # AI themes
-            "Ai Infrastructure": "AI Infrastructure",
-            "Ai Infra": "AI Infrastructure",
-            "Ai Datacenter": "AI Infrastructure",
-            "Ai Data Center": "AI Infrastructure",
-            "Ai Chips": "AI Semiconductors",
-            "Ai Semiconductor": "AI Semiconductors",
-
-            # Healthcare
-            "Glp-1": "GLP-1 Weight Loss",
-            "Glp1": "GLP-1 Weight Loss",
-            "Weight Loss Drugs": "GLP-1 Weight Loss",
-            "Obesity Drugs": "GLP-1 Weight Loss",
-
-            # Energy
-            "Nuclear Power": "Nuclear Energy",
-            "Nuclear Renaissance": "Nuclear Energy",
-            "Uranium": "Nuclear Energy",
-
-            # Defense
-            "Defense Drones": "Defense & Drones",
-            "Military Drones": "Defense & Drones",
-            "Defense Technology": "Defense & Drones",
-
-            # Quantum
-            "Quantum": "Quantum Computing",
-            "Quantum Tech": "Quantum Computing",
-
-            # Manufacturing
-            "Reshoring": "Nearshoring & Reshoring",
-            "Nearshoring": "Nearshoring & Reshoring",
-            "Onshoring": "Nearshoring & Reshoring",
-
-            # Crypto
-            "Bitcoin": "Crypto & Bitcoin",
-            "Cryptocurrency": "Crypto & Bitcoin",
-            "Bitcoin Mining": "Bitcoin Miners",
-            "Crypto Mining": "Bitcoin Miners",
-        }
-
-        return normalizations.get(theme, theme)
+        key = canonical_theme_key(theme)
+        if key in _LEGACY_THEME_CANONICAL_NAME_MAP:
+            return _LEGACY_THEME_CANONICAL_NAME_MAP[key]
+        return display_theme_name(theme)
 
     def _get_or_create_cluster(self, mention_data: dict) -> ThemeCluster:
         """Get or create theme cluster for a mention, returns the cluster"""

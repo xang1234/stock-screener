@@ -92,7 +92,7 @@
       "id": "E2-CASE-015",
       "category": "plural",
       "raw": "EVs and batteries",
-      "expected_key": "ev_and_batterie"
+      "expected_key": "ev_and_battery"
     },
     {
       "id": "E2-CASE-016",
@@ -129,6 +129,12 @@
       "category": "fallback",
       "raw": "the of for to",
       "expected_key": "unknown_theme"
+    },
+    {
+      "id": "E2-CASE-022",
+      "category": "protected",
+      "raw": "A/S software",
+      "expected_key": "as_software"
     }
   ]
 }

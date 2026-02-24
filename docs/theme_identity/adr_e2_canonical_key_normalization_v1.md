@@ -40,8 +40,10 @@ Given raw theme text, apply all steps in this exact order:
 2. Unicode normalize using `NFKD`.
 3. Remove combining diacritics.
 4. Lowercase.
-5. Replace punctuation/separators with spaces using these rules:
+5. Replace punctuation/separators using these rules:
    - `&` -> ` and `
+   - `glp-1` and `glp 1` pattern -> `glp1` (before generic hyphen/slash handling)
+   - `a/s` pattern -> `as` (before generic slash handling)
    - `/`, `\`, `|`, `-`, `_`, `.`, `,`, `:`, `;`, `(`, `)`, `[`, `]`, `{`, `}`, `'`, `"` -> space
    - `+` between alnum tokens -> ` plus ` (for example `c++` -> `c plus plus`)
 6. Collapse whitespace to a single space.
@@ -59,13 +61,14 @@ Token mappings are applied before stopword removal:
   - `ai`, `a.i` -> `ai`
   - `ml`, `m.l` -> `ml`
   - `llm`, `l.l.m` -> `llm`
-  - `glp`, `glp1`, `glp-1` -> `glp1`
+  - `glp`, `glp1` -> `glp1`
   - `gpu`, `gpus` -> `gpu`
   - `ev`, `evs` -> `ev`
   - `ipo`, `ipos` -> `ipo`
   - `etf`, `etfs` -> `etf`
 - Domain plurals:
-  - strip trailing `s` for tokens longer than 3 unless token is in exception set
+  - if token ends with `ies` and length > 4, replace `ies` with `y`
+  - otherwise strip trailing `s` for tokens longer than 3 unless token is in exception set
   - exception set: `gas`, `as`, `us`, `esg`, `saas`
 - Numeric normalization:
   - keep pure numerics as-is (`2`, `10`, `2025`)

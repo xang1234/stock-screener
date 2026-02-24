@@ -19,6 +19,7 @@ EXPECTED_REQUIRED_CASES = {
     "E2-CASE-013",
     "E2-CASE-017",
     "E2-CASE-021",
+    "E2-CASE-022",
 }
 EXPECTED_CATEGORIES = {
     "acronym",
@@ -87,3 +88,11 @@ def test_unicode_normalization_examples_match():
     payload = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
     mapping = {case["id"]: case["expected_key"] for case in payload["cases"]}
     assert mapping["E2-CASE-010"] == mapping["E2-CASE-011"] == "cafe_robotic"
+
+
+def test_policy_regression_examples_for_reported_gaps():
+    payload = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    mapping = {case["id"]: case["expected_key"] for case in payload["cases"]}
+    assert mapping["E2-CASE-004"] == "glp1_weight_loss"
+    assert mapping["E2-CASE-015"] == "ev_and_battery"
+    assert mapping["E2-CASE-022"] == "as_software"
