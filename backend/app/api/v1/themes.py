@@ -1149,6 +1149,11 @@ async def get_merge_suggestions(
 
     Returns pairs of themes that may be duplicates, with embedding similarity
     scores and LLM verification results.
+
+    Canonical response fields:
+    - source_theme_id / source_theme_name / target_theme_id / target_theme_name
+    - similarity_score / relationship_type / reasoning / suggested_name
+    Legacy merge fields remain temporarily for migration compatibility.
     """
     service = ThemeMergingService(db)
     suggestions = service.get_merge_suggestions(status=status, limit=limit)

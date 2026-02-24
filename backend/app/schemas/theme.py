@@ -361,19 +361,29 @@ class ExtractionResponse(BaseModel):
 # Theme Merge Suggestion Schemas
 class ThemeMergeSuggestionResponse(BaseModel):
     id: int
+    source_theme_id: int
+    source_theme_name: str
+    source_aliases: Optional[list[str]]
+    target_theme_id: int
+    target_theme_name: str
+    target_aliases: Optional[list[str]]
+    similarity_score: Optional[float]
+    llm_confidence: Optional[float]
+    relationship_type: Optional[str]
+    reasoning: Optional[str]
+    suggested_name: Optional[str]
+    status: str
+    created_at: Optional[str]
+
+    # Legacy compatibility fields (deprecated)
     source_cluster_id: int
     source_name: str
-    source_aliases: Optional[list[str]]
     target_cluster_id: int
     target_name: str
-    target_aliases: Optional[list[str]]
     embedding_similarity: Optional[float]
-    llm_confidence: Optional[float]
     llm_reasoning: Optional[str]
     llm_relationship: Optional[str]
     suggested_canonical_name: Optional[str]
-    status: str
-    created_at: Optional[str]
 
 
 class ThemeMergeSuggestionsResponse(BaseModel):

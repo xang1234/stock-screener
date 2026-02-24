@@ -184,9 +184,24 @@ class ThemeMergingService:
 
     def _get_suggestion_for_pair(self, cluster_a_id: int, cluster_b_id: int) -> ThemeMergeSuggestion | None:
         pair_min_id, pair_max_id = self._canonical_pair_ids(cluster_a_id, cluster_b_id)
-        return self.db.query(ThemeMergeSuggestion).filter(
+        suggestion = self.db.query(ThemeMergeSuggestion).filter(
             ThemeMergeSuggestion.pair_min_cluster_id == pair_min_id,
             ThemeMergeSuggestion.pair_max_cluster_id == pair_max_id,
+        ).first()
+        if suggestion:
+            return suggestion
+        # Legacy fallback before canonical pair columns were backfilled.
+        return self.db.query(ThemeMergeSuggestion).filter(
+            or_(
+                and_(
+                    ThemeMergeSuggestion.source_cluster_id == cluster_a_id,
+                    ThemeMergeSuggestion.target_cluster_id == cluster_b_id,
+                ),
+                and_(
+                    ThemeMergeSuggestion.source_cluster_id == cluster_b_id,
+                    ThemeMergeSuggestion.target_cluster_id == cluster_a_id,
+                ),
+            )
         ).first()
 
     def _load_replay_result(
@@ -1314,19 +1329,29 @@ class ThemeMergingService:
 
             results.append({
                 "id": s.id,
+                # Canonical contract (frontend-facing)
+                "source_theme_id": s.source_cluster_id,
+                "source_theme_name": source.name,
+                "source_aliases": source.aliases,
+                "target_theme_id": s.target_cluster_id,
+                "target_theme_name": target.name,
+                "target_aliases": target.aliases,
+                "similarity_score": s.embedding_similarity,
+                "llm_confidence": s.llm_confidence,
+                "relationship_type": s.llm_relationship,
+                "reasoning": s.llm_reasoning,
+                "suggested_name": s.suggested_canonical_name,
+                "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                # Legacy compatibility keys (deprecated)
                 "source_cluster_id": s.source_cluster_id,
                 "source_name": source.name,
-                "source_aliases": source.aliases,
                 "target_cluster_id": s.target_cluster_id,
                 "target_name": target.name,
-                "target_aliases": target.aliases,
                 "embedding_similarity": s.embedding_similarity,
-                "llm_confidence": s.llm_confidence,
                 "llm_reasoning": s.llm_reasoning,
                 "llm_relationship": s.llm_relationship,
                 "suggested_canonical_name": s.suggested_canonical_name,
-                "status": s.status,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
             })
 
         return results

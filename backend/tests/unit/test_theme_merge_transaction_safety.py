@@ -182,3 +182,72 @@ def test_create_merge_suggestion_deduplicates_reversed_pairs(db_session):
     assert only.pair_min_cluster_id == min(left.id, right.id)
     assert only.pair_max_cluster_id == max(left.id, right.id)
     assert only.embedding_similarity == 0.95
+
+
+def test_get_merge_suggestions_exposes_canonical_and_legacy_contract_fields(db_session):
+    source = _make_cluster(db_session, key="contract_source", name="Contract Source")
+    target = _make_cluster(db_session, key="contract_target", name="Contract Target")
+    suggestion = ThemeMergeSuggestion(
+        source_cluster_id=source.id,
+        target_cluster_id=target.id,
+        pair_min_cluster_id=min(source.id, target.id),
+        pair_max_cluster_id=max(source.id, target.id),
+        embedding_similarity=0.88,
+        llm_confidence=0.77,
+        llm_relationship="identical",
+        llm_reasoning="Same underlying concept",
+        suggested_canonical_name="Contract Target",
+        status="pending",
+    )
+    db_session.add(suggestion)
+    db_session.commit()
+
+    service = _make_service(db_session)
+    payload = service.get_merge_suggestions(status="pending", limit=10)
+    assert len(payload) == 1
+    row = payload[0]
+
+    assert row["source_theme_id"] == source.id
+    assert row["source_theme_name"] == "Contract Source"
+    assert row["target_theme_id"] == target.id
+    assert row["target_theme_name"] == "Contract Target"
+    assert row["similarity_score"] == 0.88
+    assert row["relationship_type"] == "identical"
+    assert row["reasoning"] == "Same underlying concept"
+    assert row["suggested_name"] == "Contract Target"
+
+    # Legacy fields still present during migration window.
+    assert row["source_cluster_id"] == source.id
+    assert row["source_name"] == "Contract Source"
+    assert row["target_cluster_id"] == target.id
+    assert row["target_name"] == "Contract Target"
+    assert row["embedding_similarity"] == 0.88
+    assert row["llm_relationship"] == "identical"
+
+
+def test_create_merge_suggestion_updates_legacy_row_without_canonical_pair_ids(db_session):
+    source = _make_cluster(db_session, key="legacy_source", name="Legacy Source")
+    target = _make_cluster(db_session, key="legacy_target", name="Legacy Target")
+    db_session.commit()
+
+    # Simulate a pre-migration row where canonical pair fields were not backfilled yet.
+    legacy = ThemeMergeSuggestion(
+        source_cluster_id=target.id,
+        target_cluster_id=source.id,
+        pair_min_cluster_id=None,
+        pair_max_cluster_id=None,
+        embedding_similarity=0.81,
+        status="pending",
+    )
+    db_session.add(legacy)
+    db_session.commit()
+
+    service = _make_service(db_session)
+    updated = service.create_merge_suggestion(source.id, target.id, 0.93, {"confidence": 0.88})
+
+    assert updated is not None
+    assert updated.id == legacy.id
+    assert updated.pair_min_cluster_id == min(source.id, target.id)
+    assert updated.pair_max_cluster_id == max(source.id, target.id)
+    assert updated.embedding_similarity == 0.93
+    assert db_session.query(ThemeMergeSuggestion).count() == 1

@@ -129,14 +129,28 @@ def _dedupe_canonical_pairs(conn) -> int:
             """
             DELETE FROM theme_merge_suggestions
             WHERE id IN (
-                SELECT older.id
-                FROM theme_merge_suggestions older
-                JOIN theme_merge_suggestions newer
-                  ON older.pair_min_cluster_id = newer.pair_min_cluster_id
-                 AND older.pair_max_cluster_id = newer.pair_max_cluster_id
-                 AND older.id < newer.id
-                WHERE older.pair_min_cluster_id IS NOT NULL
-                  AND older.pair_max_cluster_id IS NOT NULL
+                WITH ranked AS (
+                    SELECT
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY pair_min_cluster_id, pair_max_cluster_id
+                            ORDER BY
+                                CASE status
+                                    WHEN 'approved' THEN 5
+                                    WHEN 'auto_merged' THEN 4
+                                    WHEN 'pending' THEN 3
+                                    WHEN 'rejected' THEN 2
+                                    ELSE 1
+                                END DESC,
+                                CASE WHEN approval_idempotency_key IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                COALESCE(reviewed_at, created_at) DESC,
+                                id DESC
+                        ) AS rn
+                    FROM theme_merge_suggestions
+                    WHERE pair_min_cluster_id IS NOT NULL
+                      AND pair_max_cluster_id IS NOT NULL
+                )
+                SELECT id FROM ranked WHERE rn > 1
             )
             """
         )

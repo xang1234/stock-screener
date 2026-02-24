@@ -87,8 +87,11 @@ const getRelationshipTooltip = (relationship) => {
 function SuggestionRow({ suggestion, onReject, isRejecting, checked, onToggle, disabled }) {
   const [expanded, setExpanded] = useState(false);
 
-  const similarityPercent = (suggestion.similarity_score * 100).toFixed(0);
-  const confidencePercent = (suggestion.llm_confidence * 100).toFixed(0);
+  const hasSimilarity = Number.isFinite(suggestion.similarity_score);
+  const hasConfidence = Number.isFinite(suggestion.llm_confidence);
+  const similarityPercent = hasSimilarity ? (suggestion.similarity_score * 100).toFixed(0) : null;
+  const confidencePercent = hasConfidence ? (suggestion.llm_confidence * 100).toFixed(0) : null;
+  const relationshipType = suggestion.relationship_type || 'unknown';
 
   return (
     <>
@@ -138,28 +141,28 @@ function SuggestionRow({ suggestion, onReject, isRejecting, checked, onToggle, d
         </TableCell>
         <TableCell align="center">
           <Chip
-            label={`${similarityPercent}%`}
+            label={hasSimilarity ? `${similarityPercent}%` : 'N/A'}
             size="small"
-            color={getSimilarityColor(parseFloat(similarityPercent))}
+            color={hasSimilarity ? getSimilarityColor(parseFloat(similarityPercent)) : 'default'}
             variant="filled"
             sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
           />
         </TableCell>
         <TableCell align="center">
           <Chip
-            label={`${confidencePercent}%`}
+            label={hasConfidence ? `${confidencePercent}%` : 'N/A'}
             size="small"
-            color={getConfidenceColor(parseFloat(confidencePercent))}
+            color={hasConfidence ? getConfidenceColor(parseFloat(confidencePercent)) : 'default'}
             variant="filled"
             sx={{ minWidth: 55, fontFamily: 'monospace', fontWeight: 600 }}
           />
         </TableCell>
         <TableCell align="center">
-          <Tooltip title={getRelationshipTooltip(suggestion.relationship_type)}>
+          <Tooltip title={getRelationshipTooltip(relationshipType)}>
             <Chip
-              label={suggestion.relationship_type}
+              label={relationshipType}
               size="small"
-              color={getRelationshipColor(suggestion.relationship_type)}
+              color={getRelationshipColor(relationshipType)}
               variant="outlined"
               sx={{ textTransform: 'capitalize' }}
             />
@@ -190,7 +193,7 @@ function SuggestionRow({ suggestion, onReject, isRejecting, checked, onToggle, d
                     Relationship
                   </Typography>
                   <Typography variant="body2" fontWeight="medium" sx={{ textTransform: 'capitalize' }}>
-                    {suggestion.relationship_type}
+                    {relationshipType}
                   </Typography>
                 </Box>
                 <Box>
