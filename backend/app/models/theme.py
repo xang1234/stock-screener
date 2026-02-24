@@ -177,7 +177,7 @@ class ThemeCluster(Base):
     description = Column(Text)  # Auto-generated or manual description
 
     # Pipeline assignment - which pipeline this theme belongs to
-    pipeline = Column(String(20), default="technical", index=True)  # technical or fundamental
+    pipeline = Column(String(20), nullable=False, default="technical", index=True)  # technical or fundamental
 
     # Theme categorization
     category = Column(String(50), index=True)  # technology, healthcare, macro, sector, etc.

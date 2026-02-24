@@ -84,6 +84,7 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
 
         duplicate_pipeline_keys = 0
         null_identity_rows = 0
+        null_pipeline_rows = 0
         if table_exists:
             duplicate_pipeline_keys = conn.execute(
                 text(
@@ -107,6 +108,15 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
                     """
                 )
             ).scalar() or 0
+            null_pipeline_rows = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM theme_clusters
+                    WHERE pipeline IS NULL OR pipeline = ''
+                    """
+                )
+            ).scalar() or 0
 
         verification = {
             "table_exists": table_exists,
@@ -115,6 +125,7 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
             "has_global_name_unique": has_global_name_unique,
             "duplicate_pipeline_keys": int(duplicate_pipeline_keys),
             "null_identity_rows": int(null_identity_rows),
+            "null_pipeline_rows": int(null_pipeline_rows),
         }
         verification["ok"] = (
             verification["table_exists"]
@@ -123,6 +134,7 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
             and not verification["has_global_name_unique"]
             and verification["duplicate_pipeline_keys"] == 0
             and verification["null_identity_rows"] == 0
+            and verification["null_pipeline_rows"] == 0
         )
         return verification
 
@@ -157,6 +169,10 @@ def _get_index_defs(conn) -> list[dict[str, Any]]:
 def _needs_table_rebuild(conn) -> bool:
     columns = _get_table_columns(conn)
     if "canonical_key" not in columns or "display_name" not in columns:
+        return True
+
+    not_null_map = _get_table_not_null_map(conn)
+    if not not_null_map.get("pipeline", False):
         return True
 
     indexes = _get_index_defs(conn)
@@ -229,7 +245,7 @@ def _create_theme_clusters_table(conn, table_name: str) -> None:
                 display_name TEXT NOT NULL,
                 aliases JSON,
                 description TEXT,
-                pipeline TEXT DEFAULT 'technical',
+                pipeline TEXT NOT NULL DEFAULT 'technical',
                 category TEXT,
                 is_emerging BOOLEAN DEFAULT 1,
                 first_seen_at DATETIME,
@@ -278,6 +294,12 @@ def _rebuild_theme_clusters_table(conn, rows: list[dict[str, Any]]) -> None:
         conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
+def _get_table_not_null_map(conn) -> dict[str, bool]:
+    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
+    # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+    return {row[1]: bool(row[3]) for row in rows}
+
+
 def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
     updated = 0
     for row in rows:
@@ -317,4 +339,3 @@ def _ensure_unique_index(conn) -> None:
             """
         )
     )
-

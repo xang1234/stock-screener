@@ -713,8 +713,11 @@ Example themes for this pipeline: {examples_str}
             logger.info(f"Discovered new theme cluster: {canonical_theme} (pipeline={self.pipeline})")
 
         else:
-            cluster.display_name = canonical_theme
-            cluster.name = canonical_theme
+            # Preserve analyst-managed display labels once a cluster exists.
+            if not cluster.display_name:
+                cluster.display_name = canonical_theme
+            if not cluster.name:
+                cluster.name = cluster.display_name
             cluster.last_seen_at = datetime.utcnow()
             # Add alias if new
             if cluster.aliases is None:

@@ -81,10 +81,7 @@ def run_theme_cluster_identity_migration():
     """
     from .db_migrations.theme_cluster_identity_migration import migrate_theme_cluster_identity
 
-    try:
-        migrate_theme_cluster_identity(engine)
-    except Exception as e:
-        print(f"Warning: Theme cluster identity migration failed (non-fatal): {e}")
+    migrate_theme_cluster_identity(engine)
 
 
 async def trigger_gapfill_on_startup():

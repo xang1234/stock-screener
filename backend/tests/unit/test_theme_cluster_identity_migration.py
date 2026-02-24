@@ -124,6 +124,75 @@ def test_unique_enforced_for_pipeline_and_canonical_key_only():
             conn.rollback()
 
 
+def test_pipeline_is_required_for_identity_uniqueness():
+    engine = create_engine("sqlite:///:memory:")
+    migrate_theme_cluster_identity(engine)
+
+    with engine.connect() as conn:
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO theme_clusters(name, canonical_key, display_name, pipeline)
+                    VALUES ('AI Infrastructure', 'ai_infrastructure', 'AI Infrastructure', NULL)
+                    """
+                )
+            )
+            conn.commit()
+        conn.rollback()
+
+
+def test_migration_rebuilds_table_when_pipeline_nullable_and_backfills_to_technical():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE theme_clusters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    canonical_key TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    aliases JSON,
+                    description TEXT,
+                    pipeline TEXT,
+                    category TEXT,
+                    is_emerging BOOLEAN DEFAULT 1,
+                    first_seen_at DATETIME,
+                    last_seen_at DATETIME,
+                    discovery_source TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    is_validated BOOLEAN DEFAULT 0,
+                    created_at DATETIME DEFAULT (CURRENT_TIMESTAMP),
+                    updated_at DATETIME DEFAULT (CURRENT_TIMESTAMP)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO theme_clusters(name, canonical_key, display_name, pipeline)
+                VALUES ('AI Infrastructure', 'ai_infrastructure', 'AI Infrastructure', NULL)
+                """
+            )
+        )
+        conn.commit()
+
+    result = migrate_theme_cluster_identity(engine)
+    assert result["table_rebuilt"] is True
+
+    verification = verify_theme_cluster_identity_schema(engine)
+    assert verification["ok"] is True
+    assert verification["null_pipeline_rows"] == 0
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT pipeline FROM theme_clusters WHERE canonical_key = 'ai_infrastructure'")
+        ).fetchone()
+        assert row[0] == "technical"
+
+
 def test_migration_fails_on_legacy_duplicates_that_collapse_to_same_canonical_key():
     engine = create_engine("sqlite:///:memory:")
     with engine.connect() as conn:

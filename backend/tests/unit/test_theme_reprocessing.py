@@ -519,3 +519,42 @@ class TestCompatibilityWrites:
         ).first()
         assert state is not None
         assert state.status == "processed"
+
+
+class TestThemeClusterLabelPreservation:
+    """Verify ingestion does not overwrite analyst-managed cluster labels."""
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_get_or_create_cluster_preserves_existing_display_name(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        """Existing display_name should remain unchanged for analyst-managed labels."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        cluster = ThemeCluster(
+            canonical_key="ai_infrastructure",
+            display_name="Analyst Preferred Label",
+            name="Analyst Preferred Label",
+            pipeline="technical",
+            aliases=["AI Infrastructure"],
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        got = service._get_or_create_cluster({"theme": "A.I. Infrastructure"})
+        db_session.refresh(cluster)
+
+        assert got.id == cluster.id
+        assert cluster.display_name == "Analyst Preferred Label"
+        assert cluster.name == "Analyst Preferred Label"
