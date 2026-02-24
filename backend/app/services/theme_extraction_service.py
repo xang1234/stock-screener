@@ -613,6 +613,9 @@ Example themes for this pipeline: {examples_str}
 
     def _classify_failure_status(self, error: Exception) -> str:
         """Classify failures into retryable or terminal pipeline-state buckets."""
+        if isinstance(error, ThemeExtractionParseError):
+            return "failed_retryable"
+
         error_text = str(error).lower()
         terminal_markers = (
             "invalid api key",
@@ -700,8 +703,12 @@ Example themes for this pipeline: {examples_str}
             failure_state.processed_at = None
 
             # Compatibility writes
-            item_for_failure.is_processed = True
-            item_for_failure.processed_at = datetime.utcnow()
+            if isinstance(error, ThemeExtractionParseError):
+                item_for_failure.is_processed = False
+                item_for_failure.processed_at = None
+            else:
+                item_for_failure.is_processed = True
+                item_for_failure.processed_at = datetime.utcnow()
             item_for_failure.extraction_error = str(error)
 
             self.db.commit()

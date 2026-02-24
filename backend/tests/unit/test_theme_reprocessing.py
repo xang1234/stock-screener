@@ -179,6 +179,28 @@ class TestParseFailurePipelineSemantics:
         assert state.status == "failed_retryable"
         assert state.attempt_count == 1
         assert state.error_code == "llm_response_parse_error"
+        db_session.refresh(item)
+        assert item.is_processed is False
+        assert item.processed_at is None
+        assert "bad json" in (item.extraction_error or "")
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_parse_failure_with_char_413_is_retryable_not_terminal(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionParseError, ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+
+        error = ThemeExtractionParseError("Failed to parse LLM response: Expecting value: line 1 column 414 (char 413)")
+        assert service._classify_failure_status(error) == "failed_retryable"
 
 
 class TestReprocessFailedItems:
