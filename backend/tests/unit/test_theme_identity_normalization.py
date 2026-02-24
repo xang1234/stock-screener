@@ -65,6 +65,10 @@ def test_plus_normalization_respects_token_context():
     assert canonical_theme_key("AI+Infrastructure") == "ai_plus_infrastructure"
 
 
+def test_canonical_theme_key_normalizes_diacritics_and_numeric_grouping():
+    assert canonical_theme_key("Café Robotics 1,000 GPUs") == "cafe_robotic_1000_gpu"
+
+
 def test_extraction_service_normalize_theme_uses_legacy_map_and_fallback():
     service = ThemeExtractionService.__new__(ThemeExtractionService)
     assert service._normalize_theme("AI infra") == "AI Infrastructure"

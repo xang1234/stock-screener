@@ -77,6 +77,19 @@ def test_apply_lifecycle_transition_rejects_invalid_direct_jump(db_session):
         )
 
 
+def test_apply_lifecycle_transition_rejects_noop_transition(db_session):
+    theme = _theme()
+    db_session.add(theme)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="must change state"):
+        apply_lifecycle_transition(
+            db=db_session,
+            theme=theme,
+            to_state="candidate",
+        )
+
+
 def test_apply_lifecycle_transition_rejects_retired_outgoing_transition(db_session):
     theme = _theme()
     theme.lifecycle_state = "retired"

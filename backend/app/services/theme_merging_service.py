@@ -1789,6 +1789,66 @@ class ThemeMergingService:
                     break
         return queue
 
+    def _resolve_stale_pending_suggestions(self, *, pipeline: str | None = None) -> int:
+        """
+        Reject pending suggestions whose clusters are missing/inactive or pipeline-mismatched.
+
+        These records are stale review artifacts and must not remain pending indefinitely.
+        """
+        source_cluster = aliased(ThemeCluster)
+        target_cluster = aliased(ThemeCluster)
+        query = self.db.query(ThemeMergeSuggestion.id).outerjoin(
+            source_cluster,
+            source_cluster.id == ThemeMergeSuggestion.source_cluster_id,
+        ).outerjoin(
+            target_cluster,
+            target_cluster.id == ThemeMergeSuggestion.target_cluster_id,
+        ).filter(
+            ThemeMergeSuggestion.status == "pending",
+            or_(
+                source_cluster.id.is_(None),
+                target_cluster.id.is_(None),
+                source_cluster.is_active == False,
+                target_cluster.is_active == False,
+                func.coalesce(source_cluster.pipeline, "technical")
+                != func.coalesce(target_cluster.pipeline, "technical"),
+            ),
+        )
+        if pipeline:
+            query = query.filter(
+                or_(
+                    source_cluster.pipeline == pipeline,
+                    target_cluster.pipeline == pipeline,
+                )
+            )
+
+        stale_ids = [int(row[0]) for row in query.all() if row and row[0] is not None]
+        if not stale_ids:
+            return 0
+
+        now = datetime.utcnow()
+        payload = json.dumps(
+            {
+                "reviewer": "system-cleanup",
+                "action": "reject",
+                "reason": "stale_pending_suggestion",
+                "reviewed_at": now.isoformat(),
+            }
+        )
+        updated = self.db.query(ThemeMergeSuggestion).filter(
+            ThemeMergeSuggestion.id.in_(stale_ids),
+            ThemeMergeSuggestion.status == "pending",
+        ).update(
+            {
+                ThemeMergeSuggestion.status: "rejected",
+                ThemeMergeSuggestion.reviewed_at: now,
+                ThemeMergeSuggestion.approval_result_json: payload,
+            },
+            synchronize_session=False,
+        )
+        self.db.commit()
+        return int(updated or 0)
+
     def run_manual_review_wave(
         self,
         *,
@@ -1804,6 +1864,8 @@ class ThemeMergingService:
         started_at = datetime.utcnow()
         bounded_sla_hours = max(0.1, float(sla_target_hours or 24.0))
         before_counts = self._snapshot_wave_counts(pipeline=pipeline)
+        if not dry_run:
+            self._resolve_stale_pending_suggestions(pipeline=pipeline)
         queue = self._iter_manual_review_queue(pipeline=pipeline, limit=queue_limit)
         decision_by_suggestion: dict[int, dict[str, object]] = {}
         for row in decisions or []:

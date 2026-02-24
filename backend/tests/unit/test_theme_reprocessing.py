@@ -108,6 +108,7 @@ class TestExtractFromContentBugFix:
         service._last_request_time = 0
         service._min_request_interval = 0
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
 
         item = _make_content_item(db_session, pipeline_source)
@@ -137,6 +138,7 @@ class TestExtractFromContentBugFix:
         service._last_request_time = 0
         service._min_request_interval = 0
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
 
         item = _make_content_item(db_session, pipeline_source)
@@ -167,6 +169,7 @@ class TestParseFailurePipelineSemantics:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, "_extract_and_store_mentions", side_effect=ThemeExtractionParseError("bad json")):
             with pytest.raises(ThemeExtractionParseError, match="bad json"):
@@ -199,6 +202,7 @@ class TestParseFailurePipelineSemantics:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         error = ThemeExtractionParseError("Failed to parse LLM response: Expecting value: line 1 column 414 (char 413)")
         assert service._classify_failure_status(error) == "failed_retryable"
@@ -238,6 +242,7 @@ class TestReprocessFailedItems:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         # Mock process_batch to avoid LLM calls
         with patch.object(service, 'process_batch', return_value={
@@ -268,6 +273,7 @@ class TestReprocessFailedItems:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, 'process_batch') as mock_batch:
             result = service.reprocess_failed_items(limit=100)
@@ -308,6 +314,7 @@ class TestReprocessFailedItems:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30  # 30-day cutoff excludes 60-day-old item
+        service.theme_policy_overrides = {}
 
         with patch.object(service, 'process_batch') as mock_batch:
             result = service.reprocess_failed_items(limit=100)
@@ -348,6 +355,7 @@ class TestReprocessFailedItems:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, "process_batch", return_value={"processed": 1, "total_mentions": 0, "errors": 0, "pipeline": "technical"}) as mock_batch:
             result = service.reprocess_failed_items(limit=100)
@@ -431,6 +439,7 @@ class TestIdentifySilentFailures:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         result = service.identify_silent_failures(max_age_days=30)
 
@@ -477,6 +486,7 @@ class TestPipelineStateDrivenBatching:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, "_extract_and_store_mentions", return_value=0):
             result = service.process_batch(limit=10)
@@ -506,6 +516,7 @@ class TestPipelineStateDrivenBatching:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         assert service._claim_item_for_processing(item.id) is True
         assert service._claim_item_for_processing(item.id) is False
@@ -545,6 +556,7 @@ class TestCompatibilityWrites:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, "process_batch", return_value={"processed": 0, "total_mentions": 0, "errors": 0, "pipeline": "technical"}):
             service.reprocess_failed_items(limit=10)
@@ -567,6 +579,7 @@ class TestCompatibilityWrites:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(service, "_extract_and_store_mentions", return_value=1):
             mentions = service.process_content_item(item)
@@ -610,6 +623,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got = service._get_or_create_cluster({"theme": "A.I. Infrastructure"})
         db_session.refresh(cluster)
@@ -660,6 +674,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got = service._get_or_create_cluster({"theme": "AI Infra", "confidence": 0.8})
         cluster_count = db_session.query(ThemeCluster).count()
@@ -695,6 +710,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got = service._get_or_create_cluster({"theme": "AI Infra", "confidence": 0.8})
         db_session.refresh(cluster)
@@ -702,6 +718,80 @@ class TestThemeClusterLabelPreservation:
         assert got.id == cluster.id
         assert cluster.is_active is True
         assert db_session.query(ThemeCluster).count() == 1
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_reactivates_inactive_canonical_with_reason(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        inactive = ThemeCluster(
+            canonical_key="ai_next_wave",
+            display_name="AI Next Wave",
+            name="AI Next Wave",
+            pipeline="technical",
+            aliases=["AI Next Wave"],
+            is_active=False,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(inactive)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "AI Next Wave", "confidence": 0.8})
+        db_session.refresh(inactive)
+
+        assert got_cluster.id == inactive.id
+        assert inactive.is_active is True
+        assert decision.method == "exact_canonical_key"
+        assert decision.fallback_reason == "reactivated_inactive_canonical_match"
+        assert db_session.query(ThemeCluster).count() == 1
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_resolve_cluster_match_uses_exact_display_name_stage_when_key_misses(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        cluster = ThemeCluster(
+            canonical_key="quantum_computing",
+            display_name="Quantum Computing",
+            name="Quantum Computing",
+            pipeline="technical",
+            aliases=["Quantum Computing"],
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db_session.add(cluster)
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+
+        got_cluster, decision = service._resolve_cluster_match({"theme": "Quantum tech", "confidence": 0.8})
+
+        assert got_cluster.id == cluster.id
+        assert decision.method == "exact_display_name"
+        assert decision.score == 1.0
+        assert decision.fallback_reason is None
 
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
@@ -744,6 +834,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infra", "confidence": 0.8})
         assert got_cluster.id == cluster.id
@@ -793,6 +884,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "AI Neoinfra", "confidence": 0.8})
         db_session.refresh(alias_row)
@@ -858,6 +950,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "A.I. Infrastructure", "confidence": 0.8})
         assert got_cluster.id == active_cluster.id
@@ -918,6 +1011,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructure", "confidence": 0.8})
         assert got_cluster.id == canonical_cluster.id
@@ -960,6 +1054,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructur", "confidence": 0.8})
         assert got_cluster.id == target.id
@@ -1004,6 +1099,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "AI Infrastructur", "confidence": 0.8})
         assert got_cluster.id not in {candidate_a.id, candidate_b.id}
@@ -1039,6 +1135,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         got_cluster, decision = service._resolve_cluster_match(
             {"theme": "AI infrastructure cycle", "confidence": 0.8}
@@ -1106,6 +1203,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service._embedding_encoder = None
 
         with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
@@ -1161,6 +1259,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service._embedding_encoder = None
 
         with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
@@ -1207,6 +1306,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service._embedding_encoder = None
 
         got_cluster, decision = service._resolve_cluster_match({"theme": "Rates and Liquidity Inflection", "confidence": 0.8})
@@ -1273,6 +1373,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service._embedding_encoder = None
 
         with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
@@ -1326,6 +1427,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
         service._embedding_encoder = None
 
         with patch.object(service, "_get_embedding_encoder", return_value=_StubEncoder()):
@@ -1350,6 +1452,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(
             service,
@@ -1404,6 +1507,7 @@ class TestThemeClusterLabelPreservation:
         service.pipeline = "technical"
         service.provider = "litellm"
         service.max_age_days = 30
+        service.theme_policy_overrides = {}
 
         with patch.object(
             service,

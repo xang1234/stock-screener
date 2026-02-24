@@ -35,7 +35,7 @@ def _make_service(db_session) -> ThemeMergingService:
     return service
 
 
-def _make_cluster(db_session, *, key: str, name: str) -> ThemeCluster:
+def _make_cluster(db_session, *, key: str, name: str, pipeline: str = "technical") -> ThemeCluster:
     cluster = ThemeCluster(
         canonical_key=key,
         display_name=name,
@@ -43,7 +43,7 @@ def _make_cluster(db_session, *, key: str, name: str) -> ThemeCluster:
         aliases=[name],
         description=f"{name} description",
         category="technology",
-        pipeline="technical",
+        pipeline=pipeline,
         is_active=True,
         lifecycle_state="active",
         first_seen_at=datetime.utcnow(),
@@ -618,3 +618,126 @@ def test_run_manual_review_wave_scans_past_ineligible_rows_before_limit(db_sessi
     assert result["approved"] == 1
     assert result["errors"] == 0
     assert db_session.query(ThemeMergeHistory).count() == 1
+
+
+def test_run_manual_review_wave_resolves_stale_pending_suggestions_before_queueing(db_session):
+    stale_source = _make_cluster(db_session, key="manual_stale_source", name="Manual Stale Source")
+    stale_target = _make_cluster(db_session, key="manual_stale_target", name="Manual Stale Target")
+    live_source = _make_cluster(db_session, key="manual_live_source", name="Manual Live Source")
+    live_target = _make_cluster(db_session, key="manual_live_target", name="Manual Live Target")
+    db_session.commit()
+
+    stale_source.is_active = False
+    db_session.commit()
+
+    stale = ThemeMergeSuggestion(
+        source_cluster_id=stale_source.id,
+        target_cluster_id=stale_target.id,
+        pair_min_cluster_id=min(stale_source.id, stale_target.id),
+        pair_max_cluster_id=max(stale_source.id, stale_target.id),
+        embedding_similarity=0.90,
+        llm_confidence=0.80,
+        llm_relationship="identical",
+        status="pending",
+    )
+    live = ThemeMergeSuggestion(
+        source_cluster_id=live_source.id,
+        target_cluster_id=live_target.id,
+        pair_min_cluster_id=min(live_source.id, live_target.id),
+        pair_max_cluster_id=max(live_source.id, live_target.id),
+        embedding_similarity=0.90,
+        llm_confidence=0.80,
+        llm_relationship="identical",
+        status="pending",
+    )
+    db_session.add_all([stale, live])
+    db_session.commit()
+
+    service = _make_service(db_session)
+    result = service.run_manual_review_wave(
+        pipeline="technical",
+        decisions=[{"suggestion_id": live.id, "action": "reject", "reviewer": "analyst-live"}],
+        dry_run=False,
+    )
+
+    assert result["queue_size"] == 1
+    assert result["reviewed"] == 1
+    assert result["rejected"] == 1
+    assert result["pending_after"] == 0
+
+    stale_refreshed = db_session.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == stale.id).one()
+    assert stale_refreshed.status == "rejected"
+    assert stale_refreshed.approval_result_json is not None
+    assert "stale_pending_suggestion" in stale_refreshed.approval_result_json
+
+
+def test_run_manual_review_wave_dry_run_does_not_mutate_stale_pending_suggestions(db_session):
+    stale_source = _make_cluster(db_session, key="manual_stale_dry_source", name="Manual Stale Dry Source")
+    stale_target = _make_cluster(db_session, key="manual_stale_dry_target", name="Manual Stale Dry Target")
+    db_session.commit()
+
+    stale_source.is_active = False
+    db_session.commit()
+
+    stale = ThemeMergeSuggestion(
+        source_cluster_id=stale_source.id,
+        target_cluster_id=stale_target.id,
+        pair_min_cluster_id=min(stale_source.id, stale_target.id),
+        pair_max_cluster_id=max(stale_source.id, stale_target.id),
+        embedding_similarity=0.91,
+        llm_confidence=0.83,
+        llm_relationship="identical",
+        status="pending",
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    service = _make_service(db_session)
+    result = service.run_manual_review_wave(
+        pipeline="technical",
+        decisions=[],
+        dry_run=True,
+    )
+
+    assert result["queue_size"] == 0
+    refreshed = db_session.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == stale.id).one()
+    assert refreshed.status == "pending"
+    assert refreshed.approval_result_json is None
+
+
+def test_resolve_stale_pending_suggestions_rejects_pipeline_mismatch_pairs(db_session):
+    source = _make_cluster(
+        db_session,
+        key="manual_pipeline_mismatch_source",
+        name="Manual Pipeline Mismatch Source",
+        pipeline="technical",
+    )
+    target = _make_cluster(
+        db_session,
+        key="manual_pipeline_mismatch_target",
+        name="Manual Pipeline Mismatch Target",
+        pipeline="fundamental",
+    )
+    db_session.commit()
+
+    stale = ThemeMergeSuggestion(
+        source_cluster_id=source.id,
+        target_cluster_id=target.id,
+        pair_min_cluster_id=min(source.id, target.id),
+        pair_max_cluster_id=max(source.id, target.id),
+        embedding_similarity=0.90,
+        llm_confidence=0.79,
+        llm_relationship="identical",
+        status="pending",
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    service = _make_service(db_session)
+    updated = service._resolve_stale_pending_suggestions()
+
+    assert updated == 1
+    refreshed = db_session.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == stale.id).one()
+    assert refreshed.status == "rejected"
+    assert refreshed.approval_result_json is not None
+    assert "stale_pending_suggestion" in refreshed.approval_result_json
