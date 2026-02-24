@@ -226,6 +226,10 @@ def test_summary_counts_includes_drift_threshold_evaluation():
 
         assert report["by_pipeline_status"]["technical"]["processed"] == 1
         assert report["by_pipeline_status"]["technical"]["failed_retryable"] == 1
+        assert report["by_pipeline_status_scope"]["type"] == "all_time_table_counts"
+        assert report["by_pipeline_status_scope"]["window_days"] is None
+        assert report["drift"]["scope"]["type"] == "published_at_window"
+        assert report["drift"]["scope"]["window_days"] == 30
         assert report["drift"]["thresholds"]["processed_without_mentions_ratio_max"] == 0.4
         assert report["drift"]["thresholds"]["parse_failure_rate_max"] == 0.2
 

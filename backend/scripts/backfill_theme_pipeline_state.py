@@ -207,17 +207,23 @@ def main() -> None:
         }
 
         print("  by_pipeline_status:")
+        print(f"    scope: {report['report']['by_pipeline_status_scope']}")
         for pipeline, counts in sorted(report["report"]["by_pipeline_status"].items()):
             print(f"    {pipeline}: {counts}")
 
+        print("  drift_scope:")
+        print(f"    {report['report']['drift']['scope']}")
         print("  drift_thresholds:")
         print(f"    {report['report']['drift']['thresholds']}")
         print("  drift_breaches:")
         for pipeline_row in report["report"]["drift"]["pipelines"]:
             print(f"    {pipeline_row['pipeline']}: {pipeline_row['breaches']}")
 
-        _save_checkpoint(report_path, report)
-        print(f"\nReport written to {report_path}")
+        if args.dry_run:
+            print("\nDry-run enabled; report file write skipped.")
+        else:
+            _save_checkpoint(report_path, report)
+            print(f"\nReport written to {report_path}")
     except Exception as exc:
         db.rollback()
         print(f"Error: {exc}", file=sys.stderr)

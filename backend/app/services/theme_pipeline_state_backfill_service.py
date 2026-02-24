@@ -263,7 +263,15 @@ class ThemePipelineStateBackfillService:
 
         return {
             "by_pipeline_status": by_pipeline,
+            "by_pipeline_status_scope": {
+                "type": "all_time_table_counts",
+                "window_days": None,
+            },
             "drift": {
+                "scope": {
+                    "type": "published_at_window",
+                    "window_days": max_age_days,
+                },
                 "window_days": max_age_days,
                 "thresholds": thresholds,
                 "pipelines": drift_rows,
