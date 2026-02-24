@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r backend/requirements.txt
 
+      - name: "Gate 0: Theme identity invariants"
+        run: make gate-identity
+
       - name: Gate check (verify all SE test files are assigned)
         run: make gate-check
 

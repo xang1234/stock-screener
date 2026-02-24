@@ -9,7 +9,7 @@
 #   make all           Full CI (gate-check + backend + frontend)
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: help gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
+.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
         frontend-lint frontend-test frontend golden-update all
 
 # ── Tooling ─────────────────────────────────────────────────────────
@@ -31,6 +31,12 @@ GATE_1 = \
   tests/unit/test_setup_engine_screener.py \
   tests/unit/test_setup_engine_parameters.py \
   tests/unit/test_aggregator_execution_pipeline.py
+
+# ── Identity Invariants (Fail Fast) ──────────────────────────────────
+# Canonical-key uniqueness, alias-key integrity, and identity contracts.
+
+GATE_IDENTITY = \
+  tests/unit/test_theme_identity_invariants_ci.py
 
 # ── Gate 2: Temporal Integrity ──────────────────────────────────────
 # No future-data leakage, data policies enforce sufficiency.
@@ -84,6 +90,9 @@ help: ## Show available targets
 
 gate-1: ## Detector correctness
 	$(PYTEST) $(GATE_1) -v --tb=short
+
+gate-identity: ## Theme identity invariants
+	$(PYTEST) $(GATE_IDENTITY) -v --tb=short
 
 gate-2: ## Temporal integrity
 	$(PYTEST) $(GATE_2) -v --tb=short
@@ -143,4 +152,4 @@ frontend: frontend-lint frontend-test ## Frontend lint + test
 golden-update: ## Regenerate golden snapshots for review
 	$(PYTEST) tests/unit/golden/ -v --tb=short --golden-update
 
-all: gate-check gates frontend ## Full CI (gate-check + backend gates + frontend)
+all: gate-check gate-identity gates frontend ## Full CI (gate-check + identity + backend gates + frontend)

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.models.theme import ThemeAlias
 from app.services.theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
 
+VALID_PIPELINES = {"technical", "fundamental"}
+
 
 class SqlThemeAliasRepository:
     """Persist and query theme_aliases for exact matching."""
@@ -49,6 +51,13 @@ class SqlThemeAliasRepository:
         confidence: float = 0.5,
         seen_at: datetime | None = None,
     ) -> ThemeAlias:
+        pipeline = (pipeline or "").strip().lower()
+        if pipeline not in VALID_PIPELINES:
+            raise ValueError(f"Invalid pipeline '{pipeline}'. Allowed values: {sorted(VALID_PIPELINES)}")
+        alias_text = (alias_text or "").strip()
+        if not alias_text:
+            raise ValueError("Cannot record alias with empty alias_text")
+
         alias_key = canonical_theme_key(alias_text)
         if alias_key == UNKNOWN_THEME_KEY:
             raise ValueError("Cannot record alias with unknown_theme key")

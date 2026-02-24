@@ -45,10 +45,12 @@ class ContentSourceResponse(BaseModel):
 # Theme Cluster Schemas
 class ThemeClusterResponse(BaseModel):
     id: int
-    name: str
+    name: str = Field(..., min_length=1)
+    canonical_key: str = Field(..., min_length=1, pattern=r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+    display_name: str = Field(..., min_length=1)
     aliases: Optional[list[str]]
     description: Optional[str]
-    pipeline: Optional[str] = None
+    pipeline: str = Field(..., pattern=r"^(technical|fundamental)$")
     category: Optional[str]
     is_emerging: bool
     is_validated: bool

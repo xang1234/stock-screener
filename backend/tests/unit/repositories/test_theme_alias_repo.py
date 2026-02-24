@@ -97,6 +97,26 @@ class TestRecordObservation:
                 alias_text="!!!",
             )
 
+    def test_rejects_invalid_pipeline(self, repo: SqlThemeAliasRepository, session: Session):
+        cluster = _make_cluster(session, key="ai_infrastructure", name="AI Infrastructure")
+
+        with pytest.raises(ValueError, match="Invalid pipeline"):
+            repo.record_observation(
+                theme_cluster_id=cluster.id,
+                pipeline="macro",
+                alias_text="AI Infrastructure",
+            )
+
+    def test_rejects_empty_alias_text(self, repo: SqlThemeAliasRepository, session: Session):
+        cluster = _make_cluster(session, key="ai_infrastructure", name="AI Infrastructure")
+
+        with pytest.raises(ValueError, match="empty alias_text"):
+            repo.record_observation(
+                theme_cluster_id=cluster.id,
+                pipeline="technical",
+                alias_text="   ",
+            )
+
     def test_reactivates_inactive_alias_and_rebinds_cluster(self, repo: SqlThemeAliasRepository, session: Session):
         cluster_a = _make_cluster(session, key="ai_infrastructure", name="AI Infrastructure")
         cluster_b = _make_cluster(session, key="ai_semiconductors", name="AI Semiconductors")
