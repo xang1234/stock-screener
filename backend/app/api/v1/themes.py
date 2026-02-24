@@ -71,6 +71,7 @@ from ...services.theme_pipeline_state_service import (
     compute_pipeline_state_health,
     normalize_pipelines,
     reconcile_source_pipeline_change,
+    validate_pipeline_selection,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,11 @@ async def add_content_source(
     if detected_type != source.source_type:
         logger.info(f"Auto-correcting source type for '{source.name}': {source.source_type} -> {detected_type}")
 
+    try:
+        pipelines = validate_pipeline_selection(source.pipelines)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # Create source directly since ContentIngestionService.add_source may not support pipelines yet
     new_source = ContentSource(
         name=source.name,
@@ -318,7 +324,7 @@ async def add_content_source(
         url=source.url,
         priority=source.priority,
         fetch_interval_minutes=source.fetch_interval_minutes,
-        pipelines=source.pipelines,
+        pipelines=pipelines,
         is_active=True,
         total_items_fetched=0,
     )
@@ -337,8 +343,9 @@ async def update_content_source(
     """
     Update an existing content source.
 
-    When the pipelines field changes, existing ThemeMention records from this
-    source are updated to reflect the new pipeline classification.
+    When the pipelines field changes, existing ThemeMention records are preserved.
+    Pipeline-state rows are reconciled non-destructively for added/removed
+    assignments.
     """
     existing = db.query(ContentSource).filter(ContentSource.id == source_id).first()
     if not existing:
@@ -361,22 +368,32 @@ async def update_content_source(
         existing.fetch_interval_minutes = source.fetch_interval_minutes
     if source.is_active is not None:
         existing.is_active = source.is_active
-    if source.pipelines is not None:
-        new_pipelines = normalize_pipelines(source.pipelines)
-        existing.pipelines = new_pipelines
+    try:
+        if source.pipelines is not None:
+            new_pipelines = validate_pipeline_selection(source.pipelines)
+            existing.pipelines = new_pipelines
 
-    db.commit()
-    db.refresh(existing)
+        # Ensure source update + reconciliation complete atomically for this request.
+        db.flush()
 
-    # Reconcile pipeline-state rows if assignments changed (non-destructive)
-    if source.pipelines is not None and set(old_pipelines) != set(new_pipelines):
-        reconcile_summary = reconcile_source_pipeline_change(
-            db=db,
-            source_id=source_id,
-            old_pipelines=old_pipelines,
-            new_pipelines=new_pipelines,
-        )
-        logger.info("Source %s pipeline change reconciled: %s", source_id, reconcile_summary)
+        if source.pipelines is not None and set(old_pipelines) != set(new_pipelines):
+            reconcile_summary = reconcile_source_pipeline_change(
+                db=db,
+                source_id=source_id,
+                old_pipelines=old_pipelines,
+                new_pipelines=new_pipelines,
+                commit_each_chunk=False,
+            )
+            logger.info("Source %s pipeline change reconciled: %s", source_id, reconcile_summary)
+
+        db.commit()
+        db.refresh(existing)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
 
     return ContentSourceResponse.model_validate(existing)
 

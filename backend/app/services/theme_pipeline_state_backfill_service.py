@@ -15,7 +15,7 @@ from ..models.theme import (
     ContentSource,
     ThemeMention,
 )
-from .theme_pipeline_state_service import normalize_pipelines
+from .theme_pipeline_state_service import VALID_PIPELINES, normalize_pipelines
 
 
 @dataclass
@@ -119,7 +119,8 @@ class ThemePipelineStateBackfillService:
             ThemeMention.pipeline,
             func.count(ThemeMention.id),
         ).filter(
-            ThemeMention.content_item_id.in_(item_ids)
+            ThemeMention.content_item_id.in_(item_ids),
+            ThemeMention.pipeline.in_(list(VALID_PIPELINES)),
         ).group_by(
             ThemeMention.content_item_id,
             ThemeMention.pipeline,

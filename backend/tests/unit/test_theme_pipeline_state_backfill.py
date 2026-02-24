@@ -88,6 +88,19 @@ def test_backfill_chunk_resume_and_idempotency():
                 mentioned_at=datetime.utcnow() - timedelta(hours=4),
             )
         )
+        db.add(
+            ThemeMention(
+                content_item_id=item3.id,
+                source_type=source_tech.source_type,
+                source_name=source_tech.name,
+                raw_theme="Legacy marker",
+                canonical_theme="Legacy marker",
+                pipeline="legacy_pipeline",
+                sentiment="neutral",
+                confidence=0.3,
+                mentioned_at=datetime.utcnow() - timedelta(hours=4),
+            )
+        )
         db.commit()
 
         service = ThemePipelineStateBackfillService(db)

@@ -15,6 +15,7 @@ from app.models.theme import (
 from app.services.theme_pipeline_state_service import (
     compute_pipeline_state_health,
     reconcile_source_pipeline_change,
+    validate_pipeline_selection,
 )
 
 
@@ -227,3 +228,24 @@ def test_compute_pipeline_state_health_reports_core_metrics():
         assert health["pending_age_hours"]["p95"] >= health["pending_age_hours"]["p50"]
     finally:
         db.close()
+
+
+def test_validate_pipeline_selection_rejects_invalid_values():
+    try:
+        validate_pipeline_selection(["technical", "legacy"])
+        assert False, "Expected ValueError for invalid pipeline"
+    except ValueError as exc:
+        assert "Invalid pipelines" in str(exc)
+
+
+def test_validate_pipeline_selection_rejects_empty():
+    try:
+        validate_pipeline_selection([])
+        assert False, "Expected ValueError for empty pipelines"
+    except ValueError as exc:
+        assert "At least one valid pipeline" in str(exc)
+
+
+def test_validate_pipeline_selection_normalizes_and_dedupes():
+    pipelines = validate_pipeline_selection(["Technical", "technical", "fundamental"])
+    assert pipelines == ["technical", "fundamental"]

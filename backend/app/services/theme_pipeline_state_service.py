@@ -43,12 +43,54 @@ def normalize_pipelines(value: Any) -> list[str]:
     return normalized or list(VALID_PIPELINES)
 
 
+def validate_pipeline_selection(value: Any) -> list[str]:
+    """
+    Validate operator-provided pipeline assignments.
+
+    Raises ValueError when the provided value is empty or includes unknown
+    pipeline names so API callers fail fast instead of silently broadening scope.
+    """
+    if value is None:
+        raise ValueError("pipelines is required")
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            value = [segment.strip() for segment in value.split(",") if segment.strip()]
+
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("pipelines must be a list of pipeline names")
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    invalid: list[str] = []
+    for raw in value:
+        pipeline = str(raw).strip().lower()
+        if pipeline in VALID_PIPELINES:
+            if pipeline not in seen:
+                normalized.append(pipeline)
+                seen.add(pipeline)
+        else:
+            invalid.append(str(raw))
+
+    if invalid:
+        raise ValueError(
+            f"Invalid pipelines: {invalid}. Allowed values are: {list(VALID_PIPELINES)}"
+        )
+    if not normalized:
+        raise ValueError("At least one valid pipeline must be provided")
+
+    return normalized
+
+
 def reconcile_source_pipeline_change(
     db: Session,
     source_id: int,
     old_pipelines: list[str],
     new_pipelines: list[str],
     chunk_size: int = 500,
+    commit_each_chunk: bool = True,
 ) -> dict[str, int | list[str]]:
     """
     Reconcile pipeline-state rows when source pipeline assignments change.
@@ -136,6 +178,10 @@ def reconcile_source_pipeline_change(
                 synchronize_session=False,
             )
 
+        if commit_each_chunk:
+            db.commit()
+
+    if not commit_each_chunk:
         db.commit()
 
     return {
