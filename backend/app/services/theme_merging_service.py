@@ -429,7 +429,8 @@ class ThemeMergingService:
             return {"error": "Embedding model not available", "updated": 0, "skipped": 0}
 
         themes = self.db.query(ThemeCluster).filter(
-            ThemeCluster.is_active == True
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).all()
 
         updated = 0
@@ -476,6 +477,7 @@ class ThemeMergingService:
         base_filters = [
             ThemeEmbedding.is_stale.is_(True),
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ]
         if pipeline:
             base_filters.append(ThemeCluster.pipeline == pipeline)
@@ -577,8 +579,11 @@ class ThemeMergingService:
         }
 
     def _collect_embedding_freshness_metrics(self, *, pipeline: str | None = None) -> dict[str, object]:
-        """Compute embedding coverage/freshness metrics for active themes."""
-        themes_query = self.db.query(ThemeCluster).filter(ThemeCluster.is_active == True)
+        """Compute embedding coverage/freshness metrics for active L2 themes."""
+        themes_query = self.db.query(ThemeCluster).filter(
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
+        )
         if pipeline:
             themes_query = themes_query.filter(ThemeCluster.pipeline == pipeline)
         themes = themes_query.order_by(ThemeCluster.id.asc()).all()
@@ -641,7 +646,10 @@ class ThemeMergingService:
         Stale rows are handled by recompute_stale_embeddings so this method can
         focus on coverage and version/content drift.
         """
-        themes_query = self.db.query(ThemeCluster).filter(ThemeCluster.is_active == True)
+        themes_query = self.db.query(ThemeCluster).filter(
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
+        )
         if pipeline:
             themes_query = themes_query.filter(ThemeCluster.pipeline == pipeline)
         themes = themes_query.order_by(ThemeCluster.id.asc()).all()
@@ -831,6 +839,7 @@ class ThemeMergingService:
         cluster = self.db.query(ThemeCluster).filter(
             ThemeCluster.id == cluster_id,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).first()
         if cluster is None:
             return False
@@ -956,7 +965,7 @@ class ThemeMergingService:
             theme = self.db.query(ThemeCluster).filter(
                 ThemeCluster.id == emb.theme_cluster_id
             ).first()
-            if theme and theme.is_active:
+            if theme and theme.is_active and not theme.is_l1:
                 theme_pipeline = theme.pipeline or "technical"
                 # If pipeline filter is set, skip themes not in that pipeline
                 if pipeline and theme_pipeline != pipeline:

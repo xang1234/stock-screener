@@ -214,4 +214,7 @@ async def test_pipeline_observability_emits_actionable_alerts_with_runbook_links
     assert "merge_pending_backlog_high" in keys
 
     for row in payload["alerts"]:
-        assert row["runbook_url"].startswith("/docs/theme_identity/e8_t4_pipeline_observability_runbook.md#")
+        assert row["runbook_url"].startswith(
+            "https://github.com/xang1234/stock-screener/blob/main/"
+            "docs/theme_identity/e8_t4_pipeline_observability_runbook.md#"
+        )

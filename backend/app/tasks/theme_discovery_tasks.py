@@ -968,6 +968,13 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None):
         logger.info("\n[Step 4/5] Metrics Calculation...")
         results['metrics'] = calculate_theme_metrics(pipeline=pipeline)
 
+        # Compute L1 aggregated metrics after L2 metrics
+        try:
+            results['l1_metrics'] = compute_l1_metrics(pipeline=pipeline)
+        except Exception as e:
+            logger.warning(f"L1 metrics failed (non-fatal): {e}")
+            results['l1_metrics'] = {'error': str(e)}
+
         if pipeline_run:
             pipeline_run.current_step = 'metrics'
             pipeline_run.themes_updated = results['metrics'].get('themes_updated', 0)
@@ -1220,5 +1227,149 @@ def consolidate_themes(dry_run: bool = False):
             'timestamp': datetime.now().isoformat()
         }
 
+    finally:
+        db.close()
+
+
+# ==================== L1 Taxonomy Tasks ====================
+
+@celery_app.task(name='app.tasks.theme_discovery_tasks.compute_l1_metrics')
+def compute_l1_metrics(pipeline: str = None):
+    """
+    Aggregate L2 metrics → L1 metrics via batch SQL.
+
+    Should run after L2 metrics are computed. Uses GROUP BY parent_cluster_id
+    for a single-pass aggregation of all L1 themes.
+
+    Recommended scheduling: Daily 5:30 AM ET (after L2 stale embedding refresh)
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: Compute L1 Metrics")
+    logger.info("=" * 60)
+
+    from ..services.theme_taxonomy_service import ThemeTaxonomyService
+
+    db = SessionLocal()
+    start_time = time.time()
+
+    try:
+        pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+        results = {}
+
+        for p in pipelines:
+            service = ThemeTaxonomyService(db, pipeline=p)
+            result = service.compute_all_l1_metrics()
+            db.commit()
+            results[p] = result
+            logger.info(f"  Pipeline '{p}': {result['metrics_updated']} L1 metrics updated")
+
+        duration = time.time() - start_time
+        logger.info(f"L1 metrics complete in {duration:.2f}s")
+
+        return {
+            'results': results,
+            'duration_seconds': round(duration, 2),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error in L1 metrics task: {e}", exc_info=True)
+        return {'error': str(e), 'timestamp': datetime.now().isoformat()}
+    finally:
+        db.close()
+
+
+@celery_app.task(name='app.tasks.theme_discovery_tasks.run_taxonomy_assignment')
+def run_taxonomy_assignment(pipeline: str = None, dry_run: bool = False):
+    """
+    Run full L1 taxonomy assignment: rules → HDBSCAN → LLM naming.
+
+    3-phase pipeline that assigns unassigned L2 themes to L1 parent groups.
+
+    Recommended scheduling: Weekly Sunday 3:30 AM ET
+    """
+    logger.info("=" * 60)
+    logger.info(f"TASK: Taxonomy Assignment (dry_run={dry_run})")
+    logger.info("=" * 60)
+
+    from ..services.theme_taxonomy_service import ThemeTaxonomyService
+
+    db = SessionLocal()
+    start_time = time.time()
+
+    try:
+        pipelines = [pipeline] if pipeline else ["technical"]
+        results = {}
+
+        for p in pipelines:
+            service = ThemeTaxonomyService(db, pipeline=p)
+            result = service.run_full_taxonomy_assignment(dry_run=dry_run)
+            results[p] = result
+            logger.info(f"  Pipeline '{p}': {result['l2_themes_assigned']} assigned, "
+                        f"{result['still_unassigned']} still unassigned")
+
+        duration = time.time() - start_time
+        logger.info(f"Taxonomy assignment complete in {duration:.2f}s")
+
+        return {
+            'dry_run': dry_run,
+            'results': results,
+            'duration_seconds': round(duration, 2),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error in taxonomy assignment task: {e}", exc_info=True)
+        return {'error': str(e), 'timestamp': datetime.now().isoformat()}
+    finally:
+        db.close()
+
+
+@celery_app.task(name='app.tasks.theme_discovery_tasks.recompute_l1_centroid_embeddings')
+def recompute_l1_centroid_embeddings(pipeline: str = None):
+    """
+    Recompute L1 centroid embeddings from children's embeddings.
+
+    Should run after stale L2 embedding refresh. Centroids enable fast
+    classify_new_l2_to_l1() without LLM calls.
+
+    Recommended scheduling: Daily 5:20 AM ET
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: Recompute L1 Centroid Embeddings")
+    logger.info("=" * 60)
+
+    from ..services.theme_taxonomy_service import ThemeTaxonomyService
+
+    db = SessionLocal()
+    start_time = time.time()
+
+    try:
+        pipelines = [pipeline] if pipeline else ["technical"]
+        results = {}
+
+        for p in pipelines:
+            service = ThemeTaxonomyService(db, pipeline=p)
+            result = service.compute_l1_centroid_embeddings()
+            db.commit()
+            results[p] = result
+            logger.info(f"  Pipeline '{p}': {result['updated']} centroids updated, "
+                        f"{result['skipped']} skipped")
+
+        duration = time.time() - start_time
+        logger.info(f"L1 centroid embeddings complete in {duration:.2f}s")
+
+        return {
+            'results': results,
+            'duration_seconds': round(duration, 2),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error in L1 centroid embeddings task: {e}", exc_info=True)
+        return {'error': str(e), 'timestamp': datetime.now().isoformat()}
     finally:
         db.close()

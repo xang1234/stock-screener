@@ -588,9 +588,10 @@ class ThemeDiscoveryService:
         if as_of_date is None:
             as_of_date = datetime.utcnow()
 
-        # Get all active themes in this pipeline
+        # Get all active L2 themes in this pipeline (exclude L1 parent themes)
         clusters = self.db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,
         ).all()
 
@@ -663,6 +664,7 @@ class ThemeDiscoveryService:
         ).filter(
             ThemeMetrics.date == latest_date,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,  # Filter by pipeline
         )
 
@@ -739,6 +741,7 @@ class ThemeDiscoveryService:
 
         emerging = self.db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.first_seen_at >= week_ago,
             ThemeCluster.pipeline == self.pipeline,  # Filter by pipeline
         ).all()
@@ -899,9 +902,10 @@ class ThemeDiscoveryService:
         now = datetime.utcnow()
         day_ago = now - timedelta(days=1)
 
-        # New themes in last 24h
+        # New themes in last 24h (L2 only — L1 parent themes don't generate alerts)
         new_themes = self.db.query(ThemeCluster).filter(
             ThemeCluster.first_seen_at >= day_ago,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.pipeline == self.pipeline,
         ).all()
 
@@ -1098,6 +1102,7 @@ class ThemeDiscoveryService:
         query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
         ).order_by(ThemeCluster.candidate_since_at.asc(), ThemeCluster.id.asc())
         if limit is not None and limit > 0:
@@ -1181,6 +1186,7 @@ class ThemeDiscoveryService:
         query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state.in_(["active", "reactivated", "dormant"]),
         ).order_by(ThemeCluster.lifecycle_state_updated_at.asc(), ThemeCluster.id.asc())
         if limit is not None and limit > 0:
@@ -1337,6 +1343,7 @@ class ThemeDiscoveryService:
         base_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
         )
         total_count = base_query.count()
@@ -1382,6 +1389,7 @@ class ThemeDiscoveryService:
         candidates = self.db.query(ThemeCluster.id).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ThemeCluster.lifecycle_state == "candidate",
         ).all()
         band_counts: dict[str, int] = defaultdict(int)
@@ -1562,6 +1570,7 @@ class ThemeDiscoveryService:
         clusters = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).all()
         if len(clusters) < 2:
             return {"pairs_scanned": 0, "subset_edges": 0, "related_edges": 0, "created": 0, "updated": 0}

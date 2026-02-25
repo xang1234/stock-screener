@@ -72,6 +72,7 @@ import {
   getThemeRelationshipGraph,
   getFailedItemsCount,
   getPipelineObservability,
+  getL1Categories,
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -82,6 +83,9 @@ import ThemeCandidateReviewModal from '../components/Themes/ThemeCandidateReview
 import ThemePolicySettingsModal from '../components/Themes/ThemePolicySettingsModal';
 import ArticleBrowserModal from '../components/Themes/ArticleBrowserModal';
 import ModelSettingsModal from '../components/Themes/ModelSettingsModal';
+import ThemeTaxonomyTable from '../components/Themes/ThemeTaxonomyTable';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import CategoryIcon from '@mui/icons-material/Category';
 import { usePipeline } from '../contexts/PipelineContext';
 
 // Status badge colors
@@ -745,6 +749,8 @@ function ThemesPage() {
   const [policySettingsOpen, setPolicySettingsOpen] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState('technical');
   const [page, setPage] = useState(0);
+  const [themeView, setThemeView] = useState(() => localStorage.getItem('themeView') || 'grouped');
+  const [categoryFilter, setCategoryFilter] = useState(null);
 
   // Use global pipeline context
   const { isPipelineRunning, startPipeline } = usePipeline();
@@ -863,6 +869,21 @@ function ThemesPage() {
     queryKey: ['failedItemsCount', selectedPipeline],
     queryFn: () => getFailedItemsCount(selectedPipeline),
   });
+
+  // Fetch L1 categories for grouped view filter
+  const { data: l1Categories } = useQuery({
+    queryKey: ['l1Categories', selectedPipeline],
+    queryFn: () => getL1Categories(selectedPipeline),
+    enabled: themeView === 'grouped',
+  });
+
+  const handleViewChange = (_, newView) => {
+    if (newView !== null) {
+      setThemeView(newView);
+      localStorage.setItem('themeView', newView);
+      setPage(0);
+    }
+  };
 
   const { data: observability, isLoading: isLoadingObservability } = useQuery({
     queryKey: ['pipelineObservability', selectedPipeline],
@@ -1113,8 +1134,54 @@ function ThemesPage() {
         </Grid>
       </Grid>
 
-      {/* Status Filter Tabs */}
+      {/* View Toggle + Status Filter Tabs */}
       <Paper sx={{ mb: 3 }}>
+        <Box sx={{ px: 2, py: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+          <ToggleButtonGroup
+            value={themeView}
+            exclusive
+            onChange={handleViewChange}
+            size="small"
+            sx={{ height: 28 }}
+          >
+            <ToggleButton value="grouped" sx={{ px: 1.5, fontSize: '11px' }}>
+              <CategoryIcon sx={{ mr: 0.5, fontSize: 16 }} />
+              L1 Grouped
+            </ToggleButton>
+            <ToggleButton value="flat" sx={{ px: 1.5, fontSize: '11px' }}>
+              <ViewListIcon sx={{ mr: 0.5, fontSize: 16 }} />
+              All Themes
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {themeView === 'grouped' && l1Categories?.categories?.length > 0 && (
+            <Box display="flex" gap={0.5} alignItems="center">
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                Sector:
+              </Typography>
+              <Chip
+                label="All"
+                size="small"
+                variant={categoryFilter === null ? 'filled' : 'outlined'}
+                color={categoryFilter === null ? 'primary' : 'default'}
+                onClick={() => setCategoryFilter(null)}
+                sx={{ cursor: 'pointer', height: 22, fontSize: '10px' }}
+              />
+              {l1Categories.categories.map((cat) => (
+                <Chip
+                  key={cat.category}
+                  label={`${cat.category} (${cat.count})`}
+                  size="small"
+                  variant={categoryFilter === cat.category ? 'filled' : 'outlined'}
+                  color={categoryFilter === cat.category ? 'primary' : 'default'}
+                  onClick={() => setCategoryFilter(categoryFilter === cat.category ? null : cat.category)}
+                  sx={{ cursor: 'pointer', height: 22, fontSize: '10px', textTransform: 'capitalize' }}
+                />
+              ))}
+            </Box>
+          )}
+        </Box>
+        {themeView === 'flat' && (
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={selectedTab} onChange={handleTabChange}>
             <Tab label="All Themes" value="all" />
@@ -1150,8 +1217,18 @@ function ThemesPage() {
             />
           ))}
         </Box>
+        )}
       </Paper>
 
+      {/* Grouped or Flat View */}
+      {themeView === 'grouped' ? (
+        <ThemeTaxonomyTable
+          pipeline={selectedPipeline}
+          categoryFilter={categoryFilter}
+          onThemeClick={(theme) => setSelectedTheme(theme)}
+        />
+      ) : (
+      <>
       {/* Rankings Table */}
       {isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="300px">
@@ -1385,6 +1462,8 @@ function ThemesPage() {
             }
           />
         </Paper>
+      )}
+      </>
       )}
 
       {/* Theme Detail Modal */}

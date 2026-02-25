@@ -513,6 +513,98 @@ export const runThemeConsolidation = async (dryRun = false) => {
   return response.data;
 };
 
+// ==================== L1/L2 Taxonomy ====================
+
+/**
+ * Get L1 theme rankings with aggregated metrics.
+ *
+ * @param {Object} params - Query parameters
+ * @param {string} [params.pipeline='technical'] - Pipeline filter
+ * @param {string|null} [params.category=null] - Filter by L1 category
+ * @param {number} [params.limit=100] - Max themes
+ * @param {number} [params.offset=0] - Pagination offset
+ * @returns {Promise<Object>} L1 rankings response
+ */
+export const getL1Rankings = async ({ pipeline = 'technical', category = null, limit = 100, offset = 0 } = {}) => {
+  const params = { pipeline, limit, offset };
+  if (category) params.category = category;
+  const response = await apiClient.get('/v1/themes/taxonomy/l1', { params });
+  return response.data;
+};
+
+/**
+ * Get L2 children of an L1 theme.
+ *
+ * @param {number} l1Id - L1 theme cluster ID
+ * @param {Object} params - Query parameters
+ * @param {number} [params.limit=100] - Max children
+ * @param {number} [params.offset=0] - Pagination offset
+ * @returns {Promise<Object>} L1 with children response
+ */
+export const getL1Children = async (l1Id, { limit = 100, offset = 0 } = {}) => {
+  const response = await apiClient.get(`/v1/themes/taxonomy/l1/${l1Id}/children`, {
+    params: { limit, offset },
+  });
+  return response.data;
+};
+
+/**
+ * Get available L1 categories with counts.
+ *
+ * @param {string} [pipeline='technical'] - Pipeline filter
+ * @returns {Promise<Object>} Categories response
+ */
+export const getL1Categories = async (pipeline = 'technical') => {
+  const response = await apiClient.get('/v1/themes/taxonomy/categories', {
+    params: { pipeline },
+  });
+  return response.data;
+};
+
+/**
+ * Get L2 themes without L1 parent assignment.
+ *
+ * @param {Object} params - Query parameters
+ * @param {string} [params.pipeline='technical'] - Pipeline filter
+ * @param {number} [params.limit=100] - Max themes
+ * @param {number} [params.offset=0] - Pagination offset
+ * @returns {Promise<Object>} Unassigned themes response
+ */
+export const getUnassignedThemes = async ({ pipeline = 'technical', limit = 100, offset = 0 } = {}) => {
+  const response = await apiClient.get('/v1/themes/taxonomy/unassigned', {
+    params: { pipeline, limit, offset },
+  });
+  return response.data;
+};
+
+/**
+ * Reassign an L2 theme to a different L1 parent.
+ *
+ * @param {number} l2Id - L2 theme cluster ID
+ * @param {number} l1Id - Target L1 theme cluster ID
+ * @returns {Promise<Object>} Result
+ */
+export const reassignL2ToL1 = async (l2Id, l1Id) => {
+  const response = await apiClient.put(`/v1/themes/taxonomy/${l2Id}/reassign`, { l1_id: l1Id });
+  return response.data;
+};
+
+/**
+ * Run taxonomy assignment pipeline.
+ *
+ * @param {Object} params - Assignment parameters
+ * @param {boolean} [params.dryRun=true] - Preview without applying
+ * @param {string} [params.pipeline='technical'] - Pipeline to assign
+ * @returns {Promise<Object>} Assignment report
+ */
+export const runTaxonomyAssignment = async ({ dryRun = true, pipeline = 'technical' } = {}) => {
+  const response = await apiClient.post('/v1/themes/taxonomy/assign', {
+    dry_run: dryRun,
+    pipeline,
+  });
+  return response.data;
+};
+
 // ==================== Content Item Browser ====================
 
 /**

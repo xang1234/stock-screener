@@ -64,6 +64,10 @@ class ThemeClusterResponse(BaseModel):
     discovery_source: Optional[str]
     first_seen_at: Optional[datetime]
     last_seen_at: Optional[datetime]
+    # L1/L2 taxonomy fields
+    parent_cluster_id: Optional[int] = None
+    is_l1: bool = False
+    taxonomy_level: int = 2
 
     class Config:
         from_attributes = True
@@ -856,6 +860,102 @@ class ContentItemsListResponse(BaseModel):
     limit: int
     offset: int
     items: list[ContentItemWithThemesResponse]
+
+
+# ==================== L1/L2 Taxonomy Schemas ====================
+
+class L1ThemeRankingItem(BaseModel):
+    """L1 parent theme with aggregated metrics and child count."""
+    id: int
+    display_name: str
+    canonical_key: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+    lifecycle_state: str = "active"
+    activated_at: Optional[str] = None
+    num_l2_children: int = 0
+    mentions_7d: int = 0
+    mentions_30d: int = 0
+    num_constituents: int = 0
+    momentum_score: Optional[float] = None
+    basket_return_1w: Optional[float] = None
+    basket_rs_vs_spy: Optional[float] = None
+    rank: Optional[int] = None
+
+
+class L1ThemeRankingsResponse(BaseModel):
+    """Paginated L1 theme rankings."""
+    total: int
+    pipeline: str = "technical"
+    rankings: list[L1ThemeRankingItem]
+
+
+class L1ChildItem(BaseModel):
+    """L2 child theme within an L1 group."""
+    id: int
+    display_name: str
+    canonical_key: str
+    category: Optional[str] = None
+    lifecycle_state: str = "candidate"
+    l1_assignment_method: Optional[str] = None
+    l1_assignment_confidence: Optional[float] = None
+    mentions_7d: int = 0
+    mentions_30d: int = 0
+    num_constituents: int = 0
+    momentum_score: Optional[float] = None
+
+
+class L1ThemeDetail(BaseModel):
+    """L1 theme metadata."""
+    id: int
+    display_name: str
+    canonical_key: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+
+
+class L1ChildrenResponse(BaseModel):
+    """L1 theme with paginated L2 children."""
+    l1: L1ThemeDetail
+    children: list[L1ChildItem]
+    total_children: int
+
+
+class L1CategoryItem(BaseModel):
+    """Category with L1 theme count."""
+    category: str
+    count: int
+
+
+class L1CategoriesResponse(BaseModel):
+    """List of L1 categories."""
+    categories: list[L1CategoryItem]
+
+
+class L2ReassignRequest(BaseModel):
+    """Request to reassign an L2 theme to a different L1 parent."""
+    l1_id: int = Field(..., description="Target L1 theme ID")
+
+
+class TaxonomyAssignmentRequest(BaseModel):
+    """Request to run taxonomy assignment pipeline."""
+    dry_run: bool = Field(True, description="Preview assignments without applying")
+    pipeline: str = Field("technical", description="Pipeline to assign")
+
+
+class UnassignedThemeItem(BaseModel):
+    """L2 theme without L1 parent."""
+    id: int
+    display_name: str
+    canonical_key: str
+    category: Optional[str] = None
+    lifecycle_state: str = "candidate"
+
+
+class UnassignedThemesResponse(BaseModel):
+    """Paginated list of L2 themes without L1 assignment."""
+    total: int
+    themes: list[UnassignedThemeItem]
 
 
 # Update ThemeDetailResponse to resolve forward reference

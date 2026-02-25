@@ -152,6 +152,18 @@ def run_theme_merge_suggestion_safety_migration():
     migrate_theme_merge_suggestion_safety(engine)
 
 
+def run_theme_taxonomy_migration():
+    """
+    Run idempotent L1/L2 taxonomy migration on startup.
+
+    Adds parent_cluster_id, is_l1, taxonomy_level, and assignment tracking
+    columns to theme_clusters for hierarchical theme grouping.
+    """
+    from .db_migrations.theme_taxonomy_migration import migrate_theme_taxonomy
+
+    migrate_theme_taxonomy(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -231,6 +243,7 @@ async def lifespan(app: FastAPI):
     run_theme_relationships_migration()
     run_theme_embedding_freshness_migration()
     run_theme_merge_suggestion_safety_migration()
+    run_theme_taxonomy_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

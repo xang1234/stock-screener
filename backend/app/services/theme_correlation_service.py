@@ -531,7 +531,8 @@ class ThemeCorrelationService:
         Returns summary of validation results
         """
         clusters = self.db.query(ThemeCluster).filter(
-            ThemeCluster.is_active == True
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).all()
 
         results = {

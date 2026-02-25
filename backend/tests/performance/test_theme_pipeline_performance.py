@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
@@ -49,11 +50,18 @@ def _p95(values: list[float]) -> float:
     return float(ordered[idx])
 
 
-def _make_session() -> Session:
-    engine = create_engine("sqlite:///:memory:")
+def _make_session_factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    return SessionLocal()
+    return sessionmaker(bind=engine)
+
+
+def _make_session() -> Session:
+    return _make_session_factory()()
 
 
 def _seed_theme_clusters(session: Session, *, count: int, pipeline: str = "technical") -> None:
@@ -230,7 +238,8 @@ def test_consolidation_pair_generation_p95_and_throughput(monkeypatch):
 @pytest.mark.performance
 @pytest.mark.asyncio
 async def test_extraction_api_response_time_and_throughput(monkeypatch):
-    session = _make_session()
+    SessionLocal = _make_session_factory()
+    seed_session = SessionLocal()
 
     source = ContentSource(
         name="Perf Source",
@@ -239,11 +248,11 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         is_active=True,
         pipelines=["technical"],
     )
-    session.add(source)
-    session.flush()
+    seed_session.add(source)
+    seed_session.flush()
 
     for i in range(40):
-        session.add(
+        seed_session.add(
             ContentItem(
                 source_id=source.id,
                 source_type="news",
@@ -255,7 +264,8 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
                 is_processed=False,
             )
         )
-    session.commit()
+    seed_session.commit()
+    seed_session.close()
 
     monkeypatch.setattr(ThemeExtractionService, "_load_configured_model", lambda self: None)
     monkeypatch.setattr(ThemeExtractionService, "_init_client", lambda self: None)
@@ -279,10 +289,11 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
     )
 
     def _override_get_db():
+        db = SessionLocal()
         try:
-            yield session
+            yield db
         finally:
-            pass
+            db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
     try:
@@ -312,15 +323,15 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_db, None)
-        session.close()
 
 
 @pytest.mark.performance
 @pytest.mark.asyncio
 async def test_consolidation_api_response_time_and_throughput(monkeypatch):
-    session = _make_session()
-    _seed_theme_clusters(session, count=60, pipeline="technical")
-    cluster_ids = [row[0] for row in session.query(ThemeCluster.id).order_by(ThemeCluster.id.asc()).all()]
+    SessionLocal = _make_session_factory()
+    seed_session = SessionLocal()
+    _seed_theme_clusters(seed_session, count=60, pipeline="technical")
+    cluster_ids = [row[0] for row in seed_session.query(ThemeCluster.id).order_by(ThemeCluster.id.asc()).all()]
     synthetic_pairs = []
     for idx in range(0, min(len(cluster_ids) - 1, 24)):
         synthetic_pairs.append(
@@ -332,6 +343,7 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
             }
         )
     assert synthetic_pairs
+    seed_session.close()
 
     monkeypatch.setattr(ThemeMergingService, "_init_llm_client", lambda self: None)
     monkeypatch.setattr(ThemeEmbeddingEngine, "get_encoder", lambda self: object())
@@ -358,10 +370,11 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
     )
 
     def _override_get_db():
+        db = SessionLocal()
         try:
-            yield session
+            yield db
         finally:
-            pass
+            db.close()
 
     app.dependency_overrides[get_db] = _override_get_db
     try:
@@ -370,7 +383,11 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
         pairs_found_total = 0
         started = time.perf_counter()
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            for _ in range(4):
+            # Warmup to avoid one-time routing/import/cache effects in p95.
+            warmup_response = await client.post("/api/v1/themes/consolidate?dry_run=true")
+            assert warmup_response.status_code == 200
+
+            for _ in range(20):
                 t0 = time.perf_counter()
                 response = await client.post("/api/v1/themes/consolidate?dry_run=true")
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -392,4 +409,3 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_db, None)
-        session.close()

@@ -609,6 +609,15 @@ Example themes for this pipeline: {examples_str}
 
             self._update_theme_constituents(mention_data, cluster)
 
+            # Auto-classify new L2 themes to L1 parent via centroid similarity
+            if cluster.parent_cluster_id is None and not cluster.is_l1:
+                try:
+                    from .theme_taxonomy_service import ThemeTaxonomyService
+                    taxonomy_svc = ThemeTaxonomyService(self.db, pipeline=self.pipeline)
+                    taxonomy_svc.classify_new_l2_to_l1(cluster)
+                except Exception:
+                    pass  # Non-fatal: taxonomy may not be set up yet
+
         return mention_count
 
     def _get_match_threshold_config(self) -> MatchThresholdConfig:
@@ -816,6 +825,7 @@ Example themes for this pipeline: {examples_str}
             fallback_clusters = self.db.query(ThemeCluster).filter(
                 ThemeCluster.pipeline == self.pipeline,
                 ThemeCluster.is_active == True,
+                ThemeCluster.is_l1 == False,
             ).order_by(
                 ThemeCluster.last_seen_at.desc(),
                 ThemeCluster.id.desc(),

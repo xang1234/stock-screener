@@ -90,6 +90,17 @@ from ...schemas.theme import (
     ThemeMatchTelemetryResponse,
     ThemeMatchTelemetrySliceResponse,
     ThemePipelineObservabilityResponse,
+    L1ThemeRankingsResponse,
+    L1ThemeRankingItem,
+    L1ChildrenResponse,
+    L1ChildItem,
+    L1ThemeDetail,
+    L1CategoriesResponse,
+    L1CategoryItem,
+    L2ReassignRequest,
+    TaxonomyAssignmentRequest,
+    UnassignedThemesResponse,
+    UnassignedThemeItem,
 )
 from ...services.content_ingestion_service import ContentIngestionService, seed_default_sources
 from ...services.theme_extraction_service import ThemeExtractionService
@@ -253,6 +264,7 @@ async def get_theme_rankings(
         from sqlalchemy import func
         themes_without_metrics = db.query(ThemeCluster).filter(
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
             ~ThemeCluster.id.in_(
                 db.query(ThemeMetrics.theme_cluster_id).distinct()
             )
@@ -1685,6 +1697,129 @@ async def get_matching_telemetry(
         by_threshold_version=by_threshold_version,
         by_source_type=by_source_type,
     )
+
+# ==================== L1/L2 Taxonomy Endpoints ====================
+
+@router.get("/taxonomy/l1", response_model=L1ThemeRankingsResponse)
+async def get_l1_rankings(
+    pipeline: str = Query("technical", description="Pipeline filter"),
+    category: Optional[str] = Query(None, description="Filter by L1 category"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Get L1 theme rankings with aggregated metrics."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db, pipeline=pipeline)
+    rankings, total = service.get_l1_themes(
+        category_filter=category,
+        limit=limit,
+        offset=offset,
+    )
+    return L1ThemeRankingsResponse(
+        total=total,
+        pipeline=pipeline,
+        rankings=[L1ThemeRankingItem(**r) for r in rankings],
+    )
+
+
+@router.get("/taxonomy/l1/{l1_id}/children", response_model=L1ChildrenResponse)
+async def get_l1_children(
+    l1_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Get L2 children of an L1 theme."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db)
+    result = service.get_l1_with_children(l1_id, limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"L1 theme {l1_id} not found")
+    return L1ChildrenResponse(
+        l1=L1ThemeDetail(**result["l1"]),
+        children=[L1ChildItem(**c) for c in result["children"]],
+        total_children=result["total_children"],
+    )
+
+
+@router.post("/taxonomy/assign")
+async def run_taxonomy_assignment(
+    request: TaxonomyAssignmentRequest,
+    db: Session = Depends(get_db),
+):
+    """Run the full taxonomy assignment pipeline (rules → clustering → LLM naming)."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db, pipeline=request.pipeline)
+    report = service.run_full_taxonomy_assignment(dry_run=request.dry_run)
+    return report
+
+
+@router.post("/taxonomy/assign/async")
+async def run_taxonomy_assignment_async(
+    pipeline: str = Query("technical"),
+    dry_run: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """Run taxonomy assignment asynchronously via Celery."""
+    from ...tasks.theme_discovery_tasks import run_taxonomy_assignment as taxonomy_task
+
+    task = taxonomy_task.delay(pipeline=pipeline, dry_run=dry_run)
+    return {"task_id": task.id, "status": "queued"}
+
+
+@router.put("/taxonomy/{l2_id}/reassign")
+async def reassign_l2_to_l1(
+    l2_id: int,
+    request: L2ReassignRequest,
+    db: Session = Depends(get_db),
+):
+    """Manually reassign an L2 theme to a different L1 parent."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db)
+    success = service.assign_l2_to_l1(l2_id, request.l1_id, method="manual", confidence=1.0)
+    if not success:
+        raise HTTPException(status_code=404, detail="L2 or L1 theme not found")
+    db.commit()
+    return {"success": True, "l2_id": l2_id, "l1_id": request.l1_id}
+
+
+@router.get("/taxonomy/unassigned", response_model=UnassignedThemesResponse)
+async def get_unassigned_themes(
+    pipeline: str = Query("technical"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Get L2 themes without L1 parent assignment."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db, pipeline=pipeline)
+    themes, total = service.get_unassigned_themes(limit=limit, offset=offset)
+    return UnassignedThemesResponse(
+        total=total,
+        themes=[UnassignedThemeItem(**t) for t in themes],
+    )
+
+
+@router.get("/taxonomy/categories", response_model=L1CategoriesResponse)
+async def get_l1_categories(
+    pipeline: str = Query("technical"),
+    db: Session = Depends(get_db),
+):
+    """List available L1 categories with theme counts."""
+    from ...services.theme_taxonomy_service import ThemeTaxonomyService
+
+    service = ThemeTaxonomyService(db, pipeline=pipeline)
+    categories = service.get_categories()
+    return L1CategoriesResponse(
+        categories=[L1CategoryItem(**c) for c in categories],
+    )
+
 
 @router.get("/{theme_id}", response_model=ThemeDetailResponse)
 async def get_theme_detail(

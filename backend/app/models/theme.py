@@ -213,6 +213,14 @@ class ThemeCluster(Base):
     reactivated_at = Column(DateTime(timezone=True))
     retired_at = Column(DateTime(timezone=True))
 
+    # L1/L2 Taxonomy
+    parent_cluster_id = Column(Integer, ForeignKey("theme_clusters.id"), index=True)  # L2 → L1 parent
+    is_l1 = Column(Boolean, nullable=False, default=False)  # True for L1 parent themes
+    taxonomy_level = Column(Integer, nullable=False, default=2)  # 1=L1 parent, 2=L2 leaf
+    l1_assignment_method = Column(String(20))  # rule_based, clustering, llm, manual
+    l1_assignment_confidence = Column(Float)  # 0-1
+    l1_assigned_at = Column(DateTime(timezone=True))
+
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

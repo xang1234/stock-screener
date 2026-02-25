@@ -345,6 +345,37 @@ if settings.cache_warmup_enabled:
             'task': 'app.tasks.theme_discovery_tasks.poll_due_sources',
             'schedule': crontab(minute='*/15'),  # Every 15 minutes
         },
+
+        # L1 Taxonomy: recompute centroid embeddings from children
+        # Run after stale L2 embedding refresh (5:10 AM), before L1 metrics
+        'daily-l1-centroid-embeddings': {
+            'task': 'app.tasks.theme_discovery_tasks.recompute_l1_centroid_embeddings',
+            'schedule': crontab(
+                hour=5,
+                minute=20,
+            ),
+        },
+
+        # L1 Taxonomy: aggregate L2 metrics → L1 metrics
+        # Run after centroid embeddings (5:20 AM)
+        'daily-l1-metrics': {
+            'task': 'app.tasks.theme_discovery_tasks.compute_l1_metrics',
+            'schedule': crontab(
+                hour=5,
+                minute=30,
+            ),
+        },
+
+        # L1 Taxonomy: weekly full assignment pipeline
+        # Run before weekly consolidation (Sunday 4 AM)
+        'weekly-taxonomy-assignment': {
+            'task': 'app.tasks.theme_discovery_tasks.run_taxonomy_assignment',
+            'schedule': crontab(
+                hour=3,
+                minute=30,
+                day_of_week=0,  # Sunday
+            ),
+        },
     }
 
 if __name__ == '__main__':
