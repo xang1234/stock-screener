@@ -1299,7 +1299,7 @@ def run_taxonomy_assignment(pipeline: str = None, dry_run: bool = False):
     start_time = time.time()
 
     try:
-        pipelines = [pipeline] if pipeline else ["technical"]
+        pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
         results = {}
 
         for p in pipelines:
@@ -1347,7 +1347,7 @@ def recompute_l1_centroid_embeddings(pipeline: str = None):
     start_time = time.time()
 
     try:
-        pipelines = [pipeline] if pipeline else ["technical"]
+        pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
         results = {}
 
         for p in pipelines:

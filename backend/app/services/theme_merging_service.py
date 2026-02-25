@@ -288,7 +288,8 @@ class ThemeMergingService:
 
     def _snapshot_wave_counts(self, *, pipeline: str | None = None) -> dict[str, int]:
         active_query = self.db.query(func.count(ThemeCluster.id)).filter(
-            ThemeCluster.is_active == True
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         )
         if pipeline:
             active_query = active_query.filter(ThemeCluster.pipeline == pipeline)
@@ -897,6 +898,7 @@ class ThemeMergingService:
         other_themes = self.db.query(ThemeCluster).filter(
             ThemeCluster.id != theme_id,
             ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).all()
 
         # Calculate similarities

@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import numpy as np
-from sqlalchemy import func, case, distinct
+from sqlalchemy import func, case, distinct, or_
 from sqlalchemy.orm import Session
 
 from ..models.theme import (
@@ -160,13 +160,14 @@ class ThemeTaxonomyService:
         description: str = "",
     ) -> ThemeCluster:
         """Create an L1 parent theme. Skips candidate lifecycle — created directly as active."""
-        ckey = canonical_theme_key(display_name)
+        # L1 canonical keys use _l1 suffix to avoid collision with L2 themes
+        # that share the same display_name under the (pipeline, canonical_key) unique constraint.
+        ckey = canonical_theme_key(display_name) + "_l1"
         now = datetime.utcnow()
 
         existing = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.canonical_key == ckey,
-            ThemeCluster.is_l1 == True,
         ).first()
         if existing:
             return existing
@@ -480,11 +481,13 @@ class ThemeTaxonomyService:
         }
 
         # Handle noise themes
+        noise_assigned = 0
         if not dry_run:
             self._handle_noise_themes(noise_themes)
+            noise_assigned = len(noise_themes)
 
         # Count totals
-        total_assigned = len(rule_assigned) + sum(len(a["members"]) for a in l1_assignments)
+        total_assigned = len(rule_assigned) + sum(len(a["members"]) for a in l1_assignments) + noise_assigned
         report["l2_themes_assigned"] = total_assigned
         report["still_unassigned"] = len(unassigned) - total_assigned
 
@@ -766,8 +769,9 @@ class ThemeTaxonomyService:
         l1_ids = [t.id for t in l1_themes]
 
         # Find latest metrics date for L2 themes in this pipeline
+        # Accept NULL-pipeline rows as a legacy fallback (pre-pipeline migration)
         latest_l2_date = self.db.query(func.max(ThemeMetrics.date)).filter(
-            ThemeMetrics.pipeline == self.pipeline,
+            or_(ThemeMetrics.pipeline == self.pipeline, ThemeMetrics.pipeline.is_(None)),
         ).scalar()
         if not latest_l2_date:
             return {"l1_count": len(l1_ids), "metrics_updated": 0}
@@ -801,6 +805,7 @@ class ThemeTaxonomyService:
             ThemeCluster.parent_cluster_id.in_(l1_ids),
             ThemeCluster.is_active == True,
             ThemeCluster.is_l1 == False,
+            ThemeCluster.pipeline == self.pipeline,
             ThemeMetrics.date == latest_l2_date,
         ).group_by(
             ThemeCluster.parent_cluster_id,

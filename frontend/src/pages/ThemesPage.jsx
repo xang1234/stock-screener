@@ -784,6 +784,7 @@ function ThemesPage() {
     if (newPipeline !== null) {
       setSelectedPipeline(newPipeline);
       setPage(0);
+      setCategoryFilter(null);
     }
   };
 

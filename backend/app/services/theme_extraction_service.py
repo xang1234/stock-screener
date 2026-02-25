@@ -615,8 +615,16 @@ Example themes for this pipeline: {examples_str}
                     from .theme_taxonomy_service import ThemeTaxonomyService
                     taxonomy_svc = ThemeTaxonomyService(self.db, pipeline=self.pipeline)
                     taxonomy_svc.classify_new_l2_to_l1(cluster)
-                except Exception:
-                    pass  # Non-fatal: taxonomy may not be set up yet
+                except Exception as exc:
+                    logger.warning(
+                        "L2→L1 auto-classify failed for cluster id=%s (non-fatal): %s",
+                        cluster.id, exc,
+                    )
+                    # Roll back any partial flush to keep session usable
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
 
         return mention_count
 
@@ -1128,6 +1136,7 @@ Example themes for this pipeline: {examples_str}
             candidate_clusters = self.db.query(ThemeCluster).filter(
                 ThemeCluster.pipeline == self.pipeline,
                 ThemeCluster.is_active == True,
+                ThemeCluster.is_l1 == False,
             ).all()
             for candidate in candidate_clusters:
                 candidate_score = self._cluster_fuzzy_score(
@@ -1596,7 +1605,8 @@ class ThemeNormalizationService:
 
         similar = []
         all_clusters = self.db.query(ThemeCluster).filter(
-            ThemeCluster.is_active == True
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
         ).all()
 
         for cluster in all_clusters:

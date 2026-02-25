@@ -4,13 +4,12 @@
  * Renders L1 parent themes as bold header rows with expand/collapse.
  * L2 children are loaded on-demand via React Query when expanded.
  */
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
   Chip,
   CircularProgress,
-  Collapse,
   IconButton,
   LinearProgress,
   Paper,
@@ -203,7 +202,7 @@ export default function ThemeTaxonomyTable({
             {rankings.map((l1) => {
               const isExpanded = !!expandedL1[l1.id];
               return (
-                <Box component="tbody" key={l1.id}>
+                <React.Fragment key={l1.id}>
                   <TableRow
                     hover
                     sx={{
@@ -268,7 +267,7 @@ export default function ThemeTaxonomyTable({
                     open={isExpanded}
                     onThemeClick={onThemeClick}
                   />
-                </Box>
+                </React.Fragment>
               );
             })}
           </TableBody>

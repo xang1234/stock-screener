@@ -943,6 +943,7 @@ class ThemeDiscoveryService:
                 ThemeMetrics.mention_velocity >= 3.0,
                 ThemeMetrics.pipeline == self.pipeline,
                 ThemeCluster.pipeline == self.pipeline,
+                ThemeCluster.is_l1 == False,
             ).all()
 
             for metrics, theme in velocity_spikes:
@@ -1718,7 +1719,10 @@ class ThemeDiscoveryService:
 
             cluster_lookup = {
                 cluster.id: cluster
-                for cluster in self.db.query(ThemeCluster).filter(ThemeCluster.pipeline == self.pipeline).all()
+                for cluster in self.db.query(ThemeCluster).filter(
+                    ThemeCluster.pipeline == self.pipeline,
+                    ThemeCluster.is_l1 == False,
+                ).all()
             }
             constituent_sets = self._active_constituent_symbols_by_cluster(list(cluster_lookup.keys()))
 
