@@ -7,15 +7,18 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import and_, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from ..models.theme import (
     ContentItem,
     ContentItemPipelineState,
     ThemeMention,
+    ThemeCluster,
+    ThemeMergeSuggestion,
 )
 
 VALID_PIPELINES = ("technical", "fundamental")
+PIPELINE_OBSERVABILITY_RUNBOOK_URL = "/docs/theme_identity/e8_t4_pipeline_observability_runbook.md"
 
 
 def normalize_pipelines(value: Any) -> list[str]:
@@ -370,4 +373,237 @@ def compute_pipeline_state_health(
         "generated_at": now.isoformat(),
         "window_days": max_age_days,
         "pipelines": health_rows,
+    }
+
+
+def compute_pipeline_observability(
+    db: Session,
+    pipeline: str,
+    max_age_days: int = 30,
+) -> dict[str, Any]:
+    """
+    Build dashboard-ready observability metrics and thresholded alerts.
+    """
+    if pipeline not in VALID_PIPELINES:
+        raise ValueError(f"pipeline must be one of {list(VALID_PIPELINES)}")
+
+    health = compute_pipeline_state_health(db=db, pipeline=pipeline, max_age_days=max_age_days)
+    pipeline_health = health["pipelines"][0] if health["pipelines"] else {
+        "counts": {},
+        "rates": {},
+        "retryable_growth": {},
+    }
+    counts = pipeline_health.get("counts", {})
+    rates = pipeline_health.get("rates", {})
+    retryable_growth = pipeline_health.get("retryable_growth", {})
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=max_age_days)
+
+    method_rows = db.query(
+        ThemeMention.match_method,
+        func.count(ThemeMention.id),
+    ).filter(
+        ThemeMention.pipeline == pipeline,
+        ThemeMention.mentioned_at >= cutoff,
+    ).group_by(
+        ThemeMention.match_method
+    ).all()
+    total_mentions = int(sum(int(row[1]) for row in method_rows))
+    method_mix = {
+        str((row[0] or "unknown")): round(
+            float(row[1]) / float(total_mentions),
+            4,
+        )
+        for row in method_rows
+        if total_mentions > 0
+    }
+    new_cluster_count = int(
+        sum(int(row[1]) for row in method_rows if (row[0] or "unknown") == "create_new_cluster")
+    )
+    new_cluster_rate = (
+        round(float(new_cluster_count) / float(total_mentions), 4)
+        if total_mentions > 0
+        else 0.0
+    )
+
+    source_cluster = aliased(ThemeCluster)
+    target_cluster = aliased(ThemeCluster)
+    merge_rows = db.query(
+        ThemeMergeSuggestion.status,
+        func.count(ThemeMergeSuggestion.id),
+    ).join(
+        source_cluster,
+        source_cluster.id == ThemeMergeSuggestion.source_cluster_id,
+    ).join(
+        target_cluster,
+        target_cluster.id == ThemeMergeSuggestion.target_cluster_id,
+    ).filter(
+        source_cluster.pipeline == pipeline,
+        target_cluster.pipeline == pipeline,
+        ThemeMergeSuggestion.created_at >= cutoff,
+    ).group_by(
+        ThemeMergeSuggestion.status
+    ).all()
+    merge_status_counts = {str(row[0]): int(row[1]) for row in merge_rows}
+    merge_pending_count = int(merge_status_counts.get("pending", 0))
+    merge_reviewed = (
+        int(merge_status_counts.get("approved", 0))
+        + int(merge_status_counts.get("rejected", 0))
+        + int(merge_status_counts.get("auto_merged", 0))
+    )
+    merge_positive = int(merge_status_counts.get("approved", 0)) + int(merge_status_counts.get("auto_merged", 0))
+    merge_precision_proxy = (
+        round(float(merge_positive) / float(merge_reviewed), 4)
+        if merge_reviewed > 0
+        else 1.0
+    )
+
+    metrics = {
+        "parse_failure_rate": float(rates.get("parse_failure_rate", 0.0) or 0.0),
+        "processed_without_mentions_ratio": float(rates.get("processed_without_mentions_ratio", 0.0) or 0.0),
+        "new_cluster_rate": float(new_cluster_rate),
+        "total_mentions": int(total_mentions),
+        "new_cluster_count": int(new_cluster_count),
+        "failed_retryable_count": int(counts.get("failed_retryable", 0) or 0),
+        "retryable_growth_ratio": float(retryable_growth.get("ratio", 0.0) or 0.0),
+        "retryable_growth_delta": int(retryable_growth.get("delta", 0) or 0),
+        "merge_pending_count": int(merge_pending_count),
+        "merge_reviewed_count": int(merge_reviewed),
+        "merge_precision_proxy": float(merge_precision_proxy),
+        "match_method_mix": method_mix,
+        "merge_status_counts": merge_status_counts,
+    }
+
+    thresholds = {
+        "parse_failure_rate_max": 0.25,
+        "processed_without_mentions_ratio_max": 0.20,
+        "new_cluster_rate_max": 0.45,
+        "retryable_growth_ratio_max": 2.0,
+        "retryable_growth_delta_max": 10,
+        "merge_pending_count_max": 50,
+        "merge_precision_proxy_min": 0.55,
+    }
+    runbook_base = PIPELINE_OBSERVABILITY_RUNBOOK_URL
+    alerts: list[dict[str, Any]] = []
+
+    if metrics["parse_failure_rate"] > thresholds["parse_failure_rate_max"]:
+        alerts.append(
+            {
+                "key": "parse_failure_rate_high",
+                "severity": "warning",
+                "title": "Parse failures elevated",
+                "description": "Parser/schema failures are above policy threshold for this pipeline.",
+                "metric": "parse_failure_rate",
+                "value": round(metrics["parse_failure_rate"], 4),
+                "threshold": thresholds["parse_failure_rate_max"],
+                "runbook_url": f"{runbook_base}#parse-failure-rate",
+                "likely_causes": [
+                    "LLM output drift or malformed JSON payloads",
+                    "Provider/model changes without prompt/schema tuning",
+                ],
+            }
+        )
+
+    if metrics["processed_without_mentions_ratio"] > thresholds["processed_without_mentions_ratio_max"]:
+        alerts.append(
+            {
+                "key": "processed_without_mentions_ratio_high",
+                "severity": "warning",
+                "title": "Processed-without-mentions ratio elevated",
+                "description": "Too many items are marked processed but produced no mentions.",
+                "metric": "processed_without_mentions_ratio",
+                "value": round(metrics["processed_without_mentions_ratio"], 4),
+                "threshold": thresholds["processed_without_mentions_ratio_max"],
+                "runbook_url": f"{runbook_base}#processed-without-mentions-ratio",
+                "likely_causes": [
+                    "Extraction prompt too strict for current source mix",
+                    "Silent parse/validation errors bypassing mention persistence",
+                ],
+            }
+        )
+
+    if metrics["new_cluster_rate"] > thresholds["new_cluster_rate_max"] and metrics["total_mentions"] >= 20:
+        alerts.append(
+            {
+                "key": "new_cluster_rate_high",
+                "severity": "info",
+                "title": "New-cluster rate drift",
+                "description": "Matcher is creating clusters at an unusually high rate.",
+                "metric": "new_cluster_rate",
+                "value": round(metrics["new_cluster_rate"], 4),
+                "threshold": thresholds["new_cluster_rate_max"],
+                "runbook_url": f"{runbook_base}#new-cluster-rate",
+                "likely_causes": [
+                    "Alias coverage stale or under-trained",
+                    "Matching thresholds too strict for current language variance",
+                ],
+            }
+        )
+
+    if (
+        metrics["retryable_growth_ratio"] > thresholds["retryable_growth_ratio_max"]
+        and metrics["retryable_growth_delta"] >= thresholds["retryable_growth_delta_max"]
+    ):
+        alerts.append(
+            {
+                "key": "retryable_growth_high",
+                "severity": "warning",
+                "title": "Retry queue growth accelerating",
+                "description": "Retryable failures are growing faster than expected over the last 24h.",
+                "metric": "retryable_growth_ratio",
+                "value": round(metrics["retryable_growth_ratio"], 4),
+                "threshold": thresholds["retryable_growth_ratio_max"],
+                "runbook_url": f"{runbook_base}#retry-queue-growth",
+                "likely_causes": [
+                    "Upstream provider instability or quota pressure",
+                    "New extraction failure mode not handled by current retry policy",
+                ],
+            }
+        )
+
+    if metrics["merge_pending_count"] > thresholds["merge_pending_count_max"]:
+        alerts.append(
+            {
+                "key": "merge_pending_backlog_high",
+                "severity": "info",
+                "title": "Merge-review backlog high",
+                "description": "Pending merge suggestions exceed review queue target.",
+                "metric": "merge_pending_count",
+                "value": int(metrics["merge_pending_count"]),
+                "threshold": int(thresholds["merge_pending_count_max"]),
+                "runbook_url": f"{runbook_base}#merge-review-backlog",
+                "likely_causes": [
+                    "Insufficient reviewer throughput for incoming suggestions",
+                    "Similarity thresholds too permissive for auto-queueing",
+                ],
+            }
+        )
+
+    if (
+        metrics["merge_reviewed_count"] >= 10
+        and metrics["merge_precision_proxy"] < thresholds["merge_precision_proxy_min"]
+    ):
+        alerts.append(
+            {
+                "key": "merge_precision_proxy_low",
+                "severity": "warning",
+                "title": "Merge precision proxy low",
+                "description": "Approved/auto-merged share of reviewed suggestions fell below target.",
+                "metric": "merge_precision_proxy",
+                "value": round(metrics["merge_precision_proxy"], 4),
+                "threshold": thresholds["merge_precision_proxy_min"],
+                "runbook_url": f"{runbook_base}#merge-precision-proxy",
+                "likely_causes": [
+                    "Embedding similarity threshold too loose for current universe",
+                    "LLM merge verifier calibration drift",
+                ],
+            }
+        )
+
+    return {
+        "generated_at": now.isoformat(),
+        "window_days": max_age_days,
+        "pipeline": pipeline,
+        "metrics": metrics,
+        "alerts": alerts,
     }

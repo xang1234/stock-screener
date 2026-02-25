@@ -71,6 +71,7 @@ import {
   getMergeSuggestions,
   getThemeRelationshipGraph,
   getFailedItemsCount,
+  getPipelineObservability,
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -299,6 +300,89 @@ const AlertsCard = ({ alerts, isLoading, onDismiss, dismissingId }) => {
         ) : (
           <Box sx={{ fontSize: '11px', color: 'text.secondary', textAlign: 'center', py: 1 }}>
             No alerts
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+const PipelineObservabilityCard = ({ observability, isLoading }) => {
+  if (isLoading) {
+    return (
+      <Card variant="outlined">
+        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+          <Box display="flex" justifyContent="center" p={1}>
+            <CircularProgress size={20} />
+          </Box>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const metrics = observability?.metrics || {};
+  const alerts = observability?.alerts || [];
+  const statChip = (label, value, color = 'default') => (
+    <Chip
+      key={label}
+      label={`${label}: ${value}`}
+      size="small"
+      color={color}
+      variant="outlined"
+      sx={{ height: 18, fontSize: '10px' }}
+    />
+  );
+
+  return (
+    <Card variant="outlined" sx={{ height: '100%' }}>
+      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+        <Box display="flex" alignItems="center" mb={1}>
+          <TimelineIcon sx={{ color: 'primary.main', fontSize: 18 }} />
+          <Box sx={{ fontSize: '12px', fontWeight: 600, ml: 1 }}>
+            Pipeline Health
+          </Box>
+          {alerts.length > 0 && (
+            <Chip
+              label={`${alerts.length} alerts`}
+              size="small"
+              color="warning"
+              sx={{ ml: 1, height: 18, fontSize: '10px' }}
+            />
+          )}
+        </Box>
+
+        <Box display="flex" gap={0.5} flexWrap="wrap" mb={1}>
+          {statChip('Parse', `${((metrics.parse_failure_rate || 0) * 100).toFixed(1)}%`, metrics.parse_failure_rate > 0.25 ? 'warning' : 'default')}
+          {statChip('No-mention', `${((metrics.processed_without_mentions_ratio || 0) * 100).toFixed(1)}%`, metrics.processed_without_mentions_ratio > 0.2 ? 'warning' : 'default')}
+          {statChip('New clusters', `${((metrics.new_cluster_rate || 0) * 100).toFixed(1)}%`, metrics.new_cluster_rate > 0.45 ? 'warning' : 'default')}
+          {statChip('Merge proxy', `${((metrics.merge_precision_proxy || 0) * 100).toFixed(1)}%`, metrics.merge_precision_proxy < 0.55 ? 'warning' : 'default')}
+        </Box>
+
+        {alerts.length > 0 ? (
+          <Box sx={{ maxHeight: 120, overflowY: 'auto' }}>
+            {alerts.slice(0, 3).map((item) => (
+              <Box
+                key={item.key}
+                sx={{
+                  mb: 0.75,
+                  px: 1,
+                  py: 0.5,
+                  borderLeft: 2,
+                  borderColor: item.severity === 'warning' ? 'warning.main' : 'info.main',
+                  backgroundColor: 'background.paper',
+                }}
+              >
+                <Box sx={{ fontSize: '10px', fontWeight: 600 }}>{item.title}</Box>
+                <Box sx={{ fontSize: '10px', color: 'text.secondary' }}>{item.description}</Box>
+                <Box sx={{ fontSize: '10px', mt: 0.25 }}>
+                  <a href={item.runbook_url} target="_blank" rel="noreferrer">Runbook</a>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Box sx={{ fontSize: '11px', color: 'text.secondary', textAlign: 'center', py: 1 }}>
+            No policy breaches
           </Box>
         )}
       </CardContent>
@@ -780,6 +864,12 @@ function ThemesPage() {
     queryFn: () => getFailedItemsCount(selectedPipeline),
   });
 
+  const { data: observability, isLoading: isLoadingObservability } = useQuery({
+    queryKey: ['pipelineObservability', selectedPipeline],
+    queryFn: () => getPipelineObservability(selectedPipeline, 30),
+    refetchInterval: 60000,
+  });
+
   // Start async pipeline using global context
   const handleRunPipeline = async () => {
     try {
@@ -969,10 +1059,10 @@ function ThemesPage() {
 
       {/* Summary Cards */}
       <Grid container spacing={2} mb={3}>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
           <EmergingThemesCard themes={emerging} isLoading={isLoadingEmerging} />
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
           <Card variant="outlined" sx={{ height: '100%' }}>
             <CardContent>
               <Box display="flex" alignItems="center" mb={2}>
@@ -1007,7 +1097,13 @@ function ThemesPage() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={3}>
+          <PipelineObservabilityCard
+            observability={observability}
+            isLoading={isLoadingObservability}
+          />
+        </Grid>
+        <Grid item xs={12} md={3}>
           <AlertsCard
             alerts={alerts}
             isLoading={isLoadingAlerts}

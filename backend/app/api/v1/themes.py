@@ -89,6 +89,7 @@ from ...schemas.theme import (
     ThemeMatchMethodDistributionResponse,
     ThemeMatchTelemetryResponse,
     ThemeMatchTelemetrySliceResponse,
+    ThemePipelineObservabilityResponse,
 )
 from ...services.content_ingestion_service import ContentIngestionService, seed_default_sources
 from ...services.theme_extraction_service import ThemeExtractionService
@@ -97,6 +98,7 @@ from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_merging_service import ThemeMergingService
 from ...services.theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from ...services.theme_pipeline_state_service import (
+    compute_pipeline_observability,
     compute_pipeline_state_health,
     normalize_pipelines,
     reconcile_source_pipeline_change,
@@ -867,6 +869,24 @@ async def get_pipeline_state_health(
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
     return compute_pipeline_state_health(
+        db=db,
+        pipeline=pipeline,
+        max_age_days=window_days,
+    )
+
+
+@router.get("/pipeline/observability", response_model=ThemePipelineObservabilityResponse)
+async def get_pipeline_observability(
+    pipeline: str = Query(..., description="Pipeline: technical or fundamental"),
+    window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
+    db: Session = Depends(get_db),
+):
+    """
+    Dashboard summary + actionable alert policies for pipeline health.
+    """
+    if pipeline not in {"technical", "fundamental"}:
+        raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
+    return compute_pipeline_observability(
         db=db,
         pipeline=pipeline,
         max_age_days=window_days,

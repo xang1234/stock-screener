@@ -348,6 +348,20 @@ export const getFailedItemsCount = async (pipeline = null) => {
   return response.data;
 };
 
+/**
+ * Get observability dashboard metrics and actionable alerts for a pipeline.
+ *
+ * @param {string} pipeline - technical or fundamental
+ * @param {number} windowDays - Lookback window (default: 30)
+ * @returns {Promise<Object>} Observability payload
+ */
+export const getPipelineObservability = async (pipeline = 'technical', windowDays = 30) => {
+  const response = await apiClient.get('/v1/themes/pipeline/observability', {
+    params: { pipeline, window_days: windowDays },
+  });
+  return response.data;
+};
+
 // ==================== Theme Merge Operations ====================
 
 /**

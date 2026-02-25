@@ -352,6 +352,42 @@ class ThemeMatchTelemetryResponse(BaseModel):
     by_source_type: list[ThemeMatchTelemetrySliceResponse]
 
 
+class ThemePipelineObservabilityMetricsResponse(BaseModel):
+    parse_failure_rate: float
+    processed_without_mentions_ratio: float
+    new_cluster_rate: float
+    total_mentions: int
+    new_cluster_count: int
+    failed_retryable_count: int
+    retryable_growth_ratio: float
+    retryable_growth_delta: int
+    merge_pending_count: int
+    merge_reviewed_count: int
+    merge_precision_proxy: float
+    match_method_mix: dict[str, float]
+    merge_status_counts: dict[str, int]
+
+
+class ThemePipelineObservabilityAlertResponse(BaseModel):
+    key: str
+    severity: str
+    title: str
+    description: str
+    metric: str
+    value: float | int
+    threshold: float | int
+    runbook_url: str
+    likely_causes: list[str]
+
+
+class ThemePipelineObservabilityResponse(BaseModel):
+    generated_at: str
+    window_days: int
+    pipeline: str
+    metrics: ThemePipelineObservabilityMetricsResponse
+    alerts: list[ThemePipelineObservabilityAlertResponse]
+
+
 # Correlation Discovery Schemas
 class CorrelationClusterResponse(BaseModel):
     cluster_id: int
