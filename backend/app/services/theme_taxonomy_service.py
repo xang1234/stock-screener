@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Optional
@@ -632,17 +633,42 @@ class ThemeTaxonomyService:
 
         Returns list of dicts with l1_name, category, members.
         """
-        assignments: list[dict] = []
+        # Create a single shared LLMService to reuse across all clusters
+        # (preserves GroqKeyManager state and avoids re-initialization overhead)
+        try:
+            from .llm import LLMService
+            llm = LLMService(use_case="extraction")
+        except Exception as e:
+            logger.warning("Could not initialize LLMService, all clusters will use fallback: %s", e)
+            llm = None
 
-        for group in cluster_groups:
+        assignments: list[dict] = []
+        total = len(cluster_groups)
+        consecutive_rate_limits = 0
+
+        for i, group in enumerate(cluster_groups, 1):
             if not group:
                 continue
 
             # Try LLM naming
-            l1_info = self._llm_name_cluster(group)
+            l1_info = self._llm_name_cluster(group, llm=llm)
             if l1_info is None:
                 # Fallback: use highest-mention child's display_name
                 l1_info = self._fallback_name_cluster(group)
+                consecutive_rate_limits += 1
+                logger.info("LLM naming cluster %d/%d: fallback", i, total)
+                # Back off harder on consecutive failures
+                if consecutive_rate_limits >= 3:
+                    backoff = min(consecutive_rate_limits * 2.0, 30.0)
+                    logger.info("Multiple consecutive fallbacks (%d), backing off %.1fs",
+                                consecutive_rate_limits, backoff)
+                    time.sleep(backoff)
+            else:
+                consecutive_rate_limits = 0
+                logger.info("LLM naming cluster %d/%d: %s", i, total, l1_info["l1_name"])
+                # Proactive inter-call delay to stay under rate limits
+                if i < total:
+                    time.sleep(1.5)
 
             if not dry_run:
                 l1 = self.create_l1_theme(
@@ -664,45 +690,101 @@ class ThemeTaxonomyService:
 
         return assignments
 
-    def _llm_name_cluster(self, themes: list[ThemeCluster]) -> dict | None:
-        """Use LLM to generate an L1 name and category for a cluster of themes."""
-        try:
-            from .llm import LLMService, LLMError
+    def _llm_name_cluster(self, themes: list[ThemeCluster], llm=None) -> dict | None:
+        """Use LLM to generate an L1 name and category for a cluster of themes.
 
-            llm = LLMService(use_case="extraction")
-            theme_names = [t.display_name for t in themes]
-            prompt = build_l1_naming_prompt(theme_names)
+        Args:
+            themes: Cluster of L2 themes to name.
+            llm: Optional shared LLMService instance (avoids per-call init overhead).
+        """
+        from .llm import LLMService, LLMError, LLMRateLimitError
 
-            response = llm.completion_sync(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-            )
-            content = LLMService.extract_content(response)
-            if not content:
-                return None
-
-            # Parse JSON response
-            text = content.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```\w*\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-
-            parsed = json.loads(text)
-            l1_name = parsed.get("l1_name", "").strip()
-            category = parsed.get("category", "other").strip().lower()
-            description = parsed.get("description", "").strip()
-
-            if not l1_name:
-                return None
-
-            if category not in L1_CATEGORIES:
-                category = "other"
-
-            return {"l1_name": l1_name, "category": category, "description": description}
-
-        except Exception as e:
-            logger.warning("LLM naming failed for cluster, using fallback: %s", e)
+        if llm is None:
             return None
+
+        theme_names = [t.display_name for t in themes]
+        prompt = build_l1_naming_prompt(theme_names)
+        max_attempts = 3
+
+        for attempt in range(max_attempts):
+            try:
+                response = llm.completion_sync(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                )
+                content = LLMService.extract_content(response)
+                if not content:
+                    return None
+
+                # Parse JSON response (strict=False to tolerate LLM control chars)
+                text = content.strip()
+                if text.startswith("```"):
+                    text = re.sub(r"^```\w*\n?", "", text)
+                    text = re.sub(r"\n?```$", "", text)
+
+                try:
+                    parsed = json.loads(text, strict=False)
+                except json.JSONDecodeError:
+                    # Attempt to repair truncated JSON (e.g. unterminated string)
+                    # Close any unterminated string and missing braces
+                    repaired = text.rstrip()
+                    if repaired.count('"') % 2 == 1:
+                        repaired += '"'
+                    if not repaired.endswith("}"):
+                        repaired += "}"
+                    parsed = json.loads(repaired, strict=False)
+                l1_name = parsed.get("l1_name", "").strip()
+                category = parsed.get("category", "other").strip().lower()
+                description = parsed.get("description", "").strip()
+
+                if not l1_name:
+                    return None
+
+                if category not in L1_CATEGORIES:
+                    category = "other"
+
+                return {"l1_name": l1_name, "category": category, "description": description}
+
+            except LLMRateLimitError as e:
+                # Extract retry-after hint if present in error message
+                retry_after = getattr(e, "retry_after", None)
+                if retry_after is None:
+                    error_str = str(e).lower()
+                    match = re.search(r'try again in (\d+(?:\.\d+)?)\s*(?:s|second)', error_str)
+                    if match:
+                        retry_after = float(match.group(1))
+
+                base_delay = retry_after if retry_after else 5.0 * (2 ** attempt)
+                delay = min(base_delay, 60.0)
+                # Add 10% jitter to avoid thundering herd
+                delay += delay * 0.1 * (hash(prompt) % 10) / 10.0
+
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "Rate limit naming cluster (attempt %d/%d), waiting %.1fs: %s",
+                        attempt + 1, max_attempts, delay, e,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.warning("Rate limit naming cluster after %d attempts, using fallback: %s",
+                                   max_attempts, e)
+                    return None
+
+            except json.JSONDecodeError as e:
+                # Would get same response on retry, bail to fallback
+                logger.warning("JSON parse error naming cluster, using fallback: %s", e)
+                return None
+
+            except LLMError as e:
+                # Non-retryable LLM error (auth, context window, etc.)
+                logger.warning("LLM error naming cluster, using fallback: %s", e)
+                return None
+
+            except Exception as e:
+                logger.warning("Unexpected error naming cluster, using fallback: %s", e)
+                return None
+
+        return None
 
     def _fallback_name_cluster(self, themes: list[ThemeCluster]) -> dict:
         """Fallback naming: use highest-mention child's display_name."""
