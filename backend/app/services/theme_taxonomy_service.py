@@ -643,6 +643,7 @@ class ThemeTaxonomyService:
             llm = None
 
         assignments: list[dict] = []
+        failed_clusters: list[tuple[int, list[ThemeCluster]]] = []
         total = len(cluster_groups)
         consecutive_rate_limits = 0
 
@@ -681,12 +682,49 @@ class ThemeTaxonomyService:
                         theme.id, l1.id,
                         method="clustering", confidence=0.7,
                     )
+                self.db.commit()  # Persist each cluster immediately for crash resilience
 
             assignments.append({
                 "l1_name": l1_info["l1_name"],
                 "category": l1_info["category"],
                 "members": group,
+                "_used_fallback": l1_info is not None and l1_info.get("_fallback"),
             })
+            # Track failed clusters for retry
+            if l1_info.get("_fallback"):
+                failed_clusters.append((len(assignments) - 1, group))
+
+        # Retry fallback clusters once with longer delays
+        if failed_clusters and llm is not None:
+            logger.info("Retrying %d fallback clusters with longer delays...", len(failed_clusters))
+            time.sleep(10.0)  # Cool-down before retries
+            retried = 0
+            for idx, group in failed_clusters:
+                l1_info = self._llm_name_cluster(group, llm=llm)
+                if l1_info is not None:
+                    retried += 1
+                    if not dry_run:
+                        l1 = self.create_l1_theme(
+                            l1_info["l1_name"],
+                            l1_info["category"],
+                            l1_info.get("description", ""),
+                        )
+                        for theme in group:
+                            self.assign_l2_to_l1(
+                                theme.id, l1.id,
+                                method="clustering", confidence=0.7,
+                            )
+                        self.db.commit()
+                    assignments[idx] = {
+                        "l1_name": l1_info["l1_name"],
+                        "category": l1_info["category"],
+                        "members": group,
+                        "_used_fallback": False,
+                    }
+                time.sleep(3.0)  # Longer inter-call delay for retries
+            if retried:
+                logger.info("Retry pass upgraded %d/%d fallback clusters to LLM names",
+                            retried, len(failed_clusters))
 
         return assignments
 
@@ -718,6 +756,9 @@ class ThemeTaxonomyService:
 
                 # Parse JSON response (strict=False to tolerate LLM control chars)
                 text = content.strip()
+                # Strip Qwen3 <think>...</think> reasoning tags
+                if "<think>" in text and "</think>" in text:
+                    text = text.split("</think>")[-1].strip()
                 if text.startswith("```"):
                     text = re.sub(r"^```\w*\n?", "", text)
                     text = re.sub(r"\n?```$", "", text)
@@ -804,6 +845,7 @@ class ThemeTaxonomyService:
             "l1_name": best.display_name,
             "category": best.category or "other",
             "description": f"Group of {len(themes)} related themes",
+            "_fallback": True,
         }
 
     def _handle_noise_themes(self, noise_themes: list[ThemeCluster]) -> None:
