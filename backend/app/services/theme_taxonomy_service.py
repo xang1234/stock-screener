@@ -549,6 +549,10 @@ class ThemeTaxonomyService:
         """
         Phase 2: Cluster remaining unassigned themes using HDBSCAN on embeddings.
 
+        Uses PCA dimensionality reduction (384d → 50d) with L2-normalization
+        before HDBSCAN to avoid the curse of dimensionality that causes
+        one mega-cluster on raw high-dimensional sentence-transformer vectors.
+
         Returns (cluster_groups, noise_themes).
         """
         if len(themes) < 3:
@@ -574,17 +578,30 @@ class ThemeTaxonomyService:
         # HDBSCAN clustering
         try:
             from sklearn.cluster import HDBSCAN
+            from sklearn.decomposition import PCA
         except ImportError:
-            logger.warning("sklearn.cluster.HDBSCAN not available, skipping clustering phase")
+            logger.warning("sklearn not available, skipping clustering phase")
             return [], themes
 
         X = np.array(vectors)
+
+        # L2-normalize so euclidean distance ≈ cosine distance
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        X_norm = X / norms
+
+        # PCA reduces 384d → 50d, concentrating variance and making
+        # density differences meaningful for HDBSCAN
+        n_components = min(50, X_norm.shape[0] - 1, X_norm.shape[1])
+        X_reduced = PCA(n_components=n_components).fit_transform(X_norm)
+
         clusterer = HDBSCAN(
             min_cluster_size=3,
+            min_samples=2,
             metric="euclidean",
             cluster_selection_method="eom",
         )
-        labels = clusterer.fit_predict(X)
+        labels = clusterer.fit_predict(X_reduced)
 
         # Group by cluster label
         cluster_groups: dict[int, list[ThemeCluster]] = defaultdict(list)
