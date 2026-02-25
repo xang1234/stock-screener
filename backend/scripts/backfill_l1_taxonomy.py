@@ -16,7 +16,8 @@ from datetime import datetime
 # Add backend directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
+from app.db_migrations.theme_taxonomy_migration import migrate_theme_taxonomy
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
 
 
@@ -32,6 +33,15 @@ def main():
     print(f"Pipeline: {args.pipeline}")
     print(f"Time: {datetime.now().isoformat()}")
     print("=" * 60)
+
+    # Ensure taxonomy columns exist (migration normally runs on app startup,
+    # but this script bypasses FastAPI lifespan)
+    print("\n[Pre-flight] Ensuring taxonomy schema...")
+    migration_result = migrate_theme_taxonomy(engine)
+    if migration_result["columns_added"]:
+        print(f"  Added columns: {migration_result['columns_added']}")
+    else:
+        print("  Schema already up to date.")
 
     db = SessionLocal()
     try:
