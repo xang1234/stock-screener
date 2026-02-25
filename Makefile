@@ -59,10 +59,11 @@ GATE_3 = \
   tests/unit/test_scan_path_parity.py
 
 # ── Gate 4: Performance Baselines ───────────────────────────────────
-# Runtime budget regression (advisory — won't block CI).
+# Runtime budget regression (blocking in CI).
 
 GATE_4 = \
-  tests/performance/test_setup_engine_performance.py
+  tests/performance/test_setup_engine_performance.py \
+  tests/performance/test_theme_pipeline_performance.py
 
 # ── Gate 5: Golden Regression ───────────────────────────────────────
 # Snapshot-pinned detector, aggregator, and scanner outputs.
@@ -100,17 +101,17 @@ gate-2: ## Temporal integrity
 gate-3: ## Integration coverage
 	$(PYTEST) $(GATE_3) -v --tb=short
 
-gate-4: ## Performance baselines (advisory)
+gate-4: ## Performance baselines
 	$(PYTEST) $(GATE_4) -v --tb=short
 
 gate-5: ## Golden regression
 	$(PYTEST) $(GATE_5) -v --tb=short
 
-gates: ## Run all 5 gates sequentially (gate-4 advisory)
+gates: ## Run all 5 gates sequentially
 	$(MAKE) gate-1
 	$(MAKE) gate-2
 	$(MAKE) gate-3
-	-$(MAKE) gate-4
+	$(MAKE) gate-4
 	$(MAKE) gate-5
 
 gate-check: ## Verify all SE test files are assigned to a gate

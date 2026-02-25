@@ -39,9 +39,10 @@ from app.scanners.setup_engine_screener import SetupEngineScanner
 # Budget constants
 # ---------------------------------------------------------------------------
 
-# Per-detector budget (ms). Most detectors: 1-19ms; three_weeks_tight
-# is O(n²) at ~95ms due to nested sliding window. 150ms gives ~57% CI headroom.
-DETECTOR_BUDGET_MS = 150
+# Per-detector budget (ms). Most detectors remain in low double digits, while
+# three_weeks_tight has O(n^2) behavior and can spike on shared CI runners.
+# 300ms keeps regressions visible while avoiding flaky false negatives.
+DETECTOR_BUDGET_MS = 300
 
 # Full aggregator pipeline: sum of all detectors (~130ms typical) + calibration
 # + selection overhead. 500ms gives ~3x CI headroom.

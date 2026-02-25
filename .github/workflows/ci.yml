@@ -42,9 +42,8 @@ jobs:
       - name: "Gate 3: Integration coverage"
         run: make gate-3
 
-      - name: "Gate 4: Performance baselines (advisory)"
+      - name: "Gate 4: Performance baselines"
         run: make gate-4
-        continue-on-error: true
 
       - name: "Gate 5: Golden regression"
         run: make gate-5
