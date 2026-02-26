@@ -10,7 +10,9 @@ Requires: curl_cffi, quickjs.
 """
 import json
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -77,20 +79,40 @@ class SotweScraper:
     # ------------------------------------------------------------------
 
     def _fetch_page(self, username: str) -> str:
-        """Fetch the Sotwe profile page HTML."""
+        """Fetch the Sotwe profile page HTML with retry on transient errors."""
         url = f"{BASE_URL}/{username}"
-        try:
-            resp = cffi_requests.get(
-                url,
-                impersonate="chrome",
-                timeout=self.timeout,
-            )
-            resp.raise_for_status()
-            return resp.text
-        except Exception as exc:
-            raise SotweScraperError(
-                f"Failed to fetch Sotwe page for @{username}: {exc}"
-            ) from exc
+        max_retries = 3
+        retryable_codes = {429, 500, 502, 503}
+
+        for attempt in range(max_retries):
+            try:
+                resp = cffi_requests.get(
+                    url,
+                    impersonate="chrome",
+                    timeout=self.timeout,
+                )
+                if resp.status_code in retryable_codes and attempt < max_retries - 1:
+                    wait = (2 ** (attempt + 2)) + random.uniform(1, 3)
+                    logger.warning(
+                        f"Sotwe returned {resp.status_code} for @{username}, "
+                        f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                return resp.text
+            except Exception as exc:
+                if attempt < max_retries - 1:
+                    wait = (2 ** (attempt + 2)) + random.uniform(1, 3)
+                    logger.warning(
+                        f"Sotwe request failed for @{username}: {exc}, "
+                        f"retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+                raise SotweScraperError(
+                    f"Failed to fetch Sotwe page for @{username} after {max_retries} attempts: {exc}"
+                ) from exc
 
     def _extract_nuxt_data(self, html: str) -> dict[str, Any]:
         """Extract and evaluate the __NUXT__ payload from HTML."""

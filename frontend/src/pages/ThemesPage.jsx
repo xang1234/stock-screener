@@ -31,6 +31,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
+  Link,
 } from '@mui/material';
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
@@ -73,6 +74,7 @@ import {
   getFailedItemsCount,
   getPipelineObservability,
   getL1Categories,
+  getThemeMentions,
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -414,7 +416,13 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
     enabled: !!themeId && open,
   });
 
-  const isLoading = isLoadingDetail || isLoadingHistory || isLoadingGraph;
+  const { data: mentions, isLoading: isLoadingMentions } = useQuery({
+    queryKey: ['themeMentions', themeId],
+    queryFn: () => getThemeMentions(themeId, 50),
+    enabled: !!themeId && open,
+  });
+
+  const isLoading = isLoadingDetail || isLoadingHistory || isLoadingGraph || isLoadingMentions;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
@@ -443,7 +451,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
             {detail.metrics && (
               <Grid container spacing={2} mb={3}>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold">
                       #{detail.metrics.rank || '-'}
                     </Typography>
@@ -453,7 +461,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                   </Box>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold" color={
                       detail.metrics.momentum_score >= 70 ? 'success.main' :
                       detail.metrics.momentum_score >= 50 ? 'warning.main' : 'error.main'
@@ -466,7 +474,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                   </Box>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold">
                       {detail.metrics.mention_velocity?.toFixed(1) || '-'}x
                     </Typography>
@@ -476,7 +484,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                   </Box>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold">
                       {detail.metrics.basket_rs_vs_spy?.toFixed(0) || '-'}
                     </Typography>
@@ -486,7 +494,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                   </Box>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold">
                       {detail.metrics.pct_above_50ma?.toFixed(0) || '-'}%
                     </Typography>
@@ -496,7 +504,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                   </Box>
                 </Grid>
                 <Grid item xs={6} md={2}>
-                  <Box textAlign="center" p={1} bgcolor="grey.50" borderRadius={1}>
+                  <Box textAlign="center" p={1} bgcolor="action.hover" borderRadius={1}>
                     <Typography variant="h5" fontWeight="bold">
                       {detail.metrics.num_constituents || 0}
                     </Typography>
@@ -579,7 +587,7 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                               sx={{
                                 fontSize: '9px',
                                 padding: '1px 3px',
-                                backgroundColor: 'grey.100',
+                                backgroundColor: 'action.selected',
                                 borderRadius: '2px',
                               }}
                             >
@@ -598,6 +606,117 @@ const ThemeDetailModal = ({ themeId, themeName, open, onClose, selectedPipeline 
                 </TableContainer>
               </Box>
             )}
+
+            {/* Source Articles */}
+            <Box mt={3}>
+              <Box sx={{ fontSize: '12px', fontWeight: 600, mb: 0.5 }}>
+                Source Articles ({mentions?.total_count || 0})
+              </Box>
+              {mentions?.mentions?.length > 0 ? (
+                <TableContainer sx={{ maxHeight: 300 }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Title</TableCell>
+                        <TableCell>Excerpt</TableCell>
+                        <TableCell>Source</TableCell>
+                        <TableCell>Sentiment</TableCell>
+                        <TableCell>Date</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {mentions.mentions.map((m) => (
+                        <TableRow key={m.mention_id} hover>
+                          <TableCell sx={{ maxWidth: 200 }}>
+                            {m.content_url ? (
+                              <Link
+                                href={m.content_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                underline="hover"
+                                sx={{
+                                  fontSize: '11px',
+                                  fontWeight: 500,
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {m.content_title || 'Untitled'}
+                              </Link>
+                            ) : (
+                              <Box sx={{
+                                fontSize: '11px',
+                                fontWeight: 500,
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden',
+                              }}>
+                                {m.content_title || 'Untitled'}
+                              </Box>
+                            )}
+                          </TableCell>
+                          <TableCell sx={{ maxWidth: 280 }}>
+                            <Box sx={{
+                              fontSize: '10px',
+                              color: 'text.secondary',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}>
+                              {m.excerpt || '-'}
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Box display="flex" alignItems="center" gap={0.5}>
+                              {m.source_name && (
+                                <Box sx={{ fontSize: '10px', fontWeight: 500 }}>
+                                  {m.source_name}
+                                </Box>
+                              )}
+                              <Box
+                                component="span"
+                                sx={{
+                                  fontSize: '9px',
+                                  padding: '1px 3px',
+                                  backgroundColor: 'action.selected',
+                                  borderRadius: '2px',
+                                }}
+                              >
+                                {m.source_type}
+                              </Box>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              size="small"
+                              label={m.sentiment || 'neutral'}
+                              color={
+                                m.sentiment === 'bullish' ? 'success' :
+                                m.sentiment === 'bearish' ? 'error' : 'default'
+                              }
+                              sx={{ height: 18, fontSize: '9px' }}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ fontSize: '10px', color: 'text.secondary', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                            {m.published_at
+                              ? new Date(m.published_at).toLocaleDateString()
+                              : '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              ) : (
+                <Box sx={{ fontSize: '11px', color: 'text.secondary', textAlign: 'center', py: 2 }}>
+                  No articles found
+                </Box>
+              )}
+            </Box>
 
             {detail.relationships?.length > 0 && (
               <Box mt={3}>
@@ -893,10 +1012,10 @@ function ThemesPage() {
   });
 
   // Start async pipeline using global context
-  const handleRunPipeline = async () => {
+  const handleRunPipeline = async (lookbackDays = null) => {
     try {
       // Run pipeline for selected pipeline only (not both)
-      const result = await runPipelineAsync(selectedPipeline);
+      const result = await runPipelineAsync(selectedPipeline, lookbackDays);
       startPipeline(result.run_id);
     } catch (error) {
       console.error('Pipeline error:', error);
@@ -936,7 +1055,7 @@ function ThemesPage() {
           <Button
             variant="contained"
             startIcon={<PlayArrowIcon />}
-            onClick={handleRunPipeline}
+            onClick={() => handleRunPipeline()}
             disabled={isPipelineRunning}
           >
             {isPipelineRunning ? 'Running Pipeline...' : 'Run Discovery Pipeline'}
@@ -1059,7 +1178,7 @@ function ThemesPage() {
                 size="small"
                 variant="outlined"
                 startIcon={isPipelineRunning ? <CircularProgress size={12} /> : <PlayArrowIcon />}
-                onClick={handleRunPipeline}
+                onClick={() => handleRunPipeline()}
                 disabled={isPipelineRunning}
                 sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
               >
@@ -1067,6 +1186,16 @@ function ThemesPage() {
               </Button>
             </Badge>
           </Tooltip>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<RefreshIcon />}
+            onClick={() => handleRunPipeline(30)}
+            disabled={isPipelineRunning}
+            sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
+          >
+            Backfill 30d
+          </Button>
           <Button
             size="small"
             variant="outlined"
@@ -1183,6 +1312,7 @@ function ThemesPage() {
           )}
         </Box>
         {themeView === 'flat' && (
+        <>
         <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
           <Tabs value={selectedTab} onChange={handleTabChange}>
             <Tab label="All Themes" value="all" />
@@ -1218,6 +1348,7 @@ function ThemesPage() {
             />
           ))}
         </Box>
+        </>
         )}
       </Paper>
 

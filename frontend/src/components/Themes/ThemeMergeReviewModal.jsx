@@ -204,7 +204,7 @@ function SuggestionRow({ suggestion, onReject, isRejecting, checked, onToggle, d
       <TableRow>
         <TableCell colSpan={8} sx={{ py: 0 }}>
           <Collapse in={expanded} timeout="auto" unmountOnExit>
-            <Box sx={{ py: 2, px: 2, bgcolor: 'grey.50', borderRadius: 1, my: 1 }}>
+            <Box sx={{ py: 2, px: 2, bgcolor: 'action.hover', borderRadius: 1, my: 1 }}>
               <Box display="flex" gap={4} mb={2}>
                 <Box>
                   <Typography variant="caption" color="text.secondary">

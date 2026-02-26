@@ -194,6 +194,11 @@ class ThemeTaxonomyService:
         logger.info("Created L1 theme: %s (id=%d, category=%s)", display_name, theme.id, category)
         return theme
 
+    _SORTABLE_FIELDS = {
+        "momentum_score", "mentions_7d", "num_constituents",
+        "basket_return_1w", "basket_rs_vs_spy", "display_name", "rank",
+    }
+
     def get_l1_themes(
         self,
         *,
@@ -201,8 +206,19 @@ class ThemeTaxonomyService:
         include_children_count: bool = True,
         limit: int = 300,
         offset: int = 0,
+        sort_by: str = "momentum_score",
+        sort_order: str = "desc",
     ) -> tuple[list[dict], int]:
-        """Return L1 themes with optional children count and aggregated metrics."""
+        """Return L1 themes with optional children count and aggregated metrics.
+
+        Args:
+            sort_by: Field to sort by (momentum_score, mentions_7d, num_constituents,
+                     basket_return_1w, basket_rs_vs_spy, display_name, rank).
+            sort_order: 'asc' or 'desc'.
+        """
+        if sort_by not in self._SORTABLE_FIELDS:
+            sort_by = "momentum_score"
+
         base_query = self.db.query(ThemeCluster).filter(
             ThemeCluster.pipeline == self.pipeline,
             ThemeCluster.is_l1 == True,
@@ -213,9 +229,8 @@ class ThemeTaxonomyService:
 
         total = base_query.count()
 
-        l1_themes = base_query.order_by(
-            ThemeCluster.display_name.asc()
-        ).offset(offset).limit(limit).all()
+        # Fetch all L1 themes (no pagination yet — we sort after metric enrichment)
+        l1_themes = base_query.all()
 
         results = []
         for l1 in l1_themes:
@@ -259,6 +274,18 @@ class ThemeTaxonomyService:
 
             results.append(row)
 
+        # Sort in Python after metric enrichment
+        reverse = sort_order != "asc"
+        if sort_by == "display_name":
+            results.sort(key=lambda r: (r.get("display_name") or "").lower(), reverse=reverse)
+        else:
+            # Numeric sort — treat None as -inf for desc, +inf for asc
+            none_val = float("-inf") if reverse else float("inf")
+            results.sort(key=lambda r: r.get(sort_by) if r.get(sort_by) is not None else none_val, reverse=reverse)
+
+        # Apply pagination after sorting
+        results = results[offset:offset + limit]
+
         return results, total
 
     def get_l1_with_children(
@@ -267,8 +294,13 @@ class ThemeTaxonomyService:
         *,
         limit: int = 100,
         offset: int = 0,
+        sort_by: str = "momentum_score",
+        sort_order: str = "desc",
     ) -> dict | None:
-        """Get an L1 theme with its L2 children (paginated)."""
+        """Get an L1 theme with its L2 children (paginated, sortable)."""
+        if sort_by not in self._SORTABLE_FIELDS:
+            sort_by = "momentum_score"
+
         l1 = self.db.query(ThemeCluster).filter(
             ThemeCluster.id == l1_id,
             ThemeCluster.is_l1 == True,
@@ -281,9 +313,8 @@ class ThemeTaxonomyService:
             ThemeCluster.is_active == True,
         )
         total_children = children_query.count()
-        children = children_query.order_by(
-            ThemeCluster.display_name.asc()
-        ).offset(offset).limit(limit).all()
+        # Fetch all children (sort after metric enrichment)
+        children = children_query.all()
 
         child_rows = []
         for child in children:
@@ -304,6 +335,17 @@ class ThemeTaxonomyService:
                 "num_constituents": latest_metrics.num_constituents if latest_metrics else 0,
                 "momentum_score": latest_metrics.momentum_score if latest_metrics else None,
             })
+
+        # Sort children after metric enrichment
+        reverse = sort_order != "asc"
+        if sort_by == "display_name":
+            child_rows.sort(key=lambda r: (r.get("display_name") or "").lower(), reverse=reverse)
+        else:
+            none_val = float("-inf") if reverse else float("inf")
+            child_rows.sort(key=lambda r: r.get(sort_by) if r.get(sort_by) is not None else none_val, reverse=reverse)
+
+        # Apply pagination after sorting
+        child_rows = child_rows[offset:offset + limit]
 
         return {
             "l1": {

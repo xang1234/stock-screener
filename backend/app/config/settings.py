@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     twitter_bearer_token: str = ""  # For Twitter/X API (optional)
     sotwe_enabled: bool = True  # Enable Sotwe scraper as Twitter fallback
     sotwe_request_timeout: int = 30  # Timeout for Sotwe HTTP requests (seconds)
+    sotwe_request_delay: float = 5.0  # Delay between Sotwe requests (seconds)
     benzinga_api_key: str = ""  # For Benzinga news API (optional)
     tavily_api_key: str = ""  # For web search in chatbot (primary)
     serper_api_key: str = ""  # For web search in chatbot (fallback)

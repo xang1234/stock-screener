@@ -653,6 +653,7 @@ async def validate_all_themes(
 @router.post("/pipeline/run")
 async def run_pipeline_async(
     pipeline: Optional[str] = Query(None, description="Pipeline: technical, fundamental, or None for both"),
+    lookback_days: Optional[int] = Query(None, ge=1, le=30, description="Re-fetch articles from the last N days (backfill mode)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -677,7 +678,7 @@ async def run_pipeline_async(
     run_id = str(uuid.uuid4())
 
     # Queue Celery task with pipeline parameter
-    task = run_full_pipeline.delay(run_id=run_id, pipeline=pipeline)
+    task = run_full_pipeline.delay(run_id=run_id, pipeline=pipeline, lookback_days=lookback_days)
 
     # Create pipeline run record for tracking
     pipeline_run = ThemePipelineRun(
@@ -1704,6 +1705,8 @@ async def get_matching_telemetry(
 async def get_l1_rankings(
     pipeline: str = Query("technical", description="Pipeline filter"),
     category: Optional[str] = Query(None, description="Filter by L1 category"),
+    sort_by: str = Query("momentum_score", description="Sort field: momentum_score, mentions_7d, num_constituents, basket_return_1w, basket_rs_vs_spy, display_name, rank"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -1716,6 +1719,8 @@ async def get_l1_rankings(
         category_filter=category,
         limit=limit,
         offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     return L1ThemeRankingsResponse(
         total=total,
@@ -1727,6 +1732,8 @@ async def get_l1_rankings(
 @router.get("/taxonomy/l1/{l1_id}/children", response_model=L1ChildrenResponse)
 async def get_l1_children(
     l1_id: int,
+    sort_by: str = Query("momentum_score", description="Sort field"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -1735,7 +1742,10 @@ async def get_l1_children(
     from ...services.theme_taxonomy_service import ThemeTaxonomyService
 
     service = ThemeTaxonomyService(db)
-    result = service.get_l1_with_children(l1_id, limit=limit, offset=offset)
+    result = service.get_l1_with_children(
+        l1_id, limit=limit, offset=offset,
+        sort_by=sort_by, sort_order=sort_order,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail=f"L1 theme {l1_id} not found")
     return L1ChildrenResponse(

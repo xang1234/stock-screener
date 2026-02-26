@@ -68,18 +68,22 @@ def _release_theme_stale_embedding_lock(client, token: str) -> None:
 
 
 @celery_app.task(name='app.tasks.theme_discovery_tasks.ingest_content')
-def ingest_content():
+def ingest_content(lookback_days=None):
     """
     Fetch new content from all active sources.
 
     This pulls content from RSS feeds, Twitter, news APIs, and Reddit.
     Should be run every 2-4 hours during market hours.
 
+    Args:
+        lookback_days: If set, re-fetch articles from the last N days (backfill mode).
+
     Returns:
         Dict with ingestion statistics
     """
+    mode = f" (backfill {lookback_days}d)" if lookback_days else ""
     logger.info("=" * 60)
-    logger.info("TASK: Content Ingestion for Theme Discovery")
+    logger.info(f"TASK: Content Ingestion for Theme Discovery{mode}")
     logger.info("=" * 60)
 
     from ..services.content_ingestion_service import ContentIngestionService
@@ -89,7 +93,7 @@ def ingest_content():
 
     try:
         service = ContentIngestionService(db)
-        result = service.fetch_all_active_sources()
+        result = service.fetch_all_active_sources(lookback_days=lookback_days)
 
         duration = time.time() - start_time
 
@@ -836,7 +840,7 @@ def check_alerts():
 
 
 @celery_app.task(bind=True, name='app.tasks.theme_discovery_tasks.run_full_pipeline')
-def run_full_pipeline(self, run_id: str = None, pipeline: str = None):
+def run_full_pipeline(self, run_id: str = None, pipeline: str = None, lookback_days: int = None):
     """
     Run the complete theme discovery pipeline with progress tracking.
 
@@ -855,6 +859,7 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None):
         run_id: Optional pipeline run ID for database tracking
         pipeline: Pipeline to run (technical/fundamental).
                   If None, runs for both pipelines sequentially.
+        lookback_days: If set, re-fetch articles from the last N days during ingestion.
 
     Returns:
         Dict with pipeline results
@@ -898,7 +903,7 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None):
         )
 
         logger.info("\n[Step 1/5] Content Ingestion...")
-        results['ingestion'] = ingest_content()
+        results['ingestion'] = ingest_content(lookback_days=lookback_days)
 
         if pipeline_run:
             pipeline_run.current_step = 'ingestion'

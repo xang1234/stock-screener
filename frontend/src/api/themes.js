@@ -302,9 +302,10 @@ export const addThemeConstituents = async (themeId, symbols) => {
  * @param {string|null} pipeline - Pipeline: technical, fundamental, or null for both
  * @returns {Promise<Object>} Response with run_id and task_id for tracking
  */
-export const runPipelineAsync = async (pipeline = null) => {
+export const runPipelineAsync = async (pipeline = null, lookbackDays = null) => {
   const params = {};
   if (pipeline) params.pipeline = pipeline;
+  if (lookbackDays) params.lookback_days = lookbackDays;
   const response = await apiClient.post('/v1/themes/pipeline/run', null, { params });
   return response.data;
 };
@@ -525,8 +526,8 @@ export const runThemeConsolidation = async (dryRun = false) => {
  * @param {number} [params.offset=0] - Pagination offset
  * @returns {Promise<Object>} L1 rankings response
  */
-export const getL1Rankings = async ({ pipeline = 'technical', category = null, limit = 100, offset = 0 } = {}) => {
-  const params = { pipeline, limit, offset };
+export const getL1Rankings = async ({ pipeline = 'technical', category = null, limit = 100, offset = 0, sortBy = 'momentum_score', sortOrder = 'desc' } = {}) => {
+  const params = { pipeline, limit, offset, sort_by: sortBy, sort_order: sortOrder };
   if (category) params.category = category;
   const response = await apiClient.get('/v1/themes/taxonomy/l1', { params });
   return response.data;
@@ -541,9 +542,9 @@ export const getL1Rankings = async ({ pipeline = 'technical', category = null, l
  * @param {number} [params.offset=0] - Pagination offset
  * @returns {Promise<Object>} L1 with children response
  */
-export const getL1Children = async (l1Id, { limit = 100, offset = 0 } = {}) => {
+export const getL1Children = async (l1Id, { limit = 100, offset = 0, sortBy = 'momentum_score', sortOrder = 'desc' } = {}) => {
   const response = await apiClient.get(`/v1/themes/taxonomy/l1/${l1Id}/children`, {
-    params: { limit, offset },
+    params: { limit, offset, sort_by: sortBy, sort_order: sortOrder },
   });
   return response.data;
 };

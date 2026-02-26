@@ -9,6 +9,7 @@ Fetches content from multiple sources:
 """
 import logging
 import hashlib
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from abc import ABC, abstractmethod
@@ -419,14 +420,24 @@ class ContentIngestionService:
         """Get appropriate fetcher for source type"""
         return self.fetchers.get(source_type, RSSFetcher())
 
-    def fetch_source(self, source: ContentSource) -> int:
-        """Fetch new content from a single source, returns count of new items"""
+    def fetch_source(self, source: ContentSource, lookback_days: int | None = None) -> int:
+        """Fetch new content from a single source, returns count of new items.
+
+        Args:
+            source: The content source to fetch from.
+            lookback_days: If set, override the since date to fetch articles
+                from the last N days. Used for backfilling gaps. When backfilling,
+                last_fetched_at is NOT updated so normal runs resume correctly.
+        """
         fetcher = self.get_fetcher(source.source_type)
 
-        # Determine since date (last fetch time or default lookback)
-        since = source.last_fetched_at
-        if not since:
-            since = datetime.utcnow() - timedelta(days=30)  # Default 30-day lookback for new sources
+        # Determine since date
+        if lookback_days:
+            since = datetime.utcnow() - timedelta(days=lookback_days)
+        else:
+            since = source.last_fetched_at
+            if not since:
+                since = datetime.utcnow() - timedelta(days=30)  # Default 30-day lookback for new sources
 
         # Fetch items
         items = fetcher.fetch(source, since)
@@ -474,15 +485,24 @@ class ContentIngestionService:
 
         # Update source metadata (refresh source first in case session was affected)
         source = self.db.query(ContentSource).filter(ContentSource.id == source_id).first()
-        source.last_fetched_at = datetime.utcnow()
+        # Only update last_fetched_at during normal runs, not backfills.
+        # Backfill leaves last_fetched_at unchanged so the next normal run
+        # resumes from the correct point.
+        if not lookback_days:
+            source.last_fetched_at = datetime.utcnow()
         source.total_items_fetched = (source.total_items_fetched or 0) + new_count
         self.db.commit()
 
         logger.info(f"Ingested {new_count} new items from {source.name}")
         return new_count
 
-    def fetch_all_active_sources(self) -> dict:
-        """Fetch from all active sources, returns summary"""
+    def fetch_all_active_sources(self, lookback_days: int | None = None) -> dict:
+        """Fetch from all active sources, returns summary.
+
+        Args:
+            lookback_days: If set, re-fetch articles from the last N days
+                (backfill mode). Deduplication ensures no duplicates.
+        """
         sources = self.db.query(ContentSource).filter(
             ContentSource.is_active == True
         ).order_by(ContentSource.priority.desc()).all()
@@ -496,7 +516,7 @@ class ContentIngestionService:
 
         for source in sources:
             try:
-                new_count = self.fetch_source(source)
+                new_count = self.fetch_source(source, lookback_days=lookback_days)
                 results["total_new_items"] += new_count
                 results["sources_fetched"].append({
                     "name": source.name,
@@ -511,6 +531,10 @@ class ContentIngestionService:
                     "name": source.name,
                     "error": str(e),
                 })
+
+            # Rate-limit Sotwe/Twitter requests to avoid Cloudflare 503s
+            if source.source_type == "twitter":
+                time.sleep(settings.sotwe_request_delay)
 
         return results
 

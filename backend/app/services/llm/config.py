@@ -151,9 +151,9 @@ RESEARCH_PRESET = ModelPreset(
 
 # Theme extraction - needs structured output (JSON)
 EXTRACTION_PRESET = ModelPreset(
-    primary=GROQ_LLAMA_70B,
+    primary=GROQ_QWEN3_32B,
     fallbacks=[
-        GROQ_QWEN3_32B,
+        GROQ_LLAMA_70B,
         GROQ_MIXTRAL,
     ]
 )

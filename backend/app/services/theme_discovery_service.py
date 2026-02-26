@@ -89,6 +89,25 @@ class ThemeDiscoveryService:
             return {}
         return pipeline_overrides
 
+    def _count_active_ingestion_days(self, since: datetime, until: datetime) -> int:
+        """Count distinct calendar days with at least one ContentItem ingested.
+
+        Uses ContentItem.fetched_at (when the pipeline ran), not published_at,
+        so it reflects actual pipeline uptime. Only counts items from active sources.
+        This is theme-agnostic — pipeline downtime affects all themes equally.
+        """
+        from sqlalchemy import cast, Date
+        count = self.db.query(
+            func.count(func.distinct(cast(ContentItem.fetched_at, Date)))
+        ).join(
+            ContentSource, ContentItem.source_id == ContentSource.id
+        ).filter(
+            ContentItem.fetched_at >= since,
+            ContentItem.fetched_at <= until,
+            ContentSource.is_active == True,
+        ).scalar() or 0
+        return count
+
     def calculate_mention_metrics(self, theme_cluster_id: int, as_of_date: Optional[datetime] = None) -> dict:
         """
         Calculate mention velocity and sentiment for a theme
@@ -141,18 +160,26 @@ class ThemeDiscoveryService:
             ContentSource.is_active == True,
         ).scalar() or 0
 
-        # Calculate velocity (7d vs 30d weekly average)
-        # Compares last 7 days to the average week in the 30-day period
+        # Calculate velocity (7d vs 30d per-active-day rate)
+        # Normalizes by actual ingestion days to prevent pipeline downtime
+        # from creating false momentum declines across all themes.
         if mentions_30d > 0:
             # If 7d mentions == 30d mentions, all activity is recent (new theme)
             # In this case, velocity = 1.0 (neutral) since we can't determine trend
             if mentions_7d == mentions_30d:
                 mention_velocity = 1.0
             else:
-                weekly_avg_30d = mentions_30d / 4.3  # ~4.3 weeks in 30 days
-                raw_velocity = mentions_7d / weekly_avg_30d if weekly_avg_30d > 0 else 0
-                # Cap velocity between 0.1 and 3.0 for display purposes
-                mention_velocity = max(0.1, min(3.0, raw_velocity))
+                active_days_7d = getattr(self, '_cached_active_days_7d', None) or self._count_active_ingestion_days(date_7d, as_of_date)
+                active_days_30d = getattr(self, '_cached_active_days_30d', None) or self._count_active_ingestion_days(date_30d, as_of_date)
+
+                if active_days_7d == 0 or active_days_30d == 0:
+                    mention_velocity = 1.0  # No ingestion data => neutral
+                else:
+                    rate_7d = mentions_7d / active_days_7d
+                    rate_30d = mentions_30d / active_days_30d
+                    raw_velocity = rate_7d / rate_30d if rate_30d > 0 else 0
+                    # Cap velocity between 0.1 and 3.0 for display purposes
+                    mention_velocity = max(0.1, min(3.0, raw_velocity))
         else:
             mention_velocity = 1.0 if mentions_7d > 0 else 0
 
@@ -601,6 +628,13 @@ class ThemeDiscoveryService:
             "rankings": [],
             "pipeline": self.pipeline,
         }
+
+        # Pre-compute active ingestion days once for the entire scoring run
+        # (2 queries total, not 2×N themes)
+        date_7d = as_of_date - timedelta(days=7)
+        date_30d = as_of_date - timedelta(days=30)
+        self._cached_active_days_7d = self._count_active_ingestion_days(date_7d, as_of_date)
+        self._cached_active_days_30d = self._count_active_ingestion_days(date_30d, as_of_date)
 
         metrics_list = []
         for cluster in clusters:

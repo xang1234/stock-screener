@@ -3,6 +3,7 @@
  *
  * Renders L1 parent themes as bold header rows with expand/collapse.
  * L2 children are loaded on-demand via React Query when expanded.
+ * Supports sortable column headers (momentum, mentions, stocks, return, RS).
  */
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import {
   TableHead,
   TableRow,
   TablePagination,
+  TableSortLabel,
   Typography,
 } from '@mui/material';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -40,6 +42,15 @@ const CATEGORY_COLORS = {
   real_estate: 'default',
   other: 'default',
 };
+
+const SORTABLE_COLUMNS = [
+  { id: 'display_name', label: 'Theme Group', align: 'left' },
+  { id: 'momentum_score', label: 'Momentum', align: 'center' },
+  { id: 'mentions_7d', label: 'Mentions 7d', align: 'right' },
+  { id: 'num_constituents', label: 'Stocks', align: 'right' },
+  { id: 'basket_return_1w', label: 'Return 1w', align: 'right' },
+  { id: 'basket_rs_vs_spy', label: 'RS vs SPY', align: 'right' },
+];
 
 const MomentumBar = ({ score }) => {
   if (score == null) return <Box sx={{ color: 'text.secondary', fontSize: '11px', fontFamily: 'monospace' }}>-</Box>;
@@ -64,10 +75,10 @@ const formatReturn = (val) => {
 };
 
 /** Expandable L2 children rows for a single L1 theme */
-function L1ChildrenRows({ l1Id, open, onThemeClick }) {
+function L1ChildrenRows({ l1Id, open, onThemeClick, orderBy, order }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['l1Children', l1Id],
-    queryFn: () => getL1Children(l1Id),
+    queryKey: ['l1Children', l1Id, orderBy, order],
+    queryFn: () => getL1Children(l1Id, { sortBy: orderBy, sortOrder: order }),
     enabled: open,
     staleTime: 60000,
   });
@@ -152,11 +163,23 @@ export default function ThemeTaxonomyTable({
 }) {
   const [expandedL1, setExpandedL1] = useState({});
   const [page, setPage] = useState(0);
+  const [orderBy, setOrderBy] = useState('momentum_score');
+  const [order, setOrder] = useState('desc');
   const pageSize = 50;
 
+  const handleSort = (property) => {
+    const isAsc = orderBy === property && order === 'asc';
+    setOrder(isAsc ? 'desc' : 'asc');
+    setOrderBy(property);
+    setPage(0);
+  };
+
   const { data, isLoading } = useQuery({
-    queryKey: ['l1Rankings', pipeline, categoryFilter, page],
-    queryFn: () => getL1Rankings({ pipeline, category: categoryFilter, limit: pageSize, offset: page * pageSize }),
+    queryKey: ['l1Rankings', pipeline, categoryFilter, page, orderBy, order],
+    queryFn: () => getL1Rankings({
+      pipeline, category: categoryFilter, limit: pageSize, offset: page * pageSize,
+      sortBy: orderBy, sortOrder: order,
+    }),
     staleTime: 60000,
   });
 
@@ -189,13 +212,19 @@ export default function ThemeTaxonomyTable({
           <TableHead>
             <TableRow>
               <TableCell sx={{ width: 40 }} />
-              <TableCell>Theme Group</TableCell>
+              {SORTABLE_COLUMNS.map((col) => (
+                <TableCell key={col.id} align={col.align}>
+                  <TableSortLabel
+                    active={orderBy === col.id}
+                    direction={orderBy === col.id ? order : 'asc'}
+                    onClick={() => handleSort(col.id)}
+                    sx={{ fontSize: '12px' }}
+                  >
+                    {col.label}
+                  </TableSortLabel>
+                </TableCell>
+              ))}
               <TableCell>Category</TableCell>
-              <TableCell align="center">Momentum</TableCell>
-              <TableCell align="right">Mentions 7d</TableCell>
-              <TableCell align="right">Stocks</TableCell>
-              <TableCell align="right">Return 1w</TableCell>
-              <TableCell align="right">RS vs SPY</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -206,7 +235,7 @@ export default function ThemeTaxonomyTable({
                   <TableRow
                     hover
                     sx={{
-                      bgcolor: 'grey.50',
+                      bgcolor: 'action.hover',
                       cursor: 'pointer',
                       '& td': { fontWeight: 600 },
                     }}
@@ -230,16 +259,6 @@ export default function ThemeTaxonomyTable({
                         />
                       </Box>
                     </TableCell>
-                    <TableCell>
-                      {l1.category && (
-                        <Chip
-                          label={l1.category}
-                          size="small"
-                          color={CATEGORY_COLORS[l1.category] || 'default'}
-                          sx={{ height: 20, fontSize: '10px', textTransform: 'capitalize' }}
-                        />
-                      )}
-                    </TableCell>
                     <TableCell align="center">
                       <MomentumBar score={l1.momentum_score} />
                     </TableCell>
@@ -261,11 +280,23 @@ export default function ThemeTaxonomyTable({
                         {l1.basket_rs_vs_spy != null ? l1.basket_rs_vs_spy.toFixed(0) : '-'}
                       </Typography>
                     </TableCell>
+                    <TableCell>
+                      {l1.category && (
+                        <Chip
+                          label={l1.category}
+                          size="small"
+                          color={CATEGORY_COLORS[l1.category] || 'default'}
+                          sx={{ height: 20, fontSize: '10px', textTransform: 'capitalize' }}
+                        />
+                      )}
+                    </TableCell>
                   </TableRow>
                   <L1ChildrenRows
                     l1Id={l1.id}
                     open={isExpanded}
                     onThemeClick={onThemeClick}
+                    orderBy={orderBy}
+                    order={order}
                   />
                 </React.Fragment>
               );
