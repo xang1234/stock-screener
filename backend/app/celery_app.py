@@ -18,7 +18,7 @@ os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_ready
+from celery.signals import worker_ready, worker_shutting_down
 from .config import settings
 
 
@@ -102,6 +102,20 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
             _logger.info("No stale data fetch lock found on startup")
     except Exception as e:
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
+
+
+@worker_shutting_down.connect
+def _graceful_db_shutdown(sig, how, exitcode, **kwargs):
+    """Checkpoint WAL and close DB connections on worker shutdown."""
+    try:
+        from .database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        engine.dispose()
+        _logger.info("Worker shutdown: WAL checkpoint complete, DB connections closed")
+    except Exception as e:
+        _logger.warning("Worker shutdown DB cleanup failed (non-fatal): %s", e)
 
 
 # Task routing: route background tasks to dedicated queues

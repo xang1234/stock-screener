@@ -93,6 +93,7 @@ services:
     depends_on:
       - backend
       - redis
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # Celery Worker - Data Fetch Queue (serialized, concurrency=1)
@@ -132,6 +133,7 @@ services:
     depends_on:
       - backend
       - redis
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # Celery Worker - User Scans Queue (isolated from maintenance jobs)
@@ -171,6 +173,7 @@ services:
     depends_on:
       - backend
       - redis
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # Celery Beat Scheduler

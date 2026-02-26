@@ -253,6 +253,15 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Shutting down Stock Scanner API...")
+    if "sqlite" in settings.database_url:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            print("WAL checkpoint complete")
+        except Exception as e:
+            print(f"WAL checkpoint failed (non-fatal): {e}")
+    engine.dispose()
+    print("Database connections closed")
 
 
 # Create FastAPI application
