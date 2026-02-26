@@ -69,7 +69,7 @@ const MomentumBar = ({ score }) => {
 
 const formatReturn = (val) => {
   if (val == null) return '-';
-  const pct = (val * 100).toFixed(1);
+  const pct = val.toFixed(1);
   const color = val >= 0 ? 'success.main' : 'error.main';
   return <Box component="span" sx={{ color, fontFamily: 'monospace', fontSize: '11px' }}>{val > 0 ? '+' : ''}{pct}%</Box>;
 };
