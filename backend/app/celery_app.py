@@ -105,12 +105,12 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
 
 
 @worker_shutting_down.connect
-def _graceful_db_shutdown(sig, how, exitcode, **kwargs):
+def _graceful_db_shutdown(sender=None, **kwargs):
     """Checkpoint WAL and close DB connections on worker shutdown."""
     try:
         from .database import engine
         from sqlalchemy import text
-        with engine.connect() as conn:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
         engine.dispose()
         _logger.info("Worker shutdown: WAL checkpoint complete, DB connections closed")
