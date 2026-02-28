@@ -434,3 +434,73 @@ def test_sqlite_store_retention_rejects_negative_policy_values(tmp_path: Path) -
             store.apply_retention(RetentionPolicy(run_retention_days=-1), dry_run=True)
     finally:
         store.close()
+
+
+def test_sqlite_store_retention_rolls_back_if_second_delete_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SQLiteStore(tmp_path / "reader.db")
+    try:
+        source_id = "list:3"
+        store.save_items(
+            source_id,
+            (
+                TweetItem(
+                    tweet_id="old",
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="old",
+                    source_id=source_id,
+                ),
+                TweetItem(
+                    tweet_id="new",
+                    created_at=datetime(2026, 2, 20, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="new",
+                    source_id=source_id,
+                ),
+            ),
+        )
+        old_run = store.begin_run(source_id, started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        store.finish_run(
+            old_run,
+            status="success",
+            finished_at=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+        )
+        new_run = store.begin_run(source_id, started_at=datetime(2026, 2, 20, tzinfo=timezone.utc))
+        store.finish_run(
+            new_run,
+            status="success",
+            finished_at=datetime(2026, 2, 20, 0, 1, tzinfo=timezone.utc),
+        )
+
+        original_delete = store._delete_retention_candidates
+        call_count = 0
+
+        def _fail_on_second_delete(table: str, field: str, cutoff: datetime | None) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise StoreError("simulated retention delete failure")
+            return original_delete(table, field, cutoff)
+
+        monkeypatch.setattr(store, "_delete_retention_candidates", _fail_on_second_delete)
+
+        with pytest.raises(StoreError, match="simulated retention delete failure"):
+            store.apply_retention(
+                RetentionPolicy(tweet_retention_days=10, run_retention_days=10),
+                now=datetime(2026, 2, 20, tzinfo=timezone.utc),
+                dry_run=False,
+            )
+
+        # The first delete should also be rolled back if the second delete fails.
+        assert [item.tweet_id for item in store.load_new_since(datetime(2025, 1, 1, tzinfo=timezone.utc))] == [
+            "new",
+            "old",
+        ]
+        run_count = store._conn.execute("SELECT COUNT(*) FROM runs").fetchone()
+        assert run_count is not None
+        assert int(run_count[0]) == 2
+    finally:
+        store.close()

@@ -113,7 +113,8 @@ def _apply_time_mode(
         new_items=tuple(new_items),
         next_checkpoint=Checkpoint(
             source_id=source_id,
-            last_seen_id=checkpoint.last_seen_id if checkpoint is not None else None,
+            # Keep time-mode transitions sticky under auto resolution.
+            last_seen_id=None,
             last_seen_time=next_seen_time,
             updated_at=_normalize_now(now),
         ),
@@ -170,4 +171,3 @@ def _max_created_at(items: list[TweetItem]) -> datetime | None:
     if not present:
         return None
     return max(present)
-

@@ -434,9 +434,14 @@ class SQLiteStore:
         tweet_deleted = 0
         run_deleted = 0
         if not dry_run:
-            tweet_deleted = self._delete_retention_candidates("tweets", "created_at", tweet_cutoff)
-            run_deleted = self._delete_retention_candidates("runs", "started_at", run_cutoff)
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                tweet_deleted = self._delete_retention_candidates("tweets", "created_at", tweet_cutoff)
+                run_deleted = self._delete_retention_candidates("runs", "started_at", run_cutoff)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
         return RetentionReport(
             dry_run=dry_run,

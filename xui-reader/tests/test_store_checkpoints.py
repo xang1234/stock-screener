@@ -114,6 +114,41 @@ def test_checkpoint_mixed_order_id_mode_remains_deterministic() -> None:
     assert transition.next_checkpoint.last_seen_time == datetime(2026, 2, 3, 0, 0, tzinfo=timezone.utc)
 
 
+def test_checkpoint_time_mode_clears_id_and_keeps_auto_in_time_mode() -> None:
+    checkpoint = Checkpoint(
+        source_id="src:1",
+        last_seen_id="100",
+        last_seen_time=datetime(2026, 2, 2, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 2, 2, 0, 1, tzinfo=timezone.utc),
+    )
+    items = (
+        _tweet("102", "2026-02-03T00:00:00+00:00"),
+        _tweet("101", "2026-02-02T12:00:00+00:00"),
+        _tweet("100", "2026-02-01T00:00:00+00:00"),
+    )
+
+    first = apply_checkpoint_mode(
+        "src:1",
+        items,
+        checkpoint=checkpoint,
+        mode="time",
+        now=datetime(2026, 2, 3, 0, 5, tzinfo=timezone.utc),
+    )
+
+    assert first.mode == "time"
+    assert first.next_checkpoint.last_seen_id is None
+
+    followup = apply_checkpoint_mode(
+        "src:1",
+        (),
+        checkpoint=first.next_checkpoint,
+        mode="auto",
+        now=datetime(2026, 2, 3, 0, 6, tzinfo=timezone.utc),
+    )
+
+    assert followup.mode == "time"
+
+
 def _tweet(tweet_id: str, created_at: str) -> TweetItem:
     return TweetItem(
         tweet_id=tweet_id,
@@ -122,4 +157,3 @@ def _tweet(tweet_id: str, created_at: str) -> TweetItem:
         text=tweet_id,
         source_id="src:1",
     )
-
