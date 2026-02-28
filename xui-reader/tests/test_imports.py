@@ -2,6 +2,8 @@
 
 from importlib import import_module
 
+from xui_reader.models import Checkpoint
+
 
 MODULES = [
     "xui_reader.config",
@@ -21,3 +23,8 @@ MODULES = [
 def test_core_modules_import_cleanly() -> None:
     for module in MODULES:
         assert import_module(module) is not None
+
+
+def test_checkpoint_defaults_updated_at_timestamp() -> None:
+    checkpoint = Checkpoint(source_id="src-1")
+    assert checkpoint.updated_at is not None

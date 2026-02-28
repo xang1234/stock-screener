@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 
 
@@ -34,4 +34,4 @@ class Checkpoint:
     source_id: str
     last_seen_id: str | None = None
     last_seen_time: datetime | None = None
-    updated_at: datetime | None = None
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

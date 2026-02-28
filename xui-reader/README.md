@@ -4,10 +4,12 @@
 
 ## Bootstrap
 
-1. Create and activate a virtual environment.
-2. Install package and dev tools:
+1. Enter package directory:
+   - `cd xui-reader`
+2. Create and activate a virtual environment.
+3. Install package and dev tools:
    - `pip install -e ".[dev]"`
-3. Install Playwright Chromium:
+4. Install Playwright Chromium:
    - `python -m playwright install chromium`
 
 ## Local Workflow

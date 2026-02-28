@@ -1,32 +1,32 @@
-"""Minimal CLI entrypoint for the scaffold package."""
+"""Typer CLI entrypoint for the scaffold package."""
 
 from __future__ import annotations
 
-import argparse
-from collections.abc import Sequence
+import typer
 
 from . import __version__
 
+app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="xui",
-        description="xui-reader scaffold CLI with stable entrypoint wiring.",
-    )
-    parser.add_argument("--version", action="store_true", help="Show xui-reader version and exit.")
-    return parser
+auth_app = typer.Typer(help="Authentication commands.")
+profile_app = typer.Typer(help="Profile management commands.")
+list_app = typer.Typer(help="List helpers.")
+user_app = typer.Typer(help="User helpers.")
+config_app = typer.Typer(help="Config commands.")
 
+app.add_typer(auth_app, name="auth")
+app.add_typer(profile_app, name="profile")
+app.add_typer(list_app, name="list")
+app.add_typer(user_app, name="user")
+app.add_typer(config_app, name="config")
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.version:
-        print(__version__)
-        return 0
-
-    print("xui-reader scaffold is installed. Run `xui --help` for options.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", help="Show xui-reader version and exit."),
+) -> None:
+    if version:
+        typer.echo(__version__)
+        raise typer.Exit()
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())

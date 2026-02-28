@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-xui = "xui_reader.cli:main"
+xui = "xui_reader.cli:app"
 
 [tool.pytest.ini_options]
 addopts = "-q"
