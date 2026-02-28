@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from xui_reader.config import RuntimeConfig
+from xui_reader.diagnostics.events import JsonlEventLogger
 from xui_reader.errors import CollectError, SchedulerError
 from xui_reader.models import SourceKind, SourceRef, TweetItem
-from xui_reader.scheduler.read import collect_source_items, run_configured_read, run_multi_source_read
+from xui_reader.scheduler.read import (
+    SourceReadResult,
+    collect_source_items,
+    run_configured_read,
+    run_multi_source_read,
+)
 
 
 def test_run_multi_source_read_isolates_source_failures_and_merges_successes() -> None:
@@ -77,7 +84,11 @@ def test_collect_source_items_raises_when_extractor_returns_empty(
 
         def collect(self, _source: SourceRef, *, limit: int) -> SimpleNamespace:
             assert limit == 3
-            return SimpleNamespace(items=(fallback_item,), dom_snapshots=("<article />",))
+            return SimpleNamespace(
+                items=(fallback_item,),
+                dom_snapshots=("<article />",),
+                stats=SimpleNamespace(scroll_rounds=0, observed_ids=1),
+            )
 
     class FakeExtractor:
         def extract(self, _payload: dict[str, object]) -> tuple[TweetItem, ...]:
@@ -90,6 +101,69 @@ def test_collect_source_items_raises_when_extractor_returns_empty(
 
     with pytest.raises(CollectError, match="Extractor produced no items"):
         collect_source_items(config, source, limit=3)
+
+
+def test_run_configured_read_writes_failure_artifacts_with_run_linkage(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    source = SourceRef(source_id="list:1", kind=SourceKind.LIST, value="1", enabled=True)
+    config = RuntimeConfig(sources=(source,))
+
+    def failing_read(_source: SourceRef) -> tuple[TweetItem, ...]:
+        raise RuntimeError("selector mismatch")
+
+    result = run_configured_read(
+        config,
+        config_path=config_path,
+        read_source=failing_read,
+        run_id="run-123",
+        enable_debug_artifacts=True,
+    )
+
+    assert result.failed == 1
+    outcome = result.outcomes[0]
+    assert outcome.html_artifact_path is not None
+    assert outcome.selector_report_path is not None
+    assert "run-123" in outcome.html_artifact_path
+    assert "run-123" in outcome.selector_report_path
+
+    selector_payload = json.loads(Path(outcome.selector_report_path).read_text(encoding="utf-8"))
+    assert selector_payload["run_id"] == "run-123"
+    assert selector_payload["source_id"] == "list:1"
+    assert selector_payload["error"] == "selector mismatch"
+
+
+def test_run_configured_read_emits_jsonl_event_with_counters(tmp_path: Path) -> None:
+    source = SourceRef(source_id="list:1", kind=SourceKind.LIST, value="1", enabled=True)
+    config = RuntimeConfig(sources=(source,))
+    logger = JsonlEventLogger(tmp_path / "events.jsonl")
+
+    def read_source(_source: SourceRef) -> SourceReadResult:
+        return SourceReadResult(
+            items=(_tweet("100", "list:1", "2026-03-01T00:00:00+00:00"),),
+            page_loads=1,
+            scroll_rounds=2,
+            observed_ids=3,
+            dom_snapshots=1,
+        )
+
+    result = run_configured_read(
+        config,
+        read_source=read_source,
+        run_id="read-1",
+        event_logger=logger,
+    )
+    assert result.total_page_loads == 1
+    assert result.total_scroll_rounds == 2
+    assert result.total_observed_ids == 3
+
+    lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["event_type"] == "read_run"
+    assert event["run_id"] == "read-1"
+    assert event["payload"]["page_loads"] == 1
+    assert event["payload"]["scroll_rounds"] == 2
+    assert event["payload"]["seen_items"] == 3
 
 
 def _tweet(tweet_id: str, source_id: str, created_at: str) -> TweetItem:

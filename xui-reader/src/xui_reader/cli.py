@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 
@@ -18,9 +19,10 @@ from .auth import (
 from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
 from .diagnostics.artifacts import redact_value
 from .diagnostics.doctor import run_doctor_preflight
+from .diagnostics.events import JsonlEventLogger
 from .errors import AuthError, CollectError, ConfigError, DiagnosticsError, ProfileError, SchedulerError
 from .models import TweetItem
-from .profiles import create_profile, delete_profile, list_profiles, switch_profile
+from .profiles import create_profile, delete_profile, list_profiles, profiles_root, switch_profile
 from .scheduler.read import MultiSourceReadResult, run_configured_read
 from .scheduler.watch import (
     WatchExitCode,
@@ -305,11 +307,16 @@ def read(
     try:
         config = load_runtime_config(path)
         selected_profile = _resolve_profile(profile, ctx)
+        resolved_profile = selected_profile or config.app.default_profile
+        debug_enabled = _resolve_debug(ctx)
+        event_logger = _event_logger_for_profile(resolved_profile, path) if debug_enabled else None
         result = run_configured_read(
             config,
             profile_name=selected_profile,
             config_path=path,
             limit=limit,
+            enable_debug_artifacts=debug_enabled,
+            event_logger=event_logger,
         )
     except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
         typer.secho(f"Read failed: {exc}", err=True, fg=typer.colors.RED)
@@ -364,11 +371,26 @@ def watch(
         help="Optional local shutdown window in HH:MM-HH:MM format.",
     ),
     max_cycles: int = typer.Option(1, "--max-cycles", min=1, help="Number of watch cycles to run."),
+    max_page_loads: int | None = typer.Option(
+        None,
+        "--max-page-loads",
+        min=1,
+        help="Optional page-load budget across the watch run.",
+    ),
+    max_scroll_rounds: int | None = typer.Option(
+        None,
+        "--max-scroll-rounds",
+        min=1,
+        help="Optional scroll-round budget across the watch run.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Render watch result as JSON."),
 ) -> None:
     try:
         config = load_runtime_config(path)
         selected_profile = _resolve_profile(profile, ctx)
+        resolved_profile = selected_profile or config.app.default_profile
+        debug_enabled = _resolve_debug(ctx)
+        event_logger = _event_logger_for_profile(resolved_profile, path) if debug_enabled else None
         result = run_configured_watch(
             config,
             profile_name=selected_profile,
@@ -378,9 +400,11 @@ def watch(
             jitter_ratio=jitter_ratio,
             shutdown_window=shutdown_window,
             max_cycles=max_cycles,
+            max_page_loads=max_page_loads,
+            max_scroll_rounds=max_scroll_rounds,
+            enable_debug_artifacts=debug_enabled,
+            event_logger=event_logger,
         )
-    except KeyboardInterrupt:
-        raise typer.Exit(int(WatchExitCode.INTERRUPTED))
     except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
         typer.secho(f"Watch failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
@@ -399,6 +423,7 @@ def watch(
             typer.echo(
                 f"- cycle={cycle.cycle} emitted={cycle.emitted_items} "
                 f"sources_ok={cycle.succeeded_sources} sources_failed={cycle.failed_sources} "
+                f"page_loads={cycle.page_loads} scroll_rounds={cycle.scroll_rounds} "
                 f"sleep={cycle.sleep_seconds:.2f}s next={next_run}"
             )
     if exit_code is not WatchExitCode.SUCCESS:
@@ -525,13 +550,21 @@ def _read_result_payload(result: MultiSourceReadResult) -> dict[str, object]:
     return {
         "succeeded_sources": result.succeeded,
         "failed_sources": result.failed,
+        "page_loads": result.total_page_loads,
+        "scroll_rounds": result.total_scroll_rounds,
+        "seen_items": result.total_observed_ids,
         "outcomes": [
             {
                 "source_id": outcome.source_id,
                 "source_kind": outcome.source_kind,
                 "ok": outcome.ok,
                 "item_count": outcome.item_count,
+                "page_loads": outcome.page_loads,
+                "scroll_rounds": outcome.scroll_rounds,
+                "observed_ids": outcome.observed_ids,
                 "error": outcome.error,
+                "html_artifact_path": outcome.html_artifact_path,
+                "selector_report_path": outcome.selector_report_path,
             }
             for outcome in result.outcomes
         ],
@@ -548,6 +581,9 @@ def _watch_result_payload(
     return {
         "exit_code": int(resolved_exit),
         "exit_state": _watch_exit_state_name(resolved_exit),
+        "budget_stop_reason": result.budget_stop_reason,
+        "interrupted": result.interrupted,
+        "counters_state_path": result.counters_state_path,
         "cycles": [
             {
                 "cycle": cycle.cycle,
@@ -555,6 +591,9 @@ def _watch_result_payload(
                 "next_run_at": cycle.next_run_at.isoformat() if cycle.next_run_at else None,
                 "sleep_seconds": cycle.sleep_seconds,
                 "emitted_items": cycle.emitted_items,
+                "seen_items": cycle.seen_items,
+                "page_loads": cycle.page_loads,
+                "scroll_rounds": cycle.scroll_rounds,
                 "succeeded_sources": cycle.succeeded_sources,
                 "failed_sources": cycle.failed_sources,
                 "auth_failed_sources": cycle.auth_failed_sources,
@@ -575,6 +614,25 @@ def _resolve_profile(command_profile: str | None, ctx: typer.Context | None) -> 
     if isinstance(configured, str) and configured:
         return configured
     return None
+
+
+def _resolve_debug(ctx: typer.Context | None) -> bool:
+    if ctx is None or not isinstance(ctx.obj, dict):
+        return False
+    return bool(ctx.obj.get("debug", False))
+
+
+def _event_logger_for_profile(profile_name: str | None, config_path: str | None) -> JsonlEventLogger | None:
+    if not profile_name:
+        return None
+    logs_dir = create_profile_logs_dir(profile_name, config_path)
+    return JsonlEventLogger(logs_dir / "debug-events.jsonl")
+
+
+def create_profile_logs_dir(profile_name: str, config_path: str | None) -> Path:
+    root = profiles_root(config_path) / profile_name / "logs"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _watch_exit_state_name(exit_code: WatchExitCode) -> str:
