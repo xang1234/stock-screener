@@ -138,7 +138,12 @@ def collect_source_items(
         )
         if extracted:
             return extracted
-        return batch.items
+        if batch.items:
+            raise CollectError(
+                f"Extractor produced no items for source '{source.source_id}' "
+                f"from {len(batch.dom_snapshots)} DOM snapshot(s)."
+            )
+        return ()
 
 
 def run_source_smoke_check(

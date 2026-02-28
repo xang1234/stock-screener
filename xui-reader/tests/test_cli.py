@@ -7,6 +7,7 @@ import pytest
 
 from xui_reader import __version__
 from xui_reader.auth import AuthProbeSnapshot, storage_state_path
+from xui_reader.diagnostics.base import DiagnosticReport
 from xui_reader.models import TweetItem
 from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
 from xui_reader.scheduler.watch import WatchCycleResult, WatchRunResult
@@ -304,6 +305,73 @@ def test_doctor_json_reports_selected_sources(tmp_path: Path) -> None:
     assert '"ok": false' in result.output
     assert '"selected_source_ids"' in result.output
     assert '"sections"' in result.output
+
+
+def test_doctor_command_profile_overrides_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    captured: dict[str, object] = {}
+
+    def fake_doctor(
+        _config: object,
+        *,
+        profile_name: str | None,
+        config_path: str | None,
+        max_sources: int,
+    ) -> DiagnosticReport:
+        captured["profile_name"] = profile_name
+        captured["config_path"] = config_path
+        captured["max_sources"] = max_sources
+        return DiagnosticReport(ok=True)
+
+    monkeypatch.setattr("xui_reader.cli.run_doctor_preflight", fake_doctor)
+
+    result = runner.invoke(
+        app,
+        ["doctor", "--path", str(config_path), "--profile", "ops"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["profile_name"] == "ops"
+    assert captured["config_path"] == str(config_path)
+    assert captured["max_sources"] == 2
+
+
+def test_doctor_uses_global_profile_when_command_profile_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    captured: dict[str, object] = {}
+
+    def fake_doctor(
+        _config: object,
+        *,
+        profile_name: str | None,
+        config_path: str | None,
+        max_sources: int,
+    ) -> DiagnosticReport:
+        captured["profile_name"] = profile_name
+        captured["config_path"] = config_path
+        captured["max_sources"] = max_sources
+        return DiagnosticReport(ok=True)
+
+    monkeypatch.setattr("xui_reader.cli.run_doctor_preflight", fake_doctor)
+
+    result = runner.invoke(
+        app,
+        ["--profile", "ops", "doctor", "--path", str(config_path)],
+    )
+
+    assert result.exit_code == 0
+    assert captured["profile_name"] == "ops"
+    assert captured["config_path"] == str(config_path)
+    assert captured["max_sources"] == 2
 
 
 def test_read_json_reports_outcomes_and_merged_items(

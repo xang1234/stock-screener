@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from xui_reader.config import AppConfig, RuntimeConfig
 from xui_reader.errors import SchedulerError
 from xui_reader.models import TweetItem
 from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
-from xui_reader.scheduler.watch import run_watch_loop
+from xui_reader.scheduler.watch import WatchRunResult, run_configured_watch, run_watch_loop
 
 
 def test_run_watch_loop_uses_shutdown_clamped_next_run_for_sleep() -> None:
@@ -50,6 +51,51 @@ def test_run_watch_loop_rejects_non_positive_cycles() -> None:
             interval_seconds=60,
             max_cycles=0,
         )
+
+
+def test_run_configured_watch_uses_configured_timezone_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = RuntimeConfig(app=AppConfig(timezone="America/New_York"))
+    observed: dict[str, object] = {}
+
+    def fake_run_watch_loop(
+        _run_once: object,
+        *,
+        interval_seconds: int,
+        jitter_ratio: float,
+        shutdown_start: object,
+        shutdown_end: object,
+        max_cycles: int,
+        now_fn: object,
+        sleep_fn: object,
+    ) -> WatchRunResult:
+        observed["interval_seconds"] = interval_seconds
+        observed["jitter_ratio"] = jitter_ratio
+        observed["max_cycles"] = max_cycles
+        observed["now_fn"] = now_fn
+        return WatchRunResult(cycles=())
+
+    monkeypatch.setattr("xui_reader.scheduler.watch.run_watch_loop", fake_run_watch_loop)
+    monkeypatch.setattr(
+        "xui_reader.scheduler.watch.run_configured_read",
+        lambda *_args, **_kwargs: MultiSourceReadResult(items=(), outcomes=()),
+    )
+
+    run_configured_watch(config, interval_seconds=120, max_cycles=1)
+
+    resolved_now = observed["now_fn"]
+    assert callable(resolved_now)
+    now_value = resolved_now()
+    assert isinstance(now_value, datetime)
+    assert getattr(now_value.tzinfo, "key", None) == "America/New_York"
+
+
+def test_run_configured_watch_rejects_invalid_timezone() -> None:
+    config = RuntimeConfig(app=AppConfig(timezone="Invalid/Timezone"))
+
+    with pytest.raises(SchedulerError, match="Invalid app.timezone"):
+        run_configured_watch(config, max_cycles=1)
 
 
 def _fake_run_once() -> MultiSourceReadResult:

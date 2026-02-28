@@ -284,6 +284,7 @@ def config_show(
 
 @app.command("read")
 def read(
+    ctx: typer.Context,
     path: str | None = typer.Option(
         None, "--path", help="Optional config TOML path (defaults to platform config dir)."
     ),
@@ -297,9 +298,10 @@ def read(
 ) -> None:
     try:
         config = load_runtime_config(path)
+        selected_profile = _resolve_profile(profile, ctx)
         result = run_configured_read(
             config,
-            profile_name=profile,
+            profile_name=selected_profile,
             config_path=path,
             limit=limit,
         )
@@ -332,6 +334,7 @@ def read(
 
 @app.command("watch")
 def watch(
+    ctx: typer.Context,
     path: str | None = typer.Option(
         None, "--path", help="Optional config TOML path (defaults to platform config dir)."
     ),
@@ -359,9 +362,10 @@ def watch(
 ) -> None:
     try:
         config = load_runtime_config(path)
+        selected_profile = _resolve_profile(profile, ctx)
         result = run_configured_watch(
             config,
-            profile_name=profile,
+            profile_name=selected_profile,
             config_path=path,
             limit=limit,
             interval_seconds=interval_seconds,
@@ -389,8 +393,14 @@ def watch(
 
 @app.command("doctor")
 def doctor(
+    ctx: typer.Context,
     path: str | None = typer.Option(
         None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to use for auth/smoke checks (defaults to configured app.default_profile).",
     ),
     max_sources: int = typer.Option(
         2,
@@ -402,9 +412,10 @@ def doctor(
 ) -> None:
     try:
         config = load_runtime_config(path)
+        selected_profile = _resolve_profile(profile, ctx)
         report = run_doctor_preflight(
             config,
-            profile_name=None,
+            profile_name=selected_profile,
             config_path=path,
             max_sources=max_sources,
         )
@@ -466,7 +477,11 @@ def doctor(
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", help="Show xui-reader version and exit."),
-    profile: str = typer.Option("default", "--profile", help="Active profile name."),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Active profile override used by commands when they omit --profile.",
+    ),
     output_format: str = typer.Option(
         "pretty",
         "--format",
@@ -476,7 +491,13 @@ def main(
     debug: bool = typer.Option(False, "--debug", help="Enable debug diagnostics placeholders."),
     timeout_ms: int = typer.Option(30_000, "--timeout-ms", help="Timeout placeholder in ms."),
 ) -> None:
-    _ = (profile, output_format, headful, debug, timeout_ms)
+    ctx.obj = {
+        "profile": profile,
+        "output_format": output_format,
+        "headful": headful,
+        "debug": debug,
+        "timeout_ms": timeout_ms,
+    }
     if version:
         typer.echo(__version__)
         raise typer.Exit()
@@ -517,6 +538,19 @@ def _watch_result_payload(result: WatchRunResult) -> dict[str, object]:
             for cycle in result.cycles
         ]
     }
+
+
+def _resolve_profile(command_profile: str | None, ctx: typer.Context | None) -> str | None:
+    if command_profile:
+        return command_profile
+    if ctx is None:
+        return None
+    if not isinstance(ctx.obj, dict):
+        return None
+    configured = ctx.obj.get("profile")
+    if isinstance(configured, str) and configured:
+        return configured
+    return None
 
 
 def _tweet_item_to_dict(item: TweetItem) -> dict[str, object]:

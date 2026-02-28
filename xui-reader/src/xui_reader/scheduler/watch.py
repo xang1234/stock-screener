@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from pathlib import Path
 import time as time_module
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from xui_reader.config import RuntimeConfig
 from xui_reader.errors import SchedulerError
@@ -110,6 +111,16 @@ def run_configured_watch(
     sleep_fn: SleepFn | None = None,
 ) -> WatchRunResult:
     """Run watch mode using configured sources and runtime parameters."""
+    effective_now_fn = now_fn
+    if effective_now_fn is None:
+        try:
+            configured_zone = ZoneInfo(config.app.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise SchedulerError(
+                f"Invalid app.timezone '{config.app.timezone}'. Use an IANA timezone like 'UTC' or 'America/New_York'."
+            ) from exc
+        effective_now_fn = lambda: datetime.now(configured_zone)  # noqa: E731
+
     shutdown_start: time | None = None
     shutdown_end: time | None = None
     if shutdown_window:
@@ -127,7 +138,7 @@ def run_configured_watch(
         shutdown_start=shutdown_start,
         shutdown_end=shutdown_end,
         max_cycles=max_cycles,
-        now_fn=now_fn,
+        now_fn=effective_now_fn,
         sleep_fn=sleep_fn,
     )
 
