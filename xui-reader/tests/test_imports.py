@@ -19,6 +19,7 @@ MODULES = [
     "xui_reader.extract.selectors",
     "xui_reader.extract.tweets",
     "xui_reader.store.base",
+    "xui_reader.store.sqlite",
     "xui_reader.render.base",
     "xui_reader.scheduler.base",
     "xui_reader.diagnostics.base",
