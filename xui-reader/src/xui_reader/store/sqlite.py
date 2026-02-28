@@ -197,6 +197,12 @@ class SQLiteStore:
     def save_items(self, source_id: str, items: tuple[TweetItem, ...]) -> int:
         if not items:
             return 0
+        for item in items:
+            if item.source_id != source_id:
+                raise StoreError(
+                    "Tweet source mismatch in save_items: "
+                    f"expected source_id '{source_id}' but got '{item.source_id}' for tweet '{item.tweet_id}'."
+                )
         self._ensure_source_placeholder(source_id)
 
         rows = [
@@ -281,11 +287,23 @@ class SQLiteStore:
 
         if row is None:
             return None
+        last_seen_time = _db_to_dt(row["last_seen_time"])
+        if row["last_seen_time"] is not None and last_seen_time is None:
+            raise StoreError(
+                "Checkpoint row has invalid 'last_seen_time' "
+                f"for source '{source_id}': {row['last_seen_time']!r}."
+            )
+        updated_at = _db_to_dt(row["updated_at"])
+        if updated_at is None:
+            raise StoreError(
+                "Checkpoint row has invalid 'updated_at' "
+                f"for source '{source_id}': {row['updated_at']!r}."
+            )
         return Checkpoint(
             source_id=str(row["source_id"]),
             last_seen_id=str(row["last_seen_id"]) if row["last_seen_id"] is not None else None,
-            last_seen_time=_db_to_dt(row["last_seen_time"]),
-            updated_at=_db_to_dt(row["updated_at"]) or _utcnow(),
+            last_seen_time=last_seen_time,
+            updated_at=updated_at,
         )
 
     def load_new_since(self, since: datetime) -> tuple[TweetItem, ...]:
@@ -418,4 +436,3 @@ def _db_to_dt(raw: object) -> datetime | None:
     except ValueError:
         return None
     return _normalize_datetime(parsed)
-

@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
+import pytest
+
+from xui_reader.errors import StoreError
 from xui_reader.models import Checkpoint, SourceKind, SourceRef, TweetItem
 from xui_reader.store.sqlite import SQLiteStore
 
@@ -252,3 +255,54 @@ def test_sqlite_store_load_new_since_filters_by_created_time(tmp_path: Path) -> 
     finally:
         store.close()
 
+
+def test_sqlite_store_save_items_rejects_source_mismatch(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "reader.db")
+    try:
+        with pytest.raises(StoreError, match="Tweet source mismatch in save_items"):
+            store.save_items(
+                "source:a",
+                (
+                    TweetItem(
+                        tweet_id="1",
+                        created_at=datetime(2026, 2, 3, tzinfo=timezone.utc),
+                        author_handle="@alice",
+                        text="bad batch",
+                        source_id="source:b",
+                    ),
+                ),
+            )
+    finally:
+        store.close()
+
+
+def test_sqlite_store_load_checkpoint_fails_closed_on_invalid_timestamp(tmp_path: Path) -> None:
+    db_path = tmp_path / "reader.db"
+    store = SQLiteStore(db_path)
+    try:
+        checkpoint = Checkpoint(
+            source_id="user:alice",
+            last_seen_id="1",
+            last_seen_time=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc),
+        )
+        store.save_checkpoint(checkpoint)
+    finally:
+        store.close()
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "UPDATE checkpoints SET updated_at = ? WHERE source_id = ?",
+            ("invalid-datetime", "user:alice"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    reopened = SQLiteStore(db_path)
+    try:
+        with pytest.raises(StoreError, match="invalid 'updated_at'"):
+            reopened.load_checkpoint("user:alice")
+    finally:
+        reopened.close()
