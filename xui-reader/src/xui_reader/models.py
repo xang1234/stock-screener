@@ -23,10 +23,15 @@ class SourceRef:
 @dataclass(frozen=True)
 class TweetItem:
     tweet_id: str
-    created_at: datetime
-    author_handle: str
-    text: str
+    created_at: datetime | None
+    author_handle: str | None
+    text: str | None
     source_id: str
+    is_reply: bool | None = None
+    is_repost: bool | None = None
+    is_pinned: bool | None = None
+    has_quote: bool | None = None
+    quote_tweet_id: str | None = None
 
 
 @dataclass(frozen=True)
