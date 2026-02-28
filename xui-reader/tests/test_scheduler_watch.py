@@ -21,20 +21,15 @@ from xui_reader.scheduler.watch import (
     run_configured_watch,
     run_watch_loop,
 )
+from xui_reader.testing.time_control import SleepRecorder, assert_local_day_delta, fixed_now, sequenced_now
 
 
 def test_run_watch_loop_uses_shutdown_clamped_next_run_for_sleep() -> None:
     tz = ZoneInfo("America/New_York")
     first_start = datetime(2026, 3, 1, 23, 55, tzinfo=tz)
     second_start = datetime(2026, 3, 2, 6, 0, tzinfo=tz)
-    now_values = iter((first_start, first_start, second_start))
-    sleeps: list[float] = []
-
-    def now_fn() -> datetime:
-        return next(now_values)
-
-    def sleep_fn(seconds: float) -> None:
-        sleeps.append(seconds)
+    now_fn = sequenced_now(first_start, first_start, second_start)
+    sleep_recorder = SleepRecorder()
 
     result = run_watch_loop(
         _fake_run_once,
@@ -44,12 +39,13 @@ def test_run_watch_loop_uses_shutdown_clamped_next_run_for_sleep() -> None:
         shutdown_end=datetime(2026, 3, 1, 6, 0).time(),
         max_cycles=2,
         now_fn=now_fn,
-        sleep_fn=sleep_fn,
+        sleep_fn=sleep_recorder,
     )
 
     assert len(result.cycles) == 2
     assert result.cycles[0].next_run_at == second_start
-    assert sleeps == [21_900.0]
+    assert_local_day_delta(first_start, second_start, days=1)
+    assert sleep_recorder.calls == [21_900.0]
     assert result.cycles[1].sleep_seconds == 0.0
     assert result.cycles[0].auth_failed_sources == 0
 
@@ -144,6 +140,7 @@ def test_run_watch_loop_stops_when_page_load_budget_exceeded() -> None:
         interval_seconds=60,
         max_cycles=5,
         max_page_loads=2,
+        now_fn=fixed_now(datetime(2026, 3, 1, 0, 0, tzinfo=ZoneInfo("UTC"))),
         sleep_fn=lambda _seconds: None,
     )
     assert len(result.cycles) == 1
@@ -179,7 +176,7 @@ def test_run_configured_watch_persists_counter_snapshot(
         config,
         config_path=tmp_path / "config.toml",
         max_cycles=1,
-        now_fn=lambda: datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC")),
+        now_fn=fixed_now(datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC"))),
         sleep_fn=lambda _seconds: None,
     )
 

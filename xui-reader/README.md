@@ -17,6 +17,10 @@
 - CLI help: `xui --help`
 - Run tests: `pytest`
 - Lint: `ruff check .`
+- Package install smoke:
+  - `pip install -e ".[dev]"`
+  - `python -m playwright install chromium`
+  - `xui --help`
 
 This baseline intentionally keeps behavior minimal while stabilizing module contracts.
 
@@ -53,3 +57,18 @@ Compatibility policy:
 - Top-level fields are append-only within a schema major version.
 - Consumers should ignore unknown top-level fields.
 - Breaking top-level changes require a schema major bump.
+
+## Fixture Sanitizer Pipeline
+
+Use the sanitizer before committing extractor snapshot fixtures:
+
+- `python -m xui_reader.extract.fixture_sanitizer tests/fixtures/raw_fixture.html`
+
+The sanitizer redacts auth tokens/cookies, replaces PII markers (emails/phones), and
+deterministically aliases handles and numeric IDs while preserving selector-relevant DOM structure.
+
+## Release Docs
+
+- [Release Readiness Checklist](docs/release-readiness-checklist.md)
+- [Operator Handoff Checklist](docs/operator-handoff-checklist.md)
+- [Release Notes Template](docs/release-notes-template.md)

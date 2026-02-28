@@ -8,6 +8,17 @@ version = "0.1.0"
 description = "Read-only X UI reader package scaffold."
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+  { name = "XUI Reader Maintainers" },
+]
+keywords = ["xui", "playwright", "automation", "timeline", "cli"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+]
 dependencies = [
   "platformdirs>=4.0",
   "playwright>=1.40",

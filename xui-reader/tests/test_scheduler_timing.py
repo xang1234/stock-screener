@@ -15,6 +15,7 @@ from xui_reader.scheduler.timing import (
     jittered_interval_seconds,
     parse_shutdown_window,
 )
+from xui_reader.testing.time_control import assert_local_day_delta
 
 
 def test_jittered_interval_seconds_is_bounded_and_repeatable() -> None:
@@ -41,6 +42,7 @@ def test_calculate_next_run_applies_cross_midnight_shutdown_wakeup() -> None:
     )
 
     assert result == datetime(2026, 3, 2, 6, 0, tzinfo=tz)
+    assert_local_day_delta(now, result, days=1)
 
 
 def test_calculate_next_run_applies_same_day_shutdown_window() -> None:
@@ -56,6 +58,7 @@ def test_calculate_next_run_applies_same_day_shutdown_window() -> None:
     )
 
     assert result == datetime(2026, 3, 1, 13, 0, tzinfo=tz)
+    assert_local_day_delta(now, result, days=0)
 
 
 def test_clamp_to_shutdown_wakeup_returns_same_time_outside_window() -> None:
