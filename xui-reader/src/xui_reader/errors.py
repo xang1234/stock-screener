@@ -9,6 +9,14 @@ class ConfigError(XUIReaderError):
     """Raised when configuration is invalid or missing."""
 
 
+class ProfileError(XUIReaderError):
+    """Raised when profile lifecycle operations are unsafe or invalid."""
+
+
+class AuthError(XUIReaderError):
+    """Raised for authentication and storage-state lifecycle failures."""
+
+
 class BrowserError(XUIReaderError):
     """Raised for browser/session management failures."""
 

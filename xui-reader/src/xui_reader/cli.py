@@ -7,8 +7,17 @@ import json
 import typer
 
 from . import __version__
+from .auth import (
+    DEFAULT_LOGIN_URL,
+    auth_logout_to_dict,
+    auth_status_to_dict,
+    login_and_save_storage_state,
+    logout_profile,
+    probe_auth_status,
+)
 from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
-from .errors import ConfigError
+from .errors import AuthError, ConfigError, ProfileError
+from .profiles import create_profile, delete_profile, list_profiles, switch_profile
 
 app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
 
@@ -26,38 +35,183 @@ app.add_typer(config_app, name="config")
 
 
 @auth_app.command("login")
-def auth_login() -> None:
-    typer.echo("Not implemented yet: auth login.")
+def auth_login(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to store session state in (defaults to configured app.default_profile).",
+    ),
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    login_url: str = typer.Option(
+        DEFAULT_LOGIN_URL,
+        "--login-url",
+        help="Login URL to open before capturing Playwright storage_state.",
+    ),
+) -> None:
+    try:
+        storage_path = login_and_save_storage_state(
+            profile_name=profile,
+            config_path=path,
+            login_url=login_url,
+        )
+    except (ConfigError, AuthError) as exc:
+        typer.secho(f"Auth login failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    typer.echo(f"Saved storage_state to {storage_path}")
 
 
 @auth_app.command("status")
-def auth_status() -> None:
-    typer.echo("Not implemented yet: auth status.")
+def auth_status(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to probe (defaults to configured app.default_profile).",
+    ),
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render auth status result as JSON."),
+) -> None:
+    try:
+        result = probe_auth_status(profile_name=profile, config_path=path)
+    except (ConfigError, AuthError) as exc:
+        typer.secho(f"Auth status failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    if as_json:
+        typer.echo(json.dumps(auth_status_to_dict(result), indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Profile: {result.profile}")
+        typer.echo(f"Storage state: {result.storage_state_path}")
+        typer.echo(f"Status: {result.status_code}")
+        typer.echo(result.message)
+        for step in result.next_steps:
+            typer.echo(f"- {step}")
+
+    if result.authenticated:
+        return
+    raise typer.Exit(2)
 
 
 @auth_app.command("logout")
-def auth_logout() -> None:
-    typer.echo("Not implemented yet: auth logout.")
+def auth_logout(
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to log out (defaults to configured app.default_profile).",
+    ),
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render logout result as JSON."),
+) -> None:
+    try:
+        result = logout_profile(profile_name=profile, config_path=path)
+    except (ConfigError, AuthError) as exc:
+        typer.secho(f"Auth logout failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    if as_json:
+        typer.echo(json.dumps(auth_logout_to_dict(result), indent=2, sort_keys=True))
+        return
+
+    typer.echo(result.message)
+    typer.echo(f"Storage state: {result.storage_state_path}")
+    for step in result.next_steps:
+        typer.echo(f"- Re-login: `{step}`")
 
 
 @profiles_app.command("list")
-def profiles_list() -> None:
-    typer.echo("Not implemented yet: profiles list.")
+def profiles_list_cmd(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render profiles as JSON."),
+) -> None:
+    try:
+        profiles, active_name = list_profiles(path)
+    except (ConfigError, ProfileError) as exc:
+        typer.secho(f"Profiles list failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    payload = {
+        "active_profile": active_name,
+        "profiles": [{"name": profile.name, "active": profile.active} for profile in profiles],
+    }
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not profiles:
+        typer.echo("No profiles found.")
+    else:
+        for profile in profiles:
+            marker = "*" if profile.active else " "
+            typer.echo(f"{marker} {profile.name}")
+
+    if any(profile.active for profile in profiles):
+        typer.echo(f"Active profile: {active_name}")
+        return
+    typer.echo(
+        f"Configured active profile '{active_name}' has no directory yet. "
+        f"Run `xui profiles create {active_name}` to bootstrap it."
+    )
 
 
 @profiles_app.command("create")
-def profiles_create(name: str) -> None:
-    typer.echo(f"Not implemented yet: profiles create {name}.")
+def profiles_create_cmd(
+    name: str,
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    switch: bool = typer.Option(False, "--switch", help="Switch to the profile after creation."),
+    force: bool = typer.Option(False, "--force", help="Re-bootstrap if profile already exists."),
+) -> None:
+    try:
+        profile_path = create_profile(name, path, switch=switch, force=force)
+    except (ConfigError, ProfileError) as exc:
+        typer.secho(f"Profiles create failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    typer.echo(f"Profile '{name}' ready at {profile_path}")
+    if switch:
+        typer.echo(f"Active profile set to '{name}'.")
 
 
 @profiles_app.command("delete")
-def profiles_delete(name: str) -> None:
-    typer.echo(f"Not implemented yet: profiles delete {name}.")
+def profiles_delete_cmd(
+    name: str,
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+) -> None:
+    try:
+        deleted_path = delete_profile(name, path)
+    except (ConfigError, ProfileError) as exc:
+        typer.secho(f"Profiles delete failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+    typer.echo(f"Deleted profile '{name}' at {deleted_path}")
 
 
 @profiles_app.command("switch")
-def profiles_switch(name: str) -> None:
-    typer.echo(f"Not implemented yet: profiles switch {name}.")
+def profiles_switch_cmd(
+    name: str,
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    create: bool = typer.Option(
+        False, "--create", help="Create the profile directory if it does not exist."
+    ),
+) -> None:
+    try:
+        switched_path = switch_profile(name, path, create_missing=create)
+    except (ConfigError, ProfileError) as exc:
+        typer.secho(f"Profiles switch failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+    typer.echo(f"Active profile set to '{name}' ({switched_path})")
 
 
 @list_app.command("read")
