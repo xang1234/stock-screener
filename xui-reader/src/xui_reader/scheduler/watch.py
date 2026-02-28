@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
+from enum import IntEnum
 from pathlib import Path
 import time as time_module
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -29,11 +30,21 @@ class WatchCycleResult:
     emitted_items: int
     succeeded_sources: int
     failed_sources: int
+    auth_failed_sources: int = 0
 
 
 @dataclass(frozen=True)
 class WatchRunResult:
     cycles: tuple[WatchCycleResult, ...]
+
+
+class WatchExitCode(IntEnum):
+    """Stable watch exit code matrix for automation wrappers."""
+
+    SUCCESS = 0
+    BUDGET_STOP = 4
+    AUTH_FAIL = 5
+    INTERRUPTED = 130
 
 
 def run_watch_loop(
@@ -60,6 +71,9 @@ def run_watch_loop(
         read_result = run_once()
 
         if index == max_cycles:
+            auth_failed_sources = sum(
+                1 for outcome in read_result.outcomes if _is_auth_related_error(outcome.error)
+            )
             cycles.append(
                 WatchCycleResult(
                     cycle=index,
@@ -69,6 +83,7 @@ def run_watch_loop(
                     emitted_items=len(read_result.items),
                     succeeded_sources=read_result.succeeded,
                     failed_sources=read_result.failed,
+                    auth_failed_sources=auth_failed_sources,
                 )
             )
             break
@@ -82,6 +97,9 @@ def run_watch_loop(
         )
         sleep_seconds = max(0.0, (next_run - _normalize_datetime(now())).total_seconds())
         sleeper(sleep_seconds)
+        auth_failed_sources = sum(
+            1 for outcome in read_result.outcomes if _is_auth_related_error(outcome.error)
+        )
         cycles.append(
             WatchCycleResult(
                 cycle=index,
@@ -91,6 +109,7 @@ def run_watch_loop(
                 emitted_items=len(read_result.items),
                 succeeded_sources=read_result.succeeded,
                 failed_sources=read_result.failed,
+                auth_failed_sources=auth_failed_sources,
             )
         )
 
@@ -147,3 +166,37 @@ def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def determine_watch_exit_code(result: WatchRunResult, *, max_cycles: int) -> WatchExitCode:
+    """Resolve watch exit code from run outcomes with deterministic precedence."""
+    if max_cycles <= 0:
+        raise SchedulerError("max_cycles must be > 0.")
+    if _is_auth_failed_run(result):
+        return WatchExitCode.AUTH_FAIL
+    if max_cycles > 1 and len(result.cycles) >= max_cycles:
+        return WatchExitCode.BUDGET_STOP
+    return WatchExitCode.SUCCESS
+
+
+def _is_auth_failed_run(result: WatchRunResult) -> bool:
+    total_succeeded = sum(cycle.succeeded_sources for cycle in result.cycles)
+    total_failed = sum(cycle.failed_sources for cycle in result.cycles)
+    total_auth_failed = sum(cycle.auth_failed_sources for cycle in result.cycles)
+    return total_succeeded == 0 and total_failed > 0 and total_auth_failed == total_failed
+
+
+def _is_auth_related_error(error: str | None) -> bool:
+    if error is None:
+        return False
+    lowered = error.lower()
+    markers = (
+        "missing storage_state",
+        "storage_state",
+        "run `xui auth login`",
+        "not authenticated",
+        "login wall",
+        "challenge",
+        "blocked session state",
+    )
+    return any(marker in lowered for marker in markers)

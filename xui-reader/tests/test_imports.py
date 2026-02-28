@@ -28,7 +28,9 @@ MODULES = [
     "xui_reader.scheduler.timing",
     "xui_reader.scheduler.watch",
     "xui_reader.diagnostics.base",
+    "xui_reader.diagnostics.artifacts",
     "xui_reader.diagnostics.doctor",
+    "xui_reader.diagnostics.events",
 ]
 
 

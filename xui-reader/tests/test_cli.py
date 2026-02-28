@@ -7,7 +7,7 @@ import pytest
 
 from xui_reader import __version__
 from xui_reader.auth import AuthProbeSnapshot, storage_state_path
-from xui_reader.diagnostics.base import DiagnosticReport
+from xui_reader.diagnostics.base import DiagnosticReport, DiagnosticSection
 from xui_reader.models import TweetItem
 from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
 from xui_reader.scheduler.watch import WatchCycleResult, WatchRunResult
@@ -374,6 +374,33 @@ def test_doctor_uses_global_profile_when_command_profile_omitted(
     assert captured["max_sources"] == 2
 
 
+def test_doctor_json_redacts_sensitive_details(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    report = DiagnosticReport(
+        ok=False,
+        checks=("FAIL auth: token leak",),
+        details={"selected_source_ids": "list:1", "authorization": "Bearer super-secret"},
+        sections=(
+            DiagnosticSection(
+                name="auth",
+                ok=False,
+                summary="Auth failed",
+                details={"storage_state": '{"cookies":[{"name":"sessionid","value":"secret"}]}'},
+            ),
+        ),
+    )
+    monkeypatch.setattr("xui_reader.cli.run_doctor_preflight", lambda *_args, **_kwargs: report)
+
+    result = runner.invoke(app, ["doctor", "--path", str(config_path), "--json"])
+    assert result.exit_code == 0
+    assert "super-secret" not in result.output
+    assert "sessionid" not in result.output
+    assert "<redacted>" in result.output
+
+
 def test_read_json_reports_outcomes_and_merged_items(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -441,3 +468,65 @@ def test_watch_json_reports_cycle_timing(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert result.exit_code == 0
     assert '"cycle": 1' in result.output
     assert '"emitted_items": 2' in result.output
+    assert '"exit_code": 0' in result.output
+    assert '"exit_state": "success"' in result.output
+
+
+def test_watch_returns_budget_stop_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc),
+                next_run_at=datetime(2026, 3, 1, 0, 5, tzinfo=timezone.utc),
+                sleep_seconds=300.0,
+                emitted_items=1,
+                succeeded_sources=1,
+                failed_sources=0,
+            ),
+            WatchCycleResult(
+                cycle=2,
+                started_at=datetime(2026, 3, 1, 0, 5, tzinfo=timezone.utc),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=1,
+                succeeded_sources=1,
+                failed_sources=0,
+            ),
+        )
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_watch", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["watch", "--path", str(config_path), "--max-cycles", "2"])
+    assert result.exit_code == 4
+    assert "exit_state=budget_stop" in result.output
+
+
+def test_watch_returns_auth_fail_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=0,
+                succeeded_sources=0,
+                failed_sources=2,
+                auth_failed_sources=2,
+            ),
+        )
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_watch", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["watch", "--path", str(config_path), "--json"])
+    assert result.exit_code == 5
+    assert '"exit_state": "auth_fail"' in result.output

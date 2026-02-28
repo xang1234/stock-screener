@@ -16,7 +16,14 @@ from .timing import (
     jittered_interval_seconds,
     parse_shutdown_window,
 )
-from .watch import WatchCycleResult, WatchRunResult, run_configured_watch, run_watch_loop
+from .watch import (
+    WatchCycleResult,
+    WatchExitCode,
+    WatchRunResult,
+    determine_watch_exit_code,
+    run_configured_watch,
+    run_watch_loop,
+)
 
 __all__ = [
     "Scheduler",
@@ -24,10 +31,12 @@ __all__ = [
     "MultiSourceReadResult",
     "SourceReadOutcome",
     "WatchCycleResult",
+    "WatchExitCode",
     "WatchRunResult",
     "calculate_next_run",
     "clamp_to_shutdown_wakeup",
     "collect_source_items",
+    "determine_watch_exit_code",
     "jittered_interval_seconds",
     "merge_tweet_items",
     "parse_shutdown_window",

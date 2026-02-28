@@ -11,7 +11,14 @@ from xui_reader.config import AppConfig, RuntimeConfig
 from xui_reader.errors import SchedulerError
 from xui_reader.models import TweetItem
 from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
-from xui_reader.scheduler.watch import WatchRunResult, run_configured_watch, run_watch_loop
+from xui_reader.scheduler.watch import (
+    WatchCycleResult,
+    WatchExitCode,
+    WatchRunResult,
+    determine_watch_exit_code,
+    run_configured_watch,
+    run_watch_loop,
+)
 
 
 def test_run_watch_loop_uses_shutdown_clamped_next_run_for_sleep() -> None:
@@ -42,6 +49,7 @@ def test_run_watch_loop_uses_shutdown_clamped_next_run_for_sleep() -> None:
     assert result.cycles[0].next_run_at == second_start
     assert sleeps == [21_900.0]
     assert result.cycles[1].sleep_seconds == 0.0
+    assert result.cycles[0].auth_failed_sources == 0
 
 
 def test_run_watch_loop_rejects_non_positive_cycles() -> None:
@@ -96,6 +104,70 @@ def test_run_configured_watch_rejects_invalid_timezone() -> None:
 
     with pytest.raises(SchedulerError, match="Invalid app.timezone"):
         run_configured_watch(config, max_cycles=1)
+
+
+def test_determine_watch_exit_code_returns_auth_fail_when_all_failures_are_auth_related() -> None:
+    result = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC")),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=0,
+                succeeded_sources=0,
+                failed_sources=2,
+                auth_failed_sources=2,
+            ),
+        )
+    )
+    assert determine_watch_exit_code(result, max_cycles=1) is WatchExitCode.AUTH_FAIL
+
+
+def test_determine_watch_exit_code_returns_budget_stop_for_multi_cycle_budget() -> None:
+    result = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC")),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=3,
+                succeeded_sources=1,
+                failed_sources=0,
+                auth_failed_sources=0,
+            ),
+            WatchCycleResult(
+                cycle=2,
+                started_at=datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC")),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=2,
+                succeeded_sources=1,
+                failed_sources=0,
+                auth_failed_sources=0,
+            ),
+        )
+    )
+    assert determine_watch_exit_code(result, max_cycles=2) is WatchExitCode.BUDGET_STOP
+
+
+def test_determine_watch_exit_code_returns_success_for_single_cycle_non_auth_failures() -> None:
+    result = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, tzinfo=ZoneInfo("UTC")),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=0,
+                succeeded_sources=0,
+                failed_sources=1,
+                auth_failed_sources=0,
+            ),
+        )
+    )
+    assert determine_watch_exit_code(result, max_cycles=1) is WatchExitCode.SUCCESS
 
 
 def _fake_run_once() -> MultiSourceReadResult:

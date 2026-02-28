@@ -16,12 +16,18 @@ from .auth import (
     probe_auth_status,
 )
 from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
+from .diagnostics.artifacts import redact_value
 from .diagnostics.doctor import run_doctor_preflight
 from .errors import AuthError, CollectError, ConfigError, DiagnosticsError, ProfileError, SchedulerError
 from .models import TweetItem
 from .profiles import create_profile, delete_profile, list_profiles, switch_profile
 from .scheduler.read import MultiSourceReadResult, run_configured_read
-from .scheduler.watch import WatchRunResult, run_configured_watch
+from .scheduler.watch import (
+    WatchExitCode,
+    WatchRunResult,
+    determine_watch_exit_code,
+    run_configured_watch,
+)
 
 app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
 
@@ -373,15 +379,21 @@ def watch(
             shutdown_window=shutdown_window,
             max_cycles=max_cycles,
         )
+    except KeyboardInterrupt:
+        raise typer.Exit(int(WatchExitCode.INTERRUPTED))
     except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
         typer.secho(f"Watch failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
 
-    payload = _watch_result_payload(result)
+    exit_code = determine_watch_exit_code(result, max_cycles=max_cycles)
+    payload = _watch_result_payload(result, exit_code=exit_code)
     if as_json:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        typer.echo(f"Watch completed: {len(result.cycles)} cycle(s).")
+        typer.echo(
+            f"Watch completed: {len(result.cycles)} cycle(s), "
+            f"exit_state={_watch_exit_state_name(exit_code)} exit_code={int(exit_code)}."
+        )
         for cycle in result.cycles:
             next_run = cycle.next_run_at.isoformat() if cycle.next_run_at else "none"
             typer.echo(
@@ -389,6 +401,8 @@ def watch(
                 f"sources_ok={cycle.succeeded_sources} sources_failed={cycle.failed_sources} "
                 f"sleep={cycle.sleep_seconds:.2f}s next={next_run}"
             )
+    if exit_code is not WatchExitCode.SUCCESS:
+        raise typer.Exit(int(exit_code))
 
 
 @app.command("doctor")
@@ -423,23 +437,25 @@ def doctor(
         typer.secho(f"Doctor failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
 
+    redacted_report_details = _redact_details(report.details)
+    redacted_sections = [
+        {
+            "name": section.name,
+            "ok": section.ok,
+            "summary": section.summary,
+            "details": _redact_details(section.details),
+        }
+        for section in report.sections
+    ]
+
     if as_json:
-        sections = [
-            {
-                "name": section.name,
-                "ok": section.ok,
-                "summary": section.summary,
-                "details": section.details,
-            }
-            for section in report.sections
-        ]
         typer.echo(
             json.dumps(
                 {
                     "ok": report.ok,
                     "checks": list(report.checks),
-                    "details": report.details,
-                    "sections": sections,
+                    "details": redacted_report_details,
+                    "sections": redacted_sections,
                 },
                 indent=2,
                 sort_keys=True,
@@ -449,24 +465,24 @@ def doctor(
 
     typer.echo("Doctor preflight")
     typer.echo(f"Status: {'ok' if report.ok else 'fail'}")
-    if report.sections:
-        for section in report.sections:
-            marker = "PASS" if section.ok else "FAIL"
-            typer.echo(f"[{marker}] {section.name}: {section.summary}")
-            for key, value in section.details.items():
+    if redacted_sections:
+        for section in redacted_sections:
+            marker = "PASS" if section["ok"] else "FAIL"
+            typer.echo(f"[{marker}] {section['name']}: {section['summary']}")
+            for key, value in section["details"].items():
                 if value:
                     typer.echo(f"  {key}: {value}")
     else:
         for check in report.checks:
             typer.echo(f"- {check}")
 
-    selected_ids = report.details.get("selected_source_ids", "")
+    selected_ids = redacted_report_details.get("selected_source_ids", "")
     if selected_ids:
         typer.echo(f"Selected smoke sources: {selected_ids}")
     else:
         typer.echo("Selected smoke sources: none")
 
-    guidance = report.details.get("guidance")
+    guidance = redacted_report_details.get("guidance")
     if guidance:
         typer.echo("Guidance:")
         for line in guidance.splitlines():
@@ -523,8 +539,15 @@ def _read_result_payload(result: MultiSourceReadResult) -> dict[str, object]:
     }
 
 
-def _watch_result_payload(result: WatchRunResult) -> dict[str, object]:
+def _watch_result_payload(
+    result: WatchRunResult,
+    *,
+    exit_code: WatchExitCode | None = None,
+) -> dict[str, object]:
+    resolved_exit = exit_code if exit_code is not None else WatchExitCode.SUCCESS
     return {
+        "exit_code": int(resolved_exit),
+        "exit_state": _watch_exit_state_name(resolved_exit),
         "cycles": [
             {
                 "cycle": cycle.cycle,
@@ -534,6 +557,7 @@ def _watch_result_payload(result: WatchRunResult) -> dict[str, object]:
                 "emitted_items": cycle.emitted_items,
                 "succeeded_sources": cycle.succeeded_sources,
                 "failed_sources": cycle.failed_sources,
+                "auth_failed_sources": cycle.auth_failed_sources,
             }
             for cycle in result.cycles
         ]
@@ -551,6 +575,17 @@ def _resolve_profile(command_profile: str | None, ctx: typer.Context | None) -> 
     if isinstance(configured, str) and configured:
         return configured
     return None
+
+
+def _watch_exit_state_name(exit_code: WatchExitCode) -> str:
+    return exit_code.name.lower()
+
+
+def _redact_details(details: dict[str, str]) -> dict[str, str]:
+    sanitized = redact_value(details)
+    if not isinstance(sanitized, dict):
+        return {}
+    return {str(key): str(value) for key, value in sanitized.items()}
 
 
 def _tweet_item_to_dict(item: TweetItem) -> dict[str, object]:
