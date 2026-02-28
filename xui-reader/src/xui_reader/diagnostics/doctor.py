@@ -11,7 +11,6 @@ from xui_reader.config import RuntimeConfig
 from xui_reader.diagnostics.base import DiagnosticReport, DiagnosticSection
 from xui_reader.errors import DiagnosticsError
 from xui_reader.models import SourceKind, SourceRef
-from xui_reader.scheduler.read import run_source_smoke_check
 
 AuthProbeFn = Callable[[str | None, str | Path | None], AuthStatusResult]
 SmokeRunnerFn = Callable[[RuntimeConfig, SourceRef, str | None, str | Path | None, int], int]
@@ -74,7 +73,13 @@ def run_doctor_preflight(
 
     selected_profile = profile_name or config.app.default_profile
     probe = auth_probe or probe_auth_status
-    smoke = smoke_runner or run_source_smoke_check
+    if smoke_runner is None:
+        # Lazy import avoids a diagnostics<->scheduler import cycle at module load time.
+        from xui_reader.scheduler.read import run_source_smoke_check
+
+        smoke = run_source_smoke_check
+    else:
+        smoke = smoke_runner
 
     sections: list[DiagnosticSection] = []
 
