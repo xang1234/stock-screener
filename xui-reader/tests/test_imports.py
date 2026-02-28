@@ -10,6 +10,7 @@ MODULES = [
     "xui_reader.models",
     "xui_reader.errors",
     "xui_reader.logging",
+    "xui_reader.browser.policy",
     "xui_reader.browser.session",
     "xui_reader.collectors.base",
     "xui_reader.extract.base",
