@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 
@@ -18,6 +18,23 @@ _SOURCE_KIND_UNKNOWN = "unknown"
 class Migration:
     version: str
     statements: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    tweet_retention_days: int | None = None
+    run_retention_days: int | None = None
+
+
+@dataclass(frozen=True)
+class RetentionReport:
+    dry_run: bool
+    tweet_cutoff: datetime | None
+    run_cutoff: datetime | None
+    tweet_candidates: int
+    run_candidates: int
+    tweet_deleted: int
+    run_deleted: int
 
 
 DEFAULT_MIGRATIONS: tuple[Migration, ...] = (
@@ -390,6 +407,47 @@ class SQLiteStore:
     def migration_versions(self) -> tuple[str, ...]:
         return self._migration_runner.applied_versions(self._conn)
 
+    def apply_retention(
+        self,
+        policy: RetentionPolicy,
+        *,
+        now: datetime | None = None,
+        dry_run: bool = False,
+    ) -> RetentionReport:
+        reference = _normalize_datetime(now or _utcnow())
+        _validate_retention_policy(policy)
+
+        tweet_cutoff = (
+            reference - timedelta(days=policy.tweet_retention_days)
+            if policy.tweet_retention_days is not None
+            else None
+        )
+        run_cutoff = (
+            reference - timedelta(days=policy.run_retention_days)
+            if policy.run_retention_days is not None
+            else None
+        )
+
+        tweet_candidates = self._count_retention_candidates("tweets", "created_at", tweet_cutoff)
+        run_candidates = self._count_retention_candidates("runs", "started_at", run_cutoff)
+
+        tweet_deleted = 0
+        run_deleted = 0
+        if not dry_run:
+            tweet_deleted = self._delete_retention_candidates("tweets", "created_at", tweet_cutoff)
+            run_deleted = self._delete_retention_candidates("runs", "started_at", run_cutoff)
+            self._conn.commit()
+
+        return RetentionReport(
+            dry_run=dry_run,
+            tweet_cutoff=tweet_cutoff,
+            run_cutoff=run_cutoff,
+            tweet_candidates=tweet_candidates,
+            run_candidates=run_candidates,
+            tweet_deleted=tweet_deleted,
+            run_deleted=run_deleted,
+        )
+
     def _ensure_source_placeholder(self, source_id: str) -> None:
         try:
             self._conn.execute(
@@ -405,6 +463,53 @@ class SQLiteStore:
             raise StoreError(
                 f"Could not ensure source placeholder for '{source_id}': {exc}."
             ) from exc
+
+    def _count_retention_candidates(
+        self,
+        table: str,
+        field: str,
+        cutoff: datetime | None,
+    ) -> int:
+        if cutoff is None:
+            return 0
+        cutoff_value = _dt_to_db(cutoff)
+        assert cutoff_value is not None
+        try:
+            row = self._conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM {table}
+                WHERE {field} IS NOT NULL AND julianday({field}) < julianday(?)
+                """,
+                (cutoff_value,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise StoreError(f"Could not count retention candidates in '{table}': {exc}.") from exc
+        if row is None:
+            return 0
+        return int(row[0])
+
+    def _delete_retention_candidates(
+        self,
+        table: str,
+        field: str,
+        cutoff: datetime | None,
+    ) -> int:
+        if cutoff is None:
+            return 0
+        cutoff_value = _dt_to_db(cutoff)
+        assert cutoff_value is not None
+        try:
+            cursor = self._conn.execute(
+                f"""
+                DELETE FROM {table}
+                WHERE {field} IS NOT NULL AND julianday({field}) < julianday(?)
+                """,
+                (cutoff_value,),
+            )
+        except sqlite3.Error as exc:
+            raise StoreError(f"Could not delete retention rows from '{table}': {exc}.") from exc
+        return int(cursor.rowcount)
 
 
 def _utcnow() -> datetime:
@@ -436,3 +541,10 @@ def _db_to_dt(raw: object) -> datetime | None:
     except ValueError:
         return None
     return _normalize_datetime(parsed)
+
+
+def _validate_retention_policy(policy: RetentionPolicy) -> None:
+    if policy.tweet_retention_days is not None and policy.tweet_retention_days < 0:
+        raise StoreError("Retention policy 'tweet_retention_days' must be >= 0.")
+    if policy.run_retention_days is not None and policy.run_retention_days < 0:
+        raise StoreError("Retention policy 'run_retention_days' must be >= 0.")

@@ -10,7 +10,7 @@ import pytest
 
 from xui_reader.errors import StoreError
 from xui_reader.models import Checkpoint, SourceKind, SourceRef, TweetItem
-from xui_reader.store.sqlite import SQLiteStore
+from xui_reader.store.sqlite import RetentionPolicy, SQLiteStore
 
 
 def test_sqlite_store_bootstrap_creates_tables_and_tracks_migrations(tmp_path: Path) -> None:
@@ -306,3 +306,131 @@ def test_sqlite_store_load_checkpoint_fails_closed_on_invalid_timestamp(tmp_path
             reopened.load_checkpoint("user:alice")
     finally:
         reopened.close()
+
+
+def test_sqlite_store_retention_dry_run_reports_metrics_without_deleting(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "reader.db")
+    try:
+        source_id = "list:1"
+        store.save_items(
+            source_id,
+            (
+                TweetItem(
+                    tweet_id="old",
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="old",
+                    source_id=source_id,
+                ),
+                TweetItem(
+                    tweet_id="new",
+                    created_at=datetime(2026, 2, 10, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="new",
+                    source_id=source_id,
+                ),
+            ),
+        )
+        old_run = store.begin_run(source_id, started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        store.finish_run(
+            old_run,
+            status="success",
+            finished_at=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+        )
+        new_run = store.begin_run(source_id, started_at=datetime(2026, 2, 10, tzinfo=timezone.utc))
+        store.finish_run(
+            new_run,
+            status="success",
+            finished_at=datetime(2026, 2, 10, 0, 1, tzinfo=timezone.utc),
+        )
+
+        report = store.apply_retention(
+            RetentionPolicy(tweet_retention_days=20, run_retention_days=20),
+            now=datetime(2026, 2, 20, tzinfo=timezone.utc),
+            dry_run=True,
+        )
+        assert report.dry_run is True
+        assert report.tweet_candidates == 1
+        assert report.run_candidates == 1
+        assert report.tweet_deleted == 0
+        assert report.run_deleted == 0
+
+        assert [item.tweet_id for item in store.load_new_since(datetime(2025, 1, 1, tzinfo=timezone.utc))] == [
+            "new",
+            "old",
+        ]
+    finally:
+        store.close()
+
+
+def test_sqlite_store_retention_deletes_only_rows_older_than_cutoff(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "reader.db")
+    try:
+        source_id = "list:2"
+        # Cutoff will be 2026-02-10T00:00:00+00:00 for 10-day policy with now=2026-02-20.
+        store.save_items(
+            source_id,
+            (
+                TweetItem(
+                    tweet_id="older",
+                    created_at=datetime(2026, 2, 9, 23, 59, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="older",
+                    source_id=source_id,
+                ),
+                TweetItem(
+                    tweet_id="boundary",
+                    created_at=datetime(2026, 2, 10, 0, 0, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="boundary",
+                    source_id=source_id,
+                ),
+                TweetItem(
+                    tweet_id="newer",
+                    created_at=datetime(2026, 2, 11, tzinfo=timezone.utc),
+                    author_handle="@a",
+                    text="newer",
+                    source_id=source_id,
+                ),
+            ),
+        )
+        old_run = store.begin_run(source_id, started_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
+        store.finish_run(
+            old_run,
+            status="success",
+            finished_at=datetime(2026, 2, 1, 0, 1, tzinfo=timezone.utc),
+        )
+        boundary_run = store.begin_run(source_id, started_at=datetime(2026, 2, 10, tzinfo=timezone.utc))
+        store.finish_run(
+            boundary_run,
+            status="success",
+            finished_at=datetime(2026, 2, 10, 0, 1, tzinfo=timezone.utc),
+        )
+
+        report = store.apply_retention(
+            RetentionPolicy(tweet_retention_days=10, run_retention_days=10),
+            now=datetime(2026, 2, 20, tzinfo=timezone.utc),
+            dry_run=False,
+        )
+        assert report.tweet_candidates == 1
+        assert report.run_candidates == 1
+        assert report.tweet_deleted == 1
+        assert report.run_deleted == 1
+
+        remaining_tweet_ids = [
+            item.tweet_id for item in store.load_new_since(datetime(2026, 1, 1, tzinfo=timezone.utc))
+        ]
+        assert remaining_tweet_ids == ["newer", "boundary"]
+    finally:
+        store.close()
+
+
+def test_sqlite_store_retention_rejects_negative_policy_values(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "reader.db")
+    try:
+        with pytest.raises(StoreError, match="tweet_retention_days"):
+            store.apply_retention(RetentionPolicy(tweet_retention_days=-1), dry_run=True)
+        with pytest.raises(StoreError, match="run_retention_days"):
+            store.apply_retention(RetentionPolicy(run_retention_days=-1), dry_run=True)
+    finally:
+        store.close()
