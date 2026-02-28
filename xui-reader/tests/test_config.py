@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from xui_reader.config import (
+    default_config,
     default_config_toml,
     init_default_config,
     load_runtime_config,
@@ -77,6 +78,21 @@ enabled = true
         load_runtime_config(config_path)
 
 
+def test_load_runtime_config_reports_invalid_browser_engine(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """[app]
+default_profile = "default"
+
+[browser]
+engine = "edge"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="browser.engine"):
+        load_runtime_config(config_path)
+
+
 def test_load_runtime_config_parses_defaults(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     init_default_config(config_path)
@@ -87,3 +103,40 @@ def test_load_runtime_config_parses_defaults(tmp_path: Path) -> None:
     assert loaded.browser.navigation_timeout_ms == 30_000
     assert loaded.sources[0].kind == SourceKind.LIST
     assert loaded.sources[1].kind == SourceKind.USER
+
+
+def test_headless_default_is_consistent_between_dataclass_and_toml(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_default_config(config_path)
+    loaded = load_runtime_config(config_path)
+    assert default_config().browser.headless is True
+    assert loaded.browser.headless is True
+
+
+def test_init_default_config_wraps_os_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+
+    def raise_permission_error(*_args: object, **_kwargs: object) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "write_text", raise_permission_error)
+
+    with pytest.raises(ConfigError, match="Could not write config file"):
+        init_default_config(config_path)
+
+
+def test_load_runtime_config_wraps_os_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[app]\ndefault_profile = \"default\"\n", encoding="utf-8")
+
+    def raise_permission_error(*_args: object, **_kwargs: object) -> str:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "read_text", raise_permission_error)
+
+    with pytest.raises(ConfigError, match="Could not read config file"):
+        load_runtime_config(config_path)

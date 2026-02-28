@@ -51,3 +51,20 @@ def test_config_init_and_show_json(tmp_path: Path) -> None:
     assert show_result.exit_code == 0
     assert '"path":' in show_result.output
     assert '"default_profile": "default"' in show_result.output
+
+
+def test_config_show_reports_actionable_error_for_missing_path(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.toml"
+    result = runner.invoke(app, ["config", "show", "--path", str(missing_path)])
+    assert result.exit_code == 2
+    assert "Config show failed:" in result.output
+    assert "Run `xui config init" in result.output
+
+
+def test_config_init_reports_force_hint_when_file_exists(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("existing", encoding="utf-8")
+    result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert result.exit_code == 2
+    assert "Config init failed:" in result.output
+    assert "--force" in result.output

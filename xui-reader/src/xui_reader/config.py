@@ -19,6 +19,7 @@ except ModuleNotFoundError:
 
 VALID_OUTPUT_FORMATS = {"pretty", "plain", "json", "jsonl"}
 VALID_SOURCE_KINDS = {"list", "user"}
+VALID_BROWSER_ENGINES = {"chromium", "firefox", "webkit"}
 DEFAULT_CONFIG_FILENAME = "config.toml"
 
 DEFAULT_CONFIG_TEMPLATE = """[app]
@@ -63,7 +64,7 @@ class AppConfig:
 @dataclass(frozen=True)
 class BrowserConfig:
     engine: str = "chromium"
-    headless: bool = False
+    headless: bool = True
     navigation_timeout_ms: int = 30_000
     action_timeout_ms: int = 10_000
     block_resources: bool = True
@@ -116,8 +117,14 @@ def init_default_config(config_path: str | Path | None = None, force: bool = Fal
             f"Config file already exists at '{path}'. Re-run with --force to overwrite."
         )
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(default_config_toml(), encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(default_config_toml(), encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(
+            f"Could not write config file at '{path}': {exc}. "
+            "Check path permissions or choose a writable location with `--path`."
+        ) from exc
     return path
 
 
@@ -132,7 +139,13 @@ def load_runtime_config(config_path: str | Path | None = None) -> RuntimeConfig:
             f"Config path '{path}' is a directory; pass a file path ending in '{DEFAULT_CONFIG_FILENAME}'."
         )
 
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(
+            f"Could not read config file '{path}': {exc}. "
+            "Check file permissions and that the path points to a readable TOML file."
+        ) from exc
     raw = _load_toml(text, path)
     return _parse_runtime_config(raw)
 
@@ -187,7 +200,12 @@ def _parse_runtime_config(data: dict[str, Any]) -> RuntimeConfig:
     )
 
     browser_config = BrowserConfig(
-        engine=_expect_non_empty_string(browser_raw, "browser.engine", "chromium"),
+        engine=_expect_choice(
+            browser_raw,
+            "browser.engine",
+            default="chromium",
+            valid_values=VALID_BROWSER_ENGINES,
+        ),
         headless=_expect_bool(browser_raw, "browser.headless", default=True),
         navigation_timeout_ms=_expect_positive_int(
             browser_raw, "browser.navigation_timeout_ms", default=30_000
