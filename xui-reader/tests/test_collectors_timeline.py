@@ -97,6 +97,11 @@ class FakeSession:
         return self.page
 
 
+@dataclass(frozen=True)
+class FakeOverlayDismissResult:
+    blocked_category: str | None = None
+
+
 def test_select_user_tab_prefers_href_selector_before_text_fallback() -> None:
     href = FakeElement()
     text = FakeElement()
@@ -115,6 +120,21 @@ def test_select_user_tab_prefers_href_selector_before_text_fallback() -> None:
     assert result.selector == 'nav a[href="/alice/with_replies"]'
     assert href.clicks == 1
     assert text.clicks == 0
+
+
+def test_select_user_tab_does_not_select_other_handle_href_match() -> None:
+    other_handle_media = FakeElement()
+    page = FakePage(
+        contents=[""],
+        selectors={
+            'nav a[href="/bob/media"]': other_handle_media,
+        },
+    )
+
+    result = select_user_tab(page, handle="alice", tab="media")
+
+    assert result.selected is False
+    assert other_handle_media.clicks == 0
 
 
 def test_select_user_tab_falls_back_to_text_when_href_missing() -> None:
@@ -222,6 +242,23 @@ def test_timeline_collector_raises_when_user_tab_cannot_be_selected() -> None:
     source = SourceRef(source_id="user:alice", kind=SourceKind.USER, value="alice")
 
     with pytest.raises(CollectError, match="Could not select user tab"):
+        collector.collect(source)
+
+
+def test_timeline_collector_stops_immediately_on_blocked_overlay_state() -> None:
+    page = FakePage(
+        contents=['<a href="/alice/status/1">one</a>'],
+    )
+    collector = TimelineCollector(
+        RuntimeConfig(),
+        FakeSession(page),
+        overlay_dismisser=lambda _page, max_clicks=3: FakeOverlayDismissResult(
+            blocked_category="challenge"
+        ),
+    )
+    source = SourceRef(source_id="list:84839422", kind=SourceKind.LIST, value="84839422")
+
+    with pytest.raises(CollectError, match="blocked session state"):
         collector.collect(source)
 
 

@@ -209,7 +209,13 @@ def _collect_dom_loop(
     stop_reason = "max_scrolls"
 
     while True:
-        overlay_dismisser(page, max_clicks=overlay_max_clicks)
+        overlay_result = overlay_dismisser(page, max_clicks=overlay_max_clicks)
+        blocked_category = _extract_blocked_category(overlay_result)
+        if blocked_category is not None:
+            raise CollectError(
+                "Collection halted due to blocked session state "
+                f"('{blocked_category}'). Re-authenticate and retry."
+            )
         html = _read_page_content(page)
         dom_snapshots.append(html)
         new_ids = _extract_new_ids(html, seen_ids)
@@ -304,7 +310,8 @@ def _href_selectors_for_tab(handle: str, tab: str) -> tuple[str, ...]:
     if suffix:
         return (
             f'nav a[href="/{handle}{suffix}"]',
-            f'nav a[href$="{suffix}"]',
+            f'nav a[href="/{handle}{suffix}/"]',
+            f'nav a[href^="/{handle}"][href*="{suffix}"]',
         )
     return (
         f'nav a[href="/{handle}"]',
@@ -383,3 +390,11 @@ def _to_item(tweet_id: str, source_id: str) -> TweetItem:
         text="",
         source_id=source_id,
     )
+
+
+def _extract_blocked_category(overlay_result: object) -> str | None:
+    if isinstance(overlay_result, dict):
+        candidate = overlay_result.get("blocked_category")
+        return str(candidate) if candidate else None
+    candidate = getattr(overlay_result, "blocked_category", None)
+    return str(candidate) if candidate else None
