@@ -46,6 +46,8 @@ def calculate_next_run(
         return candidate
     if shutdown_start is None or shutdown_end is None:
         raise SchedulerError("shutdown_start and shutdown_end must both be provided.")
+    _validate_shutdown_time(shutdown_start, name="shutdown_start")
+    _validate_shutdown_time(shutdown_end, name="shutdown_end")
     return clamp_to_shutdown_wakeup(candidate, shutdown_start=shutdown_start, shutdown_end=shutdown_end)
 
 
@@ -57,6 +59,8 @@ def clamp_to_shutdown_wakeup(
 ) -> datetime:
     """Return shutdown end boundary when candidate lands inside shutdown window."""
     normalized = _normalize_datetime(candidate)
+    _validate_shutdown_time(shutdown_start, name="shutdown_start")
+    _validate_shutdown_time(shutdown_end, name="shutdown_end")
     if _is_within_shutdown(normalized.timetz().replace(tzinfo=None), shutdown_start, shutdown_end):
         return _shutdown_window_end(normalized, shutdown_start=shutdown_start, shutdown_end=shutdown_end)
     return normalized
@@ -102,4 +106,11 @@ def _shutdown_window_end(candidate: datetime, *, shutdown_start: time, shutdown_
 def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(value.tzinfo)
+    # Canonicalize around DST boundaries by round-tripping through UTC.
+    zone = value.tzinfo
+    return value.astimezone(timezone.utc).astimezone(zone)
+
+
+def _validate_shutdown_time(value: time, *, name: str) -> None:
+    if value.tzinfo is not None:
+        raise SchedulerError(f"{name} must be a naive local time without timezone info.")

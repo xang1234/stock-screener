@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timezone
 import random
 from zoneinfo import ZoneInfo
 
@@ -98,3 +98,28 @@ def test_jittered_interval_seconds_rejects_invalid_arguments() -> None:
         jittered_interval_seconds(0)
     with pytest.raises(SchedulerError, match="jitter_ratio"):
         jittered_interval_seconds(60, jitter_ratio=1.1)
+
+
+def test_calculate_next_run_handles_dst_gap_without_false_shutdown_clamp() -> None:
+    tz = ZoneInfo("America/New_York")
+    now = datetime(2026, 3, 8, 1, 55, tzinfo=tz)
+
+    result = calculate_next_run(
+        now,
+        interval_seconds=600,
+        jitter_ratio=0.0,
+        shutdown_start=time(0, 0),
+        shutdown_end=time(3, 0),
+    )
+
+    # 01:55 + 10m crosses spring-forward gap and should normalize to 03:05.
+    assert result == datetime(2026, 3, 8, 3, 5, tzinfo=tz)
+
+
+def test_clamp_to_shutdown_wakeup_rejects_aware_shutdown_times() -> None:
+    with pytest.raises(SchedulerError, match="naive local time"):
+        clamp_to_shutdown_wakeup(
+            datetime(2026, 3, 1, 12, 0, tzinfo=ZoneInfo("UTC")),
+            shutdown_start=time(1, 0, tzinfo=timezone.utc),
+            shutdown_end=time(2, 0, tzinfo=timezone.utc),
+        )
