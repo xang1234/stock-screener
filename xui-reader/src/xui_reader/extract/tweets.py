@@ -25,9 +25,9 @@ _STATUS_LINK_ID_ONLY_RE = re.compile(
     r"""href\s*=\s*["'](?:https?://(?:x\.com|twitter\.com))?(?:/i/web)?/status/(\d+)[^"']*["']""",
     re.IGNORECASE,
 )
+_TIME_DATETIME_ATTR_RE = re.compile(r"""\bdatetime\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 _TAG_STRIP_RE = re.compile(r"<[^>]+>")
 _ARTICLE_TAG_RE = re.compile(r"</?article\b[^>]*>", re.IGNORECASE)
-_DATETIME_RE = re.compile(r"""<time\b[^>]*\bdatetime\s*=\s*["']([^"']+)["'][^>]*>""", re.IGNORECASE)
 _REPLY_FALLBACK_RE = re.compile(r"replying to", re.IGNORECASE)
 _REPOST_FALLBACK_RE = re.compile(r"reposted", re.IGNORECASE)
 _PINNED_FALLBACK_RE = re.compile(r"pinned", re.IGNORECASE)
@@ -104,9 +104,12 @@ def _coerce_payload(raw_payload: Any) -> tuple[tuple[str, ...], str]:
         dom_snapshots = raw_payload.get("dom_snapshots")
         if isinstance(dom_snapshots, Sequence) and not isinstance(dom_snapshots, str):
             html_docs.extend(str(entry) for entry in dom_snapshots if str(entry))
+            if not html_docs and isinstance(html_value, str):
+                html_docs.append(html_value)
         elif isinstance(html_value, str):
             html_docs.append(html_value)
-        else:
+
+        if not html_docs:
             raise ExtractError(
                 "Extractor payload mapping must contain `html` string or `dom_snapshots` sequence."
             )
@@ -166,8 +169,8 @@ def _extract_primary_items(html: str, source_id: str, selectors: SelectorPack) -
 def _extract_fallback_items(html: str, source_id: str, selectors: SelectorPack) -> tuple[TweetItem, ...]:
     items: list[TweetItem] = []
     candidates = _status_candidates(html)
-    for index, (tweet_id, handle) in enumerate(candidates):
-        context = _context_around_status(html, tweet_id, fallback_index=index)
+    for tweet_id, handle in candidates:
+        context = _context_around_status(html, tweet_id)
         context_candidates = _status_candidates(context)
         quote_tweet_id = next(
             (candidate_id for candidate_id, _ in context_candidates if candidate_id != tweet_id),
@@ -296,16 +299,23 @@ def _extract_datetime(fragment: str, selectors: tuple[str, ...]) -> datetime | N
     if not selectors:
         return None
     for selector in selectors:
-        tag = _selector_tag(selector)
-        if tag != "time":
-            continue
-        match = _DATETIME_RE.search(fragment)
-        if match is None:
-            continue
-        parsed = _parse_datetime(match.group(1))
+        parsed = _extract_datetime_by_selector(fragment, selector)
         if parsed is not None:
             return parsed
     return None
+
+
+def _extract_datetime_by_selector(fragment: str, selector: str) -> datetime | None:
+    tag = _selector_tag(selector)
+    if tag != "time":
+        return None
+    open_tag = _extract_open_tag_by_selector(fragment, selector)
+    if open_tag is None:
+        return None
+    match = _TIME_DATETIME_ATTR_RE.search(open_tag)
+    if match is None:
+        return None
+    return _parse_datetime(match.group(1))
 
 
 def _parse_datetime(raw: str) -> datetime | None:
@@ -337,19 +347,32 @@ def _has_quote_container(fragment: str, selectors: tuple[str, ...]) -> bool:
     return False
 
 
-def _context_around_status(html: str, tweet_id: str, *, fallback_index: int) -> str:
+def _context_around_status(html: str, tweet_id: str) -> str:
     match = re.search(rf"/status/{re.escape(tweet_id)}", html)
     if match is None:
         return html
-    start = max(0, match.start() - 600)
+    start = match.start()
     end = min(len(html), match.end() + 600)
-    # Include a small disambiguator for repeated ids in malformed payloads.
-    if fallback_index > 0:
-        start = max(0, start - 50 * fallback_index)
     return html[start:end]
 
 
 def _extract_inner_text_by_selector(fragment: str, selector: str) -> str | None:
+    tag = _selector_tag(selector)
+    if tag is None:
+        return None
+    match = _selector_tag_block_match(fragment, selector)
+    return _clean_text(match.group(1)) if match else None
+
+
+def _extract_open_tag_by_selector(fragment: str, selector: str) -> str | None:
+    tag = _selector_tag(selector)
+    if tag is None:
+        return None
+    match = _selector_open_tag_match(fragment, selector)
+    return match.group(0) if match else None
+
+
+def _selector_tag_block_match(fragment: str, selector: str) -> re.Match[str] | None:
     tag = _selector_tag(selector)
     if tag is None:
         return None
@@ -361,8 +384,7 @@ def _extract_inner_text_by_selector(fragment: str, selector: str) -> str | None:
             rf"""<{tag}\b[^>]*\bclass\s*=\s*["'][^"']*\b{re.escape(class_match)}\b[^"']*["'][^>]*>(.*?)</{tag}>""",
             re.IGNORECASE | re.DOTALL,
         )
-        match = class_pattern.search(fragment)
-        return _clean_text(match.group(1)) if match else None
+        return class_pattern.search(fragment)
 
     if attr_match is not None:
         attr_name, contains, attr_value = attr_match
@@ -376,15 +398,44 @@ def _extract_inner_text_by_selector(fragment: str, selector: str) -> str | None:
                 rf"""<{tag}\b[^>]*\b{re.escape(attr_name)}\s*=\s*["']{re.escape(attr_value)}["'][^>]*>(.*?)</{tag}>""",
                 re.IGNORECASE | re.DOTALL,
             )
-        match = pattern.search(fragment)
-        return _clean_text(match.group(1)) if match else None
+        return pattern.search(fragment)
 
-    match = re.search(
+    return re.search(
         rf"""<{tag}\b[^>]*>(.*?)</{tag}>""",
         fragment,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    return _clean_text(match.group(1)) if match else None
+
+
+def _selector_open_tag_match(fragment: str, selector: str) -> re.Match[str] | None:
+    tag = _selector_tag(selector)
+    if tag is None:
+        return None
+    attr_match = _selector_attribute(selector)
+    class_match = _selector_class(selector)
+
+    if class_match is not None:
+        class_pattern = re.compile(
+            rf"""<{tag}\b[^>]*\bclass\s*=\s*["'][^"']*\b{re.escape(class_match)}\b[^"']*["'][^>]*>""",
+            re.IGNORECASE,
+        )
+        return class_pattern.search(fragment)
+
+    if attr_match is not None:
+        attr_name, contains, attr_value = attr_match
+        if contains:
+            pattern = re.compile(
+                rf"""<{tag}\b[^>]*\b{re.escape(attr_name)}\s*=\s*["'][^"']*{re.escape(attr_value)}[^"']*["'][^>]*>""",
+                re.IGNORECASE,
+            )
+        else:
+            pattern = re.compile(
+                rf"""<{tag}\b[^>]*\b{re.escape(attr_name)}\s*=\s*["']{re.escape(attr_value)}["'][^>]*>""",
+                re.IGNORECASE,
+            )
+        return pattern.search(fragment)
+
+    return re.search(rf"<{tag}\b[^>]*>", fragment, flags=re.IGNORECASE)
 
 
 def _selector_matches_fragment(fragment: str, selector: str) -> bool:

@@ -126,6 +126,59 @@ def test_extract_dedupes_tweet_ids_across_dom_snapshots() -> None:
     assert [item.tweet_id for item in items] == ["888", "999"]
 
 
+def test_extract_uses_html_when_dom_snapshots_empty() -> None:
+    extractor = PrimaryFallbackTweetExtractor()
+    payload = {
+        "source_id": "src",
+        "dom_snapshots": [],
+        "html": '<a href="/alice/status/123">x</a>',
+    }
+
+    items = extractor.extract(payload)
+
+    assert [item.tweet_id for item in items] == ["123"]
+
+
+def test_extract_fallback_does_not_leak_fields_between_status_links() -> None:
+    extractor = PrimaryFallbackTweetExtractor()
+    html = """
+<div>
+  <a href="/alice/status/111">one</a>
+  <time datetime="2026-01-01T00:00:00Z"></time>
+  <div data-testid="tweetText">FIRST</div>
+  <a href="/bob/status/222">two</a>
+  <time datetime="2026-01-02T00:00:00Z"></time>
+  <div data-testid="tweetText">SECOND</div>
+</div>
+"""
+
+    items = extractor.extract({"html": html, "source_id": "src"})
+
+    assert [item.tweet_id for item in items] == ["111", "222"]
+    assert items[0].text == "FIRST"
+    assert items[1].text == "SECOND"
+    assert items[0].created_at == datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert items[1].created_at == datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_extract_honors_selector_override_for_time() -> None:
+    extractor = PrimaryFallbackTweetExtractor(
+        override_data={"tweet.time": 'time[data-role="preferred"]'}
+    )
+    html = """
+<article data-testid="tweet">
+  <a href="/alice/status/321">status</a>
+  <time datetime="2024-01-01T00:00:00Z"></time>
+  <time data-role="preferred" datetime="2026-01-01T00:00:00Z"></time>
+</article>
+"""
+
+    items = extractor.extract({"html": html, "source_id": "src"})
+
+    assert len(items) == 1
+    assert items[0].created_at == datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+
 def test_extract_rejects_unsupported_payload_types() -> None:
     extractor = PrimaryFallbackTweetExtractor()
 
