@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import typer
 
 from . import __version__
+from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
+from .errors import ConfigError
 
 app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
 
@@ -77,13 +81,47 @@ def user_parse_handle(user_url: str) -> None:
 
 
 @config_app.command("init")
-def config_init() -> None:
-    typer.echo("Not implemented yet: config init.")
+def config_init(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing config file."),
+) -> None:
+    try:
+        written_path = init_default_config(path, force=force)
+    except ConfigError as exc:
+        typer.secho(f"Config init failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    typer.echo(f"Wrote default config to {written_path}")
 
 
 @config_app.command("show")
-def config_show() -> None:
-    typer.echo("Not implemented yet: config show.")
+def config_show(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render resolved config as JSON."),
+) -> None:
+    resolved_path = resolve_config_path(path)
+    try:
+        config = load_runtime_config(path)
+    except ConfigError as exc:
+        typer.secho(f"Config show failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    payload = {
+        "path": str(resolved_path),
+        "config": config_to_dict(config),
+    }
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    typer.echo(f"Resolved config path: {payload['path']}")
+    typer.echo(f"Default profile: {config.app.default_profile}")
+    typer.echo(f"Default format: {config.app.default_format}")
+    typer.echo(f"Sources: {len(config.sources)}")
 
 
 @app.command("read")

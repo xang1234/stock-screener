@@ -1,5 +1,7 @@
 """CLI smoke tests for scaffold entrypoint behavior."""
 
+from pathlib import Path
+
 import pytest
 
 from xui_reader import __version__
@@ -36,3 +38,16 @@ def test_cli_version_flag_prints_package_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert __version__ in result.output
+
+
+def test_config_init_and_show_json(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+    assert config_path.exists()
+
+    show_result = runner.invoke(app, ["config", "show", "--path", str(config_path), "--json"])
+    assert show_result.exit_code == 0
+    assert '"path":' in show_result.output
+    assert '"default_profile": "default"' in show_result.output
