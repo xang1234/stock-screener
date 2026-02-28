@@ -444,6 +444,41 @@ def test_read_json_reports_outcomes_and_merged_items(
     assert '"source_id": "user:a"' in result.output
 
 
+def test_read_prints_actionable_login_hint_when_all_sources_fail_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = MultiSourceReadResult(
+        items=(),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="list:1",
+                source_kind="list",
+                ok=False,
+                item_count=0,
+                error="Missing storage_state for profile 'default' at '/tmp/state.json'.",
+            ),
+            SourceReadOutcome(
+                source_id="user:a",
+                source_kind="user",
+                ok=False,
+                item_count=0,
+                error="Missing storage_state for profile 'default' at '/tmp/state.json'.",
+            ),
+        ),
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["read", "--path", str(config_path)])
+    assert result.exit_code == 2
+    assert "Next step:" in result.output
+    assert "xui auth login --profile default --path" in result.output
+
+
 def test_watch_json_reports_cycle_timing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
@@ -530,3 +565,33 @@ def test_watch_returns_auth_fail_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_
     result = runner.invoke(app, ["watch", "--path", str(config_path), "--json"])
     assert result.exit_code == 5
     assert '"exit_state": "auth_fail"' in result.output
+
+
+def test_watch_prints_actionable_login_hint_on_auth_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=0,
+                succeeded_sources=0,
+                failed_sources=2,
+                auth_failed_sources=2,
+            ),
+        )
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_watch", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["watch", "--path", str(config_path)])
+    assert result.exit_code == 5
+    assert "Next step:" in result.output
+    assert "xui auth login --profile default --path" in result.output

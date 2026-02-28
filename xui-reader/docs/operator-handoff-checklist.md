@@ -40,5 +40,6 @@ If release behavior regresses:
 ## 5. Runbook Pointers
 
 - `xui-reader/README.md` for install, local workflow, and debug safety defaults
+- `xui-reader/docs/clean-machine-onboarding.md` for first-run operator workflow
 - `xui-reader/docs/release-readiness-checklist.md` for release gates
 - `xui-reader/docs/release-notes-template.md` for release communication structure

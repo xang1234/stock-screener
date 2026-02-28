@@ -12,6 +12,12 @@
 4. Install Playwright Chromium:
    - `python -m playwright install chromium`
 
+## Quick Start (Clean Machine)
+
+Follow the full onboarding drill:
+
+- [Clean-Machine Onboarding](docs/clean-machine-onboarding.md)
+
 ## Local Workflow
 
 - CLI help: `xui --help`

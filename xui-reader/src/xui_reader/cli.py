@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shlex
 
 import typer
 
@@ -340,6 +341,11 @@ def read(
             for item in result.items:
                 created = item.created_at.isoformat() if item.created_at else "none"
                 typer.echo(f"- {created} {item.source_id} {item.tweet_id}")
+        if _all_source_failures_are_auth_related(result):
+            typer.echo(
+                f"Next step: `{_auth_login_command_hint(resolved_profile, path)}` "
+                "then re-run `xui read`."
+            )
 
     if result.failed == len(result.outcomes):
         raise typer.Exit(2)
@@ -425,6 +431,11 @@ def watch(
                 f"sources_ok={cycle.succeeded_sources} sources_failed={cycle.failed_sources} "
                 f"page_loads={cycle.page_loads} scroll_rounds={cycle.scroll_rounds} "
                 f"sleep={cycle.sleep_seconds:.2f}s next={next_run}"
+            )
+        if exit_code is WatchExitCode.AUTH_FAIL:
+            typer.echo(
+                f"Next step: `{_auth_login_command_hint(resolved_profile, path)}` "
+                "then re-run `xui watch`."
             )
     if exit_code is not WatchExitCode.SUCCESS:
         raise typer.Exit(int(exit_code))
@@ -659,3 +670,19 @@ def _tweet_item_to_dict(item: TweetItem) -> dict[str, object]:
         "has_quote": item.has_quote,
         "quote_tweet_id": item.quote_tweet_id,
     }
+
+
+def _auth_login_command_hint(profile_name: str, config_path: str | None) -> str:
+    parts = ["xui", "auth", "login", "--profile", profile_name]
+    if config_path:
+        parts.extend(["--path", str(Path(config_path).expanduser())])
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def _all_source_failures_are_auth_related(result: MultiSourceReadResult) -> bool:
+    if not result.outcomes:
+        return False
+    return all(
+        (not outcome.ok) and bool(outcome.error) and "Missing storage_state" in str(outcome.error)
+        for outcome in result.outcomes
+    )
