@@ -15,6 +15,7 @@ MODULES = [
     "xui_reader.collectors.base",
     "xui_reader.collectors.timeline",
     "xui_reader.extract.base",
+    "xui_reader.extract.selectors",
     "xui_reader.store.base",
     "xui_reader.render.base",
     "xui_reader.scheduler.base",
