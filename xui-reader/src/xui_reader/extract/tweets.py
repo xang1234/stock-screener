@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from xui_reader.errors import ExtractError
+from xui_reader.extract.normalize import TweetNormalizer
 from xui_reader.extract.selectors import (
     SelectorPack,
     SelectorPackResolution,
@@ -48,6 +49,8 @@ class PrimaryFallbackTweetExtractor:
         override_path: str | None = None,
         override_data: Mapping[str, Any] | None = None,
         selector_resolution: SelectorPackResolution | None = None,
+        max_expansions: int = 0,
+        normalizer: TweetNormalizer | None = None,
     ) -> None:
         if selector_resolution is not None:
             self._selector_resolution = selector_resolution
@@ -56,6 +59,10 @@ class PrimaryFallbackTweetExtractor:
                 override_path=override_path,
                 override_data=override_data,
             )
+        if max_expansions < 0:
+            raise ExtractError("max_expansions must be >= 0.")
+        self._max_expansions = max_expansions
+        self._normalizer = normalizer or TweetNormalizer()
 
     @property
     def selector_resolution(self) -> SelectorPackResolution:
@@ -68,6 +75,8 @@ class PrimaryFallbackTweetExtractor:
         html_docs, source_id = _coerce_payload(raw_payload)
         selectors = self._selector_resolution.selectors
         warnings = list(self._selector_resolution.warnings)
+        expanded_text_by_id, payload_max_expansions, payload_warnings = _coerce_expansion_payload(raw_payload)
+        warnings.extend(payload_warnings)
 
         ordered_items: list[TweetItem] = []
         seen_ids: set[str] = set()
@@ -88,7 +97,16 @@ class PrimaryFallbackTweetExtractor:
                 ordered_items.append(item)
                 seen_ids.add(item.tweet_id)
 
-        return TweetExtractionResult(items=tuple(ordered_items), warnings=tuple(warnings))
+        effective_max_expansions = (
+            payload_max_expansions if payload_max_expansions is not None else self._max_expansions
+        )
+        normalized = self._normalizer.normalize(
+            ordered_items,
+            expanded_text_by_id=expanded_text_by_id,
+            max_expansions=effective_max_expansions,
+        )
+        warnings.extend(normalized.warnings)
+        return TweetExtractionResult(items=normalized.items, warnings=tuple(warnings))
 
 
 def _coerce_payload(raw_payload: Any) -> tuple[tuple[str, ...], str]:
@@ -126,6 +144,41 @@ def _coerce_payload(raw_payload: Any) -> tuple[tuple[str, ...], str]:
 def _coerce_source_id(raw: Any) -> str:
     value = str(raw).strip()
     return value if value else "unknown"
+
+
+def _coerce_expansion_payload(raw_payload: Any) -> tuple[dict[str, str] | None, int | None, tuple[str, ...]]:
+    if not isinstance(raw_payload, Mapping):
+        return None, None, ()
+
+    warnings: list[str] = []
+    expansion_map: dict[str, str] = {}
+    raw_map = raw_payload.get("expanded_text_by_id")
+    if raw_map is not None:
+        if isinstance(raw_map, Mapping):
+            for raw_id, raw_text in raw_map.items():
+                expansion_map[str(raw_id)] = str(raw_text)
+        else:
+            warnings.append(
+                "Payload key 'expanded_text_by_id' must be a mapping; ignoring expansion hints."
+            )
+
+    max_expansions: int | None = None
+    raw_max_expansions = raw_payload.get("max_expansions")
+    if raw_max_expansions is not None:
+        if isinstance(raw_max_expansions, bool):
+            warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
+        else:
+            try:
+                candidate = int(raw_max_expansions)
+            except (TypeError, ValueError):
+                warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
+            else:
+                if candidate < 0:
+                    warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
+                else:
+                    max_expansions = candidate
+
+    return (expansion_map or None), max_expansions, tuple(warnings)
 
 
 def _extract_primary_items(html: str, source_id: str, selectors: SelectorPack) -> tuple[TweetItem, ...]:

@@ -1,0 +1,102 @@
+{
+  "cases": [
+    {
+      "name": "malformed_ids_missing_times_and_mixed_unicode",
+      "max_expansions": 1,
+      "expanded_text_by_id": {
+        "200": "Expanded\u3000text with\u200b unicode"
+      },
+      "input": [
+        {
+          "tweet_id": " https://x.com/alice/status/100 ",
+          "created_at": null,
+          "author_handle": " Alice ",
+          "text": "Hello\u200b   world",
+          "source_id": " list:demo ",
+          "is_reply": null,
+          "is_repost": 0,
+          "is_pinned": false,
+          "has_quote": null,
+          "quote_tweet_id": null
+        },
+        {
+          "tweet_id": "bad-id",
+          "created_at": "2026-01-01T00:00:00+00:00",
+          "author_handle": "@bad",
+          "text": "skip me",
+          "source_id": "list:demo",
+          "is_reply": false,
+          "is_repost": false,
+          "is_pinned": false,
+          "has_quote": false,
+          "quote_tweet_id": null
+        },
+        {
+          "tweet_id": "100",
+          "created_at": "2026-01-02T00:00:00+00:00",
+          "author_handle": "@alice",
+          "text": "duplicate",
+          "source_id": "list:demo",
+          "is_reply": false,
+          "is_repost": false,
+          "is_pinned": false,
+          "has_quote": false,
+          "quote_tweet_id": null
+        },
+        {
+          "tweet_id": "200",
+          "created_at": "2026-01-02T12:30:00",
+          "author_handle": "@Bob",
+          "text": "Need expansion...",
+          "source_id": "list:demo",
+          "is_reply": 1,
+          "is_repost": null,
+          "is_pinned": null,
+          "has_quote": true,
+          "quote_tweet_id": "https://x.com/charlie/status/300"
+        }
+      ],
+      "expected": {
+        "tweet_ids": [
+          "100",
+          "200"
+        ],
+        "texts": {
+          "100": "Hello world",
+          "200": "Expanded text with unicode"
+        },
+        "created_at": {
+          "100": null,
+          "200": "2026-01-02T12:30:00+00:00"
+        },
+        "author_handles": {
+          "100": "@Alice",
+          "200": "@Bob"
+        },
+        "quote_ids": {
+          "100": null,
+          "200": "300"
+        },
+        "is_reply": {
+          "100": false,
+          "200": true
+        },
+        "is_repost": {
+          "100": false,
+          "200": false
+        },
+        "is_pinned": {
+          "100": false,
+          "200": false
+        },
+        "has_quote": {
+          "100": false,
+          "200": true
+        },
+        "dropped_invalid_ids": 1,
+        "deduped_count": 1,
+        "expansions_applied": 1
+      }
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 """Extraction contracts."""
 
 from .base import Extractor
+from .normalize import TweetNormalizationResult, TweetNormalizer
 from .selectors import (
     DEFAULT_SELECTOR_PACK,
     SelectorPack,
@@ -16,6 +17,8 @@ __all__ = [
     "PrimaryFallbackTweetExtractor",
     "SelectorPack",
     "SelectorPackResolution",
+    "TweetNormalizationResult",
+    "TweetNormalizer",
     "TweetExtractionResult",
     "default_selector_pack",
     "resolve_selector_pack",

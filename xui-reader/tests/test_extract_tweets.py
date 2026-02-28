@@ -179,6 +179,36 @@ def test_extract_honors_selector_override_for_time() -> None:
     assert items[0].created_at == datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 
+def test_extract_applies_bounded_expansion_from_payload() -> None:
+    extractor = PrimaryFallbackTweetExtractor(max_expansions=2)
+    payload = {
+        "source_id": "src",
+        "html": '<a href="/alice/status/101">x</a><div data-testid="tweetText">Needs more...</div>',
+        "expanded_text_by_id": {"101": "Expanded\u3000text"},
+        "max_expansions": 1,
+    }
+
+    items = extractor.extract(payload)
+
+    assert len(items) == 1
+    assert items[0].tweet_id == "101"
+    assert items[0].text == "Expanded text"
+
+
+def test_extract_warns_on_invalid_max_expansions_override() -> None:
+    extractor = PrimaryFallbackTweetExtractor()
+    payload = {
+        "source_id": "src",
+        "html": '<a href="/alice/status/202">ok</a>',
+        "max_expansions": -3,
+    }
+
+    result = extractor.extract_with_warnings(payload)
+
+    assert [item.tweet_id for item in result.items] == ["202"]
+    assert any("max_expansions" in warning for warning in result.warnings)
+
+
 def test_extract_rejects_unsupported_payload_types() -> None:
     extractor = PrimaryFallbackTweetExtractor()
 
