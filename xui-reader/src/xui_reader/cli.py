@@ -17,8 +17,11 @@ from .auth import (
 )
 from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
 from .diagnostics.doctor import run_doctor_preflight
-from .errors import AuthError, ConfigError, DiagnosticsError, ProfileError
+from .errors import AuthError, CollectError, ConfigError, DiagnosticsError, ProfileError, SchedulerError
+from .models import TweetItem
 from .profiles import create_profile, delete_profile, list_profiles, switch_profile
+from .scheduler.read import MultiSourceReadResult, run_configured_read
+from .scheduler.watch import WatchRunResult, run_configured_watch
 
 app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
 
@@ -280,13 +283,108 @@ def config_show(
 
 
 @app.command("read")
-def read() -> None:
-    typer.echo("Not implemented yet: read.")
+def read(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to use for storage_state (defaults to configured app.default_profile).",
+    ),
+    limit: int = typer.Option(100, "--limit", min=1, help="Per-source collection limit."),
+    as_json: bool = typer.Option(False, "--json", help="Render read result as JSON."),
+) -> None:
+    try:
+        config = load_runtime_config(path)
+        result = run_configured_read(
+            config,
+            profile_name=profile,
+            config_path=path,
+            limit=limit,
+        )
+    except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
+        typer.secho(f"Read failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    payload = _read_result_payload(result)
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            f"Read summary: {payload['succeeded_sources']} succeeded, "
+            f"{payload['failed_sources']} failed, {len(result.items)} merged items."
+        )
+        typer.echo("Source outcomes:")
+        for outcome in payload["outcomes"]:
+            status = "ok" if outcome["ok"] else "failed"
+            suffix = f" ({outcome['error']})" if outcome["error"] else ""
+            typer.echo(f"- {outcome['source_id']} [{status}] items={outcome['item_count']}{suffix}")
+        if result.items:
+            typer.echo("Merged order:")
+            for item in result.items:
+                created = item.created_at.isoformat() if item.created_at else "none"
+                typer.echo(f"- {created} {item.source_id} {item.tweet_id}")
+
+    if result.failed == len(result.outcomes):
+        raise typer.Exit(2)
 
 
 @app.command("watch")
-def watch() -> None:
-    typer.echo("Not implemented yet: watch.")
+def watch(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to use for storage_state (defaults to configured app.default_profile).",
+    ),
+    limit: int = typer.Option(100, "--limit", min=1, help="Per-source collection limit."),
+    interval_seconds: int = typer.Option(300, "--interval-seconds", min=1, help="Watch interval."),
+    jitter_ratio: float = typer.Option(
+        0.0,
+        "--jitter-ratio",
+        min=0.0,
+        max=1.0,
+        help="Randomized +/- ratio applied to interval.",
+    ),
+    shutdown_window: str | None = typer.Option(
+        None,
+        "--shutdown-window",
+        help="Optional local shutdown window in HH:MM-HH:MM format.",
+    ),
+    max_cycles: int = typer.Option(1, "--max-cycles", min=1, help="Number of watch cycles to run."),
+    as_json: bool = typer.Option(False, "--json", help="Render watch result as JSON."),
+) -> None:
+    try:
+        config = load_runtime_config(path)
+        result = run_configured_watch(
+            config,
+            profile_name=profile,
+            config_path=path,
+            limit=limit,
+            interval_seconds=interval_seconds,
+            jitter_ratio=jitter_ratio,
+            shutdown_window=shutdown_window,
+            max_cycles=max_cycles,
+        )
+    except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
+        typer.secho(f"Watch failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    payload = _watch_result_payload(result)
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Watch completed: {len(result.cycles)} cycle(s).")
+        for cycle in result.cycles:
+            next_run = cycle.next_run_at.isoformat() if cycle.next_run_at else "none"
+            typer.echo(
+                f"- cycle={cycle.cycle} emitted={cycle.emitted_items} "
+                f"sources_ok={cycle.succeeded_sources} sources_failed={cycle.failed_sources} "
+                f"sleep={cycle.sleep_seconds:.2f}s next={next_run}"
+            )
 
 
 @app.command("doctor")
@@ -304,15 +402,34 @@ def doctor(
 ) -> None:
     try:
         config = load_runtime_config(path)
-        report = run_doctor_preflight(config, max_sources=max_sources)
+        report = run_doctor_preflight(
+            config,
+            profile_name=None,
+            config_path=path,
+            max_sources=max_sources,
+        )
     except (ConfigError, DiagnosticsError) as exc:
         typer.secho(f"Doctor failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
 
     if as_json:
+        sections = [
+            {
+                "name": section.name,
+                "ok": section.ok,
+                "summary": section.summary,
+                "details": section.details,
+            }
+            for section in report.sections
+        ]
         typer.echo(
             json.dumps(
-                {"ok": report.ok, "checks": list(report.checks), "details": report.details},
+                {
+                    "ok": report.ok,
+                    "checks": list(report.checks),
+                    "details": report.details,
+                    "sections": sections,
+                },
                 indent=2,
                 sort_keys=True,
             )
@@ -321,8 +438,16 @@ def doctor(
 
     typer.echo("Doctor preflight")
     typer.echo(f"Status: {'ok' if report.ok else 'fail'}")
-    for check in report.checks:
-        typer.echo(f"- {check}")
+    if report.sections:
+        for section in report.sections:
+            marker = "PASS" if section.ok else "FAIL"
+            typer.echo(f"[{marker}] {section.name}: {section.summary}")
+            for key, value in section.details.items():
+                if value:
+                    typer.echo(f"  {key}: {value}")
+    else:
+        for check in report.checks:
+            typer.echo(f"- {check}")
 
     selected_ids = report.details.get("selected_source_ids", "")
     if selected_ids:
@@ -357,3 +482,53 @@ def main(
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
+
+
+def _read_result_payload(result: MultiSourceReadResult) -> dict[str, object]:
+    return {
+        "succeeded_sources": result.succeeded,
+        "failed_sources": result.failed,
+        "outcomes": [
+            {
+                "source_id": outcome.source_id,
+                "source_kind": outcome.source_kind,
+                "ok": outcome.ok,
+                "item_count": outcome.item_count,
+                "error": outcome.error,
+            }
+            for outcome in result.outcomes
+        ],
+        "items": [_tweet_item_to_dict(item) for item in result.items],
+    }
+
+
+def _watch_result_payload(result: WatchRunResult) -> dict[str, object]:
+    return {
+        "cycles": [
+            {
+                "cycle": cycle.cycle,
+                "started_at": cycle.started_at.isoformat(),
+                "next_run_at": cycle.next_run_at.isoformat() if cycle.next_run_at else None,
+                "sleep_seconds": cycle.sleep_seconds,
+                "emitted_items": cycle.emitted_items,
+                "succeeded_sources": cycle.succeeded_sources,
+                "failed_sources": cycle.failed_sources,
+            }
+            for cycle in result.cycles
+        ]
+    }
+
+
+def _tweet_item_to_dict(item: TweetItem) -> dict[str, object]:
+    return {
+        "tweet_id": item.tweet_id,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "author_handle": item.author_handle,
+        "text": item.text,
+        "source_id": item.source_id,
+        "is_reply": item.is_reply,
+        "is_repost": item.is_repost,
+        "is_pinned": item.is_pinned,
+        "has_quote": item.has_quote,
+        "quote_tweet_id": item.quote_tweet_id,
+    }

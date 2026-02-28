@@ -1,11 +1,15 @@
 """CLI smoke tests for scaffold entrypoint behavior."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from xui_reader import __version__
 from xui_reader.auth import AuthProbeSnapshot, storage_state_path
+from xui_reader.models import TweetItem
+from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
+from xui_reader.scheduler.watch import WatchCycleResult, WatchRunResult
 
 pytest.importorskip("typer")
 
@@ -297,5 +301,75 @@ def test_doctor_json_reports_selected_sources(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["doctor", "--path", str(config_path), "--json", "--max-sources", "1"])
     assert result.exit_code == 0
-    assert '"ok": true' in result.output
+    assert '"ok": false' in result.output
     assert '"selected_source_ids"' in result.output
+    assert '"sections"' in result.output
+
+
+def test_read_json_reports_outcomes_and_merged_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = MultiSourceReadResult(
+        items=(
+            TweetItem(
+                tweet_id="10",
+                created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                author_handle="@a",
+                text="hello",
+                source_id="list:1",
+            ),
+        ),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="list:1",
+                source_kind="list",
+                ok=True,
+                item_count=1,
+                error=None,
+            ),
+            SourceReadOutcome(
+                source_id="user:a",
+                source_kind="user",
+                ok=False,
+                item_count=0,
+                error="collect failed",
+            ),
+        ),
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["read", "--path", str(config_path), "--json"])
+    assert result.exit_code == 0
+    assert '"succeeded_sources": 1' in result.output
+    assert '"failed_sources": 1' in result.output
+    assert '"source_id": "user:a"' in result.output
+
+
+def test_watch_json_reports_cycle_timing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    payload = WatchRunResult(
+        cycles=(
+            WatchCycleResult(
+                cycle=1,
+                started_at=datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc),
+                next_run_at=None,
+                sleep_seconds=0.0,
+                emitted_items=2,
+                succeeded_sources=1,
+                failed_sources=0,
+            ),
+        )
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_watch", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["watch", "--path", str(config_path), "--json"])
+    assert result.exit_code == 0
+    assert '"cycle": 1' in result.output
+    assert '"emitted_items": 2' in result.output

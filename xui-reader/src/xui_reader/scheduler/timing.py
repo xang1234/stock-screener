@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
 import random
+import re
 
 from xui_reader.errors import SchedulerError
+
+_SHUTDOWN_WINDOW_RE = re.compile(
+    r"^\s*(?P<start_hour>\d{1,2}):(?P<start_minute>\d{2})\s*-\s*(?P<end_hour>\d{1,2}):(?P<end_minute>\d{2})\s*$"
+)
 
 
 def jittered_interval_seconds(
@@ -114,3 +119,40 @@ def _normalize_datetime(value: datetime) -> datetime:
 def _validate_shutdown_time(value: time, *, name: str) -> None:
     if value.tzinfo is not None:
         raise SchedulerError(f"{name} must be a naive local time without timezone info.")
+
+
+def parse_shutdown_window(raw_window: str) -> tuple[time, time]:
+    """Parse shutdown window in HH:MM-HH:MM local-time format."""
+    raw = raw_window.strip()
+    match = _SHUTDOWN_WINDOW_RE.fullmatch(raw)
+    if match is None:
+        raise SchedulerError(
+            f"Invalid shutdown window '{raw_window}'. Expected format HH:MM-HH:MM (24-hour clock)."
+        )
+    start = time(
+        hour=_parse_hour(match.group("start_hour"), raw_window),
+        minute=_parse_minute(match.group("start_minute"), raw_window),
+    )
+    end = time(
+        hour=_parse_hour(match.group("end_hour"), raw_window),
+        minute=_parse_minute(match.group("end_minute"), raw_window),
+    )
+    return start, end
+
+
+def _parse_hour(raw: str, raw_window: str) -> int:
+    value = int(raw)
+    if value < 0 or value > 23:
+        raise SchedulerError(
+            f"Invalid shutdown window '{raw_window}'. Hour '{raw}' must be between 00 and 23."
+        )
+    return value
+
+
+def _parse_minute(raw: str, raw_window: str) -> int:
+    value = int(raw)
+    if value < 0 or value > 59:
+        raise SchedulerError(
+            f"Invalid shutdown window '{raw_window}'. Minute '{raw}' must be between 00 and 59."
+        )
+    return value

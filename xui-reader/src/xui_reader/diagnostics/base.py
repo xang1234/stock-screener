@@ -7,10 +7,19 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
+class DiagnosticSection:
+    name: str
+    ok: bool
+    summary: str
+    details: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class DiagnosticReport:
     ok: bool
     checks: tuple[str, ...] = ()
     details: dict[str, str] = field(default_factory=dict)
+    sections: tuple[DiagnosticSection, ...] = ()
 
 
 class Doctor(Protocol):

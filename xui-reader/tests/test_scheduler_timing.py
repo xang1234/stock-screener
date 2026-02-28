@@ -13,6 +13,7 @@ from xui_reader.scheduler.timing import (
     calculate_next_run,
     clamp_to_shutdown_wakeup,
     jittered_interval_seconds,
+    parse_shutdown_window,
 )
 
 
@@ -123,3 +124,16 @@ def test_clamp_to_shutdown_wakeup_rejects_aware_shutdown_times() -> None:
             shutdown_start=time(1, 0, tzinfo=timezone.utc),
             shutdown_end=time(2, 0, tzinfo=timezone.utc),
         )
+
+
+def test_parse_shutdown_window_parses_cross_midnight_window() -> None:
+    start, end = parse_shutdown_window("22:30-05:15")
+    assert start == time(22, 30)
+    assert end == time(5, 15)
+
+
+def test_parse_shutdown_window_rejects_invalid_strings() -> None:
+    with pytest.raises(SchedulerError, match="Invalid shutdown window"):
+        parse_shutdown_window("bad-value")
+    with pytest.raises(SchedulerError, match="Hour"):
+        parse_shutdown_window("24:00-06:00")
