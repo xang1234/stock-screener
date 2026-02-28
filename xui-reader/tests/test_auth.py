@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
 from typing import Any
 
@@ -240,6 +241,30 @@ def test_probe_auth_status_detects_challenge(tmp_path: Path) -> None:
     assert result.status_code == "blocked_challenge"
 
 
+def test_probe_auth_status_detects_login_challenge_path_as_challenge(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_default_config(config_path)
+    create_profile("default", config_path)
+    login_and_save_storage_state(
+        profile_name="default",
+        config_path=config_path,
+        capture_fn=_fake_storage_state,
+    )
+
+    result = probe_auth_status(
+        profile_name="default",
+        config_path=config_path,
+        probe_fn=lambda _config, _path: AuthProbeSnapshot(
+            current_url="https://x.com/account/login_challenge?challenge_type=LoginChallenge",
+            page_title="Log in challenge",
+            body_text="",
+        ),
+    )
+
+    assert result.authenticated is False
+    assert result.status_code == "blocked_challenge"
+
+
 def test_probe_auth_status_fail_closed_when_probe_errors(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     init_default_config(config_path)
@@ -273,6 +298,17 @@ def test_probe_auth_status_reports_missing_storage_state(tmp_path: Path) -> None
 
     assert result.authenticated is False
     assert result.status_code == "missing_storage_state"
+
+
+def test_probe_auth_status_quotes_config_path_in_login_hint(tmp_path: Path) -> None:
+    config_path = tmp_path / "dir with spaces" / "config.toml"
+    init_default_config(config_path)
+    create_profile("default", config_path)
+
+    result = probe_auth_status(profile_name="default", config_path=config_path)
+
+    expected_path = shlex.quote(str(config_path))
+    assert f"--path {expected_path}" in " ".join(result.next_steps)
 
 
 def test_logout_profile_removes_storage_state(tmp_path: Path) -> None:

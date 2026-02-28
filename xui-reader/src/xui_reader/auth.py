@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 from typing import Any
+from urllib.parse import urlparse
 
 from .browser.session import PlaywrightBrowserSession
 from .config import RuntimeConfig, load_runtime_config
@@ -243,7 +245,9 @@ def detect_login_wall_or_challenge(
     likely_authenticated_url = lowered_url.startswith("https://x.com/home") or lowered_url.startswith(
         "https://twitter.com/home"
     )
-    login_url_markers = ("/i/flow/login", "/login")
+    url_path = urlparse(lowered_url).path
+    login_url_paths = ("/i/flow/login", "/login")
+    challenge_url_markers = ("/account/access", "/account/login_challenge", "/challenge")
     login_title_markers = ("sign in", "log in")
     login_body_markers = (
         "sign in to x",
@@ -253,9 +257,6 @@ def detect_login_wall_or_challenge(
         "your session has expired",
     )
     challenge_markers = (
-        "/account/access",
-        "/account/login_challenge",
-        "/challenge",
         "confirm it",
         "verify your identity",
         "unusual activity",
@@ -263,19 +264,9 @@ def detect_login_wall_or_challenge(
         "suspicious login",
     )
 
-    if any(marker in lowered_url for marker in login_url_markers) or any(
-        marker in lowered_title for marker in login_title_markers
-    ):
-        return AuthBlockDetection(
-            category="login_wall",
-            message="Login wall detected. Session is not authenticated.",
-            next_steps=(
-                f"Run `{login_cmd}` and complete manual login.",
-                "Re-run `xui auth status` to confirm session validity.",
-            ),
-        )
-
-    if any(marker in lowered_url for marker in ("/account/access", "/challenge")) or any(
+    # Challenge detection takes priority over login-wall checks because challenge
+    # URLs commonly include "login" fragments (for example /account/login_challenge).
+    if any(marker in url_path for marker in challenge_url_markers) or any(
         marker in lowered_title for marker in ("challenge", "verify", "suspicious")
     ) or any(marker in lowered_body for marker in challenge_markers):
         return AuthBlockDetection(
@@ -284,6 +275,16 @@ def detect_login_wall_or_challenge(
             next_steps=(
                 f"Run `{login_cmd}` and complete the challenge flow in-browser.",
                 "After verification, run `xui auth status` again.",
+            ),
+        )
+
+    if url_path in login_url_paths or any(marker in lowered_title for marker in login_title_markers):
+        return AuthBlockDetection(
+            category="login_wall",
+            message="Login wall detected. Session is not authenticated.",
+            next_steps=(
+                f"Run `{login_cmd}` and complete manual login.",
+                "Re-run `xui auth status` to confirm session validity.",
             ),
         )
 
@@ -482,4 +483,4 @@ def _login_command_hint(profile_name: str, config_path: str | Path | None = None
     parts = ["xui", "auth", "login", "--profile", profile_name]
     if config_path is not None:
         parts.extend(["--path", str(Path(config_path).expanduser())])
-    return " ".join(parts)
+    return " ".join(shlex.quote(part) for part in parts)
