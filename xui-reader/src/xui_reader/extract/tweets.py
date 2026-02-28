@@ -32,6 +32,7 @@ _ARTICLE_TAG_RE = re.compile(r"</?article\b[^>]*>", re.IGNORECASE)
 _REPLY_FALLBACK_RE = re.compile(r"replying to", re.IGNORECASE)
 _REPOST_FALLBACK_RE = re.compile(r"reposted", re.IGNORECASE)
 _PINNED_FALLBACK_RE = re.compile(r"pinned", re.IGNORECASE)
+_NON_NEGATIVE_INT_RE = re.compile(r"^\d+$")
 
 
 @dataclass(frozen=True)
@@ -156,7 +157,12 @@ def _coerce_expansion_payload(raw_payload: Any) -> tuple[dict[str, str] | None, 
     if raw_map is not None:
         if isinstance(raw_map, Mapping):
             for raw_id, raw_text in raw_map.items():
-                expansion_map[str(raw_id)] = str(raw_text)
+                if isinstance(raw_text, str):
+                    expansion_map[str(raw_id)] = raw_text
+                else:
+                    warnings.append(
+                        f"Payload key 'expanded_text_by_id[{raw_id}]' must be a string; ignoring value."
+                    )
         else:
             warnings.append(
                 "Payload key 'expanded_text_by_id' must be a mapping; ignoring expansion hints."
@@ -165,18 +171,11 @@ def _coerce_expansion_payload(raw_payload: Any) -> tuple[dict[str, str] | None, 
     max_expansions: int | None = None
     raw_max_expansions = raw_payload.get("max_expansions")
     if raw_max_expansions is not None:
-        if isinstance(raw_max_expansions, bool):
+        parsed = _parse_non_negative_int(raw_max_expansions)
+        if parsed is None:
             warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
         else:
-            try:
-                candidate = int(raw_max_expansions)
-            except (TypeError, ValueError):
-                warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
-            else:
-                if candidate < 0:
-                    warnings.append("Payload key 'max_expansions' must be an integer >= 0; ignoring override.")
-                else:
-                    max_expansions = candidate
+            max_expansions = parsed
 
     return (expansion_map or None), max_expansions, tuple(warnings)
 
@@ -224,10 +223,11 @@ def _extract_fallback_items(html: str, source_id: str, selectors: SelectorPack) 
     candidates = _status_candidates(html)
     for tweet_id, handle in candidates:
         context = _context_around_status(html, tweet_id)
-        context_candidates = _status_candidates(context)
-        quote_tweet_id = next(
-            (candidate_id for candidate_id, _ in context_candidates if candidate_id != tweet_id),
-            None,
+        has_quote_container = _has_quote_container(context, selectors.get("tweet.quote_container", ()))
+        quote_tweet_id = _extract_quote_tweet_id_from_context(
+            context,
+            tweet_id=tweet_id,
+            has_quote_container=has_quote_container,
         )
         items.append(
             _build_item(
@@ -251,12 +251,39 @@ def _extract_fallback_items(html: str, source_id: str, selectors: SelectorPack) 
                     selectors.get("tweet.pinned_badge", ()),
                     fallback_regex=_PINNED_FALLBACK_RE,
                 ),
-                has_quote=quote_tweet_id is not None
-                or _has_quote_container(context, selectors.get("tweet.quote_container", ())),
+                has_quote=quote_tweet_id is not None or has_quote_container,
                 quote_tweet_id=quote_tweet_id,
             )
         )
     return tuple(items)
+
+
+def _extract_quote_tweet_id_from_context(
+    context: str,
+    *,
+    tweet_id: str,
+    has_quote_container: bool,
+) -> str | None:
+    if not has_quote_container:
+        return None
+    context_candidates = _status_candidates(context)
+    return next(
+        (candidate_id for candidate_id, _ in context_candidates if candidate_id != tweet_id),
+        None,
+    )
+
+
+def _parse_non_negative_int(raw: Any) -> int | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not _NON_NEGATIVE_INT_RE.fullmatch(value):
+            return None
+        return int(value)
+    return None
 
 
 def _build_item(

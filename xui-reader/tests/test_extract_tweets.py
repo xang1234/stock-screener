@@ -35,7 +35,9 @@ FALLBACK_HTML = """
   <div data-testid="reply">Replying to @alice</div>
   <div data-testid="socialContext">Bob reposted</div>
   <svg aria-label="Pinned Tweet"></svg>
-  <a href="/dana/status/444">quoted link</a>
+  <div data-testid="quote">
+    <a href="/dana/status/444">quoted link</a>
+  </div>
 </div>
 """
 
@@ -60,7 +62,9 @@ def test_extract_primary_article_first_with_metadata() -> None:
 
 
 def test_extract_fallback_link_first_with_metadata_consistency() -> None:
-    extractor = PrimaryFallbackTweetExtractor()
+    extractor = PrimaryFallbackTweetExtractor(
+        override_data={"tweet.quote_container": 'div[data-testid="quote"]'}
+    )
 
     items = extractor.extract({"html": FALLBACK_HTML, "source_id": "user:bob"})
 
@@ -161,6 +165,26 @@ def test_extract_fallback_does_not_leak_fields_between_status_links() -> None:
     assert items[1].created_at == datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
 
 
+def test_extract_fallback_does_not_mark_adjacent_tweets_as_quotes() -> None:
+    extractor = PrimaryFallbackTweetExtractor()
+    html = """
+<div>
+  <a href="/alice/status/111">one</a>
+  <div data-testid="tweetText">FIRST</div>
+  <a href="/bob/status/222">two</a>
+  <div data-testid="tweetText">SECOND</div>
+</div>
+"""
+
+    items = extractor.extract({"html": html, "source_id": "src"})
+
+    assert [item.tweet_id for item in items] == ["111", "222"]
+    assert items[0].has_quote is False
+    assert items[0].quote_tweet_id is None
+    assert items[1].has_quote is False
+    assert items[1].quote_tweet_id is None
+
+
 def test_extract_honors_selector_override_for_time() -> None:
     extractor = PrimaryFallbackTweetExtractor(
         override_data={"tweet.time": 'time[data-role="preferred"]'}
@@ -207,6 +231,37 @@ def test_extract_warns_on_invalid_max_expansions_override() -> None:
 
     assert [item.tweet_id for item in result.items] == ["202"]
     assert any("max_expansions" in warning for warning in result.warnings)
+
+
+def test_extract_warns_on_non_integer_max_expansions_override() -> None:
+    extractor = PrimaryFallbackTweetExtractor(max_expansions=1)
+    payload = {
+        "source_id": "src",
+        "html": '<a href="/alice/status/303">ok</a><div data-testid="tweetText">Needs more...</div>',
+        "expanded_text_by_id": {"303": "Expanded text"},
+        "max_expansions": 1.5,
+    }
+
+    result = extractor.extract_with_warnings(payload)
+
+    assert len(result.items) == 1
+    assert result.items[0].text == "Expanded text"
+    assert any("max_expansions" in warning for warning in result.warnings)
+
+
+def test_extract_warns_on_non_string_expansion_value() -> None:
+    extractor = PrimaryFallbackTweetExtractor(max_expansions=1)
+    payload = {
+        "source_id": "src",
+        "html": '<a href="/alice/status/404">ok</a><div data-testid="tweetText">Needs more...</div>',
+        "expanded_text_by_id": {"404": None},
+    }
+
+    result = extractor.extract_with_warnings(payload)
+
+    assert len(result.items) == 1
+    assert result.items[0].text == "Needs more..."
+    assert any("expanded_text_by_id[404]" in warning for warning in result.warnings)
 
 
 def test_extract_rejects_unsupported_payload_types() -> None:
