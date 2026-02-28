@@ -23,7 +23,10 @@ MODULES = [
     "xui_reader.store.sqlite",
     "xui_reader.render.base",
     "xui_reader.scheduler.base",
+    "xui_reader.scheduler.merge",
+    "xui_reader.scheduler.timing",
     "xui_reader.diagnostics.base",
+    "xui_reader.diagnostics.doctor",
 ]
 
 

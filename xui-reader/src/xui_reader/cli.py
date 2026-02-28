@@ -16,7 +16,8 @@ from .auth import (
     probe_auth_status,
 )
 from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
-from .errors import AuthError, ConfigError, ProfileError
+from .diagnostics.doctor import run_doctor_preflight
+from .errors import AuthError, ConfigError, DiagnosticsError, ProfileError
 from .profiles import create_profile, delete_profile, list_profiles, switch_profile
 
 app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
@@ -289,8 +290,51 @@ def watch() -> None:
 
 
 @app.command("doctor")
-def doctor() -> None:
-    typer.echo("Not implemented yet: doctor.")
+def doctor(
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    max_sources: int = typer.Option(
+        2,
+        "--max-sources",
+        min=1,
+        help="Maximum number of configured enabled sources to use for optional smoke checks.",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render doctor preflight report as JSON."),
+) -> None:
+    try:
+        config = load_runtime_config(path)
+        report = run_doctor_preflight(config, max_sources=max_sources)
+    except (ConfigError, DiagnosticsError) as exc:
+        typer.secho(f"Doctor failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {"ok": report.ok, "checks": list(report.checks), "details": report.details},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+
+    typer.echo("Doctor preflight")
+    typer.echo(f"Status: {'ok' if report.ok else 'fail'}")
+    for check in report.checks:
+        typer.echo(f"- {check}")
+
+    selected_ids = report.details.get("selected_source_ids", "")
+    if selected_ids:
+        typer.echo(f"Selected smoke sources: {selected_ids}")
+    else:
+        typer.echo("Selected smoke sources: none")
+
+    guidance = report.details.get("guidance")
+    if guidance:
+        typer.echo("Guidance:")
+        for line in guidance.splitlines():
+            typer.echo(f"- {line}")
 
 
 @app.callback(invoke_without_command=True)

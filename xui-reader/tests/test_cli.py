@@ -257,3 +257,45 @@ def test_auth_logout_removes_storage_state_and_reports_relogin(
     assert logout_result.exit_code == 0
     assert "Removed storage_state" in logout_result.output
     assert "Re-login" in logout_result.output
+
+
+def test_doctor_reports_guidance_when_no_sources_configured(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("", encoding="utf-8")
+
+    result = runner.invoke(app, ["doctor", "--path", str(config_path)])
+    assert result.exit_code == 0
+    assert "Doctor preflight" in result.output
+    assert "No configured sources; skipping optional smoke checks." in result.output
+    assert "Guidance:" in result.output
+
+
+def test_doctor_reports_guidance_when_all_sources_disabled(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[[sources]]
+id = "list:1"
+kind = "list"
+list_id = "1"
+enabled = false
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--path", str(config_path)])
+    assert result.exit_code == 0
+    assert "All configured sources are disabled; skipping optional smoke checks." in result.output
+    assert "Selected smoke sources: none" in result.output
+
+
+def test_doctor_json_reports_selected_sources(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
+    assert init_result.exit_code == 0
+
+    result = runner.invoke(app, ["doctor", "--path", str(config_path), "--json", "--max-sources", "1"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.output
+    assert '"selected_source_ids"' in result.output
