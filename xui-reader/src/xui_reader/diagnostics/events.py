@@ -86,6 +86,10 @@ def build_debug_event(
     resolved_payload = payload if payload is not None else {}
     if not isinstance(resolved_payload, dict):
         raise DiagnosticsError("payload must be a dictionary.")
+    if not isinstance(event_type, str):
+        raise DiagnosticsError("event_type must be a non-empty string.")
+    if not isinstance(run_id, str):
+        raise DiagnosticsError("run_id must be a non-empty string.")
     if not event_type.strip():
         raise DiagnosticsError("event_type must be non-empty.")
     if not run_id.strip():

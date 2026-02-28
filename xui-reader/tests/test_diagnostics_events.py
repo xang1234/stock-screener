@@ -57,6 +57,13 @@ def test_ensure_schema_compatible_rejects_incompatible_major() -> None:
         ensure_schema_compatible("v2")
 
 
+def test_build_debug_event_rejects_non_string_event_type_or_run_id() -> None:
+    with pytest.raises(DiagnosticsError, match="event_type must be a non-empty string"):
+        build_debug_event(None, run_id="run-1")  # type: ignore[arg-type]
+    with pytest.raises(DiagnosticsError, match="run_id must be a non-empty string"):
+        build_debug_event("watch_cycle", run_id=123)  # type: ignore[arg-type]
+
+
 def test_jsonl_event_logger_appends_valid_json_lines(tmp_path: Path) -> None:
     log_path = tmp_path / "events.jsonl"
     logger = JsonlEventLogger(log_path)

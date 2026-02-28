@@ -60,6 +60,13 @@ def test_build_html_artifact_allows_full_capture_only_when_opted_in() -> None:
     assert "super-secret" not in artifact.content
 
 
+def test_build_html_artifact_redacts_cookie_value_pairs_in_storage_state_json() -> None:
+    raw_html = '{"cookies":[{"name":"sessionid","value":"secret-cookie"}]}'
+    artifact = build_html_artifact(raw_html, raw_html_opt_in=False, snippet_chars=4000)
+    assert "secret-cookie" not in artifact.content
+    assert REDACTED in artifact.content
+
+
 def test_build_html_artifact_rejects_non_positive_snippet_chars() -> None:
     with pytest.raises(DiagnosticsError, match="snippet_chars"):
         build_html_artifact("<div>x</div>", snippet_chars=0)

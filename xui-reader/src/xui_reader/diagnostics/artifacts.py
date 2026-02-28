@@ -30,6 +30,12 @@ _SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"(?i)(set-cookie\s*[:=]\s*)([^;\n]+)"),
     re.compile(r"(?i)\b(sessionid|auth_token|ct0)\s*=\s*[^;\"'\s<>]+"),
     re.compile(r"(?i)\"(sessionid|auth_token|ct0|password|token)\"\s*:\s*\"[^\"]+\""),
+    re.compile(
+        r'(?i)("name"\s*:\s*"(?:sessionid|auth_token|ct0)"\s*,\s*"value"\s*:\s*")([^"]+)(")'
+    ),
+    re.compile(
+        r'(?i)("value"\s*:\s*")([^"]+)("\s*,\s*"name"\s*:\s*"(?:sessionid|auth_token|ct0)")'
+    ),
 )
 
 
@@ -132,6 +138,8 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _replace_with_redacted(match: re.Match[str]) -> str:
+    if match.lastindex and match.lastindex >= 3:
+        return f"{match.group(1)}{REDACTED}{match.group(3)}"
     if match.lastindex and match.lastindex >= 2:
         return f"{match.group(1)}{REDACTED}"
     if match.lastindex == 1:
