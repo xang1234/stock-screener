@@ -13,7 +13,6 @@ DEFAULT_BLOCKED_RESOURCE_TYPES = frozenset({"image", "media", "font", "styleshee
 DEFAULT_ALLOWED_OVERLAY_SELECTORS = (
     'button:has-text("Not now")',
     'button:has-text("No thanks")',
-    'button[aria-label="Close"]',
     'div[role="dialog"] button[aria-label="Close"]',
 )
 
@@ -152,10 +151,18 @@ def dismiss_allowed_overlays(
     max_clicks: int = 3,
 ) -> OverlayDismissResult:
     """Dismiss known benign overlays; never interact during blocked auth/challenge states."""
+    context = _read_overlay_context(page)
+    if context is None:
+        return OverlayDismissResult(
+            dismissed_count=0,
+            attempted_selectors=(),
+            skipped_reason="page_state_unavailable",
+        )
+
     blocked_category = detect_unsupported_overlay_state(
-        current_url=page.url,
-        page_title=page.title(),
-        body_text=_read_body_text(page),
+        current_url=context[0],
+        page_title=context[1],
+        body_text=context[2],
     )
     if blocked_category is not None:
         return OverlayDismissResult(
@@ -228,6 +235,15 @@ def _read_body_text(page: OverlayPage) -> str:
     except Exception:
         return ""
     return str(body_text)
+
+
+def _read_overlay_context(page: OverlayPage) -> tuple[str, str, str] | None:
+    try:
+        current_url = str(page.url)
+        title = str(page.title())
+    except Exception:
+        return None
+    return (current_url, title, _read_body_text(page))
 
 
 def _is_visible(element: OverlayElement) -> bool:

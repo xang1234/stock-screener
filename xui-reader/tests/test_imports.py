@@ -13,6 +13,7 @@ MODULES = [
     "xui_reader.browser.policy",
     "xui_reader.browser.session",
     "xui_reader.collectors.base",
+    "xui_reader.collectors.timeline",
     "xui_reader.extract.base",
     "xui_reader.store.base",
     "xui_reader.render.base",

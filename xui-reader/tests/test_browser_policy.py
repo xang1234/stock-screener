@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from xui_reader.browser.policy import (
+    DEFAULT_ALLOWED_OVERLAY_SELECTORS,
     configure_resource_routing,
     detect_unsupported_overlay_state,
     dismiss_allowed_overlays,
@@ -83,6 +84,29 @@ class FakeOverlayPage:
         if isinstance(value, Exception):
             raise value
         return value
+
+
+class BrokenOverlayPage:
+    def __init__(self, *, title: str, body_text: str) -> None:
+        self._title = title
+        self._body_text = body_text
+
+    @property
+    def url(self) -> str:
+        raise RuntimeError("page unavailable")
+
+    def title(self) -> str:
+        return self._title
+
+    def inner_text(self, selector: str, timeout: int | None = None) -> str:
+        _ = timeout
+        if selector != "body":
+            raise RuntimeError("unexpected selector")
+        return self._body_text
+
+    def query_selector(self, selector: str) -> FakeOverlayElement | None:
+        _ = selector
+        return None
 
 
 def _config(*, block_resources: bool = True) -> RuntimeConfig:
@@ -174,6 +198,23 @@ def test_dismiss_allowed_overlays_exits_safely_for_login_wall_state() -> None:
     assert result.skipped_reason == "unsupported_blocked_state"
 
 
+def test_dismiss_allowed_overlays_skips_when_page_state_unavailable() -> None:
+    result = dismiss_allowed_overlays(
+        BrokenOverlayPage(
+            title="Home / X",
+            body_text="",
+        ),
+    )
+    assert result.dismissed_count == 0
+    assert result.blocked_category is None
+    assert result.skipped_reason == "page_state_unavailable"
+
+
+def test_default_allowed_overlay_selectors_are_scoped_to_prompt_containers() -> None:
+    assert 'button[aria-label="Close"]' not in DEFAULT_ALLOWED_OVERLAY_SELECTORS
+    assert 'div[role="dialog"] button[aria-label="Close"]' in DEFAULT_ALLOWED_OVERLAY_SELECTORS
+
+
 def test_detect_unsupported_overlay_state_ignores_benign_home_login_copy() -> None:
     category = detect_unsupported_overlay_state(
         current_url="https://x.com/home",
@@ -181,4 +222,3 @@ def test_detect_unsupported_overlay_state_ignores_benign_home_login_copy() -> No
         body_text="Use this button to log in to another account.",
     )
     assert category is None
-

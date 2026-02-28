@@ -9,9 +9,21 @@ from xui_reader.models import Checkpoint, SourceRef, TweetItem
 
 
 @dataclass(frozen=True)
+class CollectionStats:
+    source_id: str
+    dom_snapshots: int
+    observed_ids: int
+    scroll_rounds: int
+    stagnation_rounds: int
+    stop_reason: str
+
+
+@dataclass(frozen=True)
 class CollectionBatch:
     items: tuple[TweetItem, ...]
     checkpoint: Checkpoint | None = None
+    dom_snapshots: tuple[str, ...] = ()
+    stats: CollectionStats | None = None
 
 
 class Collector(Protocol):
