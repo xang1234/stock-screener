@@ -57,6 +57,14 @@ const sentimentColors = {
   neutral: 'default',
 };
 
+const processingStatusColors = {
+  pending: 'default',
+  in_progress: 'info',
+  processed: 'success',
+  failed_retryable: 'warning',
+  failed_terminal: 'error',
+};
+
 const sourceTypeColors = {
   substack: '#FF6719',
   twitter: '#1DA1F2',
@@ -64,7 +72,7 @@ const sourceTypeColors = {
   reddit: '#FF4500',
 };
 
-function ArticleBrowserModal({ open, onClose }) {
+function ArticleBrowserModal({ open, onClose, pipeline }) {
   // State for filters and pagination
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -90,15 +98,16 @@ function ArticleBrowserModal({ open, onClose }) {
     search: debouncedSearch || undefined,
     source_type: sourceType || undefined,
     sentiment: sentiment || undefined,
+    pipeline: pipeline || undefined,
     limit: rowsPerPage,
     offset: page * rowsPerPage,
     sort_by: orderBy,
     sort_order: order,
-  }), [debouncedSearch, sourceType, sentiment, rowsPerPage, page, orderBy, order]);
+  }), [debouncedSearch, sourceType, sentiment, pipeline, rowsPerPage, page, orderBy, order]);
 
   // Fetch content items
   const { data, isLoading, error } = useQuery({
-    queryKey: ['contentItems', queryParams],
+    queryKey: ['contentItems', pipeline, queryParams],
     queryFn: () => getContentItems(queryParams),
     enabled: open,
     keepPreviousData: true,
@@ -127,6 +136,7 @@ function ArticleBrowserModal({ open, onClose }) {
         search: debouncedSearch || undefined,
         source_type: sourceType || undefined,
         sentiment: sentiment || undefined,
+        pipeline: pipeline || undefined,
         sort_by: orderBy,
         sort_order: order,
       };
@@ -296,6 +306,7 @@ function ArticleBrowserModal({ open, onClose }) {
                         Published
                       </TableSortLabel>
                     </TableCell>
+                    <TableCell sx={{ minWidth: 120 }}>Status</TableCell>
                     <TableCell sx={{ minWidth: 180 }}>Themes</TableCell>
                     <TableCell sx={{ minWidth: 80 }}>Sentiment</TableCell>
                     <TableCell sx={{ minWidth: 150 }}>Tickers</TableCell>
@@ -385,6 +396,20 @@ function ArticleBrowserModal({ open, onClose }) {
                         </Typography>
                       </TableCell>
 
+                      {/* Processing Status */}
+                      <TableCell>
+                        {item.processing_status ? (
+                          <Chip
+                            label={item.processing_status.replaceAll('_', ' ')}
+                            size="small"
+                            color={processingStatusColors[item.processing_status] || 'default'}
+                            sx={{ fontSize: '10px', height: 20, textTransform: 'capitalize' }}
+                          />
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">-</Typography>
+                        )}
+                      </TableCell>
+
                       {/* Themes */}
                       <TableCell>
                         <Box display="flex" gap={0.5} flexWrap="wrap">
@@ -456,7 +481,7 @@ function ArticleBrowserModal({ open, onClose }) {
                   ))}
                   {data?.items?.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={7} align="center">
+                      <TableCell colSpan={8} align="center">
                         <Typography color="text.secondary" py={4}>
                           No articles found matching your filters
                         </Typography>

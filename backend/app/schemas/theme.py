@@ -890,6 +890,7 @@ class ContentItemWithThemesResponse(BaseModel):
     sentiments: list[str] = []
     primary_sentiment: Optional[str] = None
     tickers: list[str] = []
+    processing_status: Optional[str] = None
 
 
 class ContentItemsListResponse(BaseModel):

@@ -646,13 +646,14 @@ export const runTaxonomyAssignment = async ({ dryRun = true, pipeline = 'technic
  * @param {string} params.search - Search in title, source_name, tickers
  * @param {string} params.source_type - Filter by source type
  * @param {string} params.sentiment - Filter by sentiment
+ * @param {string} params.pipeline - Pipeline filter: technical or fundamental
  * @param {string} params.date_from - From date (YYYY-MM-DD)
  * @param {string} params.date_to - To date (YYYY-MM-DD)
  * @param {number} params.limit - Items per page (default: 50)
  * @param {number} params.offset - Pagination offset (default: 0)
  * @param {string} params.sort_by - Sort column (default: published_at)
  * @param {string} params.sort_order - Sort order: asc or desc (default: desc)
- * @returns {Promise<Object>} Paginated content items with themes
+ * @returns {Promise<Object>} Paginated content items with themes and optional processing_status
  */
 export const getContentItems = async (params = {}) => {
   const response = await apiClient.get('/v1/themes/content', { params });
@@ -662,7 +663,7 @@ export const getContentItems = async (params = {}) => {
 /**
  * Export content items matching filters as CSV.
  *
- * @param {Object} params - Same filter params as getContentItems (without limit/offset)
+ * @param {Object} params - Same filter params as getContentItems (without limit/offset); supports pipeline
  * @returns {Promise<Blob>} CSV file blob
  */
 export const exportContentItems = async (params = {}) => {

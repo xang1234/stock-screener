@@ -222,6 +222,18 @@ def _parse_csv_values(value: Optional[str]) -> Optional[list[str]]:
     return values or None
 
 
+def _resolve_source_ids_for_pipeline(db: Session, pipeline: str) -> list[int]:
+    """Resolve active source IDs assigned to a pipeline."""
+    source_ids: list[int] = []
+    sources = db.query(ContentSource.id, ContentSource.pipelines).filter(
+        ContentSource.is_active == True
+    ).all()
+    for source_id, source_pipelines in sources:
+        if pipeline in normalize_pipelines(source_pipelines):
+            source_ids.append(source_id)
+    return source_ids
+
+
 # ==================== Theme Rankings ====================
 
 @router.get("/pipelines")
@@ -974,6 +986,7 @@ def _fetch_content_items_with_themes(
     sort_order: str = "desc",
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    pipeline: Optional[str] = None,
 ) -> tuple[list[ContentItemWithThemesResponse], int]:
     """
     Shared query logic for content items with theme/sentiment/ticker aggregation.
@@ -981,26 +994,23 @@ def _fetch_content_items_with_themes(
     Returns (items, total_count) where items are ContentItemWithThemesResponse objects.
     When limit/offset are None, returns all matching items (used by export).
     """
-    from sqlalchemy import or_, desc, asc
+    from sqlalchemy import or_, desc, asc, func
     from datetime import datetime as dt
 
-    # Base query - only processed items from active sources
+    # Base query defaults to the historical processed-only behavior.
+    # With a pipeline provided, scope to assigned sources and include all fetched items.
     base_query = db.query(ContentItem).join(
         ContentSource, ContentItem.source_id == ContentSource.id
     ).filter(
-        ContentItem.is_processed == True,
         ContentSource.is_active == True
     )
-
-    # Apply search filter
-    if search:
-        search_term = f"%{search}%"
-        base_query = base_query.filter(
-            or_(
-                ContentItem.title.ilike(search_term),
-                ContentItem.source_name.ilike(search_term),
-            )
-        )
+    if pipeline:
+        pipeline_source_ids = _resolve_source_ids_for_pipeline(db, pipeline)
+        if not pipeline_source_ids:
+            return [], 0
+        base_query = base_query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+    else:
+        base_query = base_query.filter(ContentItem.is_processed == True)
 
     # Apply source_type filter
     if source_type:
@@ -1022,6 +1032,57 @@ def _fetch_content_items_with_themes(
             base_query = base_query.filter(ContentItem.published_at < to_date)
         except ValueError:
             pass
+
+    # Apply sentiment filter before pagination/count so pages are accurate.
+    if sentiment:
+        sentiment_query = db.query(ThemeMention.content_item_id).filter(
+            ThemeMention.content_item_id.in_(base_query.with_entities(ContentItem.id))
+        )
+        if pipeline:
+            sentiment_query = sentiment_query.filter(ThemeMention.pipeline == pipeline)
+        sentiment_content_ids = {
+            row.content_item_id for row in sentiment_query.filter(
+                ThemeMention.sentiment.isnot(None),
+                func.lower(ThemeMention.sentiment) == sentiment.lower(),
+            ).distinct().all()
+        }
+        if not sentiment_content_ids:
+            return [], 0
+        base_query = base_query.filter(ContentItem.id.in_(sentiment_content_ids))
+
+    # Search applies to title/source OR mentioned ticker, both before pagination.
+    if search:
+        search_term = f"%{search}%"
+        text_match_query = base_query.with_entities(ContentItem.id).filter(
+            or_(
+                ContentItem.title.ilike(search_term),
+                ContentItem.source_name.ilike(search_term),
+            )
+        )
+        text_matched_ids = {row.id for row in text_match_query.all()}
+
+        ticker_match_query = db.query(
+            ThemeMention.content_item_id,
+            ThemeMention.tickers,
+        ).filter(
+            ThemeMention.content_item_id.in_(base_query.with_entities(ContentItem.id))
+        )
+        if pipeline:
+            ticker_match_query = ticker_match_query.filter(ThemeMention.pipeline == pipeline)
+
+        search_upper = search.upper()
+        ticker_matched_ids: set[int] = set()
+        for mention in ticker_match_query.all():
+            if mention.tickers:
+                for ticker in mention.tickers:
+                    if search_upper in str(ticker).upper():
+                        ticker_matched_ids.add(mention.content_item_id)
+                        break
+
+        matched_ids = text_matched_ids | ticker_matched_ids
+        if not matched_ids:
+            return [], 0
+        base_query = base_query.filter(ContentItem.id.in_(matched_ids))
 
     # Get total count before pagination
     total = base_query.count()
@@ -1057,41 +1118,23 @@ def _fetch_content_items_with_themes(
         ThemeCluster, ThemeMention.theme_cluster_id == ThemeCluster.id
     ).filter(
         ThemeMention.content_item_id.in_(content_ids)
-    ).all()
+    )
+    if pipeline:
+        mentions = mentions.filter(ThemeMention.pipeline == pipeline)
+    mentions = mentions.all()
 
-    # Apply sentiment filter if specified - filter the content_ids based on mentions
-    if sentiment:
-        filtered_content_ids = set()
-        for mention in mentions:
-            if mention.sentiment and mention.sentiment.lower() == sentiment.lower():
-                filtered_content_ids.add(mention.content_item_id)
-
-        if not filtered_content_ids:
-            return [], 0
-
-        content_items = [item for item in content_items if item.id in filtered_content_ids]
-        total = len(filtered_content_ids)
-
-    # Also apply search to tickers if provided
-    if search:
-        search_upper = search.upper()
-        tickers_matched_ids = set()
-        for mention in mentions:
-            if mention.tickers:
-                for ticker in mention.tickers:
-                    if search_upper in ticker.upper():
-                        tickers_matched_ids.add(mention.content_item_id)
-                        break
-
-        if tickers_matched_ids:
-            additional_items = db.query(ContentItem).filter(
-                ContentItem.id.in_(tickers_matched_ids),
-                ContentItem.is_processed == True
-            ).all()
-            existing_ids = {item.id for item in content_items}
-            for item in additional_items:
-                if item.id not in existing_ids:
-                    content_items.append(item)
+    pipeline_status_by_content_id: dict[int, str] = {}
+    if pipeline:
+        status_rows = db.query(
+            ContentItemPipelineState.content_item_id,
+            ContentItemPipelineState.status,
+        ).filter(
+            ContentItemPipelineState.content_item_id.in_(content_ids),
+            ContentItemPipelineState.pipeline == pipeline,
+        ).all()
+        pipeline_status_by_content_id = {
+            row.content_item_id: row.status for row in status_rows
+        }
 
     # Aggregate mentions by content_item_id
     mentions_by_content = {}
@@ -1141,7 +1184,12 @@ def _fetch_content_items_with_themes(
             themes=[ThemeReference(**t) for t in mention_data["themes"]],
             sentiments=sentiments_list,
             primary_sentiment=primary_sentiment,
-            tickers=sorted(list(mention_data["tickers"]))
+            tickers=sorted(list(mention_data["tickers"])),
+            processing_status=(
+                pipeline_status_by_content_id.get(content.id, "pending")
+                if pipeline
+                else None
+            ),
         ))
 
     return items, total
@@ -1154,6 +1202,7 @@ async def list_content_items(
     sentiment: Optional[str] = Query(None, description="Filter: bullish, bearish, neutral"),
     date_from: Optional[str] = Query(None, description="From date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="To date (YYYY-MM-DD)"),
+    pipeline: Optional[str] = Query(None, description="Pipeline: technical or fundamental"),
     limit: int = Query(50, ge=1, le=200, description="Items per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort_by: str = Query("published_at", description="Sort column"),
@@ -1166,10 +1215,13 @@ async def list_content_items(
     Aggregates data from ContentItem and ThemeMention tables to provide a unified
     view of all ingested content with their extracted metadata.
     """
+    if pipeline and pipeline not in _VALID_THEME_PIPELINES:
+        raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
+
     items, total = _fetch_content_items_with_themes(
         db, search=search, source_type=source_type, sentiment=sentiment,
         date_from=date_from, date_to=date_to, sort_by=sort_by,
-        sort_order=sort_order, limit=limit, offset=offset,
+        sort_order=sort_order, limit=limit, offset=offset, pipeline=pipeline,
     )
 
     return ContentItemsListResponse(
@@ -1187,6 +1239,7 @@ async def export_content_items(
     sentiment: Optional[str] = Query(None, description="Filter: bullish, bearish, neutral"),
     date_from: Optional[str] = Query(None, description="From date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="To date (YYYY-MM-DD)"),
+    pipeline: Optional[str] = Query(None, description="Pipeline: technical or fundamental"),
     sort_by: str = Query("published_at", description="Sort column"),
     sort_order: str = Query("desc", description="asc or desc"),
     db: Session = Depends(get_db)
@@ -1198,10 +1251,13 @@ async def export_content_items(
     CSV includes: ID, Title, Content, URL, Themes, Sentiment, Tickers,
     Published Date, Source Type, Source Name, Author.
     """
+    if pipeline and pipeline not in _VALID_THEME_PIPELINES:
+        raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
+
     items, total = _fetch_content_items_with_themes(
         db, search=search, source_type=source_type, sentiment=sentiment,
         date_from=date_from, date_to=date_to, sort_by=sort_by,
-        sort_order=sort_order,
+        sort_order=sort_order, pipeline=pipeline,
     )
 
     # Build CSV in memory
@@ -1211,7 +1267,7 @@ async def export_content_items(
     # Header row
     writer.writerow([
         "ID", "Title", "Content", "URL", "Themes", "Sentiment",
-        "Tickers", "Published Date", "Source Type", "Source Name", "Author",
+        "Tickers", "Published Date", "Source Type", "Source Name", "Author", "Processing Status",
     ])
 
     # Data rows
@@ -1228,6 +1284,7 @@ async def export_content_items(
             item.source_type or "",
             item.source_name or "",
             item.author or "",
+            item.processing_status or "",
         ])
 
     # UTF-8 BOM for Excel compatibility

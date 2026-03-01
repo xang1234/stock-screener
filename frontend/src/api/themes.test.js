@@ -10,6 +10,8 @@ import {
   getThemeRelationshipGraph,
   updateThemePolicy,
   reviewCandidateThemes,
+  getContentItems,
+  exportContentItems,
 } from './themes';
 
 vi.mock('./client', () => ({
@@ -168,5 +170,44 @@ describe('theme api helpers', () => {
     const payload = await importTwitterSessionFromBrowser(input);
     expect(apiClient.post).toHaveBeenCalledWith('/v1/themes/twitter/session/import', input);
     expect(payload.status_code).toBe('blocked_challenge');
+  });
+
+  it('passes pipeline to content items endpoint', async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { total: 0, limit: 25, offset: 0, items: [] } });
+
+    await getContentItems({
+      pipeline: 'fundamental',
+      source_type: 'twitter',
+      limit: 25,
+      offset: 0,
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith('/v1/themes/content', {
+      params: {
+        pipeline: 'fundamental',
+        source_type: 'twitter',
+        limit: 25,
+        offset: 0,
+      },
+    });
+  });
+
+  it('passes pipeline to content export endpoint with blob response', async () => {
+    const blob = new Blob(['csv']);
+    apiClient.get.mockResolvedValueOnce({ data: blob });
+
+    const result = await exportContentItems({
+      pipeline: 'fundamental',
+      source_type: 'twitter',
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith('/v1/themes/content/export', {
+      params: {
+        pipeline: 'fundamental',
+        source_type: 'twitter',
+      },
+      responseType: 'blob',
+    });
+    expect(result).toBe(blob);
   });
 });

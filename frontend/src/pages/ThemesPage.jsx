@@ -1641,6 +1641,7 @@ function ThemesPage() {
       <ArticleBrowserModal
         open={articleBrowserOpen}
         onClose={() => setArticleBrowserOpen(false)}
+        pipeline={selectedPipeline}
       />
 
       {/* Model Settings Modal */}
