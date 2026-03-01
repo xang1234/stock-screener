@@ -18,6 +18,8 @@ class SourceRef:
     kind: SourceKind
     value: str
     enabled: bool = True
+    label: str | None = None
+    tab: str | None = None
 
 
 @dataclass(frozen=True)

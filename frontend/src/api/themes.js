@@ -191,6 +191,37 @@ export const getContentSources = async (activeOnly = true, pipeline = null) => {
 };
 
 /**
+ * Get twitter/XUI session status for ingestion.
+ *
+ * @returns {Promise<Object>} Session status payload
+ */
+export const getTwitterSessionStatus = async () => {
+  const response = await apiClient.get('/v1/themes/twitter/session');
+  return response.data;
+};
+
+/**
+ * Request one-time challenge token for browser-extension import flow.
+ *
+ * @returns {Promise<Object>} Challenge payload
+ */
+export const createTwitterSessionChallenge = async () => {
+  const response = await apiClient.post('/v1/themes/twitter/session/challenge');
+  return response.data;
+};
+
+/**
+ * Import cookies captured by browser extension into XUI storage_state.
+ *
+ * @param {Object} payload - Import payload
+ * @returns {Promise<Object>} Updated session status
+ */
+export const importTwitterSessionFromBrowser = async (payload) => {
+  const response = await apiClient.post('/v1/themes/twitter/session/import', payload);
+  return response.data;
+};
+
+/**
  * Add a new content source.
  *
  * @param {Object} source - Source configuration

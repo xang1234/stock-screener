@@ -181,12 +181,14 @@ def run_configured_watch(
     profile_name: str | None = None,
     config_path: str | Path | None = None,
     limit: int = 100,
-    interval_seconds: int = 300,
-    jitter_ratio: float = 0.0,
+    interval_seconds: int | None = None,
+    jitter_ratio: float | None = None,
     shutdown_window: str | None = None,
-    max_cycles: int = 1,
+    max_cycles: int | None = None,
     max_page_loads: int | None = None,
     max_scroll_rounds: int | None = None,
+    new_only: bool = False,
+    checkpoint_mode: str = "auto",
     now_fn: NowFn | None = None,
     sleep_fn: SleepFn | None = None,
     run_id: str | None = None,
@@ -207,11 +209,29 @@ def run_configured_watch(
 
     selected_profile = profile_name or config.app.default_profile
     resolved_run_id = run_id or _new_run_id("watch")
+    resolved_interval_seconds = (
+        interval_seconds if interval_seconds is not None else config.scheduler.interval_sec
+    )
+    resolved_jitter_ratio = jitter_ratio if jitter_ratio is not None else config.scheduler.jitter_pct
+    resolved_shutdown_window = (
+        shutdown_window if shutdown_window is not None else config.scheduler.shutdown_local
+    )
+    resolved_max_cycles = max_cycles if max_cycles is not None else config.scheduler.max_runs_per_day
+    resolved_max_page_loads = (
+        max_page_loads
+        if max_page_loads is not None
+        else config.scheduler.daily_budget_page_loads
+    )
+    resolved_max_scroll_rounds = (
+        max_scroll_rounds
+        if max_scroll_rounds is not None
+        else config.scheduler.daily_budget_scrolls
+    )
 
     shutdown_start: time | None = None
     shutdown_end: time | None = None
-    if shutdown_window:
-        shutdown_start, shutdown_end = parse_shutdown_window(shutdown_window)
+    if resolved_shutdown_window:
+        shutdown_start, shutdown_end = parse_shutdown_window(resolved_shutdown_window)
 
     result = run_watch_loop(
         lambda: run_configured_read(  # noqa: E731
@@ -219,17 +239,19 @@ def run_configured_watch(
             profile_name=selected_profile,
             config_path=config_path,
             limit=limit,
+            new_only=new_only,
+            checkpoint_mode=checkpoint_mode,
             enable_debug_artifacts=enable_debug_artifacts,
             raw_html_opt_in=raw_html_opt_in,
             event_logger=event_logger,
         ),
-        interval_seconds=interval_seconds,
-        jitter_ratio=jitter_ratio,
+        interval_seconds=resolved_interval_seconds,
+        jitter_ratio=resolved_jitter_ratio,
         shutdown_start=shutdown_start,
         shutdown_end=shutdown_end,
-        max_cycles=max_cycles,
-        max_page_loads=max_page_loads,
-        max_scroll_rounds=max_scroll_rounds,
+        max_cycles=resolved_max_cycles,
+        max_page_loads=resolved_max_page_loads,
+        max_scroll_rounds=resolved_max_scroll_rounds,
         now_fn=effective_now_fn,
         sleep_fn=sleep_fn,
         event_logger=event_logger,
@@ -241,9 +263,9 @@ def run_configured_watch(
         state_path=state_path,
         run_id=resolved_run_id,
         result=result,
-        max_cycles=max_cycles,
-        max_page_loads=max_page_loads,
-        max_scroll_rounds=max_scroll_rounds,
+        max_cycles=resolved_max_cycles,
+        max_page_loads=resolved_max_page_loads,
+        max_scroll_rounds=resolved_max_scroll_rounds,
     )
     return WatchRunResult(
         cycles=result.cycles,
@@ -263,8 +285,6 @@ def determine_watch_exit_code(result: WatchRunResult, *, max_cycles: int) -> Wat
         return WatchExitCode.BUDGET_STOP
     if _is_auth_failed_run(result):
         return WatchExitCode.AUTH_FAIL
-    if max_cycles > 1 and len(result.cycles) >= max_cycles:
-        return WatchExitCode.BUDGET_STOP
     return WatchExitCode.SUCCESS
 
 

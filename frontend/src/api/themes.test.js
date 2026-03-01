@@ -4,6 +4,9 @@ import {
   getCandidateThemeQueue,
   promoteStagedThemePolicy,
   revertThemePolicy,
+  getTwitterSessionStatus,
+  createTwitterSessionChallenge,
+  importTwitterSessionFromBrowser,
   getThemeRelationshipGraph,
   updateThemePolicy,
   reviewCandidateThemes,
@@ -139,5 +142,31 @@ describe('theme api helpers', () => {
 
     expect(promoted.status).toBe('applied');
     expect(reverted.status).toBe('applied');
+  });
+
+  it('gets twitter session status', async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { authenticated: true, status_code: 'authenticated' } });
+    const payload = await getTwitterSessionStatus();
+    expect(apiClient.get).toHaveBeenCalledWith('/v1/themes/twitter/session');
+    expect(payload.authenticated).toBe(true);
+  });
+
+  it('creates a twitter session import challenge', async () => {
+    apiClient.post.mockResolvedValueOnce({ data: { challenge_id: 'cid', challenge_token: 'tok' } });
+    const payload = await createTwitterSessionChallenge();
+    expect(apiClient.post).toHaveBeenCalledWith('/v1/themes/twitter/session/challenge');
+    expect(payload.challenge_id).toBe('cid');
+  });
+
+  it('imports twitter session from browser cookies', async () => {
+    apiClient.post.mockResolvedValueOnce({ data: { authenticated: false, status_code: 'blocked_challenge' } });
+    const input = {
+      challenge_id: 'cid',
+      challenge_token: 'tok',
+      cookies: [{ name: 'auth_token', value: 'x', domain: 'x.com' }],
+    };
+    const payload = await importTwitterSessionFromBrowser(input);
+    expect(apiClient.post).toHaveBeenCalledWith('/v1/themes/twitter/session/import', input);
+    expect(payload.status_code).toBe('blocked_challenge');
   });
 });

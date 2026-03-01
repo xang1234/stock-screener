@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from xui_reader.models import TweetItem
 from xui_reader.scheduler.merge import merge_tweet_items

@@ -16,6 +16,7 @@ from xui_reader.auth import (
     login_and_save_storage_state,
     logout_profile,
     probe_auth_status,
+    save_storage_state,
     storage_state_path,
 )
 from xui_reader.config import init_default_config
@@ -337,3 +338,37 @@ def test_logout_profile_is_idempotent_when_storage_missing(tmp_path: Path) -> No
 
     assert result.removed is False
     assert "Already logged out" in result.message
+
+
+def test_save_storage_state_bootstraps_config_and_profile(tmp_path: Path) -> None:
+    config_path = tmp_path / "xui-config" / "config.toml"
+    state = {
+        "cookies": [{"name": "auth_token", "value": "token", "domain": "x.com", "path": "/"}],
+        "origins": [],
+    }
+
+    saved = save_storage_state(
+        state,
+        profile_name="default",
+        config_path=config_path,
+        init_config_if_missing=True,
+        create_profile_if_missing=True,
+    )
+
+    assert saved == storage_state_path("default", config_path)
+    assert saved.exists()
+    mode = stat.S_IMODE(os.stat(saved).st_mode)
+    assert mode == 0o600
+
+
+def test_save_storage_state_rejects_invalid_payload(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    init_default_config(config_path)
+    create_profile("default", config_path)
+
+    with pytest.raises(AuthError, match="cookies/origins arrays"):
+        save_storage_state(
+            {"cookies": [{"name": "auth_token", "value": "token"}]},
+            profile_name="default",
+            config_path=config_path,
+        )

@@ -20,6 +20,7 @@ except ModuleNotFoundError:
 VALID_OUTPUT_FORMATS = {"pretty", "plain", "json", "jsonl"}
 VALID_SOURCE_KINDS = {"list", "user"}
 VALID_BROWSER_ENGINES = {"chromium", "firefox", "webkit"}
+VALID_CHECKPOINT_MODES = {"id", "time"}
 DEFAULT_CONFIG_FILENAME = "config.toml"
 
 DEFAULT_CONFIG_TEMPLATE = """[app]
@@ -37,6 +38,39 @@ viewport_width = 1280
 viewport_height = 720
 locale = "en-US"
 
+[collection]
+limit = 50
+max_scrolls = 10
+scroll_delay_ms = 1250
+scroll_jitter_ms = 250
+stagnation_rounds = 2
+expand_truncated = false
+include_reposts = true
+include_pinned = false
+
+[checkpoints]
+mode = "id"
+stop_early_on_old = true
+old_streak_to_stop = 12
+
+[scheduler]
+interval_sec = 3600
+jitter_pct = 0.07
+shutdown_local = "01:00-10:00"
+max_runs_per_day = 24
+daily_budget_page_loads = 200
+daily_budget_scrolls = 500
+
+[storage]
+db_filename = "tweets.sqlite3"
+keep_days = 30
+store_raw_html = false
+store_raw_json = true
+
+[selectors]
+pack = "default"
+override_filename = "selectors/override.json"
+
 [[sources]]
 id = "list:84839422"
 kind = "list"
@@ -48,6 +82,7 @@ enabled = true
 id = "user:somehandle"
 kind = "user"
 handle = "somehandle"
+tab = "posts"
 label = "@somehandle"
 enabled = true
 """
@@ -74,9 +109,57 @@ class BrowserConfig:
 
 
 @dataclass(frozen=True)
+class CollectionConfig:
+    limit: int = 50
+    max_scrolls: int = 10
+    scroll_delay_ms: int = 1250
+    scroll_jitter_ms: int = 250
+    stagnation_rounds: int = 2
+    expand_truncated: bool = False
+    include_reposts: bool = True
+    include_pinned: bool = False
+
+
+@dataclass(frozen=True)
+class CheckpointsConfig:
+    mode: str = "id"
+    stop_early_on_old: bool = True
+    old_streak_to_stop: int = 12
+
+
+@dataclass(frozen=True)
+class SchedulerConfig:
+    interval_sec: int = 3600
+    jitter_pct: float = 0.07
+    shutdown_local: str = "01:00-10:00"
+    max_runs_per_day: int = 24
+    daily_budget_page_loads: int = 200
+    daily_budget_scrolls: int = 500
+
+
+@dataclass(frozen=True)
+class StorageConfig:
+    db_filename: str = "tweets.sqlite3"
+    keep_days: int = 30
+    store_raw_html: bool = False
+    store_raw_json: bool = True
+
+
+@dataclass(frozen=True)
+class SelectorsConfig:
+    pack: str = "default"
+    override_filename: str = "selectors/override.json"
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     app: AppConfig = field(default_factory=AppConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
+    collection: CollectionConfig = field(default_factory=CollectionConfig)
+    checkpoints: CheckpointsConfig = field(default_factory=CheckpointsConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    selectors: SelectorsConfig = field(default_factory=SelectorsConfig)
     sources: tuple[SourceRef, ...] = ()
 
 
@@ -182,6 +265,11 @@ def _load_toml(text: str, path: Path) -> dict[str, Any]:
 def _parse_runtime_config(data: dict[str, Any]) -> RuntimeConfig:
     app_raw = _expect_table(data, "app", default={})
     browser_raw = _expect_table(data, "browser", default={})
+    collection_raw = _expect_table(data, "collection", default={})
+    checkpoints_raw = _expect_table(data, "checkpoints", default={})
+    scheduler_raw = _expect_table(data, "scheduler", default={})
+    storage_raw = _expect_table(data, "storage", default={})
+    selectors_raw = _expect_table(data, "selectors", default={})
     sources_raw = data.get("sources", [])
 
     if not isinstance(sources_raw, list):
@@ -217,6 +305,103 @@ def _parse_runtime_config(data: dict[str, Any]) -> RuntimeConfig:
         locale=_expect_non_empty_string(browser_raw, "browser.locale", "en-US"),
     )
 
+    collection_config = CollectionConfig(
+        limit=_expect_positive_int(collection_raw, "collection.limit", default=50),
+        max_scrolls=_expect_non_negative_int(collection_raw, "collection.max_scrolls", default=10),
+        scroll_delay_ms=_expect_non_negative_int(
+            collection_raw,
+            "collection.scroll_delay_ms",
+            default=1250,
+        ),
+        scroll_jitter_ms=_expect_non_negative_int(
+            collection_raw,
+            "collection.scroll_jitter_ms",
+            default=250,
+        ),
+        stagnation_rounds=_expect_positive_int(
+            collection_raw,
+            "collection.stagnation_rounds",
+            default=2,
+        ),
+        expand_truncated=_expect_bool(
+            collection_raw,
+            "collection.expand_truncated",
+            default=False,
+        ),
+        include_reposts=_expect_bool(collection_raw, "collection.include_reposts", default=True),
+        include_pinned=_expect_bool(collection_raw, "collection.include_pinned", default=False),
+    )
+
+    checkpoints_config = CheckpointsConfig(
+        mode=_expect_choice(
+            checkpoints_raw,
+            "checkpoints.mode",
+            default="id",
+            valid_values=VALID_CHECKPOINT_MODES,
+        ),
+        stop_early_on_old=_expect_bool(
+            checkpoints_raw,
+            "checkpoints.stop_early_on_old",
+            default=True,
+        ),
+        old_streak_to_stop=_expect_positive_int(
+            checkpoints_raw,
+            "checkpoints.old_streak_to_stop",
+            default=12,
+        ),
+    )
+
+    scheduler_config = SchedulerConfig(
+        interval_sec=_expect_positive_int(scheduler_raw, "scheduler.interval_sec", default=3600),
+        jitter_pct=_expect_float_range(
+            scheduler_raw,
+            "scheduler.jitter_pct",
+            default=0.07,
+            min_value=0.0,
+            max_value=1.0,
+        ),
+        shutdown_local=_expect_non_empty_string(
+            scheduler_raw,
+            "scheduler.shutdown_local",
+            "01:00-10:00",
+        ),
+        max_runs_per_day=_expect_positive_int(
+            scheduler_raw,
+            "scheduler.max_runs_per_day",
+            default=24,
+        ),
+        daily_budget_page_loads=_expect_positive_int(
+            scheduler_raw,
+            "scheduler.daily_budget_page_loads",
+            default=200,
+        ),
+        daily_budget_scrolls=_expect_positive_int(
+            scheduler_raw,
+            "scheduler.daily_budget_scrolls",
+            default=500,
+        ),
+    )
+
+    storage_config = StorageConfig(
+        db_filename=_expect_non_empty_string(
+            storage_raw,
+            "storage.db_filename",
+            "tweets.sqlite3",
+        ),
+        keep_days=_expect_non_negative_int(storage_raw, "storage.keep_days", default=30),
+        store_raw_html=_expect_bool(storage_raw, "storage.store_raw_html", default=False),
+        store_raw_json=_expect_bool(storage_raw, "storage.store_raw_json", default=True),
+    )
+
+    selectors_config = SelectorsConfig(
+        pack=_expect_non_empty_string(selectors_raw, "selectors.pack", "default"),
+        override_filename=_expect_non_empty_string(
+            selectors_raw,
+            "selectors.override_filename",
+            "selectors/override.json",
+        ),
+    )
+
     parsed_sources: list[SourceRef] = []
     for index, source in enumerate(sources_raw):
         if not isinstance(source, dict):
@@ -230,17 +415,36 @@ def _parse_runtime_config(data: dict[str, Any]) -> RuntimeConfig:
         )
         source_id = _expect_non_empty_string(source, f"sources[{index}].id", default=None)
         enabled = _expect_bool(source, f"sources[{index}].enabled", default=True)
+        label = _optional_non_empty_string(source, f"sources[{index}].label")
 
         if source_kind == "list":
             value = _expect_non_empty_string(source, f"sources[{index}].list_id", default=None)
+            tab = None
         else:
             value = _expect_non_empty_string(source, f"sources[{index}].handle", default=None)
+            tab = _optional_non_empty_string(source, f"sources[{index}].tab")
 
         parsed_sources.append(
-            SourceRef(source_id=source_id, kind=SourceKind(source_kind), value=value, enabled=enabled)
+            SourceRef(
+                source_id=source_id,
+                kind=SourceKind(source_kind),
+                value=value,
+                enabled=enabled,
+                label=label,
+                tab=tab,
+            )
         )
 
-    return RuntimeConfig(app=app_config, browser=browser_config, sources=tuple(parsed_sources))
+    return RuntimeConfig(
+        app=app_config,
+        browser=browser_config,
+        collection=collection_config,
+        checkpoints=checkpoints_config,
+        scheduler=scheduler_config,
+        storage=storage_config,
+        selectors=selectors_config,
+        sources=tuple(parsed_sources),
+    )
 
 
 def _expect_table(data: dict[str, Any], key: str, default: dict[str, Any]) -> dict[str, Any]:
@@ -251,10 +455,13 @@ def _expect_table(data: dict[str, Any], key: str, default: dict[str, Any]) -> di
 
 
 def _expect_non_empty_string(
-    data: dict[str, Any], key: str, default: str | None
+    data: dict[str, Any],
+    key: str,
+    default: str | None,
 ) -> str:
-    if key.split(".")[-1] in data:
-        value = data[key.split(".")[-1]]
+    field = key.split(".")[-1]
+    if field in data:
+        value = data[field]
     else:
         if default is None:
             raise ConfigError(f"Missing required value '{key}'.")
@@ -265,11 +472,51 @@ def _expect_non_empty_string(
     return value
 
 
+def _optional_non_empty_string(data: dict[str, Any], key: str) -> str | None:
+    field = key.split(".")[-1]
+    if field not in data:
+        return None
+    value = data[field]
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"Invalid value for '{key}': expected non-empty string.")
+    return value
+
+
 def _expect_positive_int(data: dict[str, Any], key: str, default: int) -> int:
     field = key.split(".")[-1]
     value = data.get(field, default)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"Invalid value for '{key}': expected positive integer.")
+    return value
+
+
+def _expect_non_negative_int(data: dict[str, Any], key: str, default: int) -> int:
+    field = key.split(".")[-1]
+    value = data.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"Invalid value for '{key}': expected non-negative integer.")
+    return value
+
+
+def _expect_float_range(
+    data: dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    min_value: float,
+    max_value: float,
+) -> float:
+    field = key.split(".")[-1]
+    raw = data.get(field, default)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ConfigError(f"Invalid value for '{key}': expected number.")
+    value = float(raw)
+    if value < min_value or value > max_value:
+        raise ConfigError(
+            f"Invalid value for '{key}': expected number between {min_value} and {max_value}."
+        )
     return value
 
 

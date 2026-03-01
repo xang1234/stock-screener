@@ -15,8 +15,8 @@ services:
   # FastAPI Backend
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       - DATABASE_URL=sqlite:////app/data/stockscanner.db
       - REDIS_HOST=redis
@@ -38,6 +38,18 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # XUI Twitter ingestion
+      - XUI_ENABLED=${XUI_ENABLED:-true}
+      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+      - XUI_PROFILE=${XUI_PROFILE:-default}
+      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
+      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
+      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
+      - XUI_BRIDGE_ENABLED=${XUI_BRIDGE_ENABLED:-true}
+      - XUI_BRIDGE_ALLOWED_ORIGINS=${XUI_BRIDGE_ALLOWED_ORIGINS:-http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173}
+      - XUI_BRIDGE_CHALLENGE_TTL_SECONDS=${XUI_BRIDGE_CHALLENGE_TTL_SECONDS:-120}
+      - XUI_BRIDGE_MAX_COOKIES=${XUI_BRIDGE_MAX_COOKIES:-300}
+      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
       # LLM Routing (optional overrides)
       - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
       - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
@@ -59,8 +71,8 @@ services:
   # Celery Worker - General Queue (concurrency=1 for SQLite safety)
   celery-worker:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q celery -n general@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
@@ -83,6 +95,14 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # XUI Twitter ingestion
+      - XUI_ENABLED=${XUI_ENABLED:-true}
+      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+      - XUI_PROFILE=${XUI_PROFILE:-default}
+      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
+      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
+      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
+      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
       # LLM Routing
       - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
       - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
@@ -99,8 +119,8 @@ services:
   # Celery Worker - Data Fetch Queue (serialized, concurrency=1)
   celery-datafetch:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
@@ -123,6 +143,14 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # XUI Twitter ingestion
+      - XUI_ENABLED=${XUI_ENABLED:-true}
+      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+      - XUI_PROFILE=${XUI_PROFILE:-default}
+      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
+      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
+      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
+      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
       # LLM Routing
       - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
       - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
@@ -139,8 +167,8 @@ services:
   # Celery Worker - User Scans Queue (isolated from maintenance jobs)
   celery-userscans:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q user_scans -n userscans@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
@@ -163,6 +191,14 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # XUI Twitter ingestion
+      - XUI_ENABLED=${XUI_ENABLED:-true}
+      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+      - XUI_PROFILE=${XUI_PROFILE:-default}
+      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
+      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
+      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
+      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
       # LLM Routing
       - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
       - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
@@ -179,8 +215,8 @@ services:
   # Celery Beat Scheduler
   celery-beat:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     command: sh -c "rm -f /app/data/celerybeat-schedule && celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule"
     environment:
       - TZ=${CELERY_TIMEZONE:-America/New_York}
@@ -190,6 +226,14 @@ services:
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      # XUI Twitter ingestion
+      - XUI_ENABLED=${XUI_ENABLED:-true}
+      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+      - XUI_PROFILE=${XUI_PROFILE:-default}
+      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
+      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
+      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
+      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
     volumes:
       - ./data:/app/data
     depends_on:

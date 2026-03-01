@@ -18,16 +18,25 @@ RUN groupadd -r -g 1000 stockscanner && \
 # This fixes yfinance TzCache/CookieCache permission errors
 ENV HOME=/app/data
 ENV XDG_CACHE_HOME=/app/data/.cache
+# Keep Playwright browser binaries outside mounted /app/data volume.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Copy requirements first for better caching
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY --chown=stockscanner:stockscanner . .
+# Copy backend and xui-reader source trees.
+# Build context must be repository root for these paths to resolve.
+COPY --chown=stockscanner:stockscanner backend/ .
+COPY --chown=stockscanner:stockscanner xui-reader ./xui-reader
+
+# Install xui-reader package and Playwright Chromium browser.
+RUN pip install --no-cache-dir -e ./xui-reader && \
+    python -m playwright install --with-deps chromium
 
 # Create data and cache directories with correct ownership
-RUN mkdir -p /app/data/.cache && chown -R stockscanner:stockscanner /app/data
+RUN mkdir -p /app/data/.cache /ms-playwright && \
+    chown -R stockscanner:stockscanner /app/data /ms-playwright
 
 # Switch to non-root user
 USER stockscanner

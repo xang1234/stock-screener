@@ -30,6 +30,9 @@ Follow the full onboarding drill:
 
 This baseline intentionally keeps behavior minimal while stabilizing module contracts.
 
+CLI tests import `xui_reader.cli` directly and require runtime deps like `typer`.
+Install the project (`pip install -e ".[dev]"`) before running `pytest` to avoid dependency-skip gaps.
+
 ## Watch Exit Codes
 
 `xui watch` uses a stable exit-code matrix for automation wrappers:
@@ -37,7 +40,7 @@ This baseline intentionally keeps behavior minimal while stabilizing module cont
 | State | Exit code | Meaning |
 | --- | ---: | --- |
 | `success` | `0` | Run completed without auth-fail or budget-stop terminal state. |
-| `budget_stop` | `4` | Run stopped because configured cycle budget (`--max-cycles > 1`) was exhausted. |
+| `budget_stop` | `4` | Run stopped because a configured collection budget (for example `--max-page-loads` or `--max-scroll-rounds`) was exceeded. |
 | `auth_fail` | `5` | All source failures in the run were auth-related (missing/invalid session). |
 | `interrupted` | `130` | Process interrupted by operator signal/keyboard interrupt. |
 

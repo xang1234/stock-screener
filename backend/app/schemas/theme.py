@@ -42,6 +42,44 @@ class ContentSourceResponse(BaseModel):
         from_attributes = True
 
 
+class BrowserCookieInput(BaseModel):
+    name: str
+    value: str
+    domain: str
+    path: str = "/"
+    secure: bool = False
+    httpOnly: bool = False
+    sameSite: Optional[str] = None
+    expirationDate: Optional[float] = None
+    expires: Optional[float] = None
+
+
+class TwitterSessionStatusResponse(BaseModel):
+    authenticated: bool
+    status_code: str
+    message: str
+    profile: str
+    storage_state_path: str
+    provider: str = "xui"
+
+
+class TwitterSessionChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge_token: str
+    expires_at: datetime
+    ttl_seconds: int
+
+
+class TwitterSessionImportRequest(BaseModel):
+    challenge_id: str = Field(..., min_length=1)
+    challenge_token: str = Field(..., min_length=1)
+    cookies: list[BrowserCookieInput]
+    browser: Optional[str] = None
+    extension_version: Optional[str] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # Theme Cluster Schemas
 class ThemeClusterResponse(BaseModel):
     id: int

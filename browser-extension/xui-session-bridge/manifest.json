@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "XUI Session Bridge",
+  "description": "Capture X/Twitter cookies from current browser profile for local Stock Scanner ingestion.",
+  "version": "0.1.0",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://localhost/*",
+    "https://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://localhost/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

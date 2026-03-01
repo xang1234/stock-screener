@@ -3,7 +3,7 @@ Content Ingestion Service for Theme Discovery
 
 Fetches content from multiple sources:
 - Substack RSS feeds
-- Twitter/X API or Nitter scraping
+- Twitter/X via xui-reader UI collection
 - News APIs (Benzinga, Seeking Alpha)
 - Reddit API
 """
@@ -91,183 +91,15 @@ class RSSFetcher(BaseContentFetcher):
 
 
 class TwitterFetcher(BaseContentFetcher):
-    """
-    Fetches content from Twitter/X
-
-    Options:
-    1. Official Twitter API v2 (requires paid access)
-    2. Nitter instances (free but less reliable)
-    3. RSS bridges like RSSHub
-    """
+    """Fetches content from Twitter/X exclusively via xui-reader."""
 
     def __init__(self):
-        self.api_bearer_token = getattr(settings, "twitter_bearer_token", None)
-        self.sotwe_scraper = None
-        if not self.api_bearer_token and getattr(settings, "sotwe_enabled", True):
-            try:
-                from .sotwe_scraper import SotweScraper
-                self.sotwe_scraper = SotweScraper()
-            except ImportError:
-                logger.warning("curl_cffi not installed; Sotwe scraper unavailable")
+        from .xui_twitter_fetcher import XUITwitterFetcher
+
+        self._xui_fetcher = XUITwitterFetcher()
 
     def fetch(self, source: ContentSource, since: Optional[datetime] = None) -> list[dict]:
-        """Fetch tweets from user timeline.
-
-        Fallback chain: Twitter API v2 -> Sotwe -> Nitter RSS.
-        """
-        if self.api_bearer_token:
-            return self._fetch_via_api(source, since)
-
-        if self.sotwe_scraper:
-            items = self._fetch_via_sotwe(source, since)
-            if items:
-                return items
-            logger.info(f"Sotwe returned no items for {source.name}, falling back to Nitter")
-
-        return self._fetch_via_nitter_rss(source, since)
-
-    def _fetch_via_api(self, source: ContentSource, since: Optional[datetime] = None) -> list[dict]:
-        """Fetch via official Twitter API v2"""
-        items = []
-        try:
-            # Extract username from URL (format: twitter.com/username or @username)
-            username = source.url.split("/")[-1].replace("@", "")
-
-            # First get user ID
-            user_response = requests.get(
-                f"https://api.twitter.com/2/users/by/username/{username}",
-                headers={"Authorization": f"Bearer {self.api_bearer_token}"}
-            )
-            user_data = user_response.json()
-            if "data" not in user_data:
-                logger.error(f"Twitter user not found: {username}")
-                return items
-
-            user_id = user_data["data"]["id"]
-
-            # Fetch recent tweets
-            params = {
-                "max_results": 100,
-                "tweet.fields": "created_at,text,author_id",
-            }
-            if since:
-                params["start_time"] = since.isoformat() + "Z"
-
-            response = requests.get(
-                f"https://api.twitter.com/2/users/{user_id}/tweets",
-                headers={"Authorization": f"Bearer {self.api_bearer_token}"},
-                params=params
-            )
-            tweets = response.json()
-
-            for tweet in tweets.get("data", []):
-                published_at = datetime.fromisoformat(tweet["created_at"].replace("Z", "+00:00"))
-                external_id = self.generate_external_id("twitter", tweet["id"])
-
-                items.append({
-                    "external_id": external_id,
-                    "title": "",  # Tweets don't have titles
-                    "content": tweet["text"],
-                    "url": f"https://twitter.com/{username}/status/{tweet['id']}",
-                    "author": f"@{username}",
-                    "published_at": published_at,
-                })
-
-            logger.info(f"Fetched {len(items)} tweets from @{username}")
-
-        except Exception as e:
-            logger.error(f"Error fetching Twitter API for {source.name}: {e}")
-
-        return items
-
-    def _fetch_via_sotwe(self, source: ContentSource, since: Optional[datetime] = None) -> list[dict]:
-        """Fetch via Sotwe scraper (free fallback before Nitter)
-
-        Note: We intentionally don't filter by `since` date here because:
-        1. Sotwe only returns ~20-25 tweets anyway (small dataset)
-        2. Database deduplication in fetch_source() is more reliable
-        3. The `since` filter can cause issues if last_fetched_at was set
-           but no data was actually stored (e.g., wrong source_type)
-        """
-        items = []
-        try:
-            username = source.url.split("/")[-1].replace("@", "")
-            tweets = self.sotwe_scraper.fetch_user_tweets(username)
-
-            for tweet in tweets:
-                external_id = self.generate_external_id("twitter", tweet.id)
-
-                items.append({
-                    "external_id": external_id,
-                    "title": "",
-                    "content": tweet.text,
-                    "url": f"https://twitter.com/{username}/status/{tweet.id}",
-                    "author": f"@{username}",
-                    "published_at": tweet.created_at,
-                })
-
-            logger.info(f"Fetched {len(items)} tweets via Sotwe for @{username}")
-
-        except Exception as e:
-            logger.error(f"Error fetching Sotwe for {source.name}: {e}")
-
-        return items
-
-    def _fetch_via_nitter_rss(self, source: ContentSource, since: Optional[datetime] = None) -> list[dict]:
-        """
-        Fetch via Nitter RSS (fallback when no API key)
-        Uses public Nitter instances that provide RSS feeds
-
-        Note: We don't filter by `since` date - database deduplication handles it.
-        """
-        items = []
-        try:
-            # Extract username
-            username = source.url.split("/")[-1].replace("@", "")
-
-            # List of Nitter instances that provide RSS
-            nitter_instances = [
-                "nitter.net",
-                "nitter.privacydev.net",
-                "nitter.poast.org",
-            ]
-
-            feed = None
-            for instance in nitter_instances:
-                try:
-                    rss_url = f"https://{instance}/{username}/rss"
-                    feed = feedparser.parse(rss_url)
-                    if feed.entries:
-                        break
-                except Exception:
-                    continue
-
-            if not feed or not feed.entries:
-                logger.warning(f"Could not fetch Nitter RSS for @{username}")
-                return items
-
-            for entry in feed.entries:
-                published_at = None
-                if hasattr(entry, "published_parsed") and entry.published_parsed:
-                    published_at = datetime(*entry.published_parsed[:6])
-
-                external_id = self.generate_external_id("twitter", entry.get("id", entry.get("link", "")))
-
-                items.append({
-                    "external_id": external_id,
-                    "title": "",
-                    "content": entry.get("title", "") + " " + entry.get("description", ""),
-                    "url": entry.get("link", "").replace("nitter.net", "twitter.com"),
-                    "author": f"@{username}",
-                    "published_at": published_at,
-                })
-
-            logger.info(f"Fetched {len(items)} items via Nitter RSS for @{username}")
-
-        except Exception as e:
-            logger.error(f"Error fetching Nitter RSS for {source.name}: {e}")
-
-        return items
+        return self._xui_fetcher.fetch(source, since)
 
 
 class NewsFetcher(BaseContentFetcher):
@@ -532,9 +364,9 @@ class ContentIngestionService:
                     "error": str(e),
                 })
 
-            # Rate-limit Sotwe/Twitter requests to avoid Cloudflare 503s
+            # Rate-limit twitter source requests to avoid overloading upstream services.
             if source.source_type == "twitter":
-                time.sleep(settings.sotwe_request_delay)
+                time.sleep(settings.twitter_request_delay)
 
         return results
 

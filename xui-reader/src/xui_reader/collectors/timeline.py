@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
@@ -108,23 +108,28 @@ class TimelineCollector:
             raise CollectError("Collection limit must be positive when provided.")
 
         page = self._session.new_page()
-        self._route_configurer(page, self._config)
-        target_url, handle = _canonical_target(source)
-        _navigate(page, target_url, self._config.browser.navigation_timeout_ms)
+        try:
+            self._route_configurer(page, self._config)
+            target_url, handle = _canonical_target(source)
+            _navigate(page, target_url, self._config.browser.navigation_timeout_ms)
 
-        if source.kind is SourceKind.USER:
-            tab_result = select_user_tab(page, handle=handle, tab=self._user_tab)
-            if not tab_result.selected:
-                raise CollectError(tab_result.diagnostics)
+            if source.kind is SourceKind.USER:
+                selected_tab = source.tab if source.tab else self._user_tab
+                tab_result = select_user_tab(page, handle=handle, tab=selected_tab)
+                if not tab_result.selected:
+                    raise CollectError(tab_result.diagnostics)
 
-        return _collect_dom_loop(
-            page,
-            source_id=source.source_id,
-            bounds=self._bounds,
-            limit=limit,
-            overlay_max_clicks=self._overlay_max_clicks,
-            overlay_dismisser=self._overlay_dismisser,
-        )
+            return _collect_dom_loop(
+                page,
+                source_id=source.source_id,
+                bounds=self._bounds,
+                limit=limit,
+                overlay_max_clicks=self._overlay_max_clicks,
+                overlay_dismisser=self._overlay_dismisser,
+            )
+        except Exception as exc:
+            _attach_collection_diagnostics(exc, page)
+            raise
 
 
 def select_user_tab(page: TimelinePage, *, handle: str, tab: str) -> TabSelectionResult:
@@ -170,9 +175,19 @@ def select_user_tab(page: TimelinePage, *, handle: str, tab: str) -> TabSelectio
 
 def canonical_list_url(list_id_or_url: str) -> str:
     """Resolve a list id or URL to canonical X list URL."""
+    return f"https://x.com/i/lists/{parse_list_id(list_id_or_url)}"
+
+
+def canonical_user_url(handle_or_url: str) -> str:
+    """Resolve handle or user URL to canonical user timeline URL."""
+    return f"https://x.com/{parse_handle(handle_or_url)}"
+
+
+def parse_list_id(list_id_or_url: str) -> str:
+    """Parse and validate numeric list id from raw id or x.com list URL."""
     raw = list_id_or_url.strip()
     if _LIST_ID_RE.fullmatch(raw):
-        return f"https://x.com/i/lists/{raw}"
+        return raw
 
     parsed = urlparse(raw)
     segments = [segment for segment in parsed.path.split("/") if segment]
@@ -180,16 +195,16 @@ def canonical_list_url(list_id_or_url: str) -> str:
         if segment == "lists" and index + 1 < len(segments):
             maybe_list_id = segments[index + 1]
             if _LIST_ID_RE.fullmatch(maybe_list_id):
-                return f"https://x.com/i/lists/{maybe_list_id}"
+                return maybe_list_id
 
     raise CollectError(
         f"Could not parse list id from '{list_id_or_url}'. Provide numeric list id or x.com list URL."
     )
 
 
-def canonical_user_url(handle_or_url: str) -> str:
-    """Resolve handle or user URL to canonical user timeline URL."""
-    return f"https://x.com/{_normalize_handle(handle_or_url)}"
+def parse_handle(handle_or_url: str) -> str:
+    """Parse and validate @handle from raw handle or profile URL."""
+    return _normalize_handle(handle_or_url)
 
 
 def _collect_dom_loop(
@@ -398,3 +413,20 @@ def _extract_blocked_category(overlay_result: object) -> str | None:
         return str(candidate) if candidate else None
     candidate = getattr(overlay_result, "blocked_category", None)
     return str(candidate) if candidate else None
+
+
+def _attach_collection_diagnostics(exc: Exception, page: TimelinePage) -> None:
+    try:
+        setattr(exc, "dom_snapshot", _read_page_content(page))
+    except Exception:
+        pass
+
+    screenshot = getattr(page, "screenshot", None)
+    if not callable(screenshot):
+        return
+    try:
+        payload = screenshot(type="png", full_page=True)
+    except Exception:
+        return
+    if isinstance(payload, (bytes, bytearray)):
+        setattr(exc, "screenshot_png", bytes(payload))

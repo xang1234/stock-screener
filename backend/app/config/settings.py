@@ -2,14 +2,17 @@
 Configuration settings for the Stock Scanner application.
 Loads environment variables and provides application settings.
 """
+import logging
+import os
 from pathlib import Path
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 from typing import List
 
 # Get project root (StockScreenClaude/)
 # settings.py is at backend/app/config/settings.py → 4 levels up
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -24,10 +27,21 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""  # For LLM via DeepSeek (cost-effective fallback)
     together_api_key: str = ""  # For LLM via Together AI (wide model selection)
     openrouter_api_key: str = ""  # For LLM via OpenRouter (100+ models, unified billing)
-    twitter_bearer_token: str = ""  # For Twitter/X API (optional)
-    sotwe_enabled: bool = True  # Enable Sotwe scraper as Twitter fallback
-    sotwe_request_timeout: int = 30  # Timeout for Sotwe HTTP requests (seconds)
-    sotwe_request_delay: float = 5.0  # Delay between Sotwe requests (seconds)
+    twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
+    xui_enabled: bool = True  # Enable xui-reader ingestion for twitter sources
+    xui_config_path: str = f"{_PROJECT_ROOT}/data/xui-reader/config.toml"
+    xui_profile: str = "default"
+    xui_limit_per_source: int = 50
+    xui_new_only: bool = True
+    xui_checkpoint_mode: str = "auto"
+    xui_bridge_enabled: bool = True
+    xui_bridge_allowed_origins: str = (
+        "http://localhost:80,http://127.0.0.1:80,"
+        "http://localhost:5173,http://127.0.0.1:5173"
+    )
+    xui_bridge_challenge_ttl_seconds: int = 120
+    xui_bridge_max_cookies: int = 300
+    twitter_request_delay: float = 5.0  # Delay between twitter source fetches (seconds)
     benzinga_api_key: str = ""  # For Benzinga news API (optional)
     tavily_api_key: str = ""  # For web search in chatbot (primary)
     serper_api_key: str = ""  # For web search in chatbot (fallback)
@@ -196,6 +210,25 @@ class Settings(BaseSettings):
                 f"Use IANA timezone like 'America/New_York'"
             )
         return v
+
+    @model_validator(mode="after")
+    def apply_legacy_twitter_delay_fallback(self) -> "Settings":
+        legacy_delay = os.getenv("SOTWE_REQUEST_DELAY")
+        explicit_delay = os.getenv("TWITTER_REQUEST_DELAY")
+        if not explicit_delay and legacy_delay:
+            try:
+                self.twitter_request_delay = float(legacy_delay)
+                logger.warning(
+                    "SOTWE_REQUEST_DELAY is deprecated; use TWITTER_REQUEST_DELAY instead. "
+                    "Applying legacy value for compatibility."
+                )
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid SOTWE_REQUEST_DELAY value %r; using TWITTER_REQUEST_DELAY=%s",
+                    legacy_delay,
+                    self.twitter_request_delay,
+                )
+        return self
 
     @property
     def groq_api_keys_list(self) -> List[str]:

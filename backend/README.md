@@ -19,6 +19,8 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 ```bash
 pip install -r requirements.txt
+pip install -e ../xui-reader
+python -m playwright install chromium
 ```
 
 ### 3. Configure Environment
@@ -35,15 +37,27 @@ redis-server
 # or: brew services start redis (macOS)
 ```
 
-### 5. Start Celery Workers
+### 5. Bootstrap XUI Session State (Required for Twitter Theme Ingestion)
+
+```bash
+xui config init --path ../data/xui-reader/config.toml
+xui profiles create default --path ../data/xui-reader/config.toml
+xui auth login --profile default --path ../data/xui-reader/config.toml
+
+# Optional (preferred for Google-linked X accounts):
+# In Themes -> Manage Sources, click "Connect From Current Browser"
+# after loading unpacked extension from ../browser-extension/xui-session-bridge.
+```
+
+### 6. Start Celery Workers
 
 ```bash
 ./start_celery.sh
 ```
 
-> **macOS note**: Celery requires `--pool=solo` to avoid fork() crashes with curl_cffi. The `start_celery.sh` script handles this automatically along with the required `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` export.
+> **macOS note**: Celery requires `--pool=solo` to avoid fork() crashes from Objective-C fork safety checks. The `start_celery.sh` script handles this automatically along with the required `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` export.
 
-### 6. Start the API Server
+### 7. Start the API Server
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

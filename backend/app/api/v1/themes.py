@@ -13,7 +13,7 @@ import io
 import logging
 from collections import Counter, defaultdict
 from pydantic import ValidationError
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -101,8 +101,15 @@ from ...schemas.theme import (
     TaxonomyAssignmentRequest,
     UnassignedThemesResponse,
     UnassignedThemeItem,
+    TwitterSessionStatusResponse,
+    TwitterSessionChallengeResponse,
+    TwitterSessionImportRequest,
 )
 from ...services.content_ingestion_service import ContentIngestionService, seed_default_sources
+from ...services.xui_session_bridge_service import (
+    XUISessionBridgeError,
+    XUISessionBridgeService,
+)
 from ...services.theme_extraction_service import ThemeExtractionService
 from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_correlation_service import ThemeCorrelationService
@@ -406,6 +413,53 @@ async def dismiss_alert(
 
 
 # ==================== Content Sources (MUST be before /{theme_id}) ====================
+
+@router.get("/twitter/session", response_model=TwitterSessionStatusResponse)
+async def get_twitter_session_status() -> TwitterSessionStatusResponse:
+    """Get current XUI auth/session status for twitter ingestion."""
+    service = XUISessionBridgeService()
+    try:
+        status = service.get_auth_status()
+    except XUISessionBridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return TwitterSessionStatusResponse.model_validate(status, from_attributes=True)
+
+
+@router.post("/twitter/session/challenge", response_model=TwitterSessionChallengeResponse)
+async def create_twitter_session_challenge(request: Request) -> TwitterSessionChallengeResponse:
+    """Issue one-time challenge token for browser-extension session import."""
+    service = XUISessionBridgeService()
+    origin = request.headers.get("origin")
+    client_key = request.client.host if request.client else "unknown"
+    try:
+        challenge = service.create_import_challenge(origin=origin, client_key=client_key)
+    except XUISessionBridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return TwitterSessionChallengeResponse.model_validate(challenge, from_attributes=True)
+
+
+@router.post("/twitter/session/import", response_model=TwitterSessionStatusResponse)
+async def import_twitter_session_from_browser(
+    payload: TwitterSessionImportRequest,
+    request: Request,
+) -> TwitterSessionStatusResponse:
+    """Import x.com/twitter.com cookies from extension and persist XUI storage state."""
+    service = XUISessionBridgeService()
+    origin = request.headers.get("x-xui-bridge-origin") or request.headers.get("origin")
+    client_key = request.client.host if request.client else "unknown"
+    try:
+        status = service.import_browser_cookies(
+            challenge_id=payload.challenge_id,
+            challenge_token=payload.challenge_token,
+            cookies=[cookie.model_dump() for cookie in payload.cookies],
+            origin=origin,
+            client_key=client_key,
+            browser=payload.browser,
+            extension_version=payload.extension_version,
+        )
+    except XUISessionBridgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return TwitterSessionStatusResponse.model_validate(status, from_attributes=True)
 
 @router.get("/sources", response_model=list[ContentSourceResponse])
 async def list_content_sources(

@@ -7,14 +7,14 @@
 
 cd "$(dirname "$0")"
 
-# macOS fork() safety: Required for curl_cffi and other libs that use Objective-C
+# macOS fork() safety: required for Python deps that initialize Objective-C after fork.
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 export PYTORCH_ENABLE_MPS_FALLBACK=1
 export TOKENIZERS_PARALLELISM=false
 
 echo "Starting Celery workers..."
 
-# On macOS, use solo pool to avoid fork() crashes with curl_cffi
+# On macOS, use solo pool to avoid fork() crashes with Objective-C runtime safety checks.
 # Solo pool runs tasks sequentially in the main process (no forking)
 # On Linux, you can change this to 'prefork' for parallel execution
 POOL="${CELERY_POOL:-solo}"

@@ -22,6 +22,9 @@ MODULES = [
     "xui_reader.store.checkpoints",
     "xui_reader.store.sqlite",
     "xui_reader.render.base",
+    "xui_reader.render.pretty",
+    "xui_reader.render.plain",
+    "xui_reader.render.jsonout",
     "xui_reader.scheduler.base",
     "xui_reader.scheduler.merge",
     "xui_reader.scheduler.read",
@@ -31,6 +34,7 @@ MODULES = [
     "xui_reader.diagnostics.artifacts",
     "xui_reader.diagnostics.doctor",
     "xui_reader.diagnostics.events",
+    "xui_reader.cli",
 ]
 
 

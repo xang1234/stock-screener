@@ -206,7 +206,7 @@ def test_determine_watch_exit_code_returns_auth_fail_when_all_failures_are_auth_
     assert determine_watch_exit_code(result, max_cycles=1) is WatchExitCode.AUTH_FAIL
 
 
-def test_determine_watch_exit_code_returns_budget_stop_for_multi_cycle_budget() -> None:
+def test_determine_watch_exit_code_returns_success_for_planned_multi_cycle_completion() -> None:
     result = WatchRunResult(
         cycles=(
             WatchCycleResult(
@@ -231,7 +231,7 @@ def test_determine_watch_exit_code_returns_budget_stop_for_multi_cycle_budget() 
             ),
         )
     )
-    assert determine_watch_exit_code(result, max_cycles=2) is WatchExitCode.BUDGET_STOP
+    assert determine_watch_exit_code(result, max_cycles=2) is WatchExitCode.SUCCESS
 
 
 def test_determine_watch_exit_code_returns_success_for_single_cycle_non_auth_failures() -> None:

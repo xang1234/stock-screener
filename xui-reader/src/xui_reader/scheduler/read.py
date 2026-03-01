@@ -12,8 +12,8 @@ from typing import Any
 
 from xui_reader.auth import storage_state_path
 from xui_reader.browser.session import PlaywrightBrowserSession
-from xui_reader.collectors.timeline import TimelineCollector
-from xui_reader.config import RuntimeConfig
+from xui_reader.collectors.timeline import ScrollBounds, TimelineCollector
+from xui_reader.config import RuntimeConfig, resolve_config_path
 from xui_reader.diagnostics.artifacts import redact_text, write_html_artifact
 from xui_reader.diagnostics.events import JsonlEventLogger
 from xui_reader.errors import CollectError, SchedulerError
@@ -21,6 +21,7 @@ from xui_reader.extract.tweets import PrimaryFallbackTweetExtractor
 from xui_reader.models import SourceRef, TweetItem
 from xui_reader.profiles import profiles_root
 from xui_reader.scheduler.merge import merge_tweet_items
+from xui_reader.store import RetentionPolicy, SQLiteStore, apply_checkpoint_mode
 
 
 ReadSourceFn = Callable[[SourceRef], "SourceReadResult | tuple[TweetItem, ...]"]
@@ -129,6 +130,8 @@ def run_configured_read(
     profile_name: str | None = None,
     config_path: str | Path | None = None,
     limit: int = 100,
+    new_only: bool = False,
+    checkpoint_mode: str = "auto",
     read_source: ReadSourceFn | None = None,
     run_id: str | None = None,
     enable_debug_artifacts: bool = False,
@@ -141,19 +144,33 @@ def run_configured_read(
         raise SchedulerError("No enabled sources configured. Add a [[sources]] entry with enabled = true.")
     if limit <= 0:
         raise SchedulerError("limit must be > 0.")
+    if checkpoint_mode not in {"auto", "id", "time"}:
+        raise SchedulerError("checkpoint_mode must be one of: auto, id, time.")
 
     selected_profile = profile_name or config.app.default_profile
     resolved_run_id = run_id or _new_run_id("read")
     artifacts_dir = _artifacts_dir_for_profile(selected_profile, config_path)
+    should_manage_store = read_source is None or new_only
+    store: SQLiteStore | None = None
+    if should_manage_store:
+        store = SQLiteStore(
+            _db_path_for_profile(
+                selected_profile,
+                config_path,
+                config.storage.db_filename,
+            )
+        )
 
     if read_source is None:
-        read_source = lambda source: collect_source_result(  # noqa: E731
+        base_read_source: ReadSourceFn = lambda source: collect_source_result(  # noqa: E731
             config,
             source,
             profile_name=selected_profile,
             config_path=config_path,
             limit=limit,
         )
+    else:
+        base_read_source = read_source
     failure_hook: SourceFailureHookFn | None = None
     if enable_debug_artifacts:
         failure_hook = lambda source, exc: _write_source_failure_artifacts(  # noqa: E731
@@ -163,38 +180,59 @@ def run_configured_read(
             error=exc,
             raw_html_opt_in=raw_html_opt_in,
         )
-    result = run_multi_source_read(
-        enabled_sources,
-        read_source,
-        on_source_failure=failure_hook,
-    )
-    if event_logger is not None:
-        event_logger.append(
-            "read_run",
-            run_id=resolved_run_id,
-            payload={
-                "succeeded_sources": result.succeeded,
-                "failed_sources": result.failed,
-                "page_loads": result.total_page_loads,
-                "scroll_rounds": result.total_scroll_rounds,
-                "seen_items": result.total_observed_ids,
-                "emitted_items": len(result.items),
-                "source_outcomes": [
-                    {
-                        "source_id": outcome.source_id,
-                        "source_kind": outcome.source_kind,
-                        "ok": outcome.ok,
-                        "item_count": outcome.item_count,
-                        "page_loads": outcome.page_loads,
-                        "scroll_rounds": outcome.scroll_rounds,
-                        "observed_ids": outcome.observed_ids,
-                        "error": outcome.error,
-                    }
-                    for outcome in result.outcomes
-                ],
-            },
+    try:
+        def read_and_checkpoint(source: SourceRef) -> SourceReadResult:
+            source_result = _coerce_source_read_result(base_read_source(source))
+            if store is None:
+                return source_result
+            return _persist_source_result(
+                store=store,
+                source=source,
+                source_result=source_result,
+                new_only=new_only,
+                checkpoint_mode=checkpoint_mode,
+            )
+
+        result = run_multi_source_read(
+            enabled_sources,
+            read_and_checkpoint,
+            on_source_failure=failure_hook,
         )
-    return result
+        if store is not None:
+            store.apply_retention(
+                RetentionPolicy(tweet_retention_days=config.storage.keep_days),
+                dry_run=False,
+            )
+        if event_logger is not None:
+            event_logger.append(
+                "read_run",
+                run_id=resolved_run_id,
+                payload={
+                    "succeeded_sources": result.succeeded,
+                    "failed_sources": result.failed,
+                    "page_loads": result.total_page_loads,
+                    "scroll_rounds": result.total_scroll_rounds,
+                    "seen_items": result.total_observed_ids,
+                    "emitted_items": len(result.items),
+                    "source_outcomes": [
+                        {
+                            "source_id": outcome.source_id,
+                            "source_kind": outcome.source_kind,
+                            "ok": outcome.ok,
+                            "item_count": outcome.item_count,
+                            "page_loads": outcome.page_loads,
+                            "scroll_rounds": outcome.scroll_rounds,
+                            "observed_ids": outcome.observed_ids,
+                            "error": outcome.error,
+                        }
+                        for outcome in result.outcomes
+                    ],
+                },
+            )
+        return result
+    finally:
+        if store is not None:
+            store.close()
 
 
 def collect_source_result(
@@ -219,9 +257,19 @@ def collect_source_result(
     if not state_path.is_file():
         raise CollectError(f"storage_state path '{state_path}' is not a file.")
 
-    extractor = PrimaryFallbackTweetExtractor()
+    selector_override_path = _resolve_selector_override_path(config_path, config.selectors.override_filename)
+    extractor = PrimaryFallbackTweetExtractor(override_path=selector_override_path)
+    bounds = ScrollBounds(
+        max_scrolls=config.collection.max_scrolls,
+        stagnation_rounds=config.collection.stagnation_rounds,
+    )
     with PlaywrightBrowserSession(config, storage_state=state_path) as session:
-        collector = TimelineCollector(config, session)
+        collector = TimelineCollector(
+            config,
+            session,
+            bounds=bounds,
+            user_tab=source.tab or "posts",
+        )
         batch = collector.collect(source, limit=limit)
         stats = batch.stats
         page_loads = 1
@@ -309,6 +357,56 @@ def _coerce_source_read_result(value: SourceReadResult | tuple[TweetItem, ...]) 
 
 def _artifacts_dir_for_profile(profile_name: str, config_path: str | Path | None) -> Path:
     return profiles_root(config_path) / profile_name / "artifacts"
+
+
+def _db_path_for_profile(
+    profile_name: str,
+    config_path: str | Path | None,
+    db_filename: str,
+) -> Path:
+    return profiles_root(config_path) / profile_name / db_filename
+
+
+def _resolve_selector_override_path(
+    config_path: str | Path | None,
+    override_filename: str,
+) -> str | None:
+    override = Path(override_filename).expanduser()
+    if override.is_absolute():
+        return str(override)
+    base = resolve_config_path(config_path).parent
+    return str(base / override)
+
+
+def _persist_source_result(
+    *,
+    store: SQLiteStore,
+    source: SourceRef,
+    source_result: SourceReadResult,
+    new_only: bool,
+    checkpoint_mode: str,
+) -> SourceReadResult:
+    store.upsert_source(source)
+    store.save_items(source.source_id, source_result.items)
+
+    if not new_only:
+        return source_result
+
+    checkpoint = store.load_checkpoint(source.source_id)
+    transition = apply_checkpoint_mode(
+        source.source_id,
+        source_result.items,
+        checkpoint=checkpoint,
+        mode=checkpoint_mode,
+    )
+    store.save_checkpoint(transition.next_checkpoint)
+    return SourceReadResult(
+        items=transition.new_items,
+        page_loads=source_result.page_loads,
+        scroll_rounds=source_result.scroll_rounds,
+        observed_ids=source_result.observed_ids,
+        dom_snapshots=source_result.dom_snapshots,
+    )
 
 
 def _write_source_failure_artifacts(

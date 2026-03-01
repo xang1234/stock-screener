@@ -101,6 +101,11 @@ def test_load_runtime_config_parses_defaults(tmp_path: Path) -> None:
     assert loaded.app.default_profile == "default"
     assert loaded.app.default_format == "pretty"
     assert loaded.browser.navigation_timeout_ms == 30_000
+    assert loaded.collection.max_scrolls == 10
+    assert loaded.checkpoints.mode == "id"
+    assert loaded.scheduler.interval_sec == 3600
+    assert loaded.storage.db_filename == "tweets.sqlite3"
+    assert loaded.selectors.override_filename == "selectors/override.json"
     assert loaded.sources[0].kind == SourceKind.LIST
     assert loaded.sources[1].kind == SourceKind.USER
 

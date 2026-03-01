@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
 from pathlib import Path
+import re
 
 from xui_reader.auth import AuthStatusResult, probe_auth_status
 from xui_reader.config import RuntimeConfig
 from xui_reader.diagnostics.base import DiagnosticReport, DiagnosticSection
+from xui_reader.diagnostics.artifacts import redact_text, write_html_artifact
 from xui_reader.errors import DiagnosticsError
 from xui_reader.models import SourceKind, SourceRef
+from xui_reader.profiles import profiles_root
 
 AuthProbeFn = Callable[[str | None, str | Path | None], AuthStatusResult]
 SmokeRunnerFn = Callable[[RuntimeConfig, SourceRef, str | None, str | Path | None, int], int]
@@ -172,7 +177,24 @@ def run_doctor_preflight(
                 emitted = smoke(config, source, selected_profile, config_path, smoke_limit)
                 smoke_successes.append(f"{source.source_id}:ok:{emitted}")
             except Exception as exc:
-                smoke_errors.append(f"{source.source_id}: {exc}")
+                try:
+                    screenshot_path, html_path, selector_report_path = _write_smoke_failure_artifacts(
+                        profile_name=selected_profile,
+                        config_path=config_path,
+                        source=source,
+                        error=exc,
+                    )
+                except Exception:
+                    screenshot_path, html_path, selector_report_path = (None, None, None)
+                details: list[str] = []
+                if screenshot_path:
+                    details.append(f"screenshot={screenshot_path}")
+                if html_path:
+                    details.append(f"html={html_path}")
+                if selector_report_path:
+                    details.append(f"selector_report={selector_report_path}")
+                suffix = f" ({', '.join(details)})" if details else ""
+                smoke_errors.append(f"{source.source_id}: {exc}{suffix}")
         sections.append(
             DiagnosticSection(
                 name="smoke",
@@ -220,3 +242,83 @@ def _prioritize_sources(sources: tuple[SourceRef, ...]) -> tuple[SourceRef, ...]
         if source not in ordered:
             ordered.append(source)
     return tuple(ordered)
+
+
+def _write_smoke_failure_artifacts(
+    *,
+    profile_name: str,
+    config_path: str | Path | None,
+    source: SourceRef,
+    error: Exception,
+) -> tuple[str | None, str | None, str | None]:
+    artifacts_dir = profiles_root(config_path) / profile_name / "artifacts" / "doctor"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = _new_run_id("doctor")
+    html = _extract_dom_snapshot(error)
+    html_path = write_html_artifact(
+        artifacts_dir,
+        run_id=run_id,
+        source_id=source.source_id,
+        raw_html=html,
+    )
+
+    selector_report_path = artifacts_dir / f"{_slug(run_id)}_{_slug(source.source_id)}_selector-report.json"
+    status_matches = len(re.findall(r"/status/(\d+)", html))
+    selector_report = {
+        "schema_version": "v1",
+        "run_id": run_id,
+        "source_id": source.source_id,
+        "source_kind": source.kind.value,
+        "error": redact_text(str(error)),
+        "dom_snapshot_chars": len(html),
+        "status_id_matches": status_matches,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+    selector_report_path.write_text(
+        json.dumps(selector_report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    screenshot_path = _write_screenshot_artifact(
+        artifacts_dir=artifacts_dir,
+        run_id=run_id,
+        source_id=source.source_id,
+        error=error,
+    )
+    return (
+        str(screenshot_path) if screenshot_path is not None else None,
+        str(html_path),
+        str(selector_report_path),
+    )
+
+
+def _write_screenshot_artifact(
+    *,
+    artifacts_dir: Path,
+    run_id: str,
+    source_id: str,
+    error: Exception,
+) -> Path | None:
+    payload = getattr(error, "screenshot_png", None)
+    if not isinstance(payload, (bytes, bytearray)):
+        return None
+
+    path = artifacts_dir / f"{_slug(run_id)}_{_slug(source_id)}.png"
+    path.write_bytes(bytes(payload))
+    return path
+
+
+def _extract_dom_snapshot(error: Exception) -> str:
+    candidate = getattr(error, "dom_snapshot", "")
+    return candidate if isinstance(candidate, str) else ""
+
+
+def _new_run_id(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{prefix}-{stamp}"
+
+
+def _slug(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    return cleaned.strip("-") or "unknown"

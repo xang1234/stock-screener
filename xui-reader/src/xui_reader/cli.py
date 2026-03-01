@@ -1,7 +1,8 @@
-"""Typer CLI scaffold matching the v2 command tree."""
+"""Typer CLI for xui-reader workflows."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import shlex
@@ -17,13 +18,32 @@ from .auth import (
     logout_profile,
     probe_auth_status,
 )
-from .config import config_to_dict, init_default_config, load_runtime_config, resolve_config_path
+from .collectors.timeline import parse_handle, parse_list_id
+from .config import (
+    VALID_OUTPUT_FORMATS,
+    RuntimeConfig,
+    config_to_dict,
+    init_default_config,
+    load_runtime_config,
+    resolve_config_path,
+)
 from .diagnostics.artifacts import redact_value
 from .diagnostics.doctor import run_doctor_preflight
 from .diagnostics.events import JsonlEventLogger
-from .errors import AuthError, CollectError, ConfigError, DiagnosticsError, ProfileError, SchedulerError
-from .models import TweetItem
+from .errors import (
+    AuthError,
+    CollectError,
+    ConfigError,
+    DiagnosticsError,
+    ProfileError,
+    RenderError,
+    SchedulerError,
+    StoreError,
+)
+from .models import SourceKind, SourceRef, TweetItem
 from .profiles import create_profile, delete_profile, list_profiles, profiles_root, switch_profile
+from .render import render_items
+from .render.jsonout import tweet_item_to_dict
 from .scheduler.read import MultiSourceReadResult, run_configured_read
 from .scheduler.watch import (
     WatchExitCode,
@@ -32,7 +52,7 @@ from .scheduler.watch import (
     run_configured_watch,
 )
 
-app = typer.Typer(help="xui-reader scaffold CLI with stable entrypoint wiring.")
+app = typer.Typer(help="Read-only X UI timeline/list reader.")
 
 auth_app = typer.Typer(help="Authentication commands.")
 profiles_app = typer.Typer(help="Profile management commands.")
@@ -228,23 +248,151 @@ def profiles_switch_cmd(
 
 
 @list_app.command("read")
-def list_read(list_id_or_url: str) -> None:
-    typer.echo(f"Not implemented yet: list read {list_id_or_url}.")
+def list_read(
+    ctx: typer.Context,
+    list_id_or_url: str,
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to use for storage_state (defaults to configured app.default_profile).",
+    ),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Collection limit."),
+    new: bool = typer.Option(False, "--new", help="Emit only unseen items for this source."),
+    checkpoint_mode: str = typer.Option(
+        "auto",
+        "--checkpoint-mode",
+        help="Checkpoint mode: auto|id|time.",
+    ),
+) -> None:
+    try:
+        config = load_runtime_config(path)
+        selected_profile = _resolve_profile(profile, ctx)
+        effective_limit = limit if limit is not None else config.collection.limit
+        list_id = parse_list_id(list_id_or_url)
+        source = SourceRef(
+            source_id=f"list:{list_id}",
+            kind=SourceKind.LIST,
+            value=list_id,
+            enabled=True,
+            label=f"list:{list_id}",
+        )
+        result = _run_single_source_read(
+            config=config,
+            source=source,
+            profile_name=selected_profile,
+            config_path=path,
+            limit=effective_limit,
+            new_only=new,
+            checkpoint_mode=checkpoint_mode,
+            debug_enabled=_resolve_debug(ctx),
+        )
+    except (ConfigError, AuthError, CollectError, SchedulerError, StoreError, RenderError) as exc:
+        typer.secho(f"List read failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    _emit_read_items(result.items, ctx=ctx, config=config)
+    if result.failed == len(result.outcomes):
+        for outcome in result.outcomes:
+            if outcome.error:
+                typer.secho(
+                    f"Source '{outcome.source_id}' failed: {outcome.error}",
+                    err=True,
+                    fg=typer.colors.RED,
+                )
+        if _all_source_failures_are_auth_related(result):
+            resolved_profile = selected_profile or config.app.default_profile
+            typer.echo(
+                f"Next step: `{_auth_login_command_hint(resolved_profile, path)}` "
+                "then re-run `xui list read`."
+            )
+        raise typer.Exit(2)
 
 
 @list_app.command("parse-id")
 def list_parse_id(list_url: str) -> None:
-    typer.echo(f"Not implemented yet: list parse-id {list_url}.")
+    try:
+        typer.echo(parse_list_id(list_url))
+    except CollectError as exc:
+        typer.secho(f"List parse-id failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
 
 
 @user_app.command("read")
-def user_read(handle_or_url: str) -> None:
-    typer.echo(f"Not implemented yet: user read {handle_or_url}.")
+def user_read(
+    ctx: typer.Context,
+    handle_or_url: str,
+    path: str | None = typer.Option(
+        None, "--path", help="Optional config TOML path (defaults to platform config dir)."
+    ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Profile to use for storage_state (defaults to configured app.default_profile).",
+    ),
+    tab: str = typer.Option("posts", "--tab", help="Timeline tab: posts|replies|media."),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Collection limit."),
+    new: bool = typer.Option(False, "--new", help="Emit only unseen items for this source."),
+    checkpoint_mode: str = typer.Option(
+        "auto",
+        "--checkpoint-mode",
+        help="Checkpoint mode: auto|id|time.",
+    ),
+) -> None:
+    try:
+        config = load_runtime_config(path)
+        selected_profile = _resolve_profile(profile, ctx)
+        effective_limit = limit if limit is not None else config.collection.limit
+        handle = parse_handle(handle_or_url)
+        source = SourceRef(
+            source_id=f"user:{handle}",
+            kind=SourceKind.USER,
+            value=handle,
+            enabled=True,
+            label=f"@{handle}",
+            tab=tab,
+        )
+        result = _run_single_source_read(
+            config=config,
+            source=source,
+            profile_name=selected_profile,
+            config_path=path,
+            limit=effective_limit,
+            new_only=new,
+            checkpoint_mode=checkpoint_mode,
+            debug_enabled=_resolve_debug(ctx),
+        )
+    except (ConfigError, AuthError, CollectError, SchedulerError, StoreError, RenderError) as exc:
+        typer.secho(f"User read failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+
+    _emit_read_items(result.items, ctx=ctx, config=config)
+    if result.failed == len(result.outcomes):
+        for outcome in result.outcomes:
+            if outcome.error:
+                typer.secho(
+                    f"Source '{outcome.source_id}' failed: {outcome.error}",
+                    err=True,
+                    fg=typer.colors.RED,
+                )
+        if _all_source_failures_are_auth_related(result):
+            resolved_profile = selected_profile or config.app.default_profile
+            typer.echo(
+                f"Next step: `{_auth_login_command_hint(resolved_profile, path)}` "
+                "then re-run `xui user read`."
+            )
+        raise typer.Exit(2)
 
 
 @user_app.command("parse-handle")
 def user_parse_handle(user_url: str) -> None:
-    typer.echo(f"Not implemented yet: user parse-handle {user_url}.")
+    try:
+        typer.echo(parse_handle(user_url))
+    except CollectError as exc:
+        typer.secho(f"User parse-handle failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
 
 
 @config_app.command("init")
@@ -302,24 +450,39 @@ def read(
         "--profile",
         help="Profile to use for storage_state (defaults to configured app.default_profile).",
     ),
-    limit: int = typer.Option(100, "--limit", min=1, help="Per-source collection limit."),
-    as_json: bool = typer.Option(False, "--json", help="Render read result as JSON."),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Per-source collection limit."),
+    sources: str | None = typer.Option(
+        None,
+        "--sources",
+        help="Override config sources, e.g. list:84839422,user:somehandle",
+    ),
+    new: bool = typer.Option(False, "--new", help="Emit only unseen items per source."),
+    checkpoint_mode: str = typer.Option(
+        "auto",
+        "--checkpoint-mode",
+        help="Checkpoint mode: auto|id|time.",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Render read result as JSON summary."),
 ) -> None:
     try:
         config = load_runtime_config(path)
         selected_profile = _resolve_profile(profile, ctx)
         resolved_profile = selected_profile or config.app.default_profile
+        effective_limit = limit if limit is not None else config.collection.limit
+        effective_config = _config_with_optional_sources(config, sources)
         debug_enabled = _resolve_debug(ctx)
         event_logger = _event_logger_for_profile(resolved_profile, path) if debug_enabled else None
         result = run_configured_read(
-            config,
+            effective_config,
             profile_name=selected_profile,
             config_path=path,
-            limit=limit,
+            limit=effective_limit,
+            new_only=new,
+            checkpoint_mode=checkpoint_mode,
             enable_debug_artifacts=debug_enabled,
             event_logger=event_logger,
         )
-    except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
+    except (ConfigError, AuthError, CollectError, SchedulerError, StoreError, RenderError) as exc:
         typer.secho(f"Read failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
 
@@ -327,20 +490,20 @@ def read(
     if as_json:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        typer.echo(
-            f"Read summary: {payload['succeeded_sources']} succeeded, "
-            f"{payload['failed_sources']} failed, {len(result.items)} merged items."
-        )
-        typer.echo("Source outcomes:")
-        for outcome in payload["outcomes"]:
-            status = "ok" if outcome["ok"] else "failed"
-            suffix = f" ({outcome['error']})" if outcome["error"] else ""
-            typer.echo(f"- {outcome['source_id']} [{status}] items={outcome['item_count']}{suffix}")
-        if result.items:
-            typer.echo("Merged order:")
-            for item in result.items:
-                created = item.created_at.isoformat() if item.created_at else "none"
-                typer.echo(f"- {created} {item.source_id} {item.tweet_id}")
+        output_format = _resolve_output_format(ctx, config_default=effective_config.app.default_format)
+        if output_format == "pretty":
+            typer.echo(
+                f"Read summary: {payload['succeeded_sources']} succeeded, "
+                f"{payload['failed_sources']} failed, {len(result.items)} merged items."
+            )
+            typer.echo("Source outcomes:")
+            for outcome in payload["outcomes"]:
+                status = "ok" if outcome["ok"] else "failed"
+                suffix = f" ({outcome['error']})" if outcome["error"] else ""
+                typer.echo(f"- {outcome['source_id']} [{status}] items={outcome['item_count']}{suffix}")
+        rendered = render_items(result.items, output_format)
+        if rendered:
+            typer.echo(rendered)
         if _all_source_failures_are_auth_related(result):
             typer.echo(
                 f"Next step: `{_auth_login_command_hint(resolved_profile, path)}` "
@@ -362,10 +525,12 @@ def watch(
         "--profile",
         help="Profile to use for storage_state (defaults to configured app.default_profile).",
     ),
-    limit: int = typer.Option(100, "--limit", min=1, help="Per-source collection limit."),
-    interval_seconds: int = typer.Option(300, "--interval-seconds", min=1, help="Watch interval."),
-    jitter_ratio: float = typer.Option(
-        0.0,
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Per-source collection limit."),
+    interval_seconds: int | None = typer.Option(
+        None, "--interval-seconds", min=1, help="Watch interval seconds."
+    ),
+    jitter_ratio: float | None = typer.Option(
+        None,
         "--jitter-ratio",
         min=0.0,
         max=1.0,
@@ -376,7 +541,7 @@ def watch(
         "--shutdown-window",
         help="Optional local shutdown window in HH:MM-HH:MM format.",
     ),
-    max_cycles: int = typer.Option(1, "--max-cycles", min=1, help="Number of watch cycles to run."),
+    max_cycles: int | None = typer.Option(None, "--max-cycles", min=1, help="Number of watch cycles."),
     max_page_loads: int | None = typer.Option(
         None,
         "--max-page-loads",
@@ -389,33 +554,43 @@ def watch(
         min=1,
         help="Optional scroll-round budget across the watch run.",
     ),
+    new: bool = typer.Option(False, "--new", help="Emit only unseen items per source."),
+    checkpoint_mode: str = typer.Option(
+        "auto",
+        "--checkpoint-mode",
+        help="Checkpoint mode: auto|id|time.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Render watch result as JSON."),
 ) -> None:
     try:
         config = load_runtime_config(path)
         selected_profile = _resolve_profile(profile, ctx)
         resolved_profile = selected_profile or config.app.default_profile
+        effective_limit = limit if limit is not None else config.collection.limit
         debug_enabled = _resolve_debug(ctx)
         event_logger = _event_logger_for_profile(resolved_profile, path) if debug_enabled else None
         result = run_configured_watch(
             config,
             profile_name=selected_profile,
             config_path=path,
-            limit=limit,
+            limit=effective_limit,
             interval_seconds=interval_seconds,
             jitter_ratio=jitter_ratio,
             shutdown_window=shutdown_window,
             max_cycles=max_cycles,
             max_page_loads=max_page_loads,
             max_scroll_rounds=max_scroll_rounds,
+            new_only=new,
+            checkpoint_mode=checkpoint_mode,
             enable_debug_artifacts=debug_enabled,
             event_logger=event_logger,
         )
-    except (ConfigError, AuthError, CollectError, SchedulerError) as exc:
+    except (ConfigError, AuthError, CollectError, SchedulerError, StoreError) as exc:
         typer.secho(f"Watch failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(2) from exc
 
-    exit_code = determine_watch_exit_code(result, max_cycles=max_cycles)
+    effective_max_cycles = max_cycles if max_cycles is not None else config.scheduler.max_runs_per_day
+    exit_code = determine_watch_exit_code(result, max_cycles=effective_max_cycles)
     payload = _watch_result_payload(result, exit_code=exit_code)
     if as_json:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -534,14 +709,14 @@ def main(
         "--profile",
         help="Active profile override used by commands when they omit --profile.",
     ),
-    output_format: str = typer.Option(
-        "pretty",
+    output_format: str | None = typer.Option(
+        None,
         "--format",
-        help="Output format placeholder: pretty|plain|json|jsonl.",
+        help="Output format: pretty|plain|json|jsonl.",
     ),
     headful: bool = typer.Option(True, "--headful/--headless", help="Browser mode placeholder."),
-    debug: bool = typer.Option(False, "--debug", help="Enable debug diagnostics placeholders."),
-    timeout_ms: int = typer.Option(30_000, "--timeout-ms", help="Timeout placeholder in ms."),
+    debug: bool = typer.Option(False, "--debug", help="Enable debug diagnostics."),
+    timeout_ms: int = typer.Option(30_000, "--timeout-ms", help="Timeout in ms."),
 ) -> None:
     ctx.obj = {
         "profile": profile,
@@ -555,6 +730,77 @@ def main(
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
+
+
+def _run_single_source_read(
+    *,
+    config: RuntimeConfig,
+    source: SourceRef,
+    profile_name: str | None,
+    config_path: str | None,
+    limit: int,
+    new_only: bool,
+    checkpoint_mode: str,
+    debug_enabled: bool,
+) -> MultiSourceReadResult:
+    single = replace(config, sources=(source,))
+    event_logger = _event_logger_for_profile(profile_name or config.app.default_profile, config_path) if debug_enabled else None
+    return run_configured_read(
+        single,
+        profile_name=profile_name,
+        config_path=config_path,
+        limit=limit,
+        new_only=new_only,
+        checkpoint_mode=checkpoint_mode,
+        enable_debug_artifacts=debug_enabled,
+        event_logger=event_logger,
+    )
+
+
+def _emit_read_items(items: tuple[TweetItem, ...], *, ctx: typer.Context, config: RuntimeConfig) -> None:
+    output_format = _resolve_output_format(ctx, config_default=config.app.default_format)
+    rendered = render_items(items, output_format)
+    if rendered:
+        typer.echo(rendered)
+
+
+def _config_with_optional_sources(config: RuntimeConfig, raw_sources: str | None) -> RuntimeConfig:
+    if raw_sources is None or not raw_sources.strip():
+        return config
+
+    parsed_sources: list[SourceRef] = []
+    for raw in (part.strip() for part in raw_sources.split(",")):
+        if not raw:
+            continue
+        if raw.startswith("list:"):
+            list_id = parse_list_id(raw.split(":", 1)[1])
+            parsed_sources.append(
+                SourceRef(
+                    source_id=f"list:{list_id}",
+                    kind=SourceKind.LIST,
+                    value=list_id,
+                    enabled=True,
+                )
+            )
+            continue
+        if raw.startswith("user:"):
+            handle = parse_handle(raw.split(":", 1)[1])
+            parsed_sources.append(
+                SourceRef(
+                    source_id=f"user:{handle}",
+                    kind=SourceKind.USER,
+                    value=handle,
+                    enabled=True,
+                )
+            )
+            continue
+        raise RenderError(
+            f"Invalid --sources entry '{raw}'. Expected list:<id_or_url> or user:<handle_or_url>."
+        )
+
+    if not parsed_sources:
+        raise RenderError("No valid --sources entries found.")
+    return replace(config, sources=tuple(parsed_sources))
 
 
 def _read_result_payload(result: MultiSourceReadResult) -> dict[str, object]:
@@ -579,7 +825,7 @@ def _read_result_payload(result: MultiSourceReadResult) -> dict[str, object]:
             }
             for outcome in result.outcomes
         ],
-        "items": [_tweet_item_to_dict(item) for item in result.items],
+        "items": [tweet_item_to_dict(item) for item in result.items],
     }
 
 
@@ -610,7 +856,7 @@ def _watch_result_payload(
                 "auth_failed_sources": cycle.auth_failed_sources,
             }
             for cycle in result.cycles
-        ]
+        ],
     }
 
 
@@ -625,6 +871,21 @@ def _resolve_profile(command_profile: str | None, ctx: typer.Context | None) -> 
     if isinstance(configured, str) and configured:
         return configured
     return None
+
+
+def _resolve_output_format(ctx: typer.Context | None, *, config_default: str) -> str:
+    configured: str | None = None
+    if ctx is not None and isinstance(ctx.obj, dict):
+        value = ctx.obj.get("output_format")
+        if isinstance(value, str) and value:
+            configured = value
+    resolved = configured or config_default
+    if resolved not in VALID_OUTPUT_FORMATS:
+        supported = ", ".join(sorted(VALID_OUTPUT_FORMATS))
+        raise RenderError(
+            f"Invalid output format '{resolved}'. Supported formats: {supported}."
+        )
+    return resolved
 
 
 def _resolve_debug(ctx: typer.Context | None) -> bool:
@@ -655,21 +916,6 @@ def _redact_details(details: dict[str, str]) -> dict[str, str]:
     if not isinstance(sanitized, dict):
         return {}
     return {str(key): str(value) for key, value in sanitized.items()}
-
-
-def _tweet_item_to_dict(item: TweetItem) -> dict[str, object]:
-    return {
-        "tweet_id": item.tweet_id,
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "author_handle": item.author_handle,
-        "text": item.text,
-        "source_id": item.source_id,
-        "is_reply": item.is_reply,
-        "is_repost": item.is_repost,
-        "is_pinned": item.is_pinned,
-        "has_quote": item.has_quote,
-        "quote_tweet_id": item.quote_tweet_id,
-    }
 
 
 def _auth_login_command_hint(profile_name: str, config_path: str | None) -> str:

@@ -101,6 +101,7 @@ AI-powered identification of market themes and trends:
 - **Finviz** - Screener data (rate-limited)
 - **Alpha Vantage** - Fundamental data (25 req/day free tier)
 - **SEC EDGAR** - Filings data (10 req/sec)
+- **xui-reader (Playwright UI)** - Twitter/X source ingestion for theme discovery
 
 ### LLM Providers
 Groq, DeepSeek, Together AI, OpenRouter, Gemini
@@ -119,10 +120,21 @@ cd backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+pip install -e ../xui-reader
+python -m playwright install chromium
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your API keys and database path
+
+# Bootstrap shared xui profile/session state for twitter ingestion (one-time)
+xui config init --path ../data/xui-reader/config.toml
+xui profiles create default --path ../data/xui-reader/config.toml
+xui auth login --profile default --path ../data/xui-reader/config.toml
+
+# Optional (preferred for Google-linked X accounts):
+# Use Themes -> Manage Sources -> "Connect From Current Browser"
+# after loading unpacked extension from browser-extension/xui-session-bridge
 
 # Start the API server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -352,6 +364,17 @@ INVALID_UNIVERSE_CLEANUP_ENABLED=false
 
 # Data Sources
 ALPHA_VANTAGE_API_KEY=your_key
+XUI_ENABLED=true
+XUI_CONFIG_PATH=../data/xui-reader/config.toml
+XUI_PROFILE=default
+XUI_LIMIT_PER_SOURCE=50
+XUI_NEW_ONLY=true
+XUI_CHECKPOINT_MODE=auto
+XUI_BRIDGE_ENABLED=true
+XUI_BRIDGE_ALLOWED_ORIGINS=http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173
+XUI_BRIDGE_CHALLENGE_TTL_SECONDS=120
+XUI_BRIDGE_MAX_COOKIES=300
+TWITTER_REQUEST_DELAY=5.0
 
 # LLM Routing (optional, sensible defaults)
 LLM_DEFAULT_PROVIDER=groq
@@ -385,7 +408,7 @@ GROQ_API_KEY=your_key
 ## Development Notes
 
 ### macOS Celery Configuration
-Use `--pool=solo` to avoid fork() crashes with curl_cffi:
+Use `--pool=solo` to avoid fork() crashes from Objective-C runtime safety checks:
 
 ```bash
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES

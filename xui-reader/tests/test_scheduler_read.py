@@ -97,7 +97,10 @@ def test_collect_source_items_raises_when_extractor_returns_empty(
     monkeypatch.setattr("xui_reader.scheduler.read.storage_state_path", lambda *_args, **_kwargs: state_path)
     monkeypatch.setattr("xui_reader.scheduler.read.PlaywrightBrowserSession", FakeSession)
     monkeypatch.setattr("xui_reader.scheduler.read.TimelineCollector", FakeCollector)
-    monkeypatch.setattr("xui_reader.scheduler.read.PrimaryFallbackTweetExtractor", lambda: FakeExtractor())
+    monkeypatch.setattr(
+        "xui_reader.scheduler.read.PrimaryFallbackTweetExtractor",
+        lambda **_kwargs: FakeExtractor(),
+    )
 
     with pytest.raises(CollectError, match="Extractor produced no items"):
         collect_source_items(config, source, limit=3)
@@ -164,6 +167,37 @@ def test_run_configured_read_emits_jsonl_event_with_counters(tmp_path: Path) -> 
     assert event["payload"]["page_loads"] == 1
     assert event["payload"]["scroll_rounds"] == 2
     assert event["payload"]["seen_items"] == 3
+
+
+def test_run_configured_read_new_only_uses_source_checkpoint(tmp_path: Path) -> None:
+    source = SourceRef(source_id="list:1", kind=SourceKind.LIST, value="1", enabled=True)
+    config = RuntimeConfig(sources=(source,))
+    config_path = tmp_path / "config.toml"
+
+    def read_source(_source: SourceRef) -> SourceReadResult:
+        return SourceReadResult(
+            items=(
+                _tweet("100", "list:1", "2026-03-02T00:00:00+00:00"),
+                _tweet("99", "list:1", "2026-03-01T00:00:00+00:00"),
+            ),
+            observed_ids=2,
+        )
+
+    first = run_configured_read(
+        config,
+        config_path=config_path,
+        new_only=True,
+        read_source=read_source,
+    )
+    second = run_configured_read(
+        config,
+        config_path=config_path,
+        new_only=True,
+        read_source=read_source,
+    )
+
+    assert [item.tweet_id for item in first.items] == ["100", "99"]
+    assert second.items == ()
 
 
 def _tweet(tweet_id: str, source_id: str, created_at: str) -> TweetItem:

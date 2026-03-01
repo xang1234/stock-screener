@@ -13,9 +13,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .browser.session import PlaywrightBrowserSession
-from .config import RuntimeConfig, load_runtime_config
-from .errors import AuthError, BrowserError
-from .profiles import profiles_root
+from .config import RuntimeConfig, init_default_config, load_runtime_config, resolve_config_path
+from .errors import AuthError, BrowserError, ProfileError
+from .profiles import create_profile, profiles_root
 
 DEFAULT_LOGIN_URL = "https://x.com/i/flow/login"
 PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -100,6 +100,40 @@ def login_and_save_storage_state(
     _validate_storage_state(storage_state)
 
     target_path = storage_state_path(selected_profile, config_path)
+    _write_storage_state_secure(target_path, storage_state)
+    return target_path
+
+
+def save_storage_state(
+    storage_state: dict[str, Any],
+    *,
+    profile_name: str | None = None,
+    config_path: str | Path | None = None,
+    create_profile_if_missing: bool = False,
+    init_config_if_missing: bool = False,
+) -> Path:
+    """Persist a storage_state payload directly for the selected profile."""
+    resolved_path = resolve_config_path(config_path)
+    if init_config_if_missing and not resolved_path.exists():
+        init_default_config(resolved_path)
+
+    config = load_runtime_config(resolved_path)
+    selected_profile = _resolve_profile_name(profile_name, config)
+
+    if create_profile_if_missing:
+        profile_dir = profiles_root(resolved_path) / selected_profile
+        if not profile_dir.exists():
+            try:
+                create_profile(selected_profile, resolved_path, switch=False, force=False)
+            except ProfileError as exc:
+                raise AuthError(
+                    f"Could not create profile '{selected_profile}' at '{profile_dir}': {exc}"
+                ) from exc
+
+    _resolve_existing_profile_dir(selected_profile, resolved_path)
+    _validate_storage_state(storage_state)
+
+    target_path = storage_state_path(selected_profile, resolved_path)
     _write_storage_state_secure(target_path, storage_state)
     return target_path
 

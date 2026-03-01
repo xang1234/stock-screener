@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -108,6 +110,44 @@ def test_run_doctor_preflight_captures_smoke_failure_context() -> None:
     smoke_section = next(section for section in report.sections if section.name == "smoke")
     assert smoke_section.ok is False
     assert "selector mismatch" in smoke_section.details["failures"]
+
+
+def test_run_doctor_preflight_writes_failure_artifacts(tmp_path: Path) -> None:
+    config = RuntimeConfig(
+        sources=(SourceRef(source_id="list:1", kind=SourceKind.LIST, value="1", enabled=True),)
+    )
+
+    class Failure(RuntimeError):
+        pass
+
+    def smoke_runner(
+        _config: RuntimeConfig,
+        _source: SourceRef,
+        _profile: str | None,
+        _path: str | Path | None,
+        _limit: int,
+    ) -> int:
+        error = Failure("selector mismatch auth_token=super-secret")
+        setattr(error, "dom_snapshot", '<a href="/alice/status/100">one</a>')
+        setattr(error, "screenshot_png", b"\x89PNG\r\n\x1a\n")
+        raise error
+
+    report = run_doctor_preflight(
+        config,
+        config_path=tmp_path / "config.toml",
+        auth_probe=_auth_ok,
+        smoke_runner=smoke_runner,
+    )
+    assert report.ok is False
+    smoke_section = next(section for section in report.sections if section.name == "smoke")
+    assert "selector_report=" in smoke_section.details["failures"]
+    assert "screenshot=" in smoke_section.details["failures"]
+    selector_report_match = re.search(r"selector_report=([^\s,)]+)", smoke_section.details["failures"])
+    assert selector_report_match is not None
+    selector_report = Path(selector_report_match.group(1))
+    payload = json.loads(selector_report.read_text(encoding="utf-8"))
+    assert "super-secret" not in payload["error"]
+    assert "<redacted>" in payload["error"]
 
 
 def _auth_ok(profile: str | None, _config_path: str | Path | None) -> AuthStatusResult:

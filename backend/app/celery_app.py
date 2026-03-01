@@ -12,8 +12,8 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # Disable macOS Objective-C fork safety check
-# Required for libraries like curl_cffi (used by Sotwe scraper) that trigger
-# Objective-C initialization after Celery forks worker processes
+# Keeps worker startup stable for libraries that initialize Objective-C runtime
+# after Celery forks worker processes.
 os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 from celery import Celery

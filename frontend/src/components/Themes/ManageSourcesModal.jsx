@@ -39,7 +39,11 @@ import {
   addContentSource,
   updateContentSource,
   deleteContentSource,
+  getTwitterSessionStatus,
+  createTwitterSessionChallenge,
 } from '../../api/themes';
+import apiClient from '../../api/client';
+import { captureXCookies, isBridgeAvailable } from '../../services/xuiBridge';
 
 const SOURCE_TYPES = [
   { value: 'substack', label: 'Substack' },
@@ -70,11 +74,24 @@ function ManageSourcesModal({ open, onClose }) {
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [newSourceData, setNewSourceData] = useState(EMPTY_SOURCE);
   const [error, setError] = useState(null);
+  const [sessionError, setSessionError] = useState(null);
+  const [isConnectingSession, setIsConnectingSession] = useState(false);
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ['contentSources'],
     queryFn: () => getContentSources(false),
     enabled: open,
+  });
+  const {
+    data: twitterSessionStatus,
+    isLoading: isLoadingSessionStatus,
+    isFetching: isFetchingSessionStatus,
+    refetch: refetchSessionStatus,
+  } = useQuery({
+    queryKey: ['twitterSessionStatus'],
+    queryFn: getTwitterSessionStatus,
+    enabled: open,
+    retry: false,
   });
 
   const addMutation = useMutation({
@@ -188,10 +205,54 @@ function ManageSourcesModal({ open, onClose }) {
     }
   };
 
+  const handleConnectFromBrowser = async () => {
+    setSessionError(null);
+    setIsConnectingSession(true);
+    try {
+      const bridgeReady = await isBridgeAvailable();
+      if (!bridgeReady) {
+        throw new Error(
+          'XUI bridge extension was not detected. Install/load the extension and refresh this page.',
+        );
+      }
+
+      const challenge = await createTwitterSessionChallenge();
+      const rawBaseUrl = String(apiClient.defaults.baseURL || '').trim();
+      const normalizedBaseUrl = rawBaseUrl.startsWith('http')
+        ? rawBaseUrl
+        : `${window.location.origin}${rawBaseUrl.startsWith('/') ? '' : '/'}${rawBaseUrl}`;
+      const baseUrl = normalizedBaseUrl.replace(/\/+$/, '');
+      const importUrl = `${baseUrl}/v1/themes/twitter/session/import`;
+      await captureXCookies({
+        challengeId: challenge.challenge_id,
+        challengeToken: challenge.challenge_token,
+        importUrl,
+        appOrigin: window.location.origin,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['twitterSessionStatus'] });
+      await refetchSessionStatus();
+    } catch (err) {
+      setSessionError(err?.response?.data?.detail || err?.message || 'Failed to import browser session.');
+    } finally {
+      setIsConnectingSession(false);
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return 'Never';
     return new Date(dateString).toLocaleString();
   };
+
+  const sessionStatusColor = twitterSessionStatus?.authenticated
+    ? 'success'
+    : twitterSessionStatus?.status_code?.startsWith('blocked_')
+      ? 'warning'
+      : 'default';
+  const sessionStatusLabel = isLoadingSessionStatus || isFetchingSessionStatus
+    ? 'Checking...'
+    : twitterSessionStatus?.authenticated
+      ? 'Authenticated'
+      : twitterSessionStatus?.status_code || 'Unavailable';
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth>
@@ -210,6 +271,57 @@ function ManageSourcesModal({ open, onClose }) {
             {error}
           </Alert>
         )}
+
+        <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+            <Box>
+              <Typography variant="subtitle2">Twitter/X Session</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {twitterSessionStatus?.message || 'Connect the current browser session used for x.com.'}
+              </Typography>
+            </Box>
+            <Chip label={sessionStatusLabel} color={sessionStatusColor} size="small" />
+          </Box>
+          <Box display="flex" gap={1} flexWrap="wrap" sx={{ mt: 1.5 }}>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleConnectFromBrowser}
+              disabled={isConnectingSession || isLoadingSessionStatus}
+            >
+              {isConnectingSession ? 'Connecting...' : 'Connect From Current Browser'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => refetchSessionStatus()}
+              disabled={isLoadingSessionStatus || isFetchingSessionStatus}
+            >
+              Check Status
+            </Button>
+            <Button
+              variant="text"
+              size="small"
+              onClick={() =>
+                window.open(
+                  'https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked',
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }
+            >
+              Install Extension
+            </Button>
+          </Box>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+            Load unpacked extension from: <code>browser-extension/xui-session-bridge</code>
+          </Typography>
+          {sessionError && (
+            <Alert severity="error" sx={{ mt: 1 }} onClose={() => setSessionError(null)}>
+              {sessionError}
+            </Alert>
+          )}
+        </Paper>
 
         {isLoading ? (
           <Box display="flex" justifyContent="center" p={4}>

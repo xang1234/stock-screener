@@ -12,8 +12,6 @@ from xui_reader.models import TweetItem
 from xui_reader.scheduler.read import MultiSourceReadResult, SourceReadOutcome
 from xui_reader.scheduler.watch import WatchCycleResult, WatchRunResult
 
-pytest.importorskip("typer")
-
 from typer.testing import CliRunner
 
 from xui_reader.cli import app
@@ -44,6 +42,18 @@ def test_cli_version_flag_prints_package_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert __version__ in result.output
+
+
+def test_list_parse_id_extracts_numeric_list_id() -> None:
+    result = runner.invoke(app, ["list", "parse-id", "https://x.com/i/lists/84839422"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "84839422"
+
+
+def test_user_parse_handle_extracts_handle() -> None:
+    result = runner.invoke(app, ["user", "parse-handle", "https://x.com/somehandle"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "somehandle"
 
 
 def test_config_init_and_show_json(tmp_path: Path) -> None:
@@ -444,6 +454,146 @@ def test_read_json_reports_outcomes_and_merged_items(
     assert '"source_id": "user:a"' in result.output
 
 
+def test_list_read_uses_single_source_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    assert runner.invoke(app, ["config", "init", "--path", str(config_path)]).exit_code == 0
+
+    captured: dict[str, object] = {}
+    payload = MultiSourceReadResult(
+        items=(
+            TweetItem(
+                tweet_id="10",
+                created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+                author_handle="@a",
+                text="hello",
+                source_id="list:84839422",
+            ),
+        ),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="list:84839422",
+                source_kind="list",
+                ok=True,
+                item_count=1,
+                error=None,
+            ),
+        ),
+    )
+
+    def fake_read(config: object, **kwargs: object) -> MultiSourceReadResult:
+        captured["sources"] = getattr(config, "sources")
+        captured["kwargs"] = kwargs
+        return payload
+
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", fake_read)
+
+    result = runner.invoke(
+        app,
+        ["list", "read", "https://x.com/i/lists/84839422", "--path", str(config_path), "--new"],
+    )
+    assert result.exit_code == 0
+    assert "list:84839422" in result.output
+    assert captured["kwargs"]["new_only"] is True
+
+
+def test_user_read_passes_tab_into_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    assert runner.invoke(app, ["config", "init", "--path", str(config_path)]).exit_code == 0
+
+    captured: dict[str, object] = {}
+    payload = MultiSourceReadResult(
+        items=(),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="user:alice",
+                source_kind="user",
+                ok=True,
+                item_count=0,
+                error=None,
+            ),
+        ),
+    )
+
+    def fake_read(config: object, **_kwargs: object) -> MultiSourceReadResult:
+        captured["sources"] = getattr(config, "sources")
+        return payload
+
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", fake_read)
+
+    result = runner.invoke(
+        app,
+        ["user", "read", "@alice", "--path", str(config_path), "--tab", "media"],
+    )
+    assert result.exit_code == 0
+    sources = captured["sources"]
+    assert len(sources) == 1
+    assert sources[0].tab == "media"
+
+
+def test_list_read_prints_source_error_and_auth_hint_when_source_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    assert runner.invoke(app, ["config", "init", "--path", str(config_path)]).exit_code == 0
+
+    payload = MultiSourceReadResult(
+        items=(),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="list:84839422",
+                source_kind="list",
+                ok=False,
+                item_count=0,
+                error="Missing storage_state for profile 'default' at '/tmp/state.json'.",
+            ),
+        ),
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["list", "read", "84839422", "--path", str(config_path)])
+    assert result.exit_code == 2
+    assert "Source 'list:84839422' failed:" in result.output
+    assert "Missing storage_state for profile 'default'" in result.output
+    assert "Next step:" in result.output
+    assert "xui auth login --profile default --path" in result.output
+
+
+def test_user_read_prints_source_error_and_auth_hint_when_source_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.toml"
+    assert runner.invoke(app, ["config", "init", "--path", str(config_path)]).exit_code == 0
+
+    payload = MultiSourceReadResult(
+        items=(),
+        outcomes=(
+            SourceReadOutcome(
+                source_id="user:alice",
+                source_kind="user",
+                ok=False,
+                item_count=0,
+                error="Missing storage_state for profile 'default' at '/tmp/state.json'.",
+            ),
+        ),
+    )
+    monkeypatch.setattr("xui_reader.cli.run_configured_read", lambda *_args, **_kwargs: payload)
+
+    result = runner.invoke(app, ["user", "read", "@alice", "--path", str(config_path)])
+    assert result.exit_code == 2
+    assert "Source 'user:alice' failed:" in result.output
+    assert "Missing storage_state for profile 'default'" in result.output
+    assert "Next step:" in result.output
+    assert "xui auth login --profile default --path" in result.output
+
+
 def test_read_prints_actionable_login_hint_when_all_sources_fail_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -507,7 +657,10 @@ def test_watch_json_reports_cycle_timing(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert '"exit_state": "success"' in result.output
 
 
-def test_watch_returns_budget_stop_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_watch_returns_success_for_planned_multi_cycle_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.toml"
     init_result = runner.invoke(app, ["config", "init", "--path", str(config_path)])
     assert init_result.exit_code == 0
@@ -537,8 +690,8 @@ def test_watch_returns_budget_stop_exit_code(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr("xui_reader.cli.run_configured_watch", lambda *_args, **_kwargs: payload)
 
     result = runner.invoke(app, ["watch", "--path", str(config_path), "--max-cycles", "2"])
-    assert result.exit_code == 4
-    assert "exit_state=budget_stop" in result.output
+    assert result.exit_code == 0
+    assert "exit_state=success" in result.output
 
 
 def test_watch_returns_auth_fail_exit_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
