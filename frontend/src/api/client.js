@@ -6,11 +6,18 @@ import axios from 'axios';
 // API base URL - defaults to localhost:8000/api, can be overridden with env var
 // In Docker, VITE_API_URL is set to '/api' for nginx proxy
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const DEFAULT_API_TIMEOUT_MS = 30000;
+const THEMES_API_TIMEOUT_MS = 300000;
+
+const isThemesApiUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return /(^|\/)v1\/themes(?:\/|$)/.test(url);
+};
 
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000, // 30 second timeout
+  timeout: DEFAULT_API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -19,6 +26,13 @@ const apiClient = axios.create({
 // Request interceptor for logging (development only)
 apiClient.interceptors.request.use(
   (config) => {
+    if (isThemesApiUrl(config?.url)) {
+      const currentTimeout = Number(config?.timeout);
+      if (!Number.isFinite(currentTimeout) || currentTimeout < THEMES_API_TIMEOUT_MS) {
+        config.timeout = THEMES_API_TIMEOUT_MS;
+      }
+    }
+
     if (import.meta.env.DEV) {
       console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
     }
