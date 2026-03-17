@@ -223,6 +223,23 @@ async def lifespan(app: FastAPI):
                 print(f"WARNING: Expected WAL journal mode but got '{journal_mode}'. "
                       "Concurrent writes may cause corruption.")
 
+            # Quick integrity check on startup (checks page structure, fast)
+            try:
+                rows = conn.execute(text("PRAGMA quick_check")).fetchall()
+                errors = [r[0] for r in rows
+                          if r[0] != "ok"
+                          and not r[0].startswith("Fragmentation")
+                          and not r[0].startswith("***")]
+                if errors:
+                    print(f"CRITICAL: Database integrity check failed:")
+                    for err in errors[:5]:
+                        print(f"  {err}")
+                    print("The database may be corrupted. Check data/backups/ for recent copies.")
+                else:
+                    print("Database integrity: ok")
+            except Exception as e:
+                print(f"CRITICAL: Database integrity check error: {e}")
+
         # Check WAL file size — large WAL indicates checkpoint failure or concurrent access
         db_path = settings.database_url.replace("sqlite:///", "")
         wal_path = db_path + "-wal"
