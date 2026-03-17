@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path.cwd()
 backend_root = project_root / "backend"
 frontend_dist = project_root / "frontend" / "dist"
 desktop_root = backend_root / "desktop"
+
+api_route_modules = collect_submodules("app.api.v1")
 
 datas = [
     (str(desktop_root / "universe_seed.csv"), "backend/desktop"),
@@ -22,12 +25,14 @@ a = Analysis(
     pathex=[str(backend_root)],
     binaries=[],
     datas=datas,
-    hiddenimports=[
-        "app.main",
-        "app.api.v1.router",
-        "app.api.v1.app_runtime",
-        "stop",
-    ],
+    hiddenimports=sorted(
+        {
+            "app.main",
+            "app.api.v1.router",
+            "stop",
+            *api_route_modules,
+        }
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
