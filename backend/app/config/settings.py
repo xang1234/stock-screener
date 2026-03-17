@@ -4,14 +4,35 @@ Loads environment variables and provides application settings.
 """
 import logging
 import os
+import sys
 from pathlib import Path
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 from typing import List
 
-# Get project root (StockScreenClaude/)
-# settings.py is at backend/app/config/settings.py → 4 levels up
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+def _get_project_root() -> Path:
+    # settings.py is at backend/app/config/settings.py -> 4 levels up
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _get_resource_root() -> Path:
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return Path(bundle_root)
+    return _get_project_root()
+
+
+def _get_default_desktop_data_dir() -> Path:
+    for env_var in ("LOCALAPPDATA", "XDG_DATA_HOME"):
+        raw = os.getenv(env_var)
+        if raw:
+            return Path(raw).expanduser() / "StockScanner"
+    return _get_project_root() / "data"
+
+
+_PROJECT_ROOT = _get_project_root()
+_RESOURCE_ROOT = _get_resource_root()
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +73,19 @@ class Settings(BaseSettings):
     llm_research_model: str = "groq/qwen-qwen3-32b"  # Model for research agents
     llm_fallback_enabled: bool = True  # Enable automatic fallback to other providers
     llm_fallback_models: str = "groq/llama-3.3-70b-versatile,deepseek/deepseek-chat,together_ai/meta-llama/Llama-3-70b-chat-hf"
+
+    # Runtime profile
+    desktop_mode: bool = False
+    feature_themes: bool = True
+    feature_chatbot: bool = True
+    feature_tasks: bool = True
+    desktop_data_dir: str = str(_get_default_desktop_data_dir())
+    frontend_dist_dir: str = str(_RESOURCE_ROOT / "frontend" / "dist")
+    desktop_bootstrap_seed_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "universe_seed.csv")
+    desktop_bootstrap_industry_seed_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "ibd_industry_seed.csv")
+    desktop_bootstrap_refresh_universe: bool = True
+    desktop_bootstrap_fundamentals_limit: int = 25
+    desktop_open_browser: bool = True
 
     # Database - use absolute path to avoid working directory issues
     database_url: str = f"sqlite:///{_PROJECT_ROOT}/data/stockscanner.db"
@@ -228,6 +262,32 @@ class Settings(BaseSettings):
                     legacy_delay,
                     self.twitter_request_delay,
                 )
+        if self.desktop_mode:
+            desktop_data_dir = Path(self.desktop_data_dir).expanduser()
+            desktop_data_dir.mkdir(parents=True, exist_ok=True)
+
+            if os.getenv("DATABASE_URL") is None:
+                self.database_url = f"sqlite:///{desktop_data_dir / 'stockscanner.db'}"
+            if os.getenv("XUI_CONFIG_PATH") is None:
+                self.xui_config_path = str(desktop_data_dir / "xui-reader" / "config.toml")
+            if os.getenv("API_HOST") is None:
+                self.api_host = "127.0.0.1"
+            if os.getenv("CORS_ORIGINS") is None:
+                self.cors_origins = "http://127.0.0.1,http://localhost"
+
+            desktop_defaults = (
+                ("FEATURE_THEMES", "feature_themes", False),
+                ("FEATURE_CHATBOT", "feature_chatbot", False),
+                ("FEATURE_TASKS", "feature_tasks", False),
+                ("XUI_ENABLED", "xui_enabled", False),
+                ("CACHE_WARMUP_ENABLED", "cache_warmup_enabled", False),
+                ("THEME_DISCOVERY_ENABLED", "theme_discovery_enabled", False),
+                ("DEEP_RESEARCH_ENABLED", "deep_research_enabled", False),
+                ("GROUP_RANK_GAPFILL_ENABLED", "group_rank_gapfill_enabled", False),
+            )
+            for env_name, attr_name, value in desktop_defaults:
+                if os.getenv(env_name) is None:
+                    setattr(self, attr_name, value)
         return self
 
     @property
@@ -244,11 +304,30 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         """Convert CORS origins string to list."""
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def frontend_dist_path(self) -> Path:
+        """Resolved frontend build directory for desktop mode static serving."""
+        return Path(self.frontend_dist_dir).expanduser()
+
+    @property
+    def desktop_data_path(self) -> Path:
+        """Resolved writable data directory for desktop installs."""
+        return Path(self.desktop_data_dir).expanduser()
+
+    def capability_flags(self) -> dict[str, bool]:
+        """Expose frontend-relevant feature flags."""
+        return {
+            "themes": self.feature_themes,
+            "chatbot": self.feature_chatbot,
+            "tasks": self.feature_tasks,
+        }
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 # Global settings instance

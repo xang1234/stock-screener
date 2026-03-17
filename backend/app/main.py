@@ -4,10 +4,11 @@ Main FastAPI application entry point.
 import asyncio
 import json
 import os
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 
@@ -246,7 +247,7 @@ async def lifespan(app: FastAPI):
     run_theme_taxonomy_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
-    if getattr(settings, 'group_rank_gapfill_enabled', True):
+    if not settings.desktop_mode and getattr(settings, 'group_rank_gapfill_enabled', True):
         await trigger_gapfill_on_startup()
 
     yield
@@ -282,9 +283,32 @@ app.add_middleware(
 )
 
 
+def _desktop_index_path() -> Path:
+    return settings.frontend_dist_path / "index.html"
+
+
+def _desktop_static_available() -> bool:
+    return settings.desktop_mode and _desktop_index_path().exists()
+
+
+def _is_reserved_frontend_path(path: str) -> bool:
+    reserved_prefixes = (
+        "api/",
+        "docs",
+        "redoc",
+        "openapi.json",
+        "livez",
+        "readyz",
+        "health",
+    )
+    return any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in reserved_prefixes)
+
+
 @app.get("/")
 async def root():
-    """Root endpoint with API information."""
+    """Serve the desktop SPA or return API information."""
+    if _desktop_static_available():
+        return FileResponse(_desktop_index_path())
     return {
         "name": "Stock Scanner API",
         "version": "0.1.0",
@@ -366,11 +390,24 @@ from .api.v1.router import router as api_router
 app.include_router(api_router, prefix="/api/v1")
 
 
+@app.get("/{full_path:path}", include_in_schema=False)
+async def desktop_spa_fallback(full_path: str):
+    """Serve built frontend assets in desktop mode."""
+    if not _desktop_static_available() or not full_path or _is_reserved_frontend_path(full_path):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    candidate = settings.frontend_dist_path / full_path
+    if candidate.is_file():
+        return FileResponse(candidate)
+
+    return FileResponse(_desktop_index_path())
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=True
+        reload=not settings.desktop_mode,
     )

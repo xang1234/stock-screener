@@ -1,29 +1,50 @@
-"""Main API router"""
-from fastapi import APIRouter
-from . import stocks, technical, scans, universe, cache, breadth, fundamentals, groups, themes, tasks, chatbot, chatbot_folders, market_scan, user_themes, user_watchlists, data_fetch_status, ticker_validation, filter_presets, prompt_presets, config, features
+"""Main API router with runtime-aware feature gating."""
 
-# Create main router
+from __future__ import annotations
+
+from importlib import import_module
+
+from fastapi import APIRouter
+
+from ...config import settings
+
 router = APIRouter()
 
-# Include sub-routers
-router.include_router(stocks.router, prefix="/stocks", tags=["stocks"])
-router.include_router(technical.router, prefix="/technical", tags=["technical"])
-router.include_router(scans.router, prefix="/scans", tags=["scans"])
-router.include_router(universe.router, prefix="/universe", tags=["universe"])
-router.include_router(cache.router, tags=["cache"])
-router.include_router(breadth.router, prefix="/breadth", tags=["breadth"])
-router.include_router(fundamentals.router, tags=["fundamentals"])
-router.include_router(groups.router, prefix="/groups", tags=["groups"])
-router.include_router(themes.router, prefix="/themes", tags=["themes"])
-router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
-router.include_router(chatbot.router, prefix="/chatbot", tags=["chatbot"])
-router.include_router(chatbot_folders.router, prefix="/chatbot/folders", tags=["chatbot-folders"])
-router.include_router(market_scan.router, prefix="/market-scan", tags=["market-scan"])
-router.include_router(user_themes.router, prefix="/user-themes", tags=["user-themes"])
-router.include_router(user_watchlists.router, prefix="/user-watchlists", tags=["user-watchlists"])
-router.include_router(data_fetch_status.router, tags=["data-fetch"])
-router.include_router(ticker_validation.router, prefix="/ticker-validation", tags=["ticker-validation"])
-router.include_router(filter_presets.router, prefix="/filter-presets", tags=["filter-presets"])
-router.include_router(prompt_presets.router, prefix="/prompt-presets", tags=["prompt-presets"])
-router.include_router(config.router, tags=["config"])
-router.include_router(features.router, prefix="/features", tags=["features"])
+
+def _include(module_name: str, *, prefix: str = "", tags: list[str] | None = None) -> None:
+    module = import_module(f"{__package__}.{module_name}")
+    router.include_router(module.router, prefix=prefix, tags=tags or [module_name])
+
+
+_include("app_runtime")
+_include("stocks", prefix="/stocks", tags=["stocks"])
+_include("technical", prefix="/technical", tags=["technical"])
+_include("scans", prefix="/scans", tags=["scans"])
+_include("universe", prefix="/universe", tags=["universe"])
+_include("breadth", prefix="/breadth", tags=["breadth"])
+_include("groups", prefix="/groups", tags=["groups"])
+_include("market_scan", prefix="/market-scan", tags=["market-scan"])
+_include("user_watchlists", prefix="/user-watchlists", tags=["user-watchlists"])
+_include("ticker_validation", prefix="/ticker-validation", tags=["ticker-validation"])
+_include("filter_presets", prefix="/filter-presets", tags=["filter-presets"])
+_include("features", prefix="/features", tags=["features"])
+
+if not settings.desktop_mode:
+    _include("cache", tags=["cache"])
+    _include("fundamentals", tags=["fundamentals"])
+    _include("data_fetch_status", tags=["data-fetch"])
+
+if settings.feature_themes:
+    _include("themes", prefix="/themes", tags=["themes"])
+    _include("user_themes", prefix="/user-themes", tags=["user-themes"])
+
+if settings.feature_tasks:
+    _include("tasks", prefix="/tasks", tags=["tasks"])
+
+if settings.feature_chatbot:
+    _include("chatbot", prefix="/chatbot", tags=["chatbot"])
+    _include("chatbot_folders", prefix="/chatbot/folders", tags=["chatbot-folders"])
+    _include("prompt_presets", prefix="/prompt-presets", tags=["prompt-presets"])
+
+if settings.feature_themes or settings.feature_chatbot:
+    _include("config", tags=["config"])

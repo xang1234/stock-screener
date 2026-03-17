@@ -69,3 +69,49 @@ jobs:
 
       - name: Test
         run: cd frontend && npm run test:run
+
+  windows-desktop:
+    name: Windows Desktop Bundle
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-desktop.txt
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Build frontend for desktop bundle
+        run: cd frontend && npm run build
+        env:
+          VITE_API_URL: /api
+
+      - name: Install desktop dependencies
+        run: pip install -r backend/requirements-desktop.txt
+
+      - name: Build desktop bundle
+        run: pyinstaller backend/desktop/StockScanner.spec --noconfirm --clean
+
+      - name: Launch desktop bundle
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "dist/StockScanner/StockScanner.exe" -ArgumentList "--no-browser","--port","8765"
+          Start-Sleep -Seconds 10
+
+      - name: Run desktop smoke test
+        run: python backend/desktop/smoke_test.py --base-url http://127.0.0.1:8765
+
+      - name: Stop desktop bundle
+        if: always()
+        run: dist/StockScanner/StockScanner.exe --stop

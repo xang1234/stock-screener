@@ -1,23 +1,31 @@
 /**
  * Market Scan page with vertical side tabs for different scan views.
  */
-import { useState } from 'react';
-import { Box, Tabs, Tab, Paper, Typography } from '@mui/material';
+import { useEffect, useMemo, useState } from 'react';
+import { Box, Tabs, Tab, Paper } from '@mui/material';
 import KeyMarketsTab from '../components/MarketScan/KeyMarketsTab';
 import ThemesTab from '../components/MarketScan/ThemesTab';
 import WatchlistsTab from '../components/MarketScan/WatchlistsTab';
 import StockbeeMmTab from '../components/MarketScan/StockbeeMmTab';
-
-// Vertical tab panels - extensible for future sub-pages
-const SUB_TABS = [
-  { id: 'key_markets', label: 'Key Markets' },
-  { id: 'themes', label: 'Themes' },
-  { id: 'watchlists', label: 'Watchlists' },
-  { id: 'stockbee_mm', label: 'Stockbee MM' },
-];
+import { useRuntime } from '../contexts/RuntimeContext';
 
 function MarketScanPage() {
+  const { features } = useRuntime();
   const [selectedTab, setSelectedTab] = useState(0);
+  const subTabs = useMemo(() => ([
+    { id: 'key_markets', label: 'Key Markets', render: () => <KeyMarketsTab /> },
+    ...(features.themes
+      ? [{ id: 'themes', label: 'Themes', render: () => <ThemesTab /> }]
+      : []),
+    { id: 'watchlists', label: 'Watchlists', render: () => <WatchlistsTab /> },
+    { id: 'stockbee_mm', label: 'Stockbee MM', render: () => <StockbeeMmTab /> },
+  ]), [features.themes]);
+
+  useEffect(() => {
+    if (selectedTab >= subTabs.length) {
+      setSelectedTab(0);
+    }
+  }, [selectedTab, subTabs.length]);
 
   return (
     <Box sx={{ display: 'flex', height: 'calc(100vh - 70px)' }}>
@@ -45,7 +53,7 @@ function MarketScanPage() {
             },
           }}
         >
-          {SUB_TABS.map((tab) => (
+          {subTabs.map((tab) => (
             <Tab
               key={tab.id}
               label={tab.label}
@@ -56,10 +64,7 @@ function MarketScanPage() {
 
       {/* Main content area */}
       <Box sx={{ flex: 1, overflow: 'hidden', p: 1 }}>
-        {selectedTab === 0 && <KeyMarketsTab />}
-        {selectedTab === 1 && <ThemesTab />}
-        {selectedTab === 2 && <WatchlistsTab />}
-        {selectedTab === 3 && <StockbeeMmTab />}
+        {subTabs[selectedTab]?.render()}
       </Box>
     </Box>
   );

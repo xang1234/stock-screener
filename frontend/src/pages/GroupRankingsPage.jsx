@@ -31,7 +31,6 @@ import {
 } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
-import CategoryIcon from '@mui/icons-material/Category';
 import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
@@ -51,6 +50,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
+import { useRuntime } from '../contexts/RuntimeContext';
 
 // Helper to format rank change with color
 const RankChangeCell = ({ value }) => {
@@ -423,6 +423,7 @@ const GroupDetailModal = ({ group, open, onClose }) => {
 };
 
 function GroupRankingsPage() {
+  const { bootstrap, bootstrapIncomplete, features } = useRuntime();
   const [selectedPeriod, setSelectedPeriod] = useState('1w');
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [orderBy, setOrderBy] = useState('rank');
@@ -456,7 +457,7 @@ function GroupRankingsPage() {
   const { data: calcStatus } = useQuery({
     queryKey: ['calculationStatus', calculationTaskId],
     queryFn: () => getCalculationStatus(calculationTaskId),
-    enabled: !!calculationTaskId,
+    enabled: features.tasks && !!calculationTaskId,
     refetchInterval: 2000,
   });
 
@@ -484,6 +485,9 @@ function GroupRankingsPage() {
   };
 
   const handleCalculate = async () => {
+    if (!features.tasks) {
+      return;
+    }
     setIsCalculating(true);
     try {
       const response = await triggerCalculation(null);
@@ -534,40 +538,55 @@ function GroupRankingsPage() {
       })
     : [];
 
+  const isBootstrapMissingData = bootstrapIncomplete && errorRankings?.response?.status === 404;
+
+  if (isBootstrapMissingData) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+        <Alert severity="info">
+          {bootstrap?.message || 'Group rankings are still initializing for this desktop install.'}
+        </Alert>
+      </Container>
+    );
+  }
+
   if (errorRankings) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="error">
           Error loading rankings: {errorRankings.message}
         </Alert>
-        <Box mt={2}>
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon />}
-            onClick={handleCalculate}
-            disabled={isCalculating}
-          >
-            {isCalculating ? 'Calculating...' : 'Calculate Rankings'}
-          </Button>
-        </Box>
+        {features.tasks && (
+          <Box mt={2}>
+            <Button
+              variant="contained"
+              startIcon={<RefreshIcon />}
+              onClick={handleCalculate}
+              disabled={isCalculating}
+            >
+              {isCalculating ? 'Calculating...' : 'Calculate Rankings'}
+            </Button>
+          </Box>
+        )}
       </Container>
     );
   }
 
   return (
     <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
-      {/* Refresh Button */}
-      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={isCalculating ? <CircularProgress size={14} /> : <RefreshIcon sx={{ fontSize: 16 }} />}
-          onClick={handleCalculate}
-          disabled={isCalculating}
-        >
-          {isCalculating ? 'Calculating...' : 'Refresh'}
-        </Button>
-      </Box>
+      {features.tasks && (
+        <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={isCalculating ? <CircularProgress size={14} /> : <RefreshIcon sx={{ fontSize: 16 }} />}
+            onClick={handleCalculate}
+            disabled={isCalculating}
+          >
+            {isCalculating ? 'Calculating...' : 'Refresh'}
+          </Button>
+        </Box>
+      )}
 
       {isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">

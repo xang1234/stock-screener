@@ -11,6 +11,7 @@ from sqlalchemy import func
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
+from ...config import settings
 from ...database import get_db
 from ...models.market_breadth import MarketBreadth
 from ...schemas.breadth import (
@@ -23,11 +24,18 @@ from ...schemas.breadth import (
     BackfillResponse,
     BreadthSummary
 )
-from ...tasks.breadth_tasks import calculate_daily_breadth, backfill_breadth_data
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_task_controls() -> None:
+    if not settings.feature_tasks:
+        raise HTTPException(
+            status_code=403,
+            detail="Manual task controls are disabled in desktop mode.",
+        )
 
 
 @router.get("/current", response_model=BreadthResponse)
@@ -184,6 +192,7 @@ async def trigger_calculation(
     Returns:
         Status and task information
     """
+    _require_task_controls()
     calculation_date = request.calculation_date
 
     # Validate date format if provided
@@ -197,6 +206,8 @@ async def trigger_calculation(
             )
 
     # Trigger background task
+    from ...tasks.breadth_tasks import calculate_daily_breadth
+
     background_tasks.add_task(calculate_daily_breadth, calculation_date)
 
     date_str = calculation_date or "today"
@@ -224,6 +235,7 @@ async def trigger_backfill(
     Returns:
         Task information for tracking progress
     """
+    _require_task_controls()
     # Validate date format
     try:
         start = datetime.strptime(request.start_date, "%Y-%m-%d").date()
@@ -254,6 +266,8 @@ async def trigger_backfill(
     estimated_trading_days = int(total_days * 5 / 7)
 
     # Trigger Celery task
+    from ...tasks.breadth_tasks import backfill_breadth_data
+
     task = backfill_breadth_data.delay(request.start_date, request.end_date)
 
     logger.info(f"Backfill task triggered: {task.id} for {request.start_date} to {request.end_date}")

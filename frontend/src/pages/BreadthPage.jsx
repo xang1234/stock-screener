@@ -8,8 +8,6 @@ import {
   CircularProgress,
   Paper,
   Grid,
-  Card,
-  CardContent,
   Chip,
   Tab,
   Tabs,
@@ -22,7 +20,6 @@ import {
 } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
-import ShowChartIcon from '@mui/icons-material/ShowChart';
 import {
   getCurrentBreadth,
   getHistoricalBreadth,
@@ -31,6 +28,7 @@ import {
 import { getPriceHistory } from '../api/stocks';
 import BreadthChart from '../components/Charts/BreadthChart';
 import { format } from 'date-fns';
+import { useRuntime } from '../contexts/RuntimeContext';
 
 // Helper function to calculate date range based on time selection
 const getDateRange = (range) => {
@@ -59,6 +57,7 @@ const getDateRange = (range) => {
 };
 
 function BreadthPage() {
+  const { bootstrap, bootstrapIncomplete } = useRuntime();
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
 
@@ -82,17 +81,13 @@ function BreadthPage() {
 
   const {
     data: historicalBreadth,
-    isLoading: isLoadingHistorical,
   } = useQuery({
     queryKey: ['breadth', 'historical', startDate, endDate],
     queryFn: () => getHistoricalBreadth(startDate, endDate),
   });
 
   // Fetch summary statistics
-  const {
-    data: summary,
-    isLoading: isLoadingSummary,
-  } = useQuery({
+  useQuery({
     queryKey: ['breadth', 'summary'],
     queryFn: getBreadthSummary,
   });
@@ -122,6 +117,18 @@ function BreadthPage() {
   const handleTabChange = (event, newValue) => {
     setSelectedTab(newValue);
   };
+
+  const isBootstrapMissingData = bootstrapIncomplete && errorCurrent?.response?.status === 404;
+
+  if (isBootstrapMissingData) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+        <Alert severity="info">
+          {bootstrap?.message || 'Market breadth is still initializing for this desktop install.'}
+        </Alert>
+      </Container>
+    );
+  }
 
   if (errorCurrent) {
     return (

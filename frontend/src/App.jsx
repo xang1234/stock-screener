@@ -1,10 +1,7 @@
-import { useState, useMemo, createContext, lazy, Suspense } from 'react';
+import { useState, useMemo, lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { CssBaseline, ThemeProvider, createTheme, CircularProgress, Box } from '@mui/material';
-
-// Context for color mode toggle
-export const ColorModeContext = createContext({ toggleColorMode: () => {}, mode: 'dark' });
 
 // Eagerly loaded pages (most frequently used)
 import ScanPage from './pages/ScanPage';
@@ -12,6 +9,8 @@ import MarketScanPage from './pages/MarketScanPage';
 import StockDetails from './components/Stock/StockDetails';
 import Layout from './components/Layout/Layout';
 import { PipelineProvider } from './contexts/PipelineContext';
+import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
+import { ColorModeContext } from './contexts/ColorModeContext';
 
 // Lazy loaded pages (secondary pages)
 const BreadthPage = lazy(() => import('./pages/BreadthPage'));
@@ -214,30 +213,45 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ColorModeContext.Provider value={colorMode}>
-        <ThemeProvider theme={theme}>
-          <CssBaseline />
-          <PipelineProvider>
-            <Router>
-              <Layout>
-                <Suspense fallback={<PageLoadingFallback />}>
-                  <Routes>
-                    <Route path="/" element={<MarketScanPage />} />
-                    <Route path="/scan" element={<ScanPage />} />
-                    <Route path="/breadth" element={<BreadthPage />} />
-                    <Route path="/groups" element={<GroupRankingsPage />} />
-                    <Route path="/themes" element={<ThemesPage />} />
-                    <Route path="/chatbot" element={<ChatbotPage />} />
-                    <Route path="/stock/:symbol" element={<StockDetails />} />
-                  </Routes>
-                </Suspense>
-              </Layout>
-            </Router>
-          </PipelineProvider>
-        </ThemeProvider>
-      </ColorModeContext.Provider>
+      <RuntimeProvider>
+        <ColorModeContext.Provider value={colorMode}>
+          <ThemeProvider theme={theme}>
+            <CssBaseline />
+            <AppShell />
+          </ThemeProvider>
+        </ColorModeContext.Provider>
+      </RuntimeProvider>
     </QueryClientProvider>
   );
+}
+
+function AppShell() {
+  const { features } = useRuntime();
+
+  const appRoutes = (
+    <Router>
+      <Layout>
+        <Suspense fallback={<PageLoadingFallback />}>
+          <Routes>
+            <Route path="/" element={<MarketScanPage />} />
+            <Route path="/scan" element={<ScanPage />} />
+            <Route path="/breadth" element={<BreadthPage />} />
+            <Route path="/groups" element={<GroupRankingsPage />} />
+            {features.themes && <Route path="/themes" element={<ThemesPage />} />}
+            {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
+            <Route path="/stock/:symbol" element={<StockDetails />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </Layout>
+    </Router>
+  );
+
+  if (features.themes) {
+    return <PipelineProvider>{appRoutes}</PipelineProvider>;
+  }
+
+  return appRoutes;
 }
 
 export default App;

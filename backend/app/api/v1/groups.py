@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import List
 
+from ...config import settings
 from ...database import get_db
 from ...models.industry import IBDGroupRank
-from celery.result import AsyncResult
 from ...schemas.common import TaskResponse
 from ...schemas.groups import (
     GroupRankResponse,
@@ -26,11 +26,18 @@ from ...schemas.groups import (
     BackfillResponse,
 )
 from ...services.ibd_group_rank_service import IBDGroupRankService
-from ...tasks.group_rank_tasks import calculate_daily_group_rankings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_task_controls() -> None:
+    if not settings.feature_tasks:
+        raise HTTPException(
+            status_code=403,
+            detail="Manual task controls are disabled in desktop mode.",
+        )
 
 
 @router.get("/rankings/current", response_model=GroupRankingsResponse)
@@ -131,6 +138,7 @@ async def trigger_calculation(request: CalculationRequest):
     Dispatches the calculation to a Celery background task and returns
     a task_id for status polling. The calculation runs asynchronously.
     """
+    _require_task_controls()
     # Validate date format if provided
     date_str = None
     if request.calculation_date:
@@ -145,6 +153,8 @@ async def trigger_calculation(request: CalculationRequest):
 
     # Dispatch to Celery
     try:
+        from ...tasks.group_rank_tasks import calculate_daily_group_rankings
+
         task = calculate_daily_group_rankings.delay(date_str)
         logger.info(f"Group ranking calculation task dispatched: {task.id}")
 
@@ -169,7 +179,10 @@ async def get_calculation_status(task_id: str):
 
     Poll this endpoint to check if the calculation is complete.
     """
+    _require_task_controls()
     try:
+        from celery.result import AsyncResult
+
         task_result = AsyncResult(task_id)
 
         if task_result.state == 'PENDING':
@@ -240,6 +253,7 @@ async def trigger_backfill(
     Returns:
         Task information for tracking progress
     """
+    _require_task_controls()
     from ...tasks.group_rank_tasks import backfill_group_rankings
 
     # Validate date format

@@ -21,13 +21,16 @@ from __future__ import annotations
 
 from typing import Iterator
 
+from app.config import settings
 from app.database import SessionLocal
 from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
 from app.infra.db.uow import SqlUnitOfWork
 from app.infra.providers.stock_data import DataPrepStockDataProvider
-from app.infra.tasks.dispatcher import CeleryTaskDispatcher
+from app.infra.tasks.dispatcher import CeleryTaskDispatcher, LocalTaskDispatcher
 from app.scanners.scan_orchestrator import ScanOrchestrator
 from app.scanners.screener_registry import screener_registry
+from app.services.desktop_bootstrap_service import DesktopBootstrapService
+from app.services.job_backend import JobBackend, LocalJobBackend, create_job_backend
 from app.use_cases.scanning.create_scan import CreateScanUseCase
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
 from app.use_cases.scanning.get_peers import GetPeersUseCase
@@ -61,15 +64,47 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 
 # ── Task Dispatchers ────────────────────────────────────────────────────
 
-_task_dispatcher: CeleryTaskDispatcher | None = None
+_task_dispatcher: TaskDispatcher | None = None
+_job_backend: JobBackend | None = None
+_desktop_bootstrap_service: DesktopBootstrapService | None = None
+
+
+def get_job_backend() -> JobBackend:
+    """Return the configured async job backend."""
+    global _job_backend
+    if _job_backend is None:
+        _job_backend = create_job_backend()
+    return _job_backend
+
+
+def get_local_job_backend() -> LocalJobBackend:
+    """Return the singleton local job backend in desktop mode."""
+    backend = get_job_backend()
+    if not isinstance(backend, LocalJobBackend):
+        raise RuntimeError("Local job backend is only available in desktop mode")
+    return backend
 
 
 def get_task_dispatcher() -> TaskDispatcher:
-    """Return a singleton CeleryTaskDispatcher."""
+    """Return the runtime-appropriate task dispatcher."""
     global _task_dispatcher
     if _task_dispatcher is None:
-        _task_dispatcher = CeleryTaskDispatcher()
+        if settings.desktop_mode:
+            _task_dispatcher = LocalTaskDispatcher(get_local_job_backend())
+        else:
+            _task_dispatcher = CeleryTaskDispatcher()
     return _task_dispatcher
+
+
+def get_desktop_bootstrap_service() -> DesktopBootstrapService:
+    """Return the desktop bootstrap orchestrator."""
+    global _desktop_bootstrap_service
+    if _desktop_bootstrap_service is None:
+        _desktop_bootstrap_service = DesktopBootstrapService(
+            session_factory=SessionLocal,
+            job_backend=get_local_job_backend(),
+        )
+    return _desktop_bootstrap_service
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────

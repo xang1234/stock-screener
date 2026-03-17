@@ -14,15 +14,18 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
-import { ColorModeContext } from '../../App';
+import { ColorModeContext } from '../../contexts/ColorModeContext';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
+import DesktopBootstrapBanner from '../App/DesktopBootstrapBanner';
+import { useRuntime } from '../../contexts/RuntimeContext';
 
 function Layout({ children }) {
   const location = useLocation();
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
+  const { desktopMode, features } = useRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const navItems = [
@@ -30,8 +33,8 @@ function Layout({ children }) {
     { path: '/scan', label: 'Bulk Scanner' },
     { path: '/breadth', label: 'Market Breadth' },
     { path: '/groups', label: 'Group Rankings' },
-    { path: '/themes', label: 'Themes' },
-    { path: '/chatbot', label: 'Chatbot' },
+    ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
+    ...(features.chatbot ? [{ path: '/chatbot', label: 'Chatbot' }] : []),
   ];
 
   return (
@@ -42,9 +45,11 @@ function Layout({ children }) {
           <Typography variant="subtitle1" component="div" sx={{ fontWeight: 600 }}>
             STOCK SCANNER
           </Typography>
-          <Box sx={{ ml: 2 }}>
-            <CacheStatus />
-          </Box>
+          {!desktopMode && (
+            <Box sx={{ ml: 2 }}>
+              <CacheStatus />
+            </Box>
+          )}
           <Box sx={{ flexGrow: 1 }} />
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
@@ -72,15 +77,17 @@ function Layout({ children }) {
               </Button>
             );
           })}
-          <IconButton
-            sx={{ ml: 1 }}
-            onClick={() => setSettingsOpen(true)}
-            color="inherit"
-            title="Scheduled Tasks"
-            size="small"
-          >
-            <SettingsIcon fontSize="small" />
-          </IconButton>
+          {features.tasks && (
+            <IconButton
+              sx={{ ml: 1 }}
+              onClick={() => setSettingsOpen(true)}
+              color="inherit"
+              title="Scheduled Tasks"
+              size="small"
+            >
+              <SettingsIcon fontSize="small" />
+            </IconButton>
+          )}
           <IconButton
             sx={{ ml: 0.5 }}
             onClick={colorMode.toggleColorMode}
@@ -94,14 +101,13 @@ function Layout({ children }) {
       </AppBar>
 
       <Container maxWidth="xl" sx={{ mt: 1, mb: 1, flex: 1 }}>
+        <DesktopBootstrapBanner />
         {children}
       </Container>
 
-      {/* Global Pipeline Progress Card */}
-      <PipelineProgressCard />
+      {features.themes && <PipelineProgressCard />}
 
-      {/* Task Settings Modal */}
-      <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </Box>
   );
 }

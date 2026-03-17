@@ -3,9 +3,9 @@
  */
 import axios from 'axios';
 
-// API base URL - defaults to localhost:8000/api, can be overridden with env var
-// In Docker, VITE_API_URL is set to '/api' for nginx proxy
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+// API base URL defaults to '/api' so the packaged desktop app can be served by FastAPI.
+// Vite development uses a local proxy to forward '/api' to the backend.
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const DEFAULT_API_TIMEOUT_MS = 30000;
 const THEMES_API_TIMEOUT_MS = 300000;
 

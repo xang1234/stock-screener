@@ -34,6 +34,7 @@ from ...wiring.bootstrap import (
     get_get_peers_use_case,
     get_export_scan_results_use_case,
     get_explain_stock_use_case,
+    get_job_backend,
 )
 from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
 from ...use_cases.scanning.explain_stock import ExplainStockQuery, ExplainStockUseCase
@@ -166,6 +167,7 @@ async def get_scan_status(
             progress = 0.0
             completed_stocks = 0
             eta_seconds = None
+            status = scan.status
 
             if scan.status == "completed":
                 progress = 100.0
@@ -177,15 +179,26 @@ async def get_scan_status(
                 progress = 0.0
                 completed_stocks = 0
             else:
-                # Get real-time progress from Celery task
+                # Get real-time progress from the configured job backend
                 if scan.task_id:
-                    from celery.result import AsyncResult
-                    task_result = AsyncResult(scan.task_id)
-
-                    if task_result.state == 'PROGRESS' and task_result.info:
-                        progress = task_result.info.get('percent', 0.0)
-                        completed_stocks = task_result.info.get('current', 0)
-                        eta_seconds = task_result.info.get('eta_seconds')
+                    snapshot = get_job_backend().get_status(scan.task_id)
+                    if snapshot is not None:
+                        status = snapshot.status or status
+                        progress = snapshot.percent or 0.0
+                        completed_stocks = snapshot.current or 0
+                        eta_seconds = snapshot.eta_seconds
+                        if snapshot.status == "completed":
+                            progress = 100.0
+                            completed_stocks = scan.total_stocks or completed_stocks
+                        elif snapshot.status == "cancelled":
+                            progress = (
+                                completed_stocks / scan.total_stocks * 100
+                                if scan.total_stocks
+                                else 0
+                            )
+                        elif snapshot.status == "failed":
+                            progress = 0.0
+                            completed_stocks = completed_stocks or 0
                     else:
                         completed_stocks = uow.scan_results.count_by_scan_id(scan_id)
                         progress = (completed_stocks / scan.total_stocks * 100) if scan.total_stocks else 0
@@ -200,7 +213,7 @@ async def get_scan_status(
 
             return ScanStatusResponse(
                 scan_id=scan_id,
-                status=scan.status,
+                status=status,
                 progress=round(progress, 2),
                 total_stocks=scan.total_stocks or 0,
                 completed_stocks=completed_stocks,

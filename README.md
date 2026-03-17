@@ -109,7 +109,7 @@ Groq, DeepSeek, Together AI, OpenRouter, Gemini
 ## Quick Start
 
 ### Prerequisites
-- Python 3.9+
+- Python 3.11+
 - Node.js 18+
 - Redis server
 
@@ -161,6 +161,26 @@ npm install
 npm run dev      # Development server on :5173
 npm run build    # Production build
 ```
+
+### Windows Desktop Bundle
+
+The repo now includes a desktop-mode packaging path for a local Windows install:
+
+```bash
+cd frontend
+VITE_API_URL=/api npm run build
+
+cd ../backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements-desktop.txt
+pyinstaller desktop/StockScanner.spec --noconfirm --clean
+```
+
+- Launcher: `backend/desktop/launcher.py`
+- Stop helper: `backend/desktop/launcher.py --stop`
+- Smoke test: `backend/desktop/smoke_test.py`
+- Inno Setup script: `backend/desktop/windows_installer.iss`
 
 ### Docker Deployment
 

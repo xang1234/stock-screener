@@ -11,7 +11,7 @@ and Custom stock screening with a Feature Store, AI chatbot, and market analysis
 ### 1. Create Virtual Environment
 
 ```bash
-python3 -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
@@ -22,6 +22,8 @@ pip install -r requirements.txt
 pip install -e ../xui-reader
 python -m playwright install chromium
 ```
+
+For the desktop/local Windows bundle, install `requirements-desktop.txt` instead and use the packager files under [desktop](./desktop/README.md).
 
 ### 3. Configure Environment
 

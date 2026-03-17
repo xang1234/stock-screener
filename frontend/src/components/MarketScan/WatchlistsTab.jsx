@@ -7,7 +7,7 @@
  * - Settings icon to open WatchlistManager modal
  * - Renders WatchlistTable for selected watchlist
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
@@ -26,8 +26,10 @@ import { getWatchlists, getWatchlistData } from '../../api/userWatchlists';
 import WatchlistTable from './WatchlistTable';
 import UserWatchlistManager from './UserWatchlistManager';
 import WatchlistChartModal from './WatchlistChartModal';
+import { useRuntime } from '../../contexts/RuntimeContext';
 
 function WatchlistsTab() {
+  const { bootstrap, bootstrapIncomplete } = useRuntime();
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
@@ -43,7 +45,10 @@ function WatchlistsTab() {
     queryFn: getWatchlists,
   });
 
-  const watchlists = watchlistsData?.watchlists || [];
+  const watchlists = useMemo(
+    () => watchlistsData?.watchlists || [],
+    [watchlistsData]
+  );
 
   // Auto-select first watchlist if none selected
   useEffect(() => {
@@ -188,7 +193,9 @@ function WatchlistsTab() {
         ) : watchlists.length === 0 ? (
           <Box textAlign="center" py={4}>
             <Typography color="text.secondary" gutterBottom>
-              No watchlists yet. Create your first watchlist to get started.
+              {bootstrapIncomplete
+                ? (bootstrap?.message || 'Desktop setup is still warming market data. You can create watchlists now and the data will fill in as setup completes.')
+                : 'No watchlists yet. Create your first watchlist to get started.'}
             </Typography>
             <Tooltip title="Manage watchlists">
               <IconButton color="primary" onClick={() => setManagerOpen(true)} size="large">
