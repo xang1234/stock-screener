@@ -162,25 +162,127 @@ npm run dev      # Development server on :5173
 npm run build    # Production build
 ```
 
-### Windows Desktop Bundle
+### Windows Deployment
 
-The repo now includes a desktop-mode packaging path for a local Windows install:
+If you are deploying on Windows, there are two practical paths:
 
-```bash
-cd frontend
-VITE_API_URL=/api npm run build
+- **Desktop bundle** - recommended for a single-user local install on a Windows machine. No Redis or Celery services are required.
+- **Source deployment** - use this when you want the full backend + frontend + worker stack on a Windows host.
 
-cd ../backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements-desktop.txt
-pyinstaller desktop/StockScanner.spec --noconfirm --clean
+#### Option 1: Windows Desktop Bundle (Recommended)
+
+Use this path when you want a self-contained local Windows app that launches the FastAPI backend and serves the built frontend from the same bundle.
+
+Prerequisites:
+- Python 3.11
+- Node.js 18+
+- PowerShell
+- Inno Setup 6 if you want a `.exe` installer instead of the raw one-folder bundle
+
+Build the bundle from the repo root:
+
+```powershell
+cd .\frontend
+npm ci
+$env:VITE_API_URL = "/api"
+npm run build
+Remove-Item Env:VITE_API_URL
+
+cd ..
+py -3.11 -m venv .\backend\venv
+.\backend\venv\Scripts\Activate.ps1
+pip install -r .\backend\requirements-desktop.txt
+pyinstaller .\backend\desktop\StockScanner.spec --noconfirm --clean
 ```
 
+Artifacts:
+- One-folder bundle: `dist\StockScanner\StockScanner.exe`
+- Optional installer output: `dist\installer\StockScanner-Setup.exe`
+
+Launch and verify the bundle:
+
+```powershell
+Start-Process -FilePath .\dist\StockScanner\StockScanner.exe -ArgumentList "--no-browser","--port","8765"
+python .\backend\desktop\smoke_test.py --base-url http://127.0.0.1:8765
+.\dist\StockScanner\StockScanner.exe --stop
+```
+
+To create a Windows installer, compile the Inno Setup script after the bundle build:
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\backend\desktop\windows_installer.iss
+```
+
+Desktop runtime notes:
+- App files install under `%LOCALAPPDATA%\StockScanner`
+- The desktop database defaults to `%LOCALAPPDATA%\StockScanner\stockscanner.db`
+- First launch seeds the local universe from the bundled CSV files
+- Desktop mode now skips the heavy full-universe refresh and fundamentals warmup by default so first-run startup completes quickly
+
+If you want the desktop bundle to run the heavier bootstrap steps on first launch, set overrides before starting it:
+
+```powershell
+$env:DESKTOP_BOOTSTRAP_REFRESH_UNIVERSE = "true"
+$env:DESKTOP_BOOTSTRAP_FUNDAMENTALS_LIMIT = "25"
+.\dist\StockScanner\StockScanner.exe
+```
+
+Useful files:
 - Launcher: `backend/desktop/launcher.py`
 - Stop helper: `backend/desktop/launcher.py --stop`
 - Smoke test: `backend/desktop/smoke_test.py`
 - Inno Setup script: `backend/desktop/windows_installer.iss`
+
+#### Option 2: Source Deployment on a Windows Host
+
+Use this path if you want the browser-based app on a Windows machine rather than the packaged desktop bundle.
+
+Prerequisites:
+- Python 3.11
+- Node.js 18+
+- Redis reachable from Windows (for example via a local service, Docker Desktop, or WSL2)
+
+Backend setup in PowerShell:
+
+```powershell
+py -3.11 -m venv .\backend\venv
+.\backend\venv\Scripts\Activate.ps1
+pip install -r .\backend\requirements.txt
+pip install -e .\xui-reader
+python -m playwright install chromium
+Copy-Item .\backend\.env.example .\backend\.env
+```
+
+Then edit `backend\.env` with your Windows-specific paths and API keys. At minimum, set an absolute `DATABASE_URL` and any LLM or data-provider keys you need.
+
+Start the backend:
+
+```powershell
+cd .\backend
+.\venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Start Celery in separate PowerShell windows if you need scans and scheduled jobs:
+
+```powershell
+cd .\backend
+.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q celery -n general@$env:COMPUTERNAME
+.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q data_fetch -n datafetch@$env:COMPUTERNAME
+.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@$env:COMPUTERNAME
+.\venv\Scripts\celery -A app.celery_app beat --loglevel=info
+```
+
+Build the frontend:
+
+```powershell
+cd .\frontend
+npm ci
+npm run build
+```
+
+For a Windows-hosted browser deployment, serve `frontend\dist` with IIS, Caddy, or another static file server and reverse proxy `/api` to `http://127.0.0.1:8000`.
+
+If PowerShell blocks virtualenv activation, run `Set-ExecutionPolicy -Scope Process Bypass` in that shell and retry `.\venv\Scripts\Activate.ps1`.
 
 ### Docker Deployment
 
