@@ -36,12 +36,15 @@ def _wait_for_json(url: str, timeout_seconds: int = 120) -> dict:
 
 def _wait_for_status(url: str, terminal_states: set[str], timeout_seconds: int = 240) -> dict:
     deadline = time.time() + timeout_seconds
+    last_payload: dict | None = None
     while time.time() < deadline:
         payload = _request("GET", url)
+        last_payload = payload
         if payload.get("status") in terminal_states:
             return payload
         time.sleep(2)
-    raise RuntimeError(f"Timed out waiting for terminal state from {url}")
+    detail = f" (last payload: {last_payload})" if last_payload is not None else ""
+    raise RuntimeError(f"Timed out waiting for terminal state from {url}{detail}")
 
 
 def main() -> None:

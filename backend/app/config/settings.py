@@ -280,6 +280,8 @@ class Settings(BaseSettings):
                 ("FEATURE_CHATBOT", "feature_chatbot", False),
                 ("FEATURE_TASKS", "feature_tasks", False),
                 ("XUI_ENABLED", "xui_enabled", False),
+                ("DESKTOP_BOOTSTRAP_REFRESH_UNIVERSE", "desktop_bootstrap_refresh_universe", False),
+                ("DESKTOP_BOOTSTRAP_FUNDAMENTALS_LIMIT", "desktop_bootstrap_fundamentals_limit", 0),
                 ("CACHE_WARMUP_ENABLED", "cache_warmup_enabled", False),
                 ("THEME_DISCOVERY_ENABLED", "theme_discovery_enabled", False),
                 ("DEEP_RESEARCH_ENABLED", "deep_research_enabled", False),
