@@ -253,9 +253,20 @@ class ContentIngestionService:
         """Get appropriate fetcher for source type"""
         return self.fetchers.get(source_type, RSSFetcher())
 
-    def _seed_pipeline_state_rows_for_item(self, content_item: ContentItem, pipelines: list[str]) -> None:
-        """Create pending per-pipeline state rows for a newly ingested content item."""
+    def _seed_pipeline_state_rows_for_item(self, content_item: ContentItem, pipelines: list[str]) -> int:
+        """Create any missing pending per-pipeline state rows for a content item."""
+        existing_pipelines = {
+            row[0]
+            for row in self.db.query(ContentItemPipelineState.pipeline).filter(
+                ContentItemPipelineState.content_item_id == content_item.id,
+                ContentItemPipelineState.pipeline.in_(pipelines),
+            ).all()
+        }
+
+        created = 0
         for pipeline in pipelines:
+            if pipeline in existing_pipelines:
+                continue
             self.db.add(
                 ContentItemPipelineState(
                     content_item_id=content_item.id,
@@ -264,6 +275,8 @@ class ContentIngestionService:
                     attempt_count=0,
                 )
             )
+            created += 1
+        return created
 
     def fetch_source(self, source: ContentSource, lookback_days: int | None = None) -> int:
         """Fetch new content from a single source, returns count of new items.
@@ -327,6 +340,8 @@ class ContentIngestionService:
                 self.db.flush()
                 self._seed_pipeline_state_rows_for_item(content_item, source_pipelines)
                 new_count += 1
+            else:
+                self._seed_pipeline_state_rows_for_item(existing, source_pipelines)
 
         # Commit all new items
         if new_count > 0:

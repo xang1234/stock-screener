@@ -127,6 +127,73 @@ def test_fetch_source_seeds_only_assigned_pipeline_state_rows(
     assert states[0].status == "pending"
 
 
+def test_fetch_source_backfills_missing_pipeline_state_for_existing_item(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ContentSource(
+        name="@alice",
+        source_type="twitter",
+        url="https://x.com/alice",
+        is_active=True,
+        pipelines=["technical", "fundamental"],
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    item = ContentItem(
+        source_id=source.id,
+        source_type=source.source_type,
+        source_name=source.name,
+        external_id="existing-item",
+        title="Existing post",
+        content="Already ingested body",
+        url="https://x.com/alice/status/42",
+        author="@alice",
+        published_at=datetime.utcnow(),
+        is_processed=False,
+    )
+    db_session.add(item)
+    db_session.flush()
+    db_session.add(
+        ContentItemPipelineState(
+            content_item_id=item.id,
+            pipeline="technical",
+            status="pending",
+            attempt_count=0,
+        )
+    )
+    db_session.commit()
+
+    class FakeTwitterFetcher:
+        def fetch(self, _source, _since=None):
+            return [
+                {
+                    "external_id": "existing-item",
+                    "title": "Existing post",
+                    "content": "Already ingested body",
+                    "url": "https://x.com/alice/status/42",
+                    "author": "@alice",
+                    "published_at": datetime.utcnow(),
+                }
+            ]
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.TwitterFetcher",
+        lambda: FakeTwitterFetcher(),
+    )
+    service = ContentIngestionService(db_session)
+
+    inserted = service.fetch_source(source)
+    assert inserted == 0
+
+    states = db_session.query(ContentItemPipelineState).filter(
+        ContentItemPipelineState.content_item_id == item.id,
+    ).order_by(ContentItemPipelineState.pipeline.asc()).all()
+    assert [state.pipeline for state in states] == ["fundamental", "technical"]
+    assert all(state.status == "pending" for state in states)
+
+
 def test_fetch_source_propagates_adapter_error_and_does_not_advance_last_fetched_at(
     db_session,
     monkeypatch: pytest.MonkeyPatch,
