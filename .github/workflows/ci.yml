@@ -103,41 +103,55 @@ jobs:
       - name: Build desktop bundle
         run: pyinstaller backend/desktop/StockScanner.spec --noconfirm --clean
 
-      - name: Launch desktop bundle
+      - name: Launch desktop bundle and run smoke test
         shell: pwsh
         run: |
           $stdout = Join-Path $env:RUNNER_TEMP "desktop-bundle.stdout.log"
           $stderr = Join-Path $env:RUNNER_TEMP "desktop-bundle.stderr.log"
-          $process = Start-Process -FilePath "dist/StockScanner/StockScanner.exe" `
-            -ArgumentList "--no-browser","--port","8765" `
-            -RedirectStandardOutput $stdout `
-            -RedirectStandardError $stderr `
-            -PassThru
-          "DESKTOP_BUNDLE_STDOUT=$stdout" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "DESKTOP_BUNDLE_STDERR=$stderr" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Start-Sleep -Seconds 5
-          if ($process.HasExited) {
-            Write-Host "Desktop bundle exited during launch"
-            if (Test-Path $stdout) { Get-Content $stdout }
-            if (Test-Path $stderr) { Get-Content $stderr }
+          $process = $null
+          $smokeExitCode = 0
+          $launchFailed = $false
+
+          try {
+            $process = Start-Process -FilePath "dist/StockScanner/StockScanner.exe" `
+              -ArgumentList "--no-browser","--port","8765" `
+              -RedirectStandardOutput $stdout `
+              -RedirectStandardError $stderr `
+              -PassThru
+
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              $launchFailed = $true
+              Write-Host "Desktop bundle exited during launch"
+            } else {
+              python backend/desktop/smoke_test.py --base-url http://127.0.0.1:8765
+              $smokeExitCode = $LASTEXITCODE
+            }
+
+            if ($launchFailed -or $smokeExitCode -ne 0) {
+              if (Test-Path $stdout) {
+                Write-Host "Desktop bundle stdout:"
+                Get-Content $stdout
+              }
+              if (Test-Path $stderr) {
+                Write-Host "Desktop bundle stderr:"
+                Get-Content $stderr
+              }
+            }
+          } finally {
+            if ($process -and -not $process.HasExited) {
+              & "dist/StockScanner/StockScanner.exe" --stop
+              Start-Sleep -Seconds 2
+            }
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          if ($launchFailed) {
             exit 1
           }
-
-      - name: Run desktop smoke test
-        run: python backend/desktop/smoke_test.py --base-url http://127.0.0.1:8765
-
-      - name: Dump desktop logs on failure
-        if: failure()
-        shell: pwsh
-        run: |
-          if ($env:DESKTOP_BUNDLE_STDOUT -and (Test-Path $env:DESKTOP_BUNDLE_STDOUT)) {
-            Write-Host "Desktop bundle stdout:"
-            Get-Content $env:DESKTOP_BUNDLE_STDOUT
-          }
-          if ($env:DESKTOP_BUNDLE_STDERR -and (Test-Path $env:DESKTOP_BUNDLE_STDERR)) {
-            Write-Host "Desktop bundle stderr:"
-            Get-Content $env:DESKTOP_BUNDLE_STDERR
-          }
+          exit $smokeExitCode
 
       - name: Stop desktop bundle
         if: always()
