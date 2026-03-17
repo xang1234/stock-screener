@@ -21,11 +21,21 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 
-def _pick_port(preferred_port: int) -> int:
+def _port_is_available(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock.bind(("127.0.0.1", preferred_port))
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def _pick_port(host: str, preferred_port: int) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, preferred_port))
             return preferred_port
         except OSError:
             sock.bind(("127.0.0.1", 0))
@@ -33,15 +43,23 @@ def _pick_port(preferred_port: int) -> int:
 
 
 def _configure_environment(args: argparse.Namespace) -> None:
+    host = args.host
+    explicit_port = args.port is not None
     preferred_port = args.port or int(os.getenv("API_PORT", "8000"))
-    selected_port = _pick_port(preferred_port)
+
+    if explicit_port:
+        if not _port_is_available(host, preferred_port):
+            raise RuntimeError(f"Requested port {preferred_port} is unavailable on {host}")
+        selected_port = preferred_port
+    else:
+        selected_port = _pick_port(host, preferred_port)
 
     os.environ.setdefault("DESKTOP_MODE", "true")
     os.environ.setdefault("FEATURE_THEMES", "false")
     os.environ.setdefault("FEATURE_CHATBOT", "false")
     os.environ.setdefault("FEATURE_TASKS", "false")
     os.environ.setdefault("XUI_ENABLED", "false")
-    os.environ.setdefault("API_HOST", args.host)
+    os.environ.setdefault("API_HOST", host)
     os.environ["API_PORT"] = str(selected_port)
     os.environ["DESKTOP_OPEN_BROWSER"] = "false" if args.no_browser else "true"
 
