@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, memo, useContext } from 'react';
 import { Box } from '@mui/material';
-import { ColorModeContext } from '../../App';
+import { ColorModeContext } from '../../contexts/ColorModeContext';
 
 function TradingViewChart({ symbol, interval = 'D', range = '9M', hideSidebar = false }) {
   const containerRef = useRef(null);

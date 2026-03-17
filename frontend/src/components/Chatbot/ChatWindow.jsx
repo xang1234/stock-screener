@@ -142,7 +142,7 @@ function ChatWindow({ conversationId, messages, onMessagesUpdate }) {
             }
             break;
 
-          case 'tool_call':
+          case 'tool_call': {
             const toolCall = {
               type: 'call',
               tool: chunk.tool,
@@ -151,8 +151,9 @@ function ChatWindow({ conversationId, messages, onMessagesUpdate }) {
             toolCallsRef.current = [...toolCallsRef.current, toolCall];
             setToolCalls((prev) => [...prev, toolCall]);
             break;
+          }
 
-          case 'tool_result':
+          case 'tool_result': {
             const toolResult = {
               type: 'result',
               tool: chunk.tool,
@@ -162,13 +163,14 @@ function ChatWindow({ conversationId, messages, onMessagesUpdate }) {
             toolCallsRef.current = [...toolCallsRef.current, toolResult];
             setToolCalls((prev) => [...prev, toolResult]);
             break;
+          }
 
           case 'content':
             contentRef.current += chunk.content;  // Update ref synchronously
             setStreamingContent((prev) => prev + chunk.content);
             break;
 
-          case 'done':
+          case 'done': {
             // Finalize the assistant message using refs (synchronous values)
             const assistantMessage = {
               id: chunk.message_id || Date.now() + 1,
@@ -192,8 +194,9 @@ function ChatWindow({ conversationId, messages, onMessagesUpdate }) {
             toolCallsRef.current = [];
             thinkingRef.current = [];
             break;
+          }
 
-          case 'error':
+          case 'error': {
             const errorMessage = {
               id: Date.now() + 1,
               role: 'assistant',
@@ -205,6 +208,7 @@ function ChatWindow({ conversationId, messages, onMessagesUpdate }) {
             setIsLoading(false);
             setStreamingContent('');
             break;
+          }
 
           default:
             break;

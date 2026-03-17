@@ -449,7 +449,7 @@ function MessageBubble({ message }) {
                         {(tool.tool === 'search_news' || tool.tool === 'web_search' || tool.tool === 'search_finance') && result.results ? (
                           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                             <Typography variant="caption" color="text.secondary">
-                              {result.total_results} results for "{result.query}"
+                              {result.total_results} results for &quot;{result.query}&quot;
                             </Typography>
                             {result.results.map((item, i) => (
                               <Box

@@ -114,4 +114,8 @@ jobs:
 
       - name: Stop desktop bundle
         if: always()
-        run: dist/StockScanner/StockScanner.exe --stop
+        shell: pwsh
+        run: |
+          if (Test-Path "dist/StockScanner/StockScanner.exe") {
+            & "dist/StockScanner/StockScanner.exe" --stop
+          }

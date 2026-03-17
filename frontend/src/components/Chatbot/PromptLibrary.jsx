@@ -181,7 +181,7 @@ function PromptLibrary({ onInsertPrompt, disabled }) {
               No saved prompts yet.
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Click "Add New" to create your first prompt template.
+              Click &quot;Add New&quot; to create your first prompt template.
             </Typography>
           </Box>
         ) : (

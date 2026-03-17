@@ -1084,7 +1084,7 @@ function ScanPage() {
       {!currentScanId && (
         <Paper sx={{ p: 5, textAlign: 'center' }}>
           <Typography variant="body1" color="text.secondary">
-            Click "Start Scan" to begin scanning all stocks in your universe
+            Click &quot;Start Scan&quot; to begin scanning all stocks in your universe
           </Typography>
         </Paper>
       )}

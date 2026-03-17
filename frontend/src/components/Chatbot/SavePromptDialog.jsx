@@ -123,7 +123,7 @@ function SavePromptDialog({ open, onClose, onSave, preset, isSaving }) {
               color="text.secondary"
               sx={{ mt: 0.5, display: 'block' }}
             >
-              Use {'{ticker}'} as a placeholder for stock symbol. When using this prompt, you'll be asked to enter a ticker.
+              Use {'{ticker}'} as a placeholder for stock symbol. When using this prompt, you&apos;ll be asked to enter a ticker.
             </Typography>
           </Box>
         </Box>

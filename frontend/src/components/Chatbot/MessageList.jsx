@@ -49,7 +49,7 @@ function MessageList({ messages, isLoading }) {
                 fontSize: '13px',
               }}
             >
-              "{suggestion}"
+              &quot;{suggestion}&quot;
             </Typography>
           ))}
         </Box>

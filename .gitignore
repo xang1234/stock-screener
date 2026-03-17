@@ -27,6 +27,7 @@ frontend/dist
 *.xls
 *.parquet
 *.html
+!frontend/index.html
 *.db
 *.db-shm
 *.db-wal

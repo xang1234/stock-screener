@@ -132,7 +132,7 @@ const getCacheChipProps = (health) => {
         color: 'success',
         tooltip: `Cache up to date (${health.spy_last_date || 'SPY cached'})`
       };
-    case 'updating':
+    case 'updating': {
       const progress = health.task_running?.progress;
       return {
         icon: <CircularProgress size={10} sx={{ color: 'white' }} />,
@@ -140,6 +140,7 @@ const getCacheChipProps = (health) => {
         color: 'info',
         tooltip: health.message
       };
+    }
     case 'stuck':
       return {
         icon: <WarningIcon />,
