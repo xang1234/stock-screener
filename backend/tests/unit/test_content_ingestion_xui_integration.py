@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.theme import ContentItem, ContentSource
+from app.models.theme import ContentItem, ContentItemPipelineState, ContentSource
 from app.services.content_ingestion_service import ContentIngestionService
 
 
@@ -74,6 +74,57 @@ def test_fetch_source_inserts_items_and_deduplicates_external_ids(
     db_session.refresh(source)
     assert source.last_fetched_at is not None
     assert source.total_items_fetched == 1
+
+    states = db_session.query(ContentItemPipelineState).filter(
+        ContentItemPipelineState.content_item_id == rows[0].id,
+    ).order_by(ContentItemPipelineState.pipeline.asc()).all()
+    assert [state.pipeline for state in states] == ["fundamental", "technical"]
+    assert all(state.status == "pending" for state in states)
+
+
+def test_fetch_source_seeds_only_assigned_pipeline_state_rows(
+    db_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ContentSource(
+        name="Stratechery",
+        source_type="substack",
+        url="https://stratechery.com/feed",
+        is_active=True,
+        pipelines=["fundamental"],
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    class FakeRssFetcher:
+        def fetch(self, _source, _since=None):
+            return [
+                {
+                    "external_id": "fundamental-only",
+                    "title": "Deep dive",
+                    "content": "Long form analysis",
+                    "url": "https://stratechery.com/p/deep-dive",
+                    "author": "Ben Thompson",
+                    "published_at": datetime.utcnow(),
+                }
+            ]
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.RSSFetcher",
+        lambda: FakeRssFetcher(),
+    )
+    service = ContentIngestionService(db_session)
+
+    inserted = service.fetch_source(source)
+    assert inserted == 1
+
+    item = db_session.query(ContentItem).filter(ContentItem.external_id == "fundamental-only").one()
+    states = db_session.query(ContentItemPipelineState).filter(
+        ContentItemPipelineState.content_item_id == item.id,
+    ).all()
+    assert len(states) == 1
+    assert states[0].pipeline == "fundamental"
+    assert states[0].status == "pending"
 
 
 def test_fetch_source_propagates_adapter_error_and_does_not_advance_last_fetched_at(

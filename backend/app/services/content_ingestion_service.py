@@ -18,8 +18,9 @@ import feedparser
 import requests
 from sqlalchemy.orm import Session
 
-from ..models.theme import ContentSource, ContentItem
+from ..models.theme import ContentSource, ContentItem, ContentItemPipelineState
 from ..config import settings
+from .theme_pipeline_state_service import normalize_pipelines
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,18 @@ class ContentIngestionService:
         """Get appropriate fetcher for source type"""
         return self.fetchers.get(source_type, RSSFetcher())
 
+    def _seed_pipeline_state_rows_for_item(self, content_item: ContentItem, pipelines: list[str]) -> None:
+        """Create pending per-pipeline state rows for a newly ingested content item."""
+        for pipeline in pipelines:
+            self.db.add(
+                ContentItemPipelineState(
+                    content_item_id=content_item.id,
+                    pipeline=pipeline,
+                    status="pending",
+                    attempt_count=0,
+                )
+            )
+
     def fetch_source(self, source: ContentSource, lookback_days: int | None = None) -> int:
         """Fetch new content from a single source, returns count of new items.
 
@@ -281,6 +294,8 @@ class ContentIngestionService:
         source_type = source.source_type
         source_name = source.name
 
+        source_pipelines = normalize_pipelines(source.pipelines)
+
         for item_data in items:
             external_id = item_data["external_id"]
 
@@ -309,6 +324,8 @@ class ContentIngestionService:
                     is_processed=False,
                 )
                 self.db.add(content_item)
+                self.db.flush()
+                self._seed_pipeline_state_rows_for_item(content_item, source_pipelines)
                 new_count += 1
 
         # Commit all new items
