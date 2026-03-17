@@ -6,7 +6,7 @@ from app.services.job_backend import LocalJobBackend
 
 
 def test_local_job_backend_runs_scan_job(monkeypatch):
-    import app.tasks.scan_tasks as scan_tasks
+    import app.services.scan_execution as scan_execution
 
     def fake_run(task_instance, scan_id, symbols, criteria):
         task_instance.update_state(
@@ -20,7 +20,7 @@ def test_local_job_backend_runs_scan_job(monkeypatch):
             "failed": 1,
         }
 
-    monkeypatch.setattr(scan_tasks, "_run_bulk_scan_via_use_case", fake_run)
+    monkeypatch.setattr(scan_execution, "run_bulk_scan_via_use_case", fake_run)
 
     backend = LocalJobBackend()
     job_id = backend.submit_scan("scan-1", ["AAPL", "MSFT", "NVDA"], {})

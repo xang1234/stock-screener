@@ -221,9 +221,9 @@ class LocalJobBackend(JobBackend):
         self.update(job_id, status="running", message="Preparing scan job")
         shim = _LocalCeleryTaskShim(self, job_id)
         try:
-            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            from app.services.scan_execution import run_bulk_scan_via_use_case
 
-            result = _run_bulk_scan_via_use_case(shim, scan_id, symbols, criteria)
+            result = run_bulk_scan_via_use_case(shim, scan_id, symbols, criteria)
             status = result.get("status", "completed")
             completed = result.get("completed", len(symbols))
             percent = (completed / len(symbols) * 100) if symbols else 100.0
