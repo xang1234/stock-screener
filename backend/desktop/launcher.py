@@ -113,12 +113,20 @@ def _load_runtime():
 def _run_server(app, settings) -> None:
     import uvicorn
 
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=settings.api_host,
         port=settings.api_port,
         reload=False,
+        loop="asyncio",
+        http="h11",
+        ws="none",
+        lifespan="on",
     )
+    print("Desktop server entering run loop", flush=True)
+    server = uvicorn.Server(config)
+    server.run()
+    print("Desktop server exited", flush=True)
 
 
 def main() -> None:
@@ -158,4 +166,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from multiprocessing import freeze_support
+
+    freeze_support()
     main()
