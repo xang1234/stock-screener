@@ -11,7 +11,7 @@ AppPublisher={#AppPublisher}
 DefaultDirName={localappdata}\StockScanner
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-OutputDir=dist\installer
+OutputDir=..\..\dist\installer
 OutputBaseFilename=StockScanner-Setup
 Compression=lzma
 SolidCompression=yes
@@ -20,7 +20,7 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExeName}
 
 [Files]
-Source: "dist\StockScanner\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\..\dist\StockScanner\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

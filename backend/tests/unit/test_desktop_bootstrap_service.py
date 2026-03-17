@@ -80,12 +80,7 @@ def _make_session_factory(tmp_path: Path):
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def test_desktop_bootstrap_service_runs_seeded_bootstrap(tmp_path, monkeypatch):
-    from app.services import desktop_bootstrap_service as module
-
-    session_factory = _make_session_factory(tmp_path)
-    job_backend = DeferredLocalJobBackend()
-
+def _write_seed_files(tmp_path: Path) -> tuple[Path, Path]:
     universe_seed = tmp_path / "universe_seed.csv"
     universe_seed.write_text(
         "symbol,name,exchange,sector,industry,market_cap\n"
@@ -99,7 +94,10 @@ def test_desktop_bootstrap_service_runs_seeded_bootstrap(tmp_path, monkeypatch):
         "AAPL,Consumer Electronics\nMSFT,Enterprise Software\nNVDA,Semiconductor Fabless\n",
         encoding="utf-8",
     )
+    return universe_seed, industry_seed
 
+
+def _patch_bootstrap_dependencies(monkeypatch, module, universe_seed: Path, industry_seed: Path) -> None:
     monkeypatch.setattr(module.settings, "desktop_mode", True)
     monkeypatch.setattr(module.settings, "desktop_bootstrap_seed_path", str(universe_seed))
     monkeypatch.setattr(module.settings, "desktop_bootstrap_industry_seed_path", str(industry_seed))
@@ -168,6 +166,16 @@ def test_desktop_bootstrap_service_runs_seeded_bootstrap(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "get_eastern_now", lambda: pd.Timestamp("2025-01-10T12:00:00", tz="US/Eastern").to_pydatetime())
     monkeypatch.setattr(module, "get_last_trading_day", lambda d: d)
 
+
+def test_desktop_bootstrap_service_runs_seeded_bootstrap(tmp_path, monkeypatch):
+    from app.services import desktop_bootstrap_service as module
+
+    session_factory = _make_session_factory(tmp_path)
+    job_backend = DeferredLocalJobBackend()
+    universe_seed, industry_seed = _write_seed_files(tmp_path)
+
+    _patch_bootstrap_dependencies(monkeypatch, module, universe_seed, industry_seed)
+
     service = DesktopBootstrapService(
         session_factory=session_factory,
         job_backend=job_backend,
@@ -214,3 +222,92 @@ def test_desktop_bootstrap_service_fails_when_seed_missing(tmp_path, monkeypatch
 
     assert failed["status"] == "failed"
     assert "Universe seed CSV not found" in failed["error"]
+
+
+def test_desktop_bootstrap_service_repairs_partial_universe(tmp_path, monkeypatch):
+    from app.services import desktop_bootstrap_service as module
+
+    session_factory = _make_session_factory(tmp_path)
+    job_backend = DeferredLocalJobBackend()
+    universe_seed, industry_seed = _write_seed_files(tmp_path)
+
+    _patch_bootstrap_dependencies(monkeypatch, module, universe_seed, industry_seed)
+
+    with session_factory() as db:
+        db.add(
+            StockUniverse(
+                symbol="AAPL",
+                name="Apple Inc",
+                exchange="NASDAQ",
+                sector="Technology",
+                industry="Consumer Electronics",
+                market_cap=1,
+                is_active=True,
+                source="manual",
+            )
+        )
+        db.commit()
+
+    service = DesktopBootstrapService(
+        session_factory=session_factory,
+        job_backend=job_backend,
+    )
+
+    service.start_bootstrap()
+    job_backend.run_all()
+    completed = service.get_status()
+
+    assert completed["status"] == "completed"
+    assert completed["steps"][0]["details"]["existing_symbols"] == 1
+    assert completed["steps"][0]["details"]["active_symbols"] == 3
+    assert completed["steps"][0]["details"]["updated"] >= 1
+
+    with session_factory() as db:
+        assert db.query(StockUniverse).filter(StockUniverse.is_active.is_(True)).count() == 3
+
+
+def test_desktop_bootstrap_service_marks_missing_local_job_as_failed(tmp_path, monkeypatch):
+    from app.services import desktop_bootstrap_service as module
+
+    session_factory = _make_session_factory(tmp_path)
+    universe_seed, industry_seed = _write_seed_files(tmp_path)
+
+    _patch_bootstrap_dependencies(monkeypatch, module, universe_seed, industry_seed)
+
+    initial_backend = DeferredLocalJobBackend()
+    service = DesktopBootstrapService(
+        session_factory=session_factory,
+        job_backend=initial_backend,
+    )
+
+    with session_factory() as db:
+        state = service._new_state(
+            status="running",
+            message="Preparing desktop data",
+            job_id="stale-job-id",
+        )
+        state["started_at"] = "2025-01-10T12:00:00"
+        state["current_step"] = "seed_universe"
+        state["steps"][0]["status"] = "running"
+        state["steps"][0]["message"] = "Import starter universe"
+        service._persist_state(db, state)
+
+    restarted_backend = DeferredLocalJobBackend()
+    restarted_service = DesktopBootstrapService(
+        session_factory=session_factory,
+        job_backend=restarted_backend,
+    )
+
+    failed = restarted_service.get_status()
+
+    assert failed["status"] == "failed"
+    assert failed["error"] == DesktopBootstrapService.INTERRUPTED_ERROR
+    assert failed["message"] == DesktopBootstrapService.INTERRUPTED_MESSAGE
+    assert failed["current_step"] is None
+    assert failed["steps"][0]["status"] == "failed"
+    assert failed["steps"][0]["message"] == DesktopBootstrapService.INTERRUPTED_STEP_MESSAGE
+
+    queued = restarted_service.start_bootstrap()
+    assert queued["status"] == "queued"
+    assert queued["job_id"] != "stale-job-id"
+    assert restarted_backend.get_status(queued["job_id"]) is not None

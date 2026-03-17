@@ -28,6 +28,8 @@ frontend/dist
 *.parquet
 *.html
 *.db
+!backend/desktop/universe_seed.csv
+!backend/desktop/ibd_industry_seed.csv
 data/.cache/*
 
 # Logs

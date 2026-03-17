@@ -34,6 +34,9 @@ class DesktopBootstrapService:
 
     SETTING_KEY = "desktop_bootstrap_state"
     SETTING_CATEGORY = "desktop"
+    INTERRUPTED_ERROR = "Previous desktop bootstrap was interrupted before it finished."
+    INTERRUPTED_MESSAGE = "Previous desktop bootstrap was interrupted. Retry setup to continue."
+    INTERRUPTED_STEP_MESSAGE = "Bootstrap interrupted before this step completed."
     STEPS: tuple[tuple[str, str, bool], ...] = (
         ("seed_universe", "Import starter universe", True),
         ("load_industries", "Load starter industry groups", False),
@@ -263,23 +266,25 @@ class DesktopBootstrapService:
             self._persist_state(db, state)
 
     def _seed_universe(self, db: Session) -> dict[str, Any]:
-        existing = db.query(StockUniverse).filter(StockUniverse.is_active.is_(True)).count()
-        if existing > 0:
-            return {
-                "status": "completed",
-                "message": f"Starter universe already present ({existing} active symbols)",
-                "existing_symbols": existing,
-            }
-
         seed_path = Path(settings.desktop_bootstrap_seed_path)
         if not seed_path.exists():
             raise FileNotFoundError(f"Universe seed CSV not found at {seed_path}")
 
+        existing = db.query(StockUniverse).filter(StockUniverse.is_active.is_(True)).count()
         csv_content = seed_path.read_text(encoding="utf-8")
         stats = stock_universe_service.populate_from_csv(db, csv_content)
+        if stats.get("total", 0) <= 0:
+            raise RuntimeError(f"Universe seed CSV at {seed_path} did not import any symbols")
+
+        active_symbols = db.query(StockUniverse).filter(StockUniverse.is_active.is_(True)).count()
         return {
             "status": "completed",
-            "message": f"Imported {stats.get('total', 0)} starter symbols",
+            "message": (
+                f"Seeded starter universe to {active_symbols} active symbols "
+                f"({stats.get('added', 0)} added, {stats.get('updated', 0)} updated)"
+            ),
+            "existing_symbols": existing,
+            "active_symbols": active_symbols,
             **stats,
         }
 
@@ -479,6 +484,8 @@ class DesktopBootstrapService:
 
         snapshot = self._job_backend.get_status(job_id)
         if snapshot is None:
+            if state.get("status") in {"queued", "running"}:
+                return self._mark_interrupted_state(state)
             return state
 
         state["current"] = snapshot.current
@@ -496,6 +503,23 @@ class DesktopBootstrapService:
         if snapshot.error and not state.get("error"):
             state["error"] = snapshot.error
         return state
+
+    def _mark_interrupted_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        current_step = state.get("current_step")
+        interrupted = deepcopy(state)
+        interrupted["status"] = "failed"
+        interrupted["message"] = self.INTERRUPTED_MESSAGE
+        interrupted["error"] = self.INTERRUPTED_ERROR
+        interrupted["current_step"] = None
+        interrupted["completed_at"] = interrupted.get("completed_at") or datetime.utcnow().isoformat()
+
+        for step in interrupted["steps"]:
+            if step["status"] == "running" or (current_step and step["name"] == current_step):
+                step["status"] = "failed"
+                step["message"] = self.INTERRUPTED_STEP_MESSAGE
+                break
+
+        return interrupted
 
     def _new_state(
         self,
