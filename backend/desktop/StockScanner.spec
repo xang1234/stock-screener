@@ -1,7 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path.cwd()
@@ -9,7 +8,30 @@ backend_root = project_root / "backend"
 frontend_dist = project_root / "frontend" / "dist"
 desktop_root = backend_root / "desktop"
 
-api_route_modules = collect_submodules("app.api.v1")
+api_route_modules = [
+    "app.api.v1.app_runtime",
+    "app.api.v1.stocks",
+    "app.api.v1.technical",
+    "app.api.v1.scans",
+    "app.api.v1.universe",
+    "app.api.v1.breadth",
+    "app.api.v1.groups",
+    "app.api.v1.market_scan",
+    "app.api.v1.user_watchlists",
+    "app.api.v1.ticker_validation",
+    "app.api.v1.filter_presets",
+    "app.api.v1.features",
+    "app.api.v1.cache",
+    "app.api.v1.fundamentals",
+    "app.api.v1.data_fetch_status",
+    "app.api.v1.themes",
+    "app.api.v1.user_themes",
+    "app.api.v1.tasks",
+    "app.api.v1.chatbot",
+    "app.api.v1.chatbot_folders",
+    "app.api.v1.prompt_presets",
+    "app.api.v1.config",
+]
 
 datas = [
     (str(desktop_root / "universe_seed.csv"), "backend/desktop"),
