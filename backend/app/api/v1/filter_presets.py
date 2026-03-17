@@ -21,6 +21,7 @@ router = APIRouter()
 
 # ================= Preset CRUD =================
 
+@router.get("", response_model=FilterPresetListResponse, include_in_schema=False)
 @router.get("/", response_model=FilterPresetListResponse)
 async def list_presets(db: Session = Depends(get_db)):
     """Get all filter presets ordered by position."""
@@ -52,6 +53,7 @@ async def list_presets(db: Session = Depends(get_db)):
     )
 
 
+@router.post("", response_model=FilterPresetResponse, include_in_schema=False)
 @router.post("/", response_model=FilterPresetResponse)
 async def create_preset(data: FilterPresetCreate, db: Session = Depends(get_db)):
     """Create a new filter preset."""

@@ -33,6 +33,7 @@ router = APIRouter()
 
 # ================= Theme CRUD =================
 
+@router.get("", response_model=ThemeListResponse, include_in_schema=False)
 @router.get("/", response_model=ThemeListResponse)
 async def list_themes(db: Session = Depends(get_db)):
     """Get all user themes ordered by position."""
@@ -43,6 +44,7 @@ async def list_themes(db: Session = Depends(get_db)):
     )
 
 
+@router.post("", response_model=UserThemeResponse, include_in_schema=False)
 @router.post("/", response_model=UserThemeResponse)
 async def create_theme(theme_data: UserThemeCreate, db: Session = Depends(get_db)):
     """Create a new theme."""

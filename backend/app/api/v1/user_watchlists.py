@@ -30,6 +30,7 @@ router = APIRouter()
 
 # ================= Watchlist CRUD =================
 
+@router.get("", response_model=WatchlistListResponse, include_in_schema=False)
 @router.get("/", response_model=WatchlistListResponse)
 async def list_watchlists(db: Session = Depends(get_db)):
     """Get all user watchlists ordered by position."""
@@ -40,6 +41,7 @@ async def list_watchlists(db: Session = Depends(get_db)):
     )
 
 
+@router.post("", response_model=WatchlistResponse, include_in_schema=False)
 @router.post("/", response_model=WatchlistResponse)
 async def create_watchlist(data: WatchlistCreate, db: Session = Depends(get_db)):
     """Create a new watchlist."""
