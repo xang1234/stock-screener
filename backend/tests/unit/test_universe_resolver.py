@@ -9,7 +9,39 @@ from app.schemas.universe import (
     UniverseDefinition,
     UniverseType,
 )
-from app.services.universe_resolver import resolve_count, resolve_symbols
+from app.services.universe_resolver import (
+    normalize_universe_definition,
+    resolve_count,
+    resolve_symbols,
+)
+
+
+class TestNormalizeUniverseDefinition:
+    def test_passes_through_typed_definition(self):
+        universe = UniverseDefinition(type=UniverseType.ALL)
+
+        result = normalize_universe_definition(universe)
+
+        assert result is universe
+
+    def test_maps_active_string_to_all(self):
+        result = normalize_universe_definition("active")
+
+        assert result.type == UniverseType.ALL
+
+    def test_accepts_typed_dict_payload(self):
+        result = normalize_universe_definition({"type": "all"})
+
+        assert result.type == UniverseType.ALL
+
+    def test_accepts_legacy_name_dict_payload(self):
+        result = normalize_universe_definition({"name": "active"})
+
+        assert result.type == UniverseType.ALL
+
+    def test_invalid_dict_raises_clear_error(self):
+        with pytest.raises(ValueError, match="Unsupported universe definition dict"):
+            normalize_universe_definition({"foo": "bar"})
 
 
 @pytest.fixture
@@ -92,6 +124,39 @@ class TestResolveSymbols:
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["A", "B", "C", "D"])
         result = resolve_symbols(mock_db, u, limit=2)
         assert result == ["A", "B"]
+
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_active_string_normalizes_to_all(self, mock_service, mock_db):
+        mock_service.get_active_symbols.return_value = ["AAPL", "MSFT"]
+
+        result = resolve_symbols(mock_db, "active")
+
+        assert result == ["AAPL", "MSFT"]
+        mock_service.get_active_symbols.assert_called_once_with(
+            mock_db, exchange=None, sp500_only=False, limit=None
+        )
+
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_typed_dict_normalizes_before_resolution(self, mock_service, mock_db):
+        mock_service.get_active_symbols.return_value = ["AAPL"]
+
+        result = resolve_symbols(mock_db, {"type": "all"})
+
+        assert result == ["AAPL"]
+        mock_service.get_active_symbols.assert_called_once_with(
+            mock_db, exchange=None, sp500_only=False, limit=None
+        )
+
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_legacy_name_dict_normalizes_before_resolution(self, mock_service, mock_db):
+        mock_service.get_active_symbols.return_value = ["AAPL"]
+
+        result = resolve_symbols(mock_db, {"name": "active"})
+
+        assert result == ["AAPL"]
+        mock_service.get_active_symbols.assert_called_once_with(
+            mock_db, exchange=None, sp500_only=False, limit=None
+        )
 
 
 class TestResolveCount:

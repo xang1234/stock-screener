@@ -49,6 +49,7 @@ def build_daily_snapshot(
     from app.domain.scanning.ports import NeverCancelledToken
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.progress_sink import CeleryProgressSink
+    from app.services.universe_resolver import normalize_universe_definition
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailySnapshotCommand,
         _is_us_trading_day,
@@ -95,7 +96,7 @@ def build_daily_snapshot(
     cmd = BuildDailySnapshotCommand(
         as_of_date=as_of,
         screener_names=screeners,
-        universe_def={"name": universe_name},
+        universe_def=normalize_universe_definition(universe_name),
         correlation_id=correlation_id,
     )
 

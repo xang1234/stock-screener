@@ -6,7 +6,7 @@ that maps UniverseDefinition → list of stock symbols. Used by the API,
 Celery tasks, and any future scan triggers.
 """
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -16,9 +16,39 @@ from ..services.stock_universe_service import stock_universe_service
 logger = logging.getLogger(__name__)
 
 
+def normalize_universe_definition(universe_def: Any) -> UniverseDefinition:
+    """Coerce legacy or serialized universe payloads to UniverseDefinition."""
+    if isinstance(universe_def, UniverseDefinition):
+        return universe_def
+
+    if isinstance(universe_def, str):
+        legacy = universe_def.strip()
+        if legacy.lower() == "active":
+            return UniverseDefinition(type=UniverseType.ALL)
+        return UniverseDefinition.from_legacy(legacy)
+
+    if isinstance(universe_def, dict):
+        if "type" in universe_def:
+            return UniverseDefinition.model_validate(universe_def)
+
+        for key in ("name", "universe", "value"):
+            legacy = universe_def.get(key)
+            if isinstance(legacy, str):
+                return normalize_universe_definition(legacy)
+
+        raise ValueError(
+            "Unsupported universe definition dict; expected {'type': ...} "
+            "or a legacy name field like {'name': 'active'}"
+        )
+
+    raise ValueError(
+        f"Unsupported universe definition type: {type(universe_def).__name__}"
+    )
+
+
 def resolve_symbols(
     db: Session,
-    universe_def: UniverseDefinition,
+    universe_def: Any,
     limit: Optional[int] = None,
 ) -> List[str]:
     """
@@ -26,12 +56,13 @@ def resolve_symbols(
 
     Args:
         db: Database session
-        universe_def: Typed universe definition
+        universe_def: Typed or normalized universe definition
         limit: Optional max number of symbols to return
 
     Returns:
         List of uppercase stock symbol strings
     """
+    universe_def = normalize_universe_definition(universe_def)
     t = universe_def.type
 
     if t == UniverseType.ALL:
@@ -61,7 +92,7 @@ def resolve_symbols(
 
 def resolve_count(
     db: Session,
-    universe_def: UniverseDefinition,
+    universe_def: Any,
 ) -> int:
     """
     Get the count of symbols in a universe without fetching the full list.
@@ -71,11 +102,12 @@ def resolve_count(
 
     Args:
         db: Database session
-        universe_def: Typed universe definition
+        universe_def: Typed or normalized universe definition
 
     Returns:
         Number of symbols in the universe
     """
+    universe_def = normalize_universe_definition(universe_def)
     if universe_def.type in (UniverseType.CUSTOM, UniverseType.TEST):
         return len(universe_def.symbols)
     return len(resolve_symbols(db, universe_def))
