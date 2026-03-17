@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 from ...config import settings
 from ...schemas.app_runtime import AppCapabilitiesResponse, BootstrapStatusResponse
-from ...wiring.bootstrap import get_desktop_bootstrap_service
 
 router = APIRouter()
 
@@ -31,6 +30,8 @@ def _default_bootstrap_state() -> dict:
 def _get_bootstrap_state() -> dict:
     if not settings.desktop_mode:
         return _default_bootstrap_state()
+    from ...wiring.bootstrap import get_desktop_bootstrap_service
+
     return get_desktop_bootstrap_service().get_status()
 
 
@@ -53,6 +54,8 @@ async def start_desktop_bootstrap(
     """Queue desktop bootstrap work for first-run local installs."""
     if not settings.desktop_mode:
         raise HTTPException(status_code=400, detail="Desktop bootstrap is only available in desktop mode")
+    from ...wiring.bootstrap import get_desktop_bootstrap_service
+
     state = get_desktop_bootstrap_service().start_bootstrap(force=force)
     return BootstrapStatusResponse(**state)
 

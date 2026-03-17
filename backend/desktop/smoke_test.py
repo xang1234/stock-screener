@@ -21,14 +21,17 @@ def _request(method: str, url: str, payload: dict | None = None) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _wait_for_json(url: str, timeout_seconds: int = 60) -> dict:
+def _wait_for_json(url: str, timeout_seconds: int = 120) -> dict:
     deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
     while time.time() < deadline:
         try:
             return _request("GET", url)
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = exc
             time.sleep(1)
-    raise RuntimeError(f"Timed out waiting for {url}")
+    detail = f" (last error: {last_error})" if last_error else ""
+    raise RuntimeError(f"Timed out waiting for {url}{detail}")
 
 
 def _wait_for_status(url: str, terminal_states: set[str], timeout_seconds: int = 240) -> dict:

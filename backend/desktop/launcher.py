@@ -103,6 +103,24 @@ def _write_pid_file(pid_file: Path, base_url: str) -> None:
     atexit.register(_cleanup)
 
 
+def _load_runtime():
+    from app.config import settings
+    from app.main import app as fastapi_app
+
+    return settings, fastapi_app
+
+
+def _run_server(app, settings) -> None:
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=settings.api_host,
+        port=settings.api_port,
+        reload=False,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Launch the Stock Scanner desktop app")
     parser.add_argument("--host", default="127.0.0.1")
@@ -120,8 +138,8 @@ def main() -> None:
 
     _configure_environment(args)
 
-    from app.config import settings
-    import uvicorn
+    print("Initializing desktop runtime...", flush=True)
+    settings, fastapi_app = _load_runtime()
 
     base_url = f"http://{settings.api_host}:{settings.api_port}"
     pid_file = settings.desktop_data_path / "stockscanner.pid"
@@ -135,12 +153,8 @@ def main() -> None:
         )
         thread.start()
 
-    uvicorn.run(
-        "app.main:app",
-        host=settings.api_host,
-        port=settings.api_port,
-        reload=False,
-    )
+    print(f"Starting desktop server at {base_url}", flush=True)
+    _run_server(fastapi_app, settings)
 
 
 if __name__ == "__main__":

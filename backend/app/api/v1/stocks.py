@@ -1,19 +1,28 @@
+from __future__ import annotations
+
 """Stock data API endpoints"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Optional
-from datetime import datetime, timedelta
 import logging
 
 from ...database import get_db
-from ...infra.db.uow import SqlUnitOfWork
-from ...services.data_fetcher import DataFetcher
-from ...services.yfinance_service import yfinance_service
-from ...schemas.stock import StockInfo, StockFundamentals, StockTechnicals, StockData
+from ...schemas.stock import StockInfo, StockTechnicals, StockData
 from ...wiring.bootstrap import get_uow
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_yfinance_service():
+    from ...services.yfinance_service import yfinance_service
+
+    return yfinance_service
+
+
+def _build_data_fetcher(db: Session):
+    from ...services.data_fetcher import DataFetcher
+
+    return DataFetcher(db)
 
 
 @router.get("/{symbol}/info", response_model=StockInfo)
@@ -27,7 +36,7 @@ async def get_stock_info(symbol: str):
     Returns:
         Basic stock information
     """
-    info = yfinance_service.get_stock_info(symbol.upper())
+    info = _get_yfinance_service().get_stock_info(symbol.upper())
 
     if not info:
         logger.error(f"Failed to fetch stock info for {symbol} - check yfinance service logs for details")
@@ -89,7 +98,7 @@ async def get_stock_technicals(
     Returns:
         Technical indicators including MAs, RS rating, 52-week range
     """
-    fetcher = DataFetcher(db)
+    fetcher = _build_data_fetcher(db)
     data = fetcher.get_stock_technicals(symbol.upper(), force_refresh=force_refresh)
 
     if not data:
@@ -124,7 +133,7 @@ async def get_stock_data(
     symbol = symbol.upper()
 
     # Get basic info
-    info = yfinance_service.get_stock_info(symbol)
+    info = _get_yfinance_service().get_stock_info(symbol)
     if not info:
         logger.error(f"Failed to fetch stock info for {symbol} - check yfinance service logs for details")
         raise HTTPException(
@@ -136,13 +145,13 @@ async def get_stock_data(
 
     # Get fundamentals if requested
     if include_fundamentals:
-        fetcher = DataFetcher(db)
+        fetcher = _build_data_fetcher(db)
         fundamentals = fetcher.get_stock_fundamentals(symbol, force_refresh=force_refresh)
         result["fundamentals"] = fundamentals
 
     # Get technicals if requested
     if include_technicals:
-        fetcher = DataFetcher(db)
+        fetcher = _build_data_fetcher(db)
         technicals = fetcher.get_stock_technicals(symbol, force_refresh=force_refresh)
         result["technicals"] = technicals
 
@@ -162,7 +171,7 @@ async def get_stock_industry(symbol: str, db: Session = Depends(get_db)):
     """
     from ...services.ibd_industry_service import IBDIndustryService
 
-    fetcher = DataFetcher(db)
+    fetcher = _build_data_fetcher(db)
     classification = fetcher.get_industry_classification(symbol.upper())
 
     if not classification:
@@ -185,7 +194,7 @@ async def get_stock_industry(symbol: str, db: Session = Depends(get_db)):
 @router.get("/{symbol}/chart-data")
 async def get_chart_data(
     symbol: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
+    uow=Depends(get_uow),
 ):
     """
     Get all chart modal data in a single call from the feature store.

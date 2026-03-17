@@ -3,9 +3,11 @@ Bulk scan API endpoints.
 
 Handles creating scans, checking progress, and retrieving results.
 """
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from typing import Optional, List, Literal
+from typing import List, Literal, Any
 from pydantic import ValidationError
 import logging
 
@@ -22,7 +24,6 @@ from ...schemas.scanning import (
     ScanStatusResponse,
     SetupDetailsResponse,
 )
-from ...schemas.universe import UniverseDefinition
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
@@ -36,19 +37,6 @@ from ...wiring.bootstrap import (
     get_explain_stock_use_case,
     get_job_backend,
 )
-from ...use_cases.scanning.create_scan import CreateScanCommand, CreateScanUseCase
-from ...use_cases.scanning.explain_stock import ExplainStockQuery, ExplainStockUseCase
-from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery, ExportScanResultsUseCase
-from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
-from ...use_cases.scanning.get_peers import GetPeersQuery, GetPeersUseCase
-from ...use_cases.scanning.get_scan_results import GetScanResultsQuery, GetScanResultsUseCase
-from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery, GetScanSymbolsUseCase
-from ...use_cases.scanning.get_setup_details import GetSetupDetailsQuery, GetSetupDetailsUseCase
-from ...use_cases.scanning.get_single_result import GetSingleResultQuery, GetSingleResultUseCase
-from ...infra.db.uow import SqlUnitOfWork
-from ...domain.common.errors import EntityNotFoundError, ValidationError as DomainValidationError
-from ...domain.scanning.filter_spec import FilterSpec, SortSpec, PageSpec, QuerySpec
-from ...domain.scanning.models import ExportFormat, PeerType
 from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
 
 logger = logging.getLogger(__name__)
@@ -58,7 +46,7 @@ router = APIRouter()
 @router.get("", response_model=ScanListResponse)
 async def list_scans(
     limit: int = Query(20, ge=1, le=100, description="Number of scans to return"),
-    uow: SqlUnitOfWork = Depends(get_uow),
+    uow: Any = Depends(get_uow),
 ):
     """Get list of all scans ordered by most recent first."""
     try:
@@ -93,10 +81,13 @@ async def list_scans(
 @router.post("", response_model=ScanCreateResponse)
 async def create_scan(
     request: ScanCreateRequest,
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: CreateScanUseCase = Depends(get_create_scan_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_create_scan_use_case),
 ):
     """Create a new bulk scan via CreateScanUseCase."""
+    from ...domain.common.errors import ValidationError as DomainValidationError
+    from ...use_cases.scanning.create_scan import CreateScanCommand
+
     universe_def = _build_universe_def(request)
     cmd = CreateScanCommand(
         universe_def=universe_def,
@@ -128,8 +119,10 @@ async def create_scan(
     )
 
 
-def _build_universe_def(request: ScanCreateRequest) -> UniverseDefinition:
+def _build_universe_def(request: ScanCreateRequest):
     """Convert request fields into a typed UniverseDefinition."""
+    from ...schemas.universe import UniverseDefinition
+
     if request.universe_def is not None:
         return request.universe_def
     try:
@@ -143,6 +136,8 @@ def _build_optional_page_spec(
     per_page: int | None,
 ) -> PageSpec | None:
     """Build optional pagination settings for symbol-list endpoints."""
+    from ...domain.scanning.filter_spec import PageSpec
+
     if page is None and per_page is None:
         return None
     return PageSpec(
@@ -154,7 +149,7 @@ def _build_optional_page_spec(
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)
 async def get_scan_status(
     scan_id: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
+    uow: Any = Depends(get_uow),
 ):
     """Get scan progress and status."""
     try:
@@ -232,7 +227,7 @@ async def get_scan_status(
 @router.post("/{scan_id}/cancel")
 async def cancel_scan(
     scan_id: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
+    uow: Any = Depends(get_uow),
 ):
     """Cancel a running scan."""
     try:
@@ -273,14 +268,18 @@ async def get_scan_results(
         "table",
         description="Response detail level. 'table' excludes heavy setup-engine payload fields.",
     ),
-    filters: FilterSpec = Depends(parse_scan_filters),
-    sort: SortSpec = Depends(parse_scan_sort),
-    page: PageSpec = Depends(parse_page_spec),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetScanResultsUseCase = Depends(get_get_scan_results_use_case),
+    filters=Depends(parse_scan_filters),
+    sort=Depends(parse_scan_sort),
+    page=Depends(parse_page_spec),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_scan_results_use_case),
 ):
     """Get scan results with pagination, sorting, and filtering."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...domain.scanning.filter_spec import QuerySpec
+        from ...use_cases.scanning.get_scan_results import GetScanResultsQuery
+
         query = GetScanResultsQuery(
             scan_id=scan_id,
             query_spec=QuerySpec(filters=filters, sort=sort, page=page),
@@ -317,13 +316,16 @@ async def get_scan_symbols(
     passes_only: bool = Query(False, description="Show only stocks passing template"),
     page: int | None = Query(None, ge=1, description="Optional page number"),
     per_page: int | None = Query(None, ge=1, le=100, description="Optional results per page"),
-    filters: FilterSpec = Depends(parse_scan_filters),
-    sort: SortSpec = Depends(parse_scan_sort),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetScanSymbolsUseCase = Depends(get_get_scan_symbols_use_case),
+    filters=Depends(parse_scan_filters),
+    sort=Depends(parse_scan_sort),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_scan_symbols_use_case),
 ):
     """Get a lightweight, filtered symbol list for chart navigation."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.get_scan_symbols import GetScanSymbolsQuery
+
         page_spec = _build_optional_page_spec(page, per_page)
         result = use_case.execute(
             uow,
@@ -354,7 +356,7 @@ async def get_scan_symbols(
 @router.delete("/{scan_id}")
 async def delete_scan(
     scan_id: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
+    uow: Any = Depends(get_uow),
 ):
     """Delete a scan and all its results."""
     try:
@@ -388,13 +390,17 @@ async def export_scan_results(
     scan_id: str,
     format: str = Query(default="csv", pattern="^(csv)$"),
     passes_only: bool = Query(False, description="Show only stocks passing template"),
-    filters: FilterSpec = Depends(parse_scan_filters),
-    sort: SortSpec = Depends(parse_scan_sort),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: ExportScanResultsUseCase = Depends(get_export_scan_results_use_case),
+    filters=Depends(parse_scan_filters),
+    sort=Depends(parse_scan_sort),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_export_scan_results_use_case),
 ):
     """Export scan results to CSV with full filter and sort support."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...domain.scanning.models import ExportFormat
+        from ...use_cases.scanning.export_scan_results import ExportScanResultsQuery
+
         query = ExportScanResultsQuery(
             scan_id=scan_id,
             filters=filters,
@@ -422,8 +428,8 @@ async def export_scan_results(
 @router.get("/{scan_id}/filter-options", response_model=FilterOptionsResponse)
 async def get_filter_options(
     scan_id: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetFilterOptionsUseCase = Depends(get_get_filter_options_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_filter_options_use_case),
 ):
     """
     Get unique values for categorical filters from this scan's results.
@@ -432,6 +438,9 @@ async def get_filter_options(
     that exist in the scan results, for populating filter dropdowns.
     """
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.get_filter_options import GetFilterOptionsQuery
+
         result = use_case.execute(uow, GetFilterOptionsQuery(scan_id=scan_id))
     except EntityNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -454,8 +463,8 @@ async def get_single_result(
         "core",
         description="Response detail level. 'core' excludes heavy setup-engine payload fields.",
     ),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetSingleResultUseCase = Depends(get_get_single_result_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_single_result_use_case),
 ):
     """
     Get a single stock result from a scan by symbol.
@@ -464,6 +473,9 @@ async def get_single_result(
     instead of fetching all results and searching client-side.
     """
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.get_single_result import GetSingleResultQuery
+
         result = use_case.execute(
             uow,
             GetSingleResultQuery(
@@ -487,11 +499,14 @@ async def get_single_result(
 async def get_setup_details(
     scan_id: str,
     symbol: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetSetupDetailsUseCase = Depends(get_get_setup_details_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_setup_details_use_case),
 ):
     """Get setup-engine explain payload for a single symbol."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.get_setup_details import GetSetupDetailsQuery
+
         result = use_case.execute(
             uow,
             GetSetupDetailsQuery(scan_id=scan_id, symbol=symbol),
@@ -515,11 +530,15 @@ async def get_industry_peers(
     scan_id: str,
     symbol: str,
     peer_type: str = Query("industry", pattern="^(industry|sector)$"),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: GetPeersUseCase = Depends(get_get_peers_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_peers_use_case),
 ):
     """Get peer stocks in the same industry group or sector as the given symbol."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...domain.scanning.models import PeerType
+        from ...use_cases.scanning.get_peers import GetPeersQuery
+
         query = GetPeersQuery(
             scan_id=scan_id,
             symbol=symbol,
@@ -548,11 +567,14 @@ async def get_industry_peers(
 async def explain_stock(
     scan_id: str,
     symbol: str,
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: ExplainStockUseCase = Depends(get_explain_stock_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_explain_stock_use_case),
 ):
     """Explain why a stock received its composite score and rating."""
     try:
+        from ...domain.common.errors import EntityNotFoundError
+        from ...use_cases.scanning.explain_stock import ExplainStockQuery
+
         query = ExplainStockQuery(scan_id=scan_id, symbol=symbol)
         result = use_case.execute(uow, query)
     except EntityNotFoundError as e:

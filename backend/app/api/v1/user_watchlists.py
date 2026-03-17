@@ -2,11 +2,12 @@
 API endpoints for User-defined Watchlists feature.
 Handles CRUD operations and data retrieval for watchlists and items.
 """
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Dict
-import pandas as pd
 import logging
 
 from ...database import get_db
@@ -14,7 +15,6 @@ from ...models.user_watchlist import UserWatchlist, WatchlistItem
 from ...models.stock import StockPrice
 from ...models.stock_universe import StockUniverse
 from ...models.industry import IBDIndustryGroup
-from ...services.price_cache_service import PriceCacheService
 from ...schemas.user_watchlist import (
     WatchlistCreate, WatchlistUpdate, WatchlistResponse,
     WatchlistItemCreate, WatchlistItemUpdate, WatchlistItemResponse,
@@ -23,8 +23,6 @@ from ...schemas.user_watchlist import (
     ReorderWatchlistsRequest, ReorderItemsRequest,
     BulkAddItemsRequest,
 )
-from ...scanners.criteria.rs_sparkline import RSSparklineCalculator
-from ...scanners.criteria.price_sparkline import PriceSparklineCalculator
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -176,6 +174,12 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     """
     if not symbols:
         return {}
+
+    import pandas as pd
+
+    from ...scanners.criteria.price_sparkline import PriceSparklineCalculator
+    from ...scanners.criteria.rs_sparkline import RSSparklineCalculator
+    from ...services.price_cache_service import PriceCacheService
 
     result = {}
 

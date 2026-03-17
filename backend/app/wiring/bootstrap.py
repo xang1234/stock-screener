@@ -24,28 +24,7 @@ from typing import Iterator
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
-from app.infra.db.uow import SqlUnitOfWork
-from app.infra.providers.stock_data import DataPrepStockDataProvider
-from app.infra.tasks.dispatcher import CeleryTaskDispatcher, LocalTaskDispatcher
-from app.scanners.scan_orchestrator import ScanOrchestrator
-from app.scanners.screener_registry import screener_registry
-from app.services.desktop_bootstrap_service import DesktopBootstrapService
 from app.services.job_backend import JobBackend, LocalJobBackend, create_job_backend
-from app.use_cases.scanning.create_scan import CreateScanUseCase
-from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
-from app.use_cases.scanning.get_peers import GetPeersUseCase
-from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
-from app.use_cases.scanning.get_scan_symbols import GetScanSymbolsUseCase
-from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
-from app.use_cases.scanning.export_scan_results import ExportScanResultsUseCase
-from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
-from app.use_cases.feature_store.build_daily_snapshot import (
-    BuildDailyFeatureSnapshotUseCase,
-)
-from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase
-from app.use_cases.feature_store.list_runs import ListFeatureRunsUseCase
-from app.use_cases.scanning.explain_stock import ExplainStockUseCase
-from app.use_cases.scanning.get_setup_details import GetSetupDetailsUseCase
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -58,6 +37,8 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 
         uow: SqlUnitOfWork = Depends(get_uow)
     """
+    from app.infra.db.uow import SqlUnitOfWork
+
     uow = SqlUnitOfWork(SessionLocal)
     yield uow
 
@@ -89,6 +70,8 @@ def get_task_dispatcher() -> TaskDispatcher:
     """Return the runtime-appropriate task dispatcher."""
     global _task_dispatcher
     if _task_dispatcher is None:
+        from app.infra.tasks.dispatcher import CeleryTaskDispatcher, LocalTaskDispatcher
+
         if settings.desktop_mode:
             _task_dispatcher = LocalTaskDispatcher(get_local_job_backend())
         else:
@@ -100,6 +83,8 @@ def get_desktop_bootstrap_service() -> DesktopBootstrapService:
     """Return the desktop bootstrap orchestrator."""
     global _desktop_bootstrap_service
     if _desktop_bootstrap_service is None:
+        from app.services.desktop_bootstrap_service import DesktopBootstrapService
+
         _desktop_bootstrap_service = DesktopBootstrapService(
             session_factory=SessionLocal,
             job_backend=get_local_job_backend(),
@@ -112,46 +97,64 @@ def get_desktop_bootstrap_service() -> DesktopBootstrapService:
 
 def get_create_scan_use_case() -> CreateScanUseCase:
     """Build a CreateScanUseCase wired with infrastructure adapters."""
+    from app.use_cases.scanning.create_scan import CreateScanUseCase
+
     return CreateScanUseCase(dispatcher=get_task_dispatcher())
 
 
 def get_get_scan_results_use_case() -> GetScanResultsUseCase:
     """Build a GetScanResultsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_scan_results import GetScanResultsUseCase
+
     return GetScanResultsUseCase()
 
 
 def get_get_scan_symbols_use_case() -> GetScanSymbolsUseCase:
     """Build a GetScanSymbolsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_scan_symbols import GetScanSymbolsUseCase
+
     return GetScanSymbolsUseCase()
 
 
 def get_get_filter_options_use_case() -> GetFilterOptionsUseCase:
     """Build a GetFilterOptionsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_filter_options import GetFilterOptionsUseCase
+
     return GetFilterOptionsUseCase()
 
 
 def get_get_single_result_use_case() -> GetSingleResultUseCase:
     """Build a GetSingleResultUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_single_result import GetSingleResultUseCase
+
     return GetSingleResultUseCase()
 
 
 def get_get_setup_details_use_case() -> GetSetupDetailsUseCase:
     """Build a GetSetupDetailsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_setup_details import GetSetupDetailsUseCase
+
     return GetSetupDetailsUseCase()
 
 
 def get_get_peers_use_case() -> GetPeersUseCase:
     """Build a GetPeersUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.get_peers import GetPeersUseCase
+
     return GetPeersUseCase()
 
 
 def get_export_scan_results_use_case() -> ExportScanResultsUseCase:
     """Build an ExportScanResultsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.export_scan_results import ExportScanResultsUseCase
+
     return ExportScanResultsUseCase()
 
 
 def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:
     """Build a RunBulkScanUseCase wired with the scan orchestrator."""
+    from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
+
     return RunBulkScanUseCase(
         scanner=get_scan_orchestrator(),
         data_provider=get_stock_data_provider(),
@@ -160,21 +163,31 @@ def get_run_bulk_scan_use_case() -> RunBulkScanUseCase:
 
 def get_explain_stock_use_case() -> ExplainStockUseCase:
     """Build an ExplainStockUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.scanning.explain_stock import ExplainStockUseCase
+
     return ExplainStockUseCase()
 
 
 def get_list_feature_runs_use_case() -> ListFeatureRunsUseCase:
     """Build a ListFeatureRunsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.feature_store.list_runs import ListFeatureRunsUseCase
+
     return ListFeatureRunsUseCase()
 
 
 def get_compare_feature_runs_use_case() -> CompareFeatureRunsUseCase:
     """Build a CompareFeatureRunsUseCase (no extra dependencies — reads via UoW)."""
+    from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase
+
     return CompareFeatureRunsUseCase()
 
 
 def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
     """Build a BuildDailyFeatureSnapshotUseCase wired with the scan orchestrator."""
+    from app.use_cases.feature_store.build_daily_snapshot import (
+        BuildDailyFeatureSnapshotUseCase,
+    )
+
     return BuildDailyFeatureSnapshotUseCase(scanner=get_scan_orchestrator())
 
 
@@ -187,6 +200,8 @@ def get_stock_data_provider() -> StockDataProvider:
     """Return a singleton StockDataProvider (wraps DataPreparationLayer)."""
     global _stock_data_provider
     if _stock_data_provider is None:
+        from app.infra.providers.stock_data import DataPrepStockDataProvider
+
         _stock_data_provider = DataPrepStockDataProvider()
     return _stock_data_provider
 
@@ -200,6 +215,9 @@ def get_scan_orchestrator() -> ScanOrchestrator:
     """Return a singleton ScanOrchestrator wired with production dependencies."""
     global _scan_orchestrator
     if _scan_orchestrator is None:
+        from app.scanners.scan_orchestrator import ScanOrchestrator
+        from app.scanners.screener_registry import screener_registry
+
         _scan_orchestrator = ScanOrchestrator(
             data_provider=get_stock_data_provider(),
             registry=screener_registry,

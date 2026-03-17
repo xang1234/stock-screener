@@ -25,11 +25,16 @@ from ...schemas.groups import (
     BackfillRequest,
     BackfillResponse,
 )
-from ...services.ibd_group_rank_service import IBDGroupRankService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_group_rank_service():
+    from ...services.ibd_group_rank_service import IBDGroupRankService
+
+    return IBDGroupRankService.get_instance()
 
 
 def _require_task_controls() -> None:
@@ -51,7 +56,7 @@ async def get_current_rankings(
     Returns the most recent ranking snapshot with rank changes
     for 1 week, 1 month, 3 months, and 6 months.
     """
-    service = IBDGroupRankService.get_instance()
+    service = _get_group_rank_service()
     rankings = service.get_current_rankings(db, limit=limit)
 
     if not rankings:
@@ -86,7 +91,7 @@ async def get_rank_movers(
     Returns:
         Lists of rank gainers and losers
     """
-    service = IBDGroupRankService.get_instance()
+    service = _get_group_rank_service()
     movers = service.get_rank_movers(db, period=period, limit=limit)
 
     if not movers.get('gainers') and not movers.get('losers'):
@@ -118,7 +123,7 @@ async def get_group_detail(
     Returns:
         Current rank, rank changes, and historical data points
     """
-    service = IBDGroupRankService.get_instance()
+    service = _get_group_rank_service()
     detail = service.get_group_history(db, group, days=days)
 
     if not detail.get('history'):

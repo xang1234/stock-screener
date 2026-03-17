@@ -9,27 +9,14 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ...domain.common.errors import (
-    EntityNotFoundError,
-    ValidationError as DomainValidationError,
-)
-from ...infra.db.uow import SqlUnitOfWork
 from ...schemas.feature_store import (
     CompareRunsResponse,
     FeatureRunResponse,
     ListRunsResponse,
-)
-from ...use_cases.feature_store.compare_runs import (
-    CompareFeatureRunsUseCase,
-    CompareRunsQuery,
-)
-from ...use_cases.feature_store.list_runs import (
-    ListFeatureRunsUseCase,
-    ListRunsQuery,
 )
 from ...wiring.bootstrap import (
     get_compare_feature_runs_use_case,
@@ -52,11 +39,14 @@ async def list_runs(
     date_from: Optional[date] = Query(None, description="Start date (inclusive)"),
     date_to: Optional[date] = Query(None, description="End date (inclusive)"),
     limit: int = Query(50, ge=1, le=200, description="Max runs to return"),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: ListFeatureRunsUseCase = Depends(get_list_feature_runs_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_list_feature_runs_use_case),
 ):
     """List feature runs with row counts and publish status."""
     try:
+        from ...domain.common.errors import ValidationError as DomainValidationError
+        from ...use_cases.feature_store.list_runs import ListRunsQuery
+
         query = ListRunsQuery(
             status=status,
             date_from=date_from,
@@ -78,11 +68,17 @@ async def compare_runs(
     run_a: int = Query(..., description="First run ID (baseline)"),
     run_b: int = Query(..., description="Second run ID (comparison)"),
     limit: int = Query(50, ge=1, le=500, description="Max movers to return"),
-    uow: SqlUnitOfWork = Depends(get_uow),
-    use_case: CompareFeatureRunsUseCase = Depends(get_compare_feature_runs_use_case),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_compare_feature_runs_use_case),
 ):
     """Compare two feature runs: added/removed symbols and score movers."""
     try:
+        from ...domain.common.errors import (
+            EntityNotFoundError,
+            ValidationError as DomainValidationError,
+        )
+        from ...use_cases.feature_store.compare_runs import CompareRunsQuery
+
         query = CompareRunsQuery(run_a=run_a, run_b=run_b, limit=limit)
         result = use_case.execute(uow, query)
     except DomainValidationError as e:

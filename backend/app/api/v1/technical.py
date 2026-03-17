@@ -1,13 +1,10 @@
 """
 Technical analysis API endpoints.
 """
-from fastapi import APIRouter, Query, HTTPException
-from typing import Optional
-import logging
-import numpy as np
+from __future__ import annotations
 
-from ...wiring.bootstrap import get_scan_orchestrator
-from ...services.yfinance_service import yfinance_service
+from fastapi import APIRouter, Query, HTTPException
+import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -15,6 +12,8 @@ router = APIRouter()
 
 def convert_numpy_types(obj):
     """Convert numpy types to native Python types for JSON serialization."""
+    import numpy as np
+
     if isinstance(obj, dict):
         return {key: convert_numpy_types(value) for key, value in obj.items()}
     elif isinstance(obj, list):
@@ -61,6 +60,8 @@ async def scan_minervini(
     """
     try:
         logger.info(f"Minervini scan request for {symbol}, include_vcp={include_vcp}")
+        from ...wiring.bootstrap import get_scan_orchestrator
+
         orchestrator = get_scan_orchestrator()
         result = orchestrator.scan_stock_multi(
             symbol=symbol.upper(),
@@ -89,6 +90,7 @@ async def get_rs_rating(symbol: str):
     Returns RS rating (0-100) and performance breakdown.
     """
     from ...scanners.criteria.relative_strength import RelativeStrengthCalculator
+    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
     stock_data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
@@ -130,6 +132,7 @@ async def get_stage_analysis(symbol: str):
     Returns stage number, trend information, and confidence score.
     """
     from ...scanners.criteria.stage_analysis import WeinsteinstageAnalyzer
+    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
@@ -182,6 +185,7 @@ async def get_ma_analysis(symbol: str):
     Returns alignment status, scores, and detailed breakdown.
     """
     from ...scanners.criteria.moving_averages import MovingAverageAnalyzer
+    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
@@ -233,6 +237,7 @@ async def detect_vcp(symbol: str):
     Returns VCP detection status, score, and pattern details.
     """
     from ...scanners.criteria.vcp_detection import VCPDetector
+    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data
     data = yfinance_service.get_historical_data(symbol.upper(), period="6mo")
@@ -264,6 +269,8 @@ async def get_52w_position(symbol: str):
 
     Returns positioning metrics and whether criteria are met.
     """
+    from ...services.yfinance_service import yfinance_service
+
     # Fetch price data (2 years to ensure we have 252+ trading days)
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
 
