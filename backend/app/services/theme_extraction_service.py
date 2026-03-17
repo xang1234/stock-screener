@@ -33,7 +33,7 @@ from ..models.theme import (
 )
 from ..models.app_settings import AppSetting
 from ..config import settings
-from .llm import LLMService, LLMError
+from .llm import LLMService, LLMError, LLMQuotaExceededError
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from .theme_lifecycle_service import set_initial_lifecycle_defaults
@@ -947,11 +947,27 @@ Example themes for this pipeline: {examples_str}
         name = error.__class__.__name__.lower()
         if isinstance(error, ThemeExtractionParseError):
             return "llm_response_parse_error"
+        if isinstance(error, LLMQuotaExceededError):
+            return "llm_provider_quota_exhausted"
         if isinstance(error, LLMError):
             return f"llm_{name}"
         if "json" in name:
             return "json_decode_error"
         return name
+
+    def _is_provider_quota_exhausted(self, error: Exception) -> bool:
+        """Detect hard provider quota errors that should abort the current batch."""
+        if isinstance(error, LLMQuotaExceededError):
+            return True
+        error_text = str(error).lower()
+        quota_markers = (
+            "tokens per day",
+            "tpd",
+            "quota exceeded",
+            "insufficient_quota",
+            "need more tokens",
+        )
+        return any(marker in error_text for marker in quota_markers)
 
     def _process_item_transactional(self, item_id: int) -> tuple[bool, int]:
         """
@@ -1436,6 +1452,8 @@ Example themes for this pipeline: {examples_str}
             "errors": 0,
             "new_themes": [],
             "pipeline": self.pipeline,
+            "aborted": False,
+            "abort_reason": None,
         }
 
         for item_id in process_item_ids:
@@ -1447,6 +1465,14 @@ Example themes for this pipeline: {examples_str}
             except Exception as e:
                 logger.error(f"Error processing item {item_id}: {e}")
                 results["errors"] += 1
+                if self._is_provider_quota_exhausted(e):
+                    results["aborted"] = True
+                    results["abort_reason"] = str(e)
+                    logger.error(
+                        "Aborting extraction batch for pipeline=%s due to provider quota exhaustion.",
+                        self.pipeline,
+                    )
+                    break
 
         # Get newly discovered themes
         recent_themes = self.db.query(ThemeCluster).filter(

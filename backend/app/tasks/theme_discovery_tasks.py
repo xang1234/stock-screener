@@ -162,6 +162,8 @@ def extract_themes(limit: int = 50, pipeline: str = None):
         'errors': 0,
         'new_themes': [],
         'pipelines': pipelines,
+        'aborted': False,
+        'abort_reason': None,
     }
 
     try:
@@ -175,6 +177,14 @@ def extract_themes(limit: int = 50, pipeline: str = None):
             combined_result['total_mentions'] += result.get('total_mentions', 0)
             combined_result['errors'] += result.get('errors', 0)
             combined_result['new_themes'].extend(result.get('new_themes', []))
+            if result.get('aborted'):
+                combined_result['aborted'] = True
+                combined_result['abort_reason'] = result.get('abort_reason')
+                logger.error(
+                    "Aborting theme extraction task after pipeline %s reported provider quota exhaustion.",
+                    p,
+                )
+                break
 
         result = combined_result
 
@@ -195,6 +205,8 @@ def extract_themes(limit: int = 50, pipeline: str = None):
             'total_mentions': result['total_mentions'],
             'errors': result['errors'],
             'new_themes': result['new_themes'],
+            'aborted': result.get('aborted', False),
+            'abort_reason': result.get('abort_reason'),
             'duration_seconds': round(duration, 2),
             'timestamp': datetime.now().isoformat()
         }

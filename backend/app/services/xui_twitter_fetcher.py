@@ -123,7 +123,10 @@ class XUITwitterFetcher:
                 f"XUI read failed for source '{source.name}' ({source_kind}): {details}"
             )
 
-        since_bound = _normalize_datetime(since)
+        # In incremental mode, xui-reader checkpoints already define "newness".
+        # Applying a separate `since` cutoff can accidentally drop valid items
+        # (for example after an earlier empty run advanced `last_fetched_at`).
+        since_bound = None if settings.xui_new_only else _normalize_datetime(since)
         records: list[dict[str, Any]] = []
         for item in result.items:
             published_at = _normalize_datetime(item.created_at)

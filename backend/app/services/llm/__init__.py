@@ -34,6 +34,7 @@ from .llm_service import (
     LLMService,
     LLMError,
     LLMRateLimitError,
+    LLMQuotaExceededError,
     LLMContextWindowError,
     quick_completion,
 )
@@ -76,6 +77,7 @@ __all__ = [
     # Exceptions
     "LLMError",
     "LLMRateLimitError",
+    "LLMQuotaExceededError",
     "LLMContextWindowError",
     # Quick helper
     "quick_completion",

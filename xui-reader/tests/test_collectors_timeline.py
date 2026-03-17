@@ -43,14 +43,17 @@ class FakePage:
         *,
         contents: list[str],
         selectors: dict[str, FakeElement | None] | None = None,
+        current_url: str = "about:blank",
     ) -> None:
         self._contents = contents
         self._selectors = selectors or {}
         self._index = 0
-        self._url = "about:blank"
+        self._url = current_url
         self.goto_calls: list[str] = []
         self.route_calls: list[FakeRouteCall] = []
         self.scroll_calls = 0
+        self.wait_for_selector_calls: list[str] = []
+        self.wait_for_timeout_calls = 0
 
     @property
     def url(self) -> str:
@@ -85,6 +88,18 @@ class FakePage:
     def inner_text(self, selector: str, timeout: int | None = None) -> str:
         _ = (selector, timeout)
         return ""
+
+    def wait_for_selector(self, selector: str, timeout: int | None = None) -> None:
+        _ = timeout
+        self.wait_for_selector_calls.append(selector)
+        if self._index < len(self._contents) - 1:
+            self._index += 1
+
+    def wait_for_timeout(self, timeout_ms: int) -> None:
+        _ = timeout_ms
+        self.wait_for_timeout_calls += 1
+        if self._index < len(self._contents) - 1:
+            self._index += 1
 
 
 class FakeSession:
@@ -161,6 +176,14 @@ def test_select_user_tab_returns_actionable_diagnostics_on_failure() -> None:
     assert "Tried selectors:" in result.diagnostics
 
 
+def test_select_user_tab_accepts_matching_url_when_selectors_missing() -> None:
+    page = FakePage(contents=[""], current_url="https://x.com/alice")
+    result = select_user_tab(page, handle="alice", tab="posts")
+
+    assert result.selected is True
+    assert result.strategy == "url"
+
+
 def test_timeline_collector_list_collection_stops_on_stagnation() -> None:
     page = FakePage(
         contents=[
@@ -231,6 +254,29 @@ def test_timeline_collector_user_collection_selects_tab_and_stops_on_max_scrolls
     assert result.stats.stop_reason == "max_scrolls"
     assert result.stats.scroll_rounds == 1
     assert [item.tweet_id for item in result.items] == ["1", "2"]
+
+
+def test_timeline_collector_waits_for_async_timeline_before_scrape() -> None:
+    page = FakePage(
+        contents=[
+            "<div>loading timeline...</div>",
+            '<a href="/alice/status/12345">tweet</a>',
+            '<a href="/alice/status/12345">tweet</a>',
+        ],
+    )
+    collector = TimelineCollector(
+        RuntimeConfig(),
+        FakeSession(page),
+        bounds=ScrollBounds(max_scrolls=0, stagnation_rounds=2),
+    )
+    source = SourceRef(source_id="user:alice", kind=SourceKind.USER, value="@alice")
+
+    result = collector.collect(source)
+
+    assert result.stats is not None
+    assert result.stats.observed_ids == 1
+    assert [item.tweet_id for item in result.items] == ["12345"]
+    assert page.wait_for_selector_calls
 
 
 def test_timeline_collector_raises_when_user_tab_cannot_be_selected() -> None:

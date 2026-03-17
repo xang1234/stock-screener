@@ -224,8 +224,45 @@ def test_fetch_raises_when_xui_read_outcome_is_failed(monkeypatch: pytest.Monkey
         fetcher.fetch(source, since=None)
 
 
-def test_fetch_applies_since_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_skips_since_filter_when_new_only_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_xui_defaults(monkeypatch)
+
+    source = ContentSource(name="@alice", source_type="twitter", url="@alice")
+    old = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
+    new = datetime(2026, 3, 1, 1, 0, tzinfo=timezone.utc)
+
+    bindings = SimpleNamespace(
+        parse_list_id=lambda _raw: (_ for _ in ()).throw(ValueError("bad list")),
+        parse_handle=lambda _raw: "alice",
+        source_ref_cls=_FakeSourceRef,
+        source_kind_enum=_FakeSourceKind,
+        load_runtime_config=lambda _path: SimpleNamespace(sources=()),
+        run_configured_read=lambda _config, **_kwargs: SimpleNamespace(
+            failed=0,
+            outcomes=(SimpleNamespace(ok=True, error=None),),
+            items=(
+                SimpleNamespace(tweet_id="10", text="old", author_handle="@alice", created_at=old),
+                SimpleNamespace(tweet_id="11", text="new", author_handle="@alice", created_at=new),
+            ),
+        ),
+        probe_auth_status=lambda **_kwargs: SimpleNamespace(
+            authenticated=True,
+            status_code="authenticated",
+            message="ok",
+        ),
+    )
+    monkeypatch.setattr("app.services.xui_twitter_fetcher._load_xui_bindings", lambda: bindings)
+
+    fetcher = XUITwitterFetcher()
+    result = fetcher.fetch(source, since=datetime(2026, 3, 1, 0, 30, tzinfo=timezone.utc))
+
+    assert len(result) == 2
+    assert {row["content"] for row in result} == {"old", "new"}
+
+
+def test_fetch_applies_since_filter_when_new_only_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_xui_defaults(monkeypatch)
+    monkeypatch.setattr(settings, "xui_new_only", False)
 
     source = ContentSource(name="@alice", source_type="twitter", url="@alice")
     old = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)

@@ -59,6 +59,12 @@ class TimelinePage(Protocol):
     def route(self, url: str, handler: object) -> Any:
         """Install request route."""
 
+    def wait_for_selector(self, selector: str, timeout: int | None = None) -> Any:
+        """Wait for selector presence when supported by page implementation."""
+
+    def wait_for_timeout(self, timeout_ms: int) -> Any:
+        """Pause execution for a short duration when supported."""
+
 
 class BrowserSessionLike(Protocol):
     def new_page(self) -> TimelinePage:
@@ -112,12 +118,17 @@ class TimelineCollector:
             self._route_configurer(page, self._config)
             target_url, handle = _canonical_target(source)
             _navigate(page, target_url, self._config.browser.navigation_timeout_ms)
+            _wait_for_timeline_render(page, timeout_ms=min(8_000, self._config.browser.navigation_timeout_ms))
 
             if source.kind is SourceKind.USER:
                 selected_tab = source.tab if source.tab else self._user_tab
                 tab_result = select_user_tab(page, handle=handle, tab=selected_tab)
                 if not tab_result.selected:
                     raise CollectError(tab_result.diagnostics)
+                _wait_for_timeline_render(
+                    page,
+                    timeout_ms=min(8_000, self._config.browser.navigation_timeout_ms),
+                )
 
             return _collect_dom_loop(
                 page,
@@ -159,6 +170,16 @@ def select_user_tab(page: TimelinePage, *, handle: str, tab: str) -> TabSelectio
                 selector=selector,
                 attempted_selectors=tuple(attempted),
             )
+
+    # X profile tab markup shifts periodically. If navigation already landed on the
+    # requested tab URL, accept it without a brittle selector click.
+    if _url_matches_user_tab(page.url, normalized_handle, normalized_tab):
+        return TabSelectionResult(
+            tab=normalized_tab,
+            selected=True,
+            strategy="url",
+            attempted_selectors=tuple(attempted),
+        )
 
     joined = ", ".join(attempted)
     return TabSelectionResult(
@@ -251,6 +272,7 @@ def _collect_dom_loop(
             break
 
         _scroll_once(page)
+        _wait_for_timeline_render(page, timeout_ms=1_200)
         scroll_rounds += 1
 
     if limit is not None:
@@ -324,21 +346,66 @@ def _href_selectors_for_tab(handle: str, tab: str) -> tuple[str, ...]:
     suffix = _USER_TAB_SUFFIX[tab]
     if suffix:
         return (
+            f'a[role="tab"][href="/{handle}{suffix}"]',
+            f'a[role="tab"][href="/{handle}{suffix}/"]',
+            f'a[role="tab"][href^="/{handle}{suffix}?"]',
             f'nav a[href="/{handle}{suffix}"]',
             f'nav a[href="/{handle}{suffix}/"]',
             f'nav a[href^="/{handle}"][href*="{suffix}"]',
+            f'a[href="/{handle}{suffix}"]',
+            f'a[href="/{handle}{suffix}/"]',
+            f'a[href^="/{handle}{suffix}?"]',
+            f'a[href="https://x.com/{handle}{suffix}"]',
+            f'a[href="https://x.com/{handle}{suffix}/"]',
+            f'a[href^="https://x.com/{handle}{suffix}?"]',
+            f'a[href="https://twitter.com/{handle}{suffix}"]',
+            f'a[href="https://twitter.com/{handle}{suffix}/"]',
+            f'a[href^="https://twitter.com/{handle}{suffix}?"]',
         )
     return (
+        f'a[role="tab"][href="/{handle}"]',
+        f'a[role="tab"][href="/{handle}/"]',
+        f'a[role="tab"][href^="/{handle}?"]',
         f'nav a[href="/{handle}"]',
         f'nav a[href="/{handle}/"]',
+        f'a[href="/{handle}"]',
+        f'a[href="/{handle}/"]',
+        f'a[href^="/{handle}?"]',
+        f'a[href="https://x.com/{handle}"]',
+        f'a[href="https://x.com/{handle}/"]',
+        f'a[href^="https://x.com/{handle}?"]',
+        f'a[href="https://twitter.com/{handle}"]',
+        f'a[href="https://twitter.com/{handle}/"]',
+        f'a[href^="https://twitter.com/{handle}?"]',
     )
 
 
 def _text_selectors_for_tab(tab: str) -> tuple[str, ...]:
     selectors: list[str] = []
     for text in _USER_TAB_TEXT[tab]:
+        selectors.append(f'a[role="tab"]:has-text("{text}")')
+        selectors.append(f'[role="tablist"] a:has-text("{text}")')
         selectors.append(f'nav a:has-text("{text}")')
+        selectors.append(f'a:has-text("{text}")')
     return tuple(selectors)
+
+
+def _url_matches_user_tab(current_url: str, handle: str, tab: str) -> bool:
+    try:
+        parsed = urlparse(current_url)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.netloc.lower() not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}:
+        return False
+
+    path = parsed.path.rstrip("/")
+    base = f"/{handle}"
+    suffix = _USER_TAB_SUFFIX[tab]
+    if not suffix:
+        return path == base
+    return path == f"{base}{suffix}"
 
 
 def _click_selector_if_visible(page: TimelinePage, selector: str) -> bool:
@@ -374,6 +441,46 @@ def _extract_new_ids(html: str, seen_ids: set[str]) -> list[str]:
         seen_ids.add(tweet_id)
         new_ids.append(tweet_id)
     return new_ids
+
+
+def _wait_for_timeline_render(page: TimelinePage, *, timeout_ms: int) -> None:
+    """Best-effort wait for async timeline hydration before scraping page content."""
+    if timeout_ms <= 0:
+        return
+    if _page_has_status_links(page):
+        return
+
+    wait_for_selector = getattr(page, "wait_for_selector", None)
+    if callable(wait_for_selector):
+        per_selector_timeout = max(300, min(timeout_ms // 2, 4_000))
+        for selector in ('a[href*="/status/"]', 'a[href*="/i/status/"]'):
+            try:
+                wait_for_selector(selector, timeout=per_selector_timeout)
+            except Exception:
+                continue
+            if _page_has_status_links(page):
+                return
+
+    wait_for_timeout = getattr(page, "wait_for_timeout", None)
+    if callable(wait_for_timeout):
+        elapsed = 0
+        step_ms = 200
+        while elapsed < timeout_ms:
+            try:
+                wait_for_timeout(step_ms)
+            except Exception:
+                break
+            elapsed += step_ms
+            if _page_has_status_links(page):
+                return
+
+
+def _page_has_status_links(page: TimelinePage) -> bool:
+    try:
+        html = _read_page_content(page)
+    except Exception:
+        return False
+    return bool(_TWEET_STATUS_RE.search(html))
 
 
 def _read_page_content(page: TimelinePage) -> str:

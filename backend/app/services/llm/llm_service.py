@@ -52,6 +52,10 @@ class LLMRateLimitError(LLMError):
         self.retry_after = retry_after
 
 
+class LLMQuotaExceededError(LLMRateLimitError):
+    """Raised when provider hard quota is exhausted (for example Groq TPD)."""
+
+
 class LLMContextWindowError(LLMError):
     """Raised when request exceeds context window."""
     def __init__(self, message: str, tokens_used: Optional[int] = None, token_limit: Optional[int] = None):
@@ -200,10 +204,19 @@ class LLMService:
         all_models = [params["model"]] + fallbacks
         last_error = None
 
-        for model in all_models:
+        for index, model in enumerate(all_models):
             params["model"] = model
             try:
                 return await self._call_with_retry(params, num_retries)
+            except LLMQuotaExceededError as e:
+                # Fail fast when quota is exhausted and all remaining fallbacks
+                # are on the same provider (e.g., Groq-only extraction presets).
+                remaining_models = all_models[index + 1 :]
+                if self._should_fail_fast_on_quota(model, remaining_models):
+                    raise
+                logger.warning(f"Model {model} quota exhausted: {e}")
+                last_error = e
+                continue
             except LLMContextWindowError:
                 raise
             except Exception as e:
@@ -247,6 +260,14 @@ class LLMService:
                 if groq_key:
                     retry_after = self._extract_retry_after(e)
                     self._groq_key_manager.report_rate_limit(groq_key, retry_after)
+                else:
+                    retry_after = self._extract_retry_after(e)
+
+                if self._is_provider_quota_exhausted(e):
+                    raise LLMQuotaExceededError(
+                        f"Provider quota exhausted: {e}",
+                        retry_after=retry_after,
+                    )
 
                 if attempt >= num_retries:
                     raise LLMRateLimitError(f"Rate limit exceeded after {num_retries} retries: {e}")
@@ -279,6 +300,14 @@ class LLMService:
                     if groq_key:
                         retry_after = self._extract_retry_after(e)
                         self._groq_key_manager.report_rate_limit(groq_key, retry_after)
+                    else:
+                        retry_after = self._extract_retry_after(e)
+
+                    if self._is_provider_quota_exhausted(e):
+                        raise LLMQuotaExceededError(
+                            f"Provider quota exhausted: {e}",
+                            retry_after=retry_after,
+                        )
 
                     if attempt >= num_retries:
                         raise LLMRateLimitError(f"Rate limit exceeded after {num_retries} retries: {e}")
@@ -307,6 +336,27 @@ class LLMService:
                 await asyncio.sleep(delay)
 
         raise LLMError(f"Unexpected error: {last_error}")
+
+    def _should_fail_fast_on_quota(self, model: str, remaining_models: List[str]) -> bool:
+        """Return True when quota exhaustion means remaining fallbacks are unlikely to help."""
+        if not model.startswith("groq/"):
+            return False
+        if not remaining_models:
+            return True
+        return all(candidate.startswith("groq/") for candidate in remaining_models)
+
+    def _is_provider_quota_exhausted(self, error: Exception) -> bool:
+        """Detect hard quota exhaustion signals that should bypass retries."""
+        error_text = str(error).lower()
+        quota_markers = (
+            "tokens per day",
+            "tpd",
+            "quota exceeded",
+            "insufficient_quota",
+            "billing hard limit",
+            "need more tokens",
+        )
+        return any(marker in error_text for marker in quota_markers)
 
     def _extract_retry_after(self, error: Exception) -> Optional[float]:
         """Extract retry-after value from error message."""

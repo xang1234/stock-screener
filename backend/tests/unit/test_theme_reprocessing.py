@@ -504,6 +504,42 @@ class TestPipelineStateDrivenBatching:
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_process_batch_aborts_after_provider_quota_error(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        """Hard quota errors should abort the batch to avoid hammering provider APIs."""
+        from app.services.llm import LLMQuotaExceededError
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        item_one = _make_content_item(db_session, pipeline_source, external_id="quota-item-1")
+        item_two = _make_content_item(db_session, pipeline_source, external_id="quota-item-2")
+        _set_pipeline_state(db_session, item_one.id, "technical", "pending", attempt_count=0)
+        _set_pipeline_state(db_session, item_two.id, "technical", "pending", attempt_count=0)
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+
+        with patch.object(
+            service,
+            "_process_item_transactional",
+            side_effect=LLMQuotaExceededError("tokens per day limit reached"),
+        ) as mock_process:
+            result = service.process_batch(limit=10)
+
+        assert result["processed"] == 0
+        assert result["errors"] == 1
+        assert result["aborted"] is True
+        assert "tokens per day" in str(result["abort_reason"]).lower()
+        assert mock_process.call_count == 1
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
     def test_claim_is_atomic_for_in_progress_rows(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
         """Once claimed, a second claim attempt should fail for the same pipeline row."""
         from app.services.theme_extraction_service import ThemeExtractionService
