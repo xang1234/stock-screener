@@ -28,9 +28,13 @@ frontend/dist
 *.parquet
 *.html
 *.db
+*.db-shm
+*.db-wal
 !backend/desktop/universe_seed.csv
 !backend/desktop/ibd_industry_seed.csv
 data/.cache/*
+data/db_repair_backup_*/
+data/*.recovered_*
 
 # Logs
 *.log
