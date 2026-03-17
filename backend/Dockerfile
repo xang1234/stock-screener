@@ -21,8 +21,9 @@ ENV XDG_CACHE_HOME=/app/data/.cache
 # Keep Playwright browser binaries outside mounted /app/data volume.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Copy requirements first for better caching
-COPY backend/requirements.txt ./requirements.txt
+# Copy requirement manifests first for better caching. requirements.txt
+# includes requirements-server.txt, so both files must exist before pip runs.
+COPY backend/requirements*.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend and xui-reader source trees.
