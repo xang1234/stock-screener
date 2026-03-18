@@ -58,13 +58,13 @@ const getDateRange = (range) => {
 };
 
 function BreadthPage() {
-  const { bootstrap, bootstrapIncomplete, uiSnapshots } = useRuntime();
+  const { bootstrap, bootstrapIncomplete, runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
   const [bootstrapSettled, setBootstrapSettled] = useState(false);
-  const snapshotEnabled = Boolean(uiSnapshots?.breadth);
-  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
+  const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.breadth);
+  const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
   // Calculate date range for chart based on selected time range
   const chartDateRange = getDateRange(chartTimeRange);
@@ -91,6 +91,10 @@ function BreadthPage() {
       return;
     }
     if (!breadthBootstrapQuery.isSuccess) {
+      return;
+    }
+    if (breadthBootstrapQuery.data?.is_stale) {
+      setBootstrapSettled(true);
       return;
     }
 
@@ -178,6 +182,16 @@ function BreadthPage() {
   };
 
   const isBootstrapMissingData = bootstrapIncomplete && errorCurrent?.response?.status === 404;
+
+  if (!runtimeReady) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <CircularProgress />
+        </Box>
+      </Container>
+    );
+  }
 
   if (isBootstrapMissingData) {
     return (

@@ -31,11 +31,11 @@ export const DEFAULT_CAPABILITIES = {
     tasks: true,
   },
   ui_snapshots: {
-    enabled: true,
-    scan: true,
-    breadth: true,
-    groups: true,
-    themes: true,
+    enabled: false,
+    scan: false,
+    breadth: false,
+    groups: false,
+    themes: false,
   },
   api_base_path: '/api',
   bootstrap_required: false,
@@ -51,7 +51,7 @@ export function RuntimeProvider({ children }) {
   const capabilitiesQuery = useQuery({
     queryKey: ['appCapabilities'],
     queryFn: getAppCapabilities,
-    initialData: DEFAULT_CAPABILITIES,
+    placeholderData: DEFAULT_CAPABILITIES,
     retry: 1,
     staleTime: 60_000,
   });
@@ -106,6 +106,7 @@ export function RuntimeProvider({ children }) {
       bootstrap,
       desktopMode,
       features,
+      runtimeReady: !capabilitiesQuery.isPlaceholderData,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       bootstrapIncomplete,
       bootstrapRunning: bootstrap.status === 'queued' || bootstrap.status === 'running',
@@ -114,7 +115,7 @@ export function RuntimeProvider({ children }) {
       startBootstrap: (force = false) => startBootstrapMutation.mutate(force),
       isStartingBootstrap: startBootstrapMutation.isPending,
     };
-  }, [bootstrap, capabilities, desktopMode, startBootstrapMutation]);
+  }, [bootstrap, capabilities, capabilitiesQuery.isPlaceholderData, desktopMode, startBootstrapMutation]);
 
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
 }

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import GroupRankingsPage from './GroupRankingsPage';
 
 const runtimeState = {
+  runtimeReady: true,
   bootstrap: {
     message: 'Desktop bootstrap is still preparing group rankings.',
   },

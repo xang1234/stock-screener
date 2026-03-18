@@ -72,6 +72,7 @@ import {
   getFailedItemsCount,
   getPipelineObservability,
   getL1Categories,
+  getL1Rankings,
   getThemeMentions,
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
@@ -869,11 +870,11 @@ function ThemesPage() {
   const [themeView, setThemeView] = useState(() => localStorage.getItem('themeView') || 'grouped');
   const [categoryFilter, setCategoryFilter] = useState(null);
   const [bootstrapSettledVariants, setBootstrapSettledVariants] = useState({});
-  const { uiSnapshots } = useRuntime();
-  const snapshotEnabled = Boolean(uiSnapshots?.themes);
+  const { runtimeReady, uiSnapshots } = useRuntime();
+  const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.themes);
   const bootstrapVariantKey = `${selectedPipeline}:${themeView}`;
   const bootstrapSettled = Boolean(bootstrapSettledVariants[bootstrapVariantKey]);
-  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
+  const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
   // Use global pipeline context
   const { isPipelineRunning, startPipeline } = usePipeline();
@@ -920,8 +921,25 @@ function ThemesPage() {
   } = useQuery({
     queryKey: ['themeRankings', selectedTab, selectedSourceTypes, selectedPipeline, page],
     queryFn: () => getThemeRankings(PAGE_SIZE, selectedTab === 'all' ? null : selectedTab, selectedSourceTypes, selectedPipeline, page * PAGE_SIZE),
-    enabled: liveQueriesEnabled,
+    enabled: liveQueriesEnabled && themeView === 'flat',
     refetchInterval: 60000,
+    staleTime: 60_000,
+  });
+
+  const {
+    data: groupedRankingsData,
+    refetch: refetchGroupedRankings,
+  } = useQuery({
+    queryKey: ['l1Rankings', selectedPipeline, null, 0, 'momentum_score', 'desc'],
+    queryFn: () => getL1Rankings({
+      pipeline: selectedPipeline,
+      category: null,
+      limit: PAGE_SIZE,
+      offset: 0,
+      sortBy: 'momentum_score',
+      sortOrder: 'desc',
+    }),
+    enabled: liveQueriesEnabled && themeView === 'grouped',
     staleTime: 60_000,
   });
 
@@ -962,6 +980,10 @@ function ThemesPage() {
       return;
     }
     if (!themesBootstrapQuery.isSuccess) {
+      return;
+    }
+    if (themesBootstrapQuery.data?.is_stale) {
+      setBootstrapSettledVariants((previous) => ({ ...previous, [bootstrapVariantKey]: true }));
       return;
     }
 
@@ -1126,6 +1148,33 @@ function ThemesPage() {
     });
   }, [rankingsData?.rankings, orderBy, order]);
 
+  const topTrendingThemes = useMemo(() => {
+    if (themeView === 'grouped') {
+      return (groupedRankingsData?.rankings ?? []).slice(0, 5).map((theme) => ({
+        id: theme.id,
+        name: theme.display_name,
+        rank: theme.rank,
+        momentum_score: theme.momentum_score,
+      }));
+    }
+    return (rankingsData?.rankings ?? []).slice(0, 5).map((theme) => ({
+      id: theme.theme_cluster_id,
+      name: theme.theme,
+      rank: theme.rank,
+      momentum_score: theme.momentum_score,
+    }));
+  }, [groupedRankingsData?.rankings, rankingsData?.rankings, themeView]);
+
+  if (!runtimeReady) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <CircularProgress />
+        </Box>
+      </Container>
+    );
+  }
+
   if (errorRankings) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -1183,7 +1232,7 @@ function ThemesPage() {
         </Box>
         <Box display="flex" gap={1}>
           <Badge
-            badgeContent={pendingMerges?.suggestions?.length || pendingMerges?.length || 0}
+            badgeContent={pendingMerges?.total ?? pendingMerges?.suggestions?.length ?? pendingMerges?.length ?? 0}
             color="warning"
             max={99}
           >
@@ -1281,7 +1330,7 @@ function ThemesPage() {
             size="small"
             variant="outlined"
             startIcon={<RefreshIcon />}
-            onClick={() => refetchRankings()}
+            onClick={() => (themeView === 'grouped' ? refetchGroupedRankings() : refetchRankings())}
             sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
           >
             Refresh
@@ -1303,9 +1352,9 @@ function ThemesPage() {
                   Top Trending
                 </Typography>
               </Box>
-              {rankingsData?.rankings?.slice(0, 5).map((theme, index) => (
+              {topTrendingThemes.map((theme, index) => (
                 <Box
-                  key={theme.theme}
+                  key={theme.id}
                   display="flex"
                   justifyContent="space-between"
                   alignItems="center"
@@ -1313,14 +1362,14 @@ function ThemesPage() {
                   borderBottom={index < 4 ? 1 : 0}
                   borderColor="divider"
                   sx={{ cursor: 'pointer' }}
-                  onClick={() => setSelectedTheme({ id: theme.theme_cluster_id, name: theme.theme })}
+                  onClick={() => setSelectedTheme({ id: theme.id, name: theme.name })}
                 >
                   <Box display="flex" alignItems="center">
                     <Typography variant="body2" color="text.secondary" sx={{ mr: 1, minWidth: 20 }}>
                       #{theme.rank}
                     </Typography>
                     <Typography variant="body2" fontWeight="medium" sx={{ maxWidth: 200 }} noWrap>
-                      {theme.theme}
+                      {theme.name}
                     </Typography>
                   </Box>
                   <MomentumBar score={theme.momentum_score} />

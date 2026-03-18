@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import BreadthPage from './BreadthPage';
 
 const runtimeState = {
+  runtimeReady: true,
   bootstrap: {
     message: 'Desktop bootstrap is still preparing breadth data.',
   },

@@ -424,7 +424,7 @@ const GroupDetailModal = ({ group, open, onClose }) => {
 };
 
 function GroupRankingsPage() {
-  const { bootstrap, bootstrapIncomplete, features, uiSnapshots } = useRuntime();
+  const { bootstrap, bootstrapIncomplete, features, runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedPeriod, setSelectedPeriod] = useState('1w');
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -434,8 +434,8 @@ function GroupRankingsPage() {
   const [calculationTaskId, setCalculationTaskId] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
   const [bootstrapSettled, setBootstrapSettled] = useState(false);
-  const snapshotEnabled = Boolean(uiSnapshots?.groups);
-  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
+  const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
+  const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
   const groupsBootstrapQuery = useQuery({
     queryKey: ['groupsBootstrap'],
@@ -454,6 +454,10 @@ function GroupRankingsPage() {
       return;
     }
     if (!groupsBootstrapQuery.isSuccess) {
+      return;
+    }
+    if (groupsBootstrapQuery.data?.is_stale) {
+      setBootstrapSettled(true);
       return;
     }
 
@@ -580,6 +584,16 @@ function GroupRankingsPage() {
     : [];
 
   const isBootstrapMissingData = bootstrapIncomplete && errorRankings?.response?.status === 404;
+
+  if (!runtimeReady) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <CircularProgress />
+        </Box>
+      </Container>
+    );
+  }
 
   if (isBootstrapMissingData) {
     return (

@@ -102,7 +102,7 @@ const buildDefaultFilters = () => ({
 const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultFilters());
 
 function ScanPage() {
-  const { uiSnapshots } = useRuntime();
+  const { runtimeReady, uiSnapshots } = useRuntime();
   // Scan state
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
@@ -163,8 +163,8 @@ function ScanPage() {
 
   // Query client for prefetching
   const queryClient = useQueryClient();
-  const snapshotEnabled = Boolean(uiSnapshots?.scan);
-  const initialQueriesEnabled = !snapshotEnabled || initialBootstrapSettled;
+  const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.scan);
+  const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
 
   const applyScanBootstrapSnapshot = useCallback((snapshot, requestedScanId = null) => {
     const payload = snapshot?.payload ?? {};
@@ -226,6 +226,10 @@ function ScanPage() {
     if (!scanBootstrapQuery.isSuccess) {
       return;
     }
+    if (scanBootstrapQuery.data?.is_stale) {
+      setInitialBootstrapSettled(true);
+      return;
+    }
     applyScanBootstrapSnapshot(scanBootstrapQuery.data);
     setInitialBootstrapSettled(true);
   }, [
@@ -253,8 +257,10 @@ function ScanPage() {
     if (snapshotEnabled) {
       try {
         const snapshot = await getScanBootstrap(scanId);
-        applyScanBootstrapSnapshot(snapshot, scanId);
-        return;
+        if (!snapshot?.is_stale) {
+          applyScanBootstrapSnapshot(snapshot, scanId);
+          return;
+        }
       } catch (error) {
         console.error('Scan bootstrap unavailable, falling back to live endpoints:', error);
       }
@@ -731,6 +737,16 @@ function ScanPage() {
     });
     return `${universeLabel} (${scan.passed_stocks}/${scan.total_stocks}) - ${dateStr}`;
   };
+
+  if (!runtimeReady) {
+    return (
+      <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
+        <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+          <CircularProgress />
+        </Box>
+      </Container>
+    );
+  }
 
   return (
     <Container maxWidth="xl" sx={{ pt: 1 }}>
