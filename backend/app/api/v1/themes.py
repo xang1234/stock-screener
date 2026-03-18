@@ -774,6 +774,7 @@ async def run_pipeline_async(
     pipeline_run = ThemePipelineRun(
         run_id=run_id,
         task_id=task.id,
+        pipeline=pipeline,
         status="queued"
     )
     db.add(pipeline_run)

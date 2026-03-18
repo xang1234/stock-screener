@@ -73,6 +73,18 @@ def run_theme_pipeline_state_migration():
         print(f"Warning: Theme pipeline-state migration failed (non-fatal): {e}")
 
 
+def run_theme_pipeline_run_migration():
+    """
+    Run idempotent Theme pipeline-run schema migration on startup.
+
+    Adds pipeline metadata to theme_pipeline_runs so run tracking and
+    snapshot invalidation can stay pipeline-scoped.
+    """
+    from .db_migrations.theme_pipeline_run_migration import migrate_theme_pipeline_run_schema
+
+    migrate_theme_pipeline_run_schema(engine)
+
+
 def run_theme_cluster_identity_migration():
     """
     Run idempotent Theme cluster identity migration on startup.
@@ -278,6 +290,7 @@ async def lifespan(app: FastAPI):
     run_feature_store_migration()
     run_scan_feature_run_migration()
     run_theme_pipeline_state_migration()
+    run_theme_pipeline_run_migration()
     run_theme_cluster_identity_migration()
     run_theme_aliases_migration()
     run_theme_match_decision_migration()

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.main import (
     run_theme_aliases_migration,
     run_theme_match_decision_migration,
+    run_theme_pipeline_run_migration,
     run_theme_relationships_migration,
     run_ui_view_snapshot_migration,
 )
@@ -38,6 +39,15 @@ def test_run_theme_relationships_migration_is_fatal_on_error():
     ):
         with pytest.raises(RuntimeError, match="migration failed"):
             run_theme_relationships_migration()
+
+
+def test_run_theme_pipeline_run_migration_is_fatal_on_error():
+    with patch(
+        "app.db_migrations.theme_pipeline_run_migration.migrate_theme_pipeline_run_schema",
+        side_effect=RuntimeError("migration failed"),
+    ):
+        with pytest.raises(RuntimeError, match="migration failed"):
+            run_theme_pipeline_run_migration()
 
 
 def test_run_ui_view_snapshot_migration_is_fatal_on_error():

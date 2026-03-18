@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from datetime import datetime
 
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
 from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
-from app.models.theme import ThemePipelineRun
+from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
 from app.models.ui_view_snapshot import UIViewSnapshot
 from app.services.ui_snapshot_service import UISnapshotService
 
@@ -76,22 +76,37 @@ def test_ui_snapshot_service_marks_outdated_pointer_reads_as_stale_and_prunes_ol
         assert kept_revisions == {"rev-2", "rev-3"}
         assert db.query(func.count(UIViewSnapshot.id)).scalar() == 2
 
+def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_global():
+    engine = create_engine("sqlite:///:memory:")
+    from app.database import Base
 
-def test_resolve_themes_source_revision_does_not_assume_pipeline_column_on_runs():
-    service = UISnapshotService(sessionmaker())
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            ThemeMetrics.__table__,
+            ThemeCluster.__table__,
+            ThemePipelineRun.__table__,
+            ThemeAlert.__table__,
+            ThemeMergeSuggestion.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
 
-    class _ScalarQuery:
-        def filter(self, *_args, **_kwargs):
-            return self
+    with Session() as db:
+        db.add_all(
+            [
+                ThemePipelineRun(run_id="global", pipeline=None, completed_at=datetime(2026, 3, 18, 10, 0, 0)),
+                ThemePipelineRun(run_id="tech", pipeline="technical", completed_at=datetime(2026, 3, 18, 11, 0, 0)),
+                ThemePipelineRun(run_id="fund", pipeline="fundamental", completed_at=datetime(2026, 3, 18, 12, 0, 0)),
+            ]
+        )
+        db.commit()
 
-        def scalar(self):
-            return None
+        service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
 
-    db = SimpleNamespace(query=lambda *_args, **_kwargs: _ScalarQuery())
+        technical_revision = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+        fundamental_revision = service._resolve_themes_source_revision(db, "fundamental")  # noqa: SLF001
 
-    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
-
-    revision = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
-
-    assert not hasattr(ThemePipelineRun, "pipeline")
-    assert revision == "none|none|none|none|none|none|0|0"
+        assert technical_revision.split("|")[2] == "2026-03-18T11:00:00"
+        assert fundamental_revision.split("|")[2] == "2026-03-18T12:00:00"

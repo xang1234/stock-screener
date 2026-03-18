@@ -373,7 +373,9 @@ class UISnapshotService:
     def _resolve_themes_source_revision(self, db: Session, pipeline: str) -> str:
         latest_metrics = db.query(func.max(ThemeMetrics.date)).filter(ThemeMetrics.pipeline == pipeline).scalar()
         latest_cluster_update = db.query(func.max(ThemeCluster.updated_at)).filter(ThemeCluster.pipeline == pipeline).scalar()
-        latest_pipeline_run = db.query(func.max(ThemePipelineRun.completed_at)).scalar()
+        latest_pipeline_run = db.query(func.max(ThemePipelineRun.completed_at)).filter(
+            (ThemePipelineRun.pipeline == pipeline) | (ThemePipelineRun.pipeline.is_(None))
+        ).scalar()
         latest_alert = db.query(func.max(ThemeAlert.triggered_at)).scalar()
         latest_merge = db.query(func.max(ThemeMergeSuggestion.created_at)).scalar()
         latest_merge_review = db.query(func.max(ThemeMergeSuggestion.reviewed_at)).scalar()

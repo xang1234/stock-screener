@@ -455,6 +455,7 @@ class ThemePipelineRun(Base):
     id = Column(Integer, primary_key=True, index=True)
     run_id = Column(String(36), nullable=False, unique=True, index=True)  # UUID
     task_id = Column(String(100), nullable=True)  # Celery task ID for progress polling
+    pipeline = Column(String(20), nullable=True, index=True)  # technical, fundamental, or null for both
 
     # Pipeline results summary
     total_sources = Column(Integer, default=0)

@@ -930,6 +930,8 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None, lookback_d
                 ThemePipelineRun.run_id == run_id
             ).first()
             if pipeline_run:
+                if pipeline_run.pipeline != pipeline:
+                    pipeline_run.pipeline = pipeline
                 pipeline_run.status = 'running'
                 db.commit()
 
