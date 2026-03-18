@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
 from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+from app.models.theme import ThemePipelineRun
 from app.models.ui_view_snapshot import UIViewSnapshot
 from app.services.ui_snapshot_service import UISnapshotService
 
@@ -72,3 +75,23 @@ def test_ui_snapshot_service_marks_outdated_pointer_reads_as_stale_and_prunes_ol
         assert second.snapshot_revision != third.snapshot_revision
         assert kept_revisions == {"rev-2", "rev-3"}
         assert db.query(func.count(UIViewSnapshot.id)).scalar() == 2
+
+
+def test_resolve_themes_source_revision_does_not_assume_pipeline_column_on_runs():
+    service = UISnapshotService(sessionmaker())
+
+    class _ScalarQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def scalar(self):
+            return None
+
+    db = SimpleNamespace(query=lambda *_args, **_kwargs: _ScalarQuery())
+
+    service._query_failed_items_count = lambda *_args, **_kwargs: 0  # noqa: SLF001
+
+    revision = service._resolve_themes_source_revision(db, "technical")  # noqa: SLF001
+
+    assert not hasattr(ThemePipelineRun, "pipeline")
+    assert revision == "none|none|none|none|none|none|0|0"

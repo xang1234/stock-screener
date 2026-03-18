@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pytest
 from sqlalchemy.orm import Session
 
@@ -100,6 +101,39 @@ class TestUpsertSnapshotRows:
         assert count == 600
         db_count = session.query(StockFeatureDaily).filter_by(run_id=run_id).count()
         assert db_count == 600
+
+    def test_normalizes_numpy_scalars_inside_details_json(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        row = FeatureRowWrite(
+            symbol="PYPL",
+            as_of_date=date(2026, 3, 18),
+            composite_score=np.float64(47.3),
+            overall_rating=np.int64(2),
+            passes_count=np.int64(0),
+            details={
+                "passes_template": np.bool_(False),
+                "setup_engine": {
+                    "is_valid": np.bool_(True),
+                    "score": np.float32(72.5),
+                },
+            },
+        )
+
+        repo.upsert_snapshot_rows(run_id, [row])
+
+        stored = session.query(StockFeatureDaily).filter_by(run_id=run_id, symbol="PYPL").one()
+        assert stored.composite_score == pytest.approx(47.3)
+        assert stored.overall_rating == 2
+        assert stored.passes_count == 0
+        assert stored.details_json == {
+            "passes_template": False,
+            "setup_engine": {
+                "is_valid": True,
+                "score": pytest.approx(72.5),
+            },
+        }
 
 
 class TestSaveRunUniverseSymbols:

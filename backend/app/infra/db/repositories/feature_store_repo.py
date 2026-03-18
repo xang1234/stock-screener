@@ -26,6 +26,7 @@ from app.infra.db.models.feature_store import (
     FeatureRunUniverseSymbol,
     StockFeatureDaily,
 )
+from app.infra.serialization import convert_numpy_types
 from app.infra.query.feature_store_query import (
     apply_filters,
     apply_sort_all,
@@ -58,10 +59,10 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
                     "run_id": run_id,
                     "symbol": row.symbol,
                     "as_of_date": row.as_of_date,
-                    "composite_score": row.composite_score,
-                    "overall_rating": row.overall_rating,
-                    "passes_count": row.passes_count,
-                    "details_json": row.details,
+                    "composite_score": convert_numpy_types(row.composite_score),
+                    "overall_rating": convert_numpy_types(row.overall_rating),
+                    "passes_count": convert_numpy_types(row.passes_count),
+                    "details_json": convert_numpy_types(row.details),
                 }
                 for row in batch
             ]
