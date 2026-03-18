@@ -342,27 +342,6 @@ function ScanPage() {
     gcTime: 0, // Don't cache (cacheTime renamed to gcTime in v5)
   });
 
-  // Update scan status when data changes
-  useEffect(() => {
-    if (statusData) {
-      const prevStatus = scanStatus;
-      setScanStatus(statusData.status);
-
-      // If scan just completed, trigger results fetch
-      if (prevStatus !== 'completed' && statusData.status === 'completed') {
-        setTimeout(() => refetchResults(), 500); // Small delay to ensure DB is updated
-      }
-    }
-  }, [refetchResults, scanStatus, statusData]);
-
-  // Fetch filter options (industries, sectors) for the current scan
-  const { data: filterOptionsData } = useQuery({
-    queryKey: ['filterOptions', currentScanId],
-    queryFn: () => getFilterOptions(currentScanId),
-    enabled: !!currentScanId && (scanStatus === 'completed' || scanStatus === 'cancelled'),
-    staleTime: 60000, // Cache for 1 minute
-  });
-
   // Build filter params for API using shared utility (uses debounced filters)
   const getApiFilterParams = useCallback(
     () => buildFilterParams(debouncedFilters, { page, perPage, sortBy, sortOrder }),
@@ -387,6 +366,27 @@ function ScanPage() {
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes - results don't change often
     gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
     placeholderData: (previousData) => previousData, // Use previous data while loading for smoother UX
+  });
+
+  // Update scan status when data changes
+  useEffect(() => {
+    if (statusData) {
+      const prevStatus = scanStatus;
+      setScanStatus(statusData.status);
+
+      // If scan just completed, trigger results fetch
+      if (prevStatus !== 'completed' && statusData.status === 'completed') {
+        setTimeout(() => refetchResults(), 500); // Small delay to ensure DB is updated
+      }
+    }
+  }, [refetchResults, scanStatus, statusData]);
+
+  // Fetch filter options (industries, sectors) for the current scan
+  const { data: filterOptionsData } = useQuery({
+    queryKey: ['filterOptions', currentScanId],
+    queryFn: () => getFilterOptions(currentScanId),
+    enabled: !!currentScanId && (scanStatus === 'completed' || scanStatus === 'cancelled'),
+    staleTime: 60000, // Cache for 1 minute
   });
 
   // Handle scan creation
