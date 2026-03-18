@@ -233,6 +233,13 @@ def _run_post_scan_pipeline(scan_id: str) -> None:
             prewarm_chart_cache_for_scan.delay(scan_id, top_n=50)
         except Exception as e:
             logger.warning("Chart cache warming failed: %s", e)
+        try:
+            from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
+
+            safe_publish_scan_bootstrap(scan_id)
+            safe_publish_scan_bootstrap()
+        except Exception as e:
+            logger.warning("Scan snapshot publish failed: %s", e)
     except Exception as e:
         logger.error("Post-scan pipeline error for %s: %s", scan_id, e, exc_info=True)
     finally:

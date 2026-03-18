@@ -96,6 +96,13 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
 
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+            safe_publish_groups_bootstrap()
+        except Exception as snapshot_error:
+            logger.warning("Group rankings snapshot publish failed: %s", snapshot_error)
+
         return {
             'date': calc_date.strftime('%Y-%m-%d'),
             'groups_ranked': len(results),
@@ -184,6 +191,13 @@ def backfill_group_rankings(self, start_date: str, end_date: str):
         logger.info(f"Total duration: {total_duration:.2f}s")
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+            safe_publish_groups_bootstrap()
+        except Exception as snapshot_error:
+            logger.warning("Group rankings snapshot publish failed after backfill: %s", snapshot_error)
+
         return {
             'start_date': start_date,
             'end_date': end_date,
@@ -271,6 +285,13 @@ def gapfill_group_rankings(self, max_days: int = 365):
         logger.info(f"Duration: {duration:.2f}s")
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+            safe_publish_groups_bootstrap()
+        except Exception as snapshot_error:
+            logger.warning("Group rankings snapshot publish failed after gapfill: %s", snapshot_error)
+
         return {
             'status': 'complete',
             'gaps_found': len(missing_dates),
@@ -335,6 +356,13 @@ def backfill_group_rankings_1year(self):
         logger.info(f"Errors: {result['errors']}")
         logger.info(f"Duration: {duration:.2f}s")
         logger.info("=" * 60)
+
+        try:
+            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
+            safe_publish_groups_bootstrap()
+        except Exception as snapshot_error:
+            logger.warning("Group rankings snapshot publish failed after 1-year backfill: %s", snapshot_error)
 
         result['total_duration_seconds'] = round(duration, 2)
         result['timestamp'] = datetime.now().isoformat()

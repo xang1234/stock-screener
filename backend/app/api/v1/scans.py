@@ -24,6 +24,7 @@ from ...schemas.scanning import (
     ScanStatusResponse,
     SetupDetailsResponse,
 )
+from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
@@ -36,11 +37,24 @@ from ...wiring.bootstrap import (
     get_export_scan_results_use_case,
     get_explain_stock_use_case,
     get_job_backend,
+    get_ui_snapshot_service,
 )
 from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/bootstrap", response_model=UISnapshotEnvelope)
+async def get_scan_bootstrap(
+    scan_id: str | None = Query(None, description="Optional explicit scan bootstrap variant"),
+    snapshot_service: Any = Depends(get_ui_snapshot_service),
+):
+    """Return the published scan bootstrap snapshot if available."""
+    snapshot = snapshot_service.get_scan_bootstrap(scan_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No published scan bootstrap snapshot is available")
+    return UISnapshotEnvelope(**snapshot.to_dict())
 
 
 @router.get("", response_model=ScanListResponse)
@@ -245,6 +259,10 @@ async def cancel_scan(
             uow.scans.update_status(scan_id, "cancelled")
             uow.commit()
 
+        from ...services.ui_snapshot_service import safe_publish_scan_bootstrap
+
+        safe_publish_scan_bootstrap(scan_id)
+        safe_publish_scan_bootstrap()
         logger.info(f"Marked scan {scan_id} as cancelled")
         return {
             "message": f"Scan {scan_id} cancelled successfully",

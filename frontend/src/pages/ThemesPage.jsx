@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -36,7 +36,6 @@ import {
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
-import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import WhatshotIcon from '@mui/icons-material/Whatshot';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BubbleChartIcon from '@mui/icons-material/BubbleChart';
@@ -50,8 +49,6 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -61,6 +58,7 @@ import {
   Area,
 } from 'recharts';
 import {
+  getThemesBootstrap,
   getThemeRankings,
   getEmergingThemes,
   getThemeDetail,
@@ -89,6 +87,7 @@ import ThemeTaxonomyTable from '../components/Themes/ThemeTaxonomyTable';
 import ViewListIcon from '@mui/icons-material/ViewList';
 import CategoryIcon from '@mui/icons-material/Category';
 import { usePipeline } from '../contexts/PipelineContext';
+import { useRuntime } from '../contexts/RuntimeContext';
 
 // Status badge colors
 const statusColors = {
@@ -106,6 +105,7 @@ const SOURCE_TYPES = [
   { value: 'news', label: 'News' },
   { value: 'reddit', label: 'Reddit' },
 ];
+const DEFAULT_SOURCE_TYPES = SOURCE_TYPES.map((source) => source.value);
 
 // Helper component for momentum score bar
 const MomentumBar = ({ score }) => {
@@ -858,9 +858,7 @@ function ThemesPage() {
   const [order, setOrder] = useState('asc');
   const [sourcesModalOpen, setSourcesModalOpen] = useState(false);
   const [sourcesTheme, setSourcesTheme] = useState(null);
-  const [selectedSourceTypes, setSelectedSourceTypes] = useState(
-    SOURCE_TYPES.map(s => s.value)  // All selected by default
-  );
+  const [selectedSourceTypes, setSelectedSourceTypes] = useState(DEFAULT_SOURCE_TYPES);
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
   const [candidateModalOpen, setCandidateModalOpen] = useState(false);
   const [articleBrowserOpen, setArticleBrowserOpen] = useState(false);
@@ -870,6 +868,12 @@ function ThemesPage() {
   const [page, setPage] = useState(0);
   const [themeView, setThemeView] = useState(() => localStorage.getItem('themeView') || 'grouped');
   const [categoryFilter, setCategoryFilter] = useState(null);
+  const [bootstrapSettledVariants, setBootstrapSettledVariants] = useState({});
+  const { uiSnapshots } = useRuntime();
+  const snapshotEnabled = Boolean(uiSnapshots?.themes);
+  const bootstrapVariantKey = `${selectedPipeline}:${themeView}`;
+  const bootstrapSettled = Boolean(bootstrapSettledVariants[bootstrapVariantKey]);
+  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
 
   // Use global pipeline context
   const { isPipelineRunning, startPipeline } = usePipeline();
@@ -916,23 +920,91 @@ function ThemesPage() {
   } = useQuery({
     queryKey: ['themeRankings', selectedTab, selectedSourceTypes, selectedPipeline, page],
     queryFn: () => getThemeRankings(PAGE_SIZE, selectedTab === 'all' ? null : selectedTab, selectedSourceTypes, selectedPipeline, page * PAGE_SIZE),
+    enabled: liveQueriesEnabled,
     refetchInterval: 60000,
+    staleTime: 60_000,
   });
 
   // Fetch emerging themes
   const { data: emerging, isLoading: isLoadingEmerging } = useQuery({
     queryKey: ['emergingThemes', selectedPipeline],
     queryFn: () => getEmergingThemes(1.5, 3, selectedPipeline),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch alerts
   const { data: alerts, isLoading: isLoadingAlerts } = useQuery({
     queryKey: ['themeAlerts'],
     queryFn: () => getAlerts(false, 50),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Query client for cache invalidation
   const queryClient = useQueryClient();
+
+  const themesBootstrapQuery = useQuery({
+    queryKey: ['themesBootstrap', selectedPipeline, themeView],
+    queryFn: () => getThemesBootstrap({ pipeline: selectedPipeline, themeView }),
+    enabled: snapshotEnabled && !bootstrapSettled,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const isBootstrappingVariant = snapshotEnabled && !bootstrapSettled && themesBootstrapQuery.isPending;
+
+  useEffect(() => {
+    if (!snapshotEnabled) {
+      return;
+    }
+    if (themesBootstrapQuery.isError) {
+      setBootstrapSettledVariants((previous) => ({ ...previous, [bootstrapVariantKey]: true }));
+      return;
+    }
+    if (!themesBootstrapQuery.isSuccess) {
+      return;
+    }
+
+    const payload = themesBootstrapQuery.data?.payload ?? {};
+    queryClient.setQueryData(['emergingThemes', selectedPipeline], payload.emerging ?? null);
+    queryClient.setQueryData(['themeAlerts'], payload.alerts ?? null);
+    queryClient.setQueryData(
+      ['mergeSuggestions', 'pending'],
+      { total: payload.pending_merge_count ?? 0, suggestions: [] }
+    );
+    queryClient.setQueryData(
+      ['candidateThemeQueue', selectedPipeline, 'summary'],
+      payload.candidate_queue_summary ?? null
+    );
+    queryClient.setQueryData(['failedItemsCount', selectedPipeline], payload.failed_items_count ?? null);
+    queryClient.setQueryData(['pipelineObservability', selectedPipeline], payload.observability ?? null);
+
+    if (payload.l1_categories) {
+      queryClient.setQueryData(['l1Categories', selectedPipeline], payload.l1_categories);
+    }
+    if (payload.l1_rankings) {
+      queryClient.setQueryData(
+        ['l1Rankings', selectedPipeline, null, 0, 'momentum_score', 'desc'],
+        payload.l1_rankings
+      );
+    }
+    if (payload.rankings) {
+      queryClient.setQueryData(
+        ['themeRankings', 'all', DEFAULT_SOURCE_TYPES, selectedPipeline, 0],
+        payload.rankings
+      );
+    }
+
+    setBootstrapSettledVariants((previous) => ({ ...previous, [bootstrapVariantKey]: true }));
+  }, [
+    bootstrapVariantKey,
+    queryClient,
+    selectedPipeline,
+    snapshotEnabled,
+    themesBootstrapQuery.data,
+    themesBootstrapQuery.isError,
+    themesBootstrapQuery.isSuccess,
+  ]);
 
   // Dismiss alert state and mutation
   const [dismissingAlertId, setDismissingAlertId] = useState(null);
@@ -977,24 +1049,31 @@ function ThemesPage() {
   const { data: pendingMerges } = useQuery({
     queryKey: ['mergeSuggestions', 'pending'],
     queryFn: () => getMergeSuggestions('pending', 100),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   const { data: candidateQueueSummary } = useQuery({
     queryKey: ['candidateThemeQueue', selectedPipeline, 'summary'],
     queryFn: () => getCandidateThemeQueue({ limit: 1, offset: 0, pipeline: selectedPipeline }),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch failed items count for retry badge
   const { data: failedCount } = useQuery({
     queryKey: ['failedItemsCount', selectedPipeline],
     queryFn: () => getFailedItemsCount(selectedPipeline),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch L1 categories for grouped view filter
   const { data: l1Categories } = useQuery({
     queryKey: ['l1Categories', selectedPipeline],
     queryFn: () => getL1Categories(selectedPipeline),
-    enabled: themeView === 'grouped',
+    enabled: liveQueriesEnabled && themeView === 'grouped',
+    staleTime: 60_000,
   });
 
   const handleViewChange = (_, newView) => {
@@ -1008,7 +1087,9 @@ function ThemesPage() {
   const { data: observability, isLoading: isLoadingObservability } = useQuery({
     queryKey: ['pipelineObservability', selectedPipeline],
     queryFn: () => getPipelineObservability(selectedPipeline, 30),
+    enabled: liveQueriesEnabled,
     refetchInterval: 60000,
+    staleTime: 60_000,
   });
 
   // Start async pipeline using global context
@@ -1354,15 +1435,21 @@ function ThemesPage() {
 
       {/* Grouped or Flat View */}
       {themeView === 'grouped' ? (
-        <ThemeTaxonomyTable
-          pipeline={selectedPipeline}
-          categoryFilter={categoryFilter}
-          onThemeClick={(theme) => setSelectedTheme(theme)}
-        />
+        isBootstrappingVariant ? (
+          <Box display="flex" justifyContent="center" alignItems="center" minHeight="300px">
+            <CircularProgress />
+          </Box>
+        ) : (
+          <ThemeTaxonomyTable
+            pipeline={selectedPipeline}
+            categoryFilter={categoryFilter}
+            onThemeClick={(theme) => setSelectedTheme(theme)}
+          />
+        )
       ) : (
       <>
       {/* Rankings Table */}
-      {isLoadingRankings ? (
+      {isBootstrappingVariant || isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="300px">
           <CircularProgress />
         </Box>

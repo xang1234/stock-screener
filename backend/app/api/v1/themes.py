@@ -29,7 +29,9 @@ from ...models.theme import (
     ThemeConstituent,
     ThemeMetrics,
     ThemeAlert,
+    ThemeMergeSuggestion,
 )
+from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...schemas.theme import (
     ContentSourceCreate,
     ContentSourceUpdate,
@@ -122,6 +124,7 @@ from ...services.theme_pipeline_state_service import (
     reconcile_source_pipeline_change,
     validate_pipeline_selection,
 )
+from ...wiring.bootstrap import get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +238,18 @@ def _resolve_source_ids_for_pipeline(db: Session, pipeline: str) -> list[int]:
 
 
 # ==================== Theme Rankings ====================
+
+@router.get("/bootstrap", response_model=UISnapshotEnvelope)
+async def get_themes_bootstrap(
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
+    theme_view: str = Query("grouped", pattern="^(grouped|flat)$"),
+    snapshot_service=Depends(get_ui_snapshot_service),
+):
+    """Return the published themes bootstrap snapshot if available."""
+    snapshot = snapshot_service.get_themes_bootstrap(pipeline=pipeline, theme_view=theme_view)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No published themes bootstrap snapshot is available")
+    return UISnapshotEnvelope(**snapshot.to_dict())
 
 @router.get("/pipelines")
 async def get_available_pipelines():
@@ -421,6 +436,9 @@ async def dismiss_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.is_dismissed = True
     db.commit()
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants()
     return {"status": "dismissed", "alert_id": alert_id}
 
 
@@ -676,6 +694,9 @@ async def run_extraction(
     """
     service = ThemeExtractionService(db, pipeline=pipeline)
     result = service.process_batch(limit=limit)
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(pipeline)
 
     return ExtractionResponse(**result)
 
@@ -694,6 +715,9 @@ async def calculate_theme_metrics(
     """
     service = ThemeDiscoveryService(db, pipeline=pipeline)
     result = service.update_all_theme_metrics()
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(pipeline)
 
     return result
 
@@ -1341,8 +1365,17 @@ async def approve_merge_suggestion(
     - Mentions are reassigned
     - Source theme is deactivated
     """
+    suggestion = db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion_id).first()
+    source_pipeline = None
+    if suggestion is not None:
+        source_pipeline = db.query(ThemeCluster.pipeline).filter(
+            ThemeCluster.id == suggestion.source_cluster_id
+        ).scalar()
     service = ThemeMergingService(db)
     result = service.approve_suggestion(suggestion_id, idempotency_key=idempotency_key)
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(source_pipeline)
     return MergeActionResponse(**result)
 
 
@@ -1356,8 +1389,17 @@ async def reject_merge_suggestion(
 
     The suggestion is marked as rejected and will not be suggested again.
     """
+    suggestion = db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion_id).first()
+    source_pipeline = None
+    if suggestion is not None:
+        source_pipeline = db.query(ThemeCluster.pipeline).filter(
+            ThemeCluster.id == suggestion.source_cluster_id
+        ).scalar()
     service = ThemeMergingService(db)
     result = service.reject_suggestion(suggestion_id)
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(source_pipeline)
     return result
 
 
@@ -1398,6 +1440,10 @@ async def run_theme_consolidation(
     """
     service = ThemeMergingService(db)
     result = service.run_consolidation(dry_run=dry_run)
+    if not dry_run:
+        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+        safe_publish_themes_bootstrap_variants()
     return ConsolidationResultResponse(**result)
 
 
@@ -1488,6 +1534,10 @@ async def run_strict_auto_merge_wave(
         limit_pairs=limit_pairs,
         dry_run=dry_run,
     )
+    if not dry_run:
+        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+        safe_publish_themes_bootstrap_variants(pipeline)
     return StrictAutoMergeWaveResponse(**result)
 
 
@@ -1508,6 +1558,10 @@ async def run_manual_review_wave(
         queue_limit=payload.queue_limit,
         dry_run=payload.dry_run,
     )
+    if not payload.dry_run:
+        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+        safe_publish_themes_bootstrap_variants(pipeline)
     return ManualReviewWaveResponse(**result)
 
 
@@ -1553,6 +1607,9 @@ async def review_candidate_themes(
     )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Candidate review failed"))
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(pipeline)
     return CandidateThemeReviewResponse(
         success=True,
         action=result["action"],
@@ -1876,6 +1933,10 @@ async def run_taxonomy_assignment(
 
     service = ThemeTaxonomyService(db, pipeline=request.pipeline)
     report = service.run_full_taxonomy_assignment(dry_run=request.dry_run)
+    if not request.dry_run:
+        from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+        safe_publish_themes_bootstrap_variants(request.pipeline)
     return report
 
 
@@ -1906,6 +1967,9 @@ async def reassign_l2_to_l1(
     if not success:
         raise HTTPException(status_code=404, detail="L2 or L1 theme not found")
     db.commit()
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants()
     return {"success": True, "l2_id": l2_id, "l1_id": request.l1_id}
 
 

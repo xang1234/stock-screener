@@ -35,6 +35,7 @@ from .prompt_preset import PromptPreset
 from .document_cache import DocumentCache, DocumentChunk
 from .institutional_ownership import InstitutionalOwnershipHistory
 from .app_settings import AppSetting
+from .ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 from app.infra.db.models.feature_store import (
     FeatureRun, FeatureRunUniverseSymbol, StockFeatureDaily, FeatureRunPointer,
 )
@@ -101,6 +102,9 @@ __all__ = [
     "InstitutionalOwnershipHistory",
     # App Settings
     "AppSetting",
+    # UI View Snapshots
+    "UIViewSnapshot",
+    "UIViewSnapshotPointer",
     # Feature Store
     "FeatureRun",
     "FeatureRunUniverseSymbol",

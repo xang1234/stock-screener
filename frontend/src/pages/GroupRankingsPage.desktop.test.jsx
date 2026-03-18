@@ -13,6 +13,9 @@ const runtimeState = {
   features: {
     tasks: false,
   },
+  uiSnapshots: {
+    groups: true,
+  },
 };
 
 vi.mock('../contexts/RuntimeContext', () => ({
@@ -20,6 +23,10 @@ vi.mock('../contexts/RuntimeContext', () => ({
 }));
 
 vi.mock('../api/groups', () => ({
+  getGroupsBootstrap: vi.fn().mockRejectedValue({
+    message: 'Not found',
+    response: { status: 404 },
+  }),
   getCurrentRankings: vi.fn().mockRejectedValue({
     message: 'Not found',
     response: { status: 404 },

@@ -48,6 +48,7 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 _task_dispatcher: TaskDispatcher | None = None
 _job_backend: JobBackend | None = None
 _desktop_bootstrap_service: DesktopBootstrapService | None = None
+_ui_snapshot_service: UISnapshotService | None = None
 
 
 def get_job_backend() -> JobBackend:
@@ -90,6 +91,16 @@ def get_desktop_bootstrap_service() -> DesktopBootstrapService:
             job_backend=get_local_job_backend(),
         )
     return _desktop_bootstrap_service
+
+
+def get_ui_snapshot_service() -> UISnapshotService:
+    """Return the singleton UI bootstrap snapshot publisher."""
+    global _ui_snapshot_service
+    if _ui_snapshot_service is None:
+        from app.services.ui_snapshot_service import UISnapshotService
+
+        _ui_snapshot_service = UISnapshotService(session_factory=SessionLocal)
+    return _ui_snapshot_service
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────

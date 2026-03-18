@@ -25,6 +25,8 @@ from ...schemas.groups import (
     BackfillRequest,
     BackfillResponse,
 )
+from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...wiring.bootstrap import get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,15 @@ async def get_current_rankings(
         total_groups=len(rankings),
         rankings=[GroupRankResponse(**r) for r in rankings]
     )
+
+
+@router.get("/bootstrap", response_model=UISnapshotEnvelope)
+async def get_groups_bootstrap(snapshot_service=Depends(get_ui_snapshot_service)):
+    """Return the published group rankings bootstrap snapshot if available."""
+    snapshot = snapshot_service.get_groups_bootstrap()
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No published groups bootstrap snapshot is available")
+    return UISnapshotEnvelope(**snapshot.to_dict())
 
 
 @router.get("/rankings/movers", response_model=MoversResponse)

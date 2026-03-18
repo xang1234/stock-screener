@@ -23,6 +23,21 @@ export const getPipelines = async () => {
 };
 
 /**
+ * Get the published themes bootstrap snapshot for a pipeline/view default state.
+ *
+ * @param {Object} params - Snapshot selector
+ * @param {string} [params.pipeline='technical'] - technical|fundamental
+ * @param {string} [params.themeView='grouped'] - grouped|flat
+ * @returns {Promise<Object>} Snapshot envelope
+ */
+export const getThemesBootstrap = async ({ pipeline = 'technical', themeView = 'grouped' } = {}) => {
+  const response = await apiClient.get('/v1/themes/bootstrap', {
+    params: { pipeline, theme_view: themeView },
+  });
+  return response.data;
+};
+
+/**
  * Get current theme rankings.
  *
  * @param {number} limit - Maximum number of themes to return (default: 20)

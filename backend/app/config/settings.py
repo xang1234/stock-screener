@@ -324,6 +324,7 @@ class Settings(BaseSettings):
             "themes": self.feature_themes,
             "chatbot": self.feature_chatbot,
             "tasks": self.feature_tasks,
+            "ui_snapshots": True,
         }
 
     class Config:

@@ -39,9 +39,12 @@ def _get_bootstrap_state() -> dict:
 async def get_app_capabilities() -> AppCapabilitiesResponse:
     """Return frontend capability flags and bootstrap state."""
     bootstrap = _get_bootstrap_state()
+    from ...wiring.bootstrap import get_ui_snapshot_service
+
     return AppCapabilitiesResponse(
         desktop_mode=settings.desktop_mode,
         features=settings.capability_flags(),
+        ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
         bootstrap_required=settings.desktop_mode and bootstrap["status"] != "completed",
         bootstrap=BootstrapStatusResponse(**bootstrap),
     )

@@ -165,6 +165,18 @@ def run_theme_taxonomy_migration():
     migrate_theme_taxonomy(engine)
 
 
+def run_ui_view_snapshot_migration():
+    """
+    Run idempotent UI snapshot schema migration on startup.
+
+    Creates published bootstrap snapshot tables used by the read-optimized
+    dashboard bootstrap endpoints.
+    """
+    from .db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+
+    migrate_ui_view_snapshot_tables(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -198,6 +210,18 @@ async def trigger_gapfill_on_startup():
     except Exception as e:
         # Don't block startup if gap-fill dispatch fails
         print(f"Warning: Failed to dispatch gap-fill task: {e}")
+
+
+async def trigger_ui_snapshot_rebuild_on_startup():
+    """Publish default UI bootstrap snapshots in the background on startup."""
+    try:
+        from .services.ui_snapshot_service import safe_publish_all_bootstraps
+
+        await asyncio.sleep(0)
+        await asyncio.to_thread(safe_publish_all_bootstraps)
+        print("UI snapshot bootstrap rebuild dispatched")
+    except Exception as e:
+        print(f"Warning: Failed to rebuild UI snapshots on startup: {e}")
 
 
 @asynccontextmanager
@@ -262,10 +286,12 @@ async def lifespan(app: FastAPI):
     run_theme_embedding_freshness_migration()
     run_theme_merge_suggestion_safety_migration()
     run_theme_taxonomy_migration()
+    run_ui_view_snapshot_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if not settings.desktop_mode and getattr(settings, 'group_rank_gapfill_enabled', True):
         await trigger_gapfill_on_startup()
+    asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
 
     yield
 

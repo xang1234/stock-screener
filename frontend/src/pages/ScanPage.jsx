@@ -24,6 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import StopIcon from '@mui/icons-material/Stop';
 import {
   createScan,
+  getScanBootstrap,
   getScanStatus,
   getScanResults,
   getUniverseStats,
@@ -39,6 +40,7 @@ import ChartViewerModal from '../components/Scan/ChartViewerModal';
 import { buildFilterParams, getStableFilterKey } from '../utils/filterUtils';
 import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../api/priceHistory';
 import { useFilterPresets } from '../hooks/useFilterPresets';
+import { useRuntime } from '../contexts/RuntimeContext';
 
 // Test list of 20 popular stocks for quick testing
 const TEST_SYMBOLS = [
@@ -48,10 +50,64 @@ const TEST_SYMBOLS = [
   'UNH', 'HD', 'CVX', 'ABBV', 'KO'
 ];
 
+const buildDefaultFilters = () => ({
+  symbolSearch: '',
+  stage: null,
+  ratings: [],
+  ibdIndustries: { values: [], mode: 'include' },
+  gicsSectors: { values: [], mode: 'include' },
+  minVolume: null,
+  minMarketCap: null,
+  compositeScore: { min: null, max: null },
+  minerviniScore: { min: null, max: null },
+  canslimScore: { min: null, max: null },
+  ipoScore: { min: null, max: null },
+  customScore: { min: null, max: null },
+  volBreakthroughScore: { min: null, max: null },
+  seSetupScore: { min: null, max: null },
+  seDistanceToPivot: { min: null, max: null },
+  seBbSqueeze: { min: null, max: null },
+  seVolumeVs50d: { min: null, max: null },
+  seSetupReady: null,
+  seRsLineNewHigh: null,
+  rsRating: { min: null, max: null },
+  rs1m: { min: null, max: null },
+  rs3m: { min: null, max: null },
+  rs12m: { min: null, max: null },
+  price: { min: null, max: null },
+  adrPercent: { min: null, max: null },
+  epsGrowth: { min: null, max: null },
+  salesGrowth: { min: null, max: null },
+  vcpScore: { min: null, max: null },
+  vcpPivot: { min: null, max: null },
+  vcpDetected: null,
+  vcpReady: null,
+  maAlignment: null,
+  passesTemplate: null,
+  perfDay: { min: null, max: null },
+  perfWeek: { min: null, max: null },
+  perfMonth: { min: null, max: null },
+  perf3m: { min: null, max: null },
+  perf6m: { min: null, max: null },
+  gapPercent: { min: null, max: null },
+  volumeSurge: { min: null, max: null },
+  ema10Distance: { min: null, max: null },
+  ema20Distance: { min: null, max: null },
+  ema50Distance: { min: null, max: null },
+  week52HighDistance: { min: null, max: null },
+  week52LowDistance: { min: null, max: null },
+  ipoAfter: null,
+});
+
+const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultFilters());
+
 function ScanPage() {
+  const { uiSnapshots } = useRuntime();
   // Scan state
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
+  const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
+  const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
 
   // Scan creation options
   const [universe, setUniverse] = useState('all');
@@ -81,83 +137,7 @@ function ScanPage() {
   const [sortOrder, setSortOrder] = useState('desc');
 
   // Filters - new compact structure
-  const [filters, setFilters] = useState({
-    // Text search
-    symbolSearch: '',
-
-    // Categorical
-    stage: null,
-    ratings: [],
-    ibdIndustries: { values: [], mode: 'include' },
-    gicsSectors: { values: [], mode: 'include' },
-
-    // Volume & Market Cap
-    minVolume: null,
-    minMarketCap: null,
-
-    // Score ranges
-    compositeScore: { min: null, max: null },
-    minerviniScore: { min: null, max: null },
-    canslimScore: { min: null, max: null },
-    ipoScore: { min: null, max: null },
-    customScore: { min: null, max: null },
-    volBreakthroughScore: { min: null, max: null },
-
-    // Setup Engine
-    seSetupScore: { min: null, max: null },
-    seDistanceToPivot: { min: null, max: null },
-    seBbSqueeze: { min: null, max: null },
-    seVolumeVs50d: { min: null, max: null },
-    seSetupReady: null,
-    seRsLineNewHigh: null,
-
-    // RS ranges
-    rsRating: { min: null, max: null },
-    rs1m: { min: null, max: null },
-    rs3m: { min: null, max: null },
-    rs12m: { min: null, max: null },
-
-    // Price & Growth
-    price: { min: null, max: null },
-    adrPercent: { min: null, max: null },
-    epsGrowth: { min: null, max: null },
-    salesGrowth: { min: null, max: null },
-
-    // VCP
-    vcpScore: { min: null, max: null },
-    vcpPivot: { min: null, max: null },
-    vcpDetected: null,
-    vcpReady: null,
-
-    // Booleans
-    maAlignment: null,
-    passesTemplate: null,
-
-    // Technical Filters - Performance (price change %)
-    perfDay: { min: null, max: null },
-    perfWeek: { min: null, max: null },
-    perfMonth: { min: null, max: null },
-
-    // Qullamaggie extended performance
-    perf3m: { min: null, max: null },
-    perf6m: { min: null, max: null },
-
-    // Episodic Pivot metrics
-    gapPercent: { min: null, max: null },
-    volumeSurge: { min: null, max: null },
-
-    // Technical Filters - EMA Distances
-    ema10Distance: { min: null, max: null },
-    ema20Distance: { min: null, max: null },
-    ema50Distance: { min: null, max: null },
-
-    // Technical Filters - 52-Week Distances
-    week52HighDistance: { min: null, max: null },
-    week52LowDistance: { min: null, max: null },
-
-    // IPO Date Filter
-    ipoAfter: null,
-  });
+  const [filters, setFilters] = useState(buildDefaultFilters);
 
   // Debounced filters for API calls (prevents rapid API spam during filter adjustments)
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
@@ -183,6 +163,38 @@ function ScanPage() {
 
   // Query client for prefetching
   const queryClient = useQueryClient();
+  const snapshotEnabled = Boolean(uiSnapshots?.scan);
+  const initialQueriesEnabled = !snapshotEnabled || initialBootstrapSettled;
+
+  const applyScanBootstrapSnapshot = useCallback((snapshot, requestedScanId = null) => {
+    const payload = snapshot?.payload ?? {};
+    queryClient.setQueryData(['universeStats'], payload.universe_stats ?? null);
+    queryClient.setQueryData(['scanHistory'], payload.recent_scans ?? { scans: [] });
+
+    const selectedScanId =
+      payload.selected_scan?.scan_id ??
+      payload.results_page?.scan_id ??
+      requestedScanId ??
+      null;
+
+    if (selectedScanId) {
+      queryClient.setQueryData(['filterOptions', selectedScanId], payload.filter_options ?? null);
+      queryClient.setQueryData(
+        ['scanResults', selectedScanId, 1, 50, 'composite_score', 'desc', DEFAULT_FILTER_KEY],
+        payload.results_page ?? null
+      );
+      if (payload.selected_scan_status) {
+        queryClient.setQueryData(['scanStatus', selectedScanId], payload.selected_scan_status);
+      }
+      setCurrentScanId(selectedScanId);
+      setBootstrappedScanId(selectedScanId);
+      setScanStatus(
+        payload.selected_scan_status?.status ??
+        payload.selected_scan?.status ??
+        null
+      );
+    }
+  }, [queryClient]);
 
   // Filter presets hook
   const {
@@ -195,6 +207,35 @@ function ScanPage() {
     isUpdating: presetIsUpdating,
   } = useFilterPresets();
 
+  const scanBootstrapQuery = useQuery({
+    queryKey: ['scanBootstrap', 'latest'],
+    queryFn: () => getScanBootstrap(),
+    enabled: snapshotEnabled && !currentScanId && !initialBootstrapSettled,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!snapshotEnabled) {
+      return;
+    }
+    if (scanBootstrapQuery.isError) {
+      setInitialBootstrapSettled(true);
+      return;
+    }
+    if (!scanBootstrapQuery.isSuccess) {
+      return;
+    }
+    applyScanBootstrapSnapshot(scanBootstrapQuery.data);
+    setInitialBootstrapSettled(true);
+  }, [
+    applyScanBootstrapSnapshot,
+    scanBootstrapQuery.data,
+    scanBootstrapQuery.isError,
+    scanBootstrapQuery.isSuccess,
+    snapshotEnabled,
+  ]);
+
   // Debounce filter changes to prevent rapid API calls
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -204,18 +245,46 @@ function ScanPage() {
     return () => clearTimeout(timer);
   }, [filters]);
 
+  const handleLoadScan = useCallback(async (scanId) => {
+    setCurrentScanId(scanId);
+    setBootstrappedScanId(null);
+    setPage(1); // Reset to first page
+
+    if (snapshotEnabled) {
+      try {
+        const snapshot = await getScanBootstrap(scanId);
+        applyScanBootstrapSnapshot(snapshot, scanId);
+        return;
+      } catch (error) {
+        console.error('Scan bootstrap unavailable, falling back to live endpoints:', error);
+      }
+    }
+
+    try {
+      const status = await getScanStatus(scanId);
+      setScanStatus(status.status);
+    } catch (error) {
+      console.error('Error loading scan:', error);
+      setScanStatus('completed'); // Fallback to completed
+    }
+  }, [applyScanBootstrapSnapshot, snapshotEnabled]);
+
   // Fetch universe stats
   const { data: universeStats, isLoading: statsLoading } = useQuery({
     queryKey: ['universeStats'],
     queryFn: getUniverseStats,
+    enabled: initialQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch scan history - only poll when a scan is actively running
   const { data: scanHistory, refetch: refetchScans } = useQuery({
     queryKey: ['scanHistory'],
     queryFn: () => getScans({ limit: 20 }),
+    enabled: initialQueriesEnabled || scanStatus === 'running' || scanStatus === 'queued',
     refetchInterval: scanStatus === 'running' ? 10000 : false, // Only poll when scan is running
     refetchIntervalInBackground: false, // Don't poll when tab not focused
+    staleTime: 60_000,
   });
 
   // Auto-load most recent completed scan on initial mount
@@ -228,13 +297,14 @@ function ScanPage() {
         handleLoadScan(latestCompletedScan.scan_id);
       }
     }
-  }, [scanHistory]);
+  }, [currentScanId, handleLoadScan, scanHistory]);
 
   // Create scan mutation
   const createScanMutation = useMutation({
     mutationFn: createScan,
     onSuccess: (data) => {
       setCurrentScanId(data.scan_id);
+      setBootstrappedScanId(null);
       setScanStatus(data.status);
       refetchScans(); // Refresh scan history
     },
@@ -250,7 +320,7 @@ function ScanPage() {
   });
 
   // Poll scan status while running/queued - stop when complete/failed/cancelled
-  const { data: statusData, error: statusError } = useQuery({
+  const { data: statusData } = useQuery({
     queryKey: ['scanStatus', currentScanId],
     queryFn: () => getScanStatus(currentScanId),
     enabled: !!currentScanId && (scanStatus === 'running' || scanStatus === 'queued'),
@@ -277,7 +347,7 @@ function ScanPage() {
         setTimeout(() => refetchResults(), 500); // Small delay to ensure DB is updated
       }
     }
-  }, [statusData]);
+  }, [refetchResults, scanStatus, statusData]);
 
   // Fetch filter options (industries, sectors) for the current scan
   const { data: filterOptionsData } = useQuery({
@@ -378,57 +448,7 @@ function ScanPage() {
 
   // Handle filter reset
   const handleResetFilters = () => {
-    setFilters({
-      symbolSearch: '',
-      stage: null,
-      ratings: [],
-      ibdIndustries: { values: [], mode: 'include' },
-      gicsSectors: { values: [], mode: 'include' },
-      compositeScore: { min: null, max: null },
-      minerviniScore: { min: null, max: null },
-      canslimScore: { min: null, max: null },
-      ipoScore: { min: null, max: null },
-      customScore: { min: null, max: null },
-      volBreakthroughScore: { min: null, max: null },
-      // Setup Engine
-      seSetupScore: { min: null, max: null },
-      seDistanceToPivot: { min: null, max: null },
-      seBbSqueeze: { min: null, max: null },
-      seVolumeVs50d: { min: null, max: null },
-      seSetupReady: null,
-      seRsLineNewHigh: null,
-      rsRating: { min: null, max: null },
-      rs1m: { min: null, max: null },
-      rs3m: { min: null, max: null },
-      rs12m: { min: null, max: null },
-      price: { min: null, max: null },
-      adrPercent: { min: null, max: null },
-      epsGrowth: { min: null, max: null },
-      salesGrowth: { min: null, max: null },
-      vcpScore: { min: null, max: null },
-      vcpPivot: { min: null, max: null },
-      vcpDetected: null,
-      vcpReady: null,
-      maAlignment: null,
-      passesTemplate: null,
-      // Technical Filters
-      perfDay: { min: null, max: null },
-      perfWeek: { min: null, max: null },
-      perfMonth: { min: null, max: null },
-      // Qullamaggie extended performance
-      perf3m: { min: null, max: null },
-      perf6m: { min: null, max: null },
-      // Episodic Pivot metrics
-      gapPercent: { min: null, max: null },
-      volumeSurge: { min: null, max: null },
-      ema10Distance: { min: null, max: null },
-      ema20Distance: { min: null, max: null },
-      ema50Distance: { min: null, max: null },
-      week52HighDistance: { min: null, max: null },
-      week52LowDistance: { min: null, max: null },
-      // IPO Date Filter
-      ipoAfter: null,
-    });
+    setFilters(buildDefaultFilters());
     setPage(1);
     // Clear active preset when resetting filters
     setActivePresetId(null);
@@ -571,21 +591,6 @@ function ScanPage() {
     }
   };
 
-  // Handle loading a previous scan
-  const handleLoadScan = async (scanId) => {
-    setCurrentScanId(scanId);
-    setPage(1); // Reset to first page
-
-    // Fetch the scan status
-    try {
-      const status = await getScanStatus(scanId);
-      setScanStatus(status.status);
-    } catch (error) {
-      console.error('Error loading scan:', error);
-      setScanStatus('completed'); // Fallback to completed
-    }
-  };
-
   // Handle cancel scan
   const handleCancelScan = () => {
     if (currentScanId && window.confirm('Are you sure you want to cancel this scan?')) {
@@ -632,6 +637,16 @@ function ScanPage() {
   // Prefetch visible page symbols when results load (Phase 3 optimization)
   useEffect(() => {
     if (!resultsData?.results || resultsData.results.length === 0) return;
+    if (
+      bootstrappedScanId === currentScanId &&
+      page === 1 &&
+      perPage === 50 &&
+      sortBy === 'composite_score' &&
+      sortOrder === 'desc' &&
+      stableFilterKey === DEFAULT_FILTER_KEY
+    ) {
+      return;
+    }
 
     // Prefetch first 5 symbols immediately (highest priority - most likely to be clicked)
     // Reduced from 10 to avoid overwhelming yfinance API
@@ -671,7 +686,7 @@ function ScanPage() {
         setTimeout(prefetchRemaining, 2000); // Delay start by 2s
       }
     }
-  }, [resultsData?.results, queryClient]);
+  }, [bootstrappedScanId, currentScanId, page, perPage, queryClient, resultsData?.results, sortBy, sortOrder, stableFilterKey]);
 
   // Format scan label for dropdown
   const formatScanLabel = (scan) => {

@@ -200,6 +200,14 @@ def extract_themes(limit: int = 50, pipeline: str = None):
 
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+            for pipeline_name in pipelines:
+                safe_publish_themes_bootstrap_variants(pipeline_name)
+        except Exception as snapshot_error:
+            logger.warning("Theme snapshot publish failed after extraction: %s", snapshot_error)
+
         return {
             'processed': result['processed'],
             'total_mentions': result['total_mentions'],
@@ -278,6 +286,14 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
         logger.info(f"  Theme mentions recovered: {combined_result['total_mentions']}")
         logger.info(f"  Errors: {combined_result['errors']}")
         logger.info("=" * 60)
+
+        try:
+            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+            for pipeline_name in pipelines:
+                safe_publish_themes_bootstrap_variants(pipeline_name)
+        except Exception as snapshot_error:
+            logger.warning("Theme snapshot publish failed after failed-item reprocessing: %s", snapshot_error)
 
         return {
             'reprocessed_count': combined_result['reprocessed_count'],
@@ -372,6 +388,14 @@ def calculate_theme_metrics(pipeline: str = None):
                 )
 
         logger.info("=" * 60)
+
+        try:
+            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+            for pipeline_name in pipelines:
+                safe_publish_themes_bootstrap_variants(pipeline_name)
+        except Exception as snapshot_error:
+            logger.warning("Theme snapshot publish failed after metrics calculation: %s", snapshot_error)
 
         return {
             'themes_updated': result['themes_updated'],
@@ -829,6 +853,13 @@ def check_alerts():
 
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+            safe_publish_themes_bootstrap_variants()
+        except Exception as snapshot_error:
+            logger.warning("Theme snapshot publish failed after alert check: %s", snapshot_error)
+
         return {
             'new_alerts': len(alerts),
             'alerts': [
@@ -1031,6 +1062,13 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None, lookback_d
         logger.info(f"Total duration: {total_duration:.2f}s")
         logger.info("=" * 60)
 
+        try:
+            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+            safe_publish_themes_bootstrap_variants(pipeline)
+        except Exception as snapshot_error:
+            logger.warning("Theme snapshot publish failed after pipeline completion: %s", snapshot_error)
+
         return {
             'status': 'complete',
             'run_id': run_id,
@@ -1224,6 +1262,14 @@ def consolidate_themes(dry_run: bool = False):
 
         logger.info("=" * 60)
 
+        if not dry_run:
+            try:
+                from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+                safe_publish_themes_bootstrap_variants()
+            except Exception as snapshot_error:
+                logger.warning("Theme snapshot publish failed after consolidation: %s", snapshot_error)
+
         return {
             'dry_run': dry_run,
             'embeddings_updated': result['embeddings_updated'],
@@ -1328,6 +1374,15 @@ def run_taxonomy_assignment(pipeline: str = None, dry_run: bool = False):
 
         duration = time.time() - start_time
         logger.info(f"Taxonomy assignment complete in {duration:.2f}s")
+
+        if not dry_run:
+            try:
+                from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+                for pipeline_name in pipelines:
+                    safe_publish_themes_bootstrap_variants(pipeline_name)
+            except Exception as snapshot_error:
+                logger.warning("Theme snapshot publish failed after taxonomy assignment: %s", snapshot_error)
 
         return {
             'dry_run': dry_run,

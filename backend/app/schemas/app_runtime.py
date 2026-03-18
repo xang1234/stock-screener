@@ -39,6 +39,7 @@ class AppCapabilitiesResponse(BaseModel):
 
     desktop_mode: bool
     features: dict[str, bool]
+    ui_snapshots: dict[str, bool] = Field(default_factory=dict)
     api_base_path: str = "/api"
     bootstrap_required: bool
     bootstrap: BootstrapStatusResponse

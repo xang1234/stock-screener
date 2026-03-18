@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
   Typography,
@@ -34,6 +34,7 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
+  getGroupsBootstrap,
   getCurrentRankings,
   getRankMovers,
   getGroupDetail,
@@ -423,7 +424,8 @@ const GroupDetailModal = ({ group, open, onClose }) => {
 };
 
 function GroupRankingsPage() {
-  const { bootstrap, bootstrapIncomplete, features } = useRuntime();
+  const { bootstrap, bootstrapIncomplete, features, uiSnapshots } = useRuntime();
+  const queryClient = useQueryClient();
   const [selectedPeriod, setSelectedPeriod] = useState('1w');
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [orderBy, setOrderBy] = useState('rank');
@@ -431,6 +433,41 @@ function GroupRankingsPage() {
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculationTaskId, setCalculationTaskId] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
+  const [bootstrapSettled, setBootstrapSettled] = useState(false);
+  const snapshotEnabled = Boolean(uiSnapshots?.groups);
+  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
+
+  const groupsBootstrapQuery = useQuery({
+    queryKey: ['groupsBootstrap'],
+    queryFn: getGroupsBootstrap,
+    enabled: snapshotEnabled && !bootstrapSettled,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!snapshotEnabled) {
+      return;
+    }
+    if (groupsBootstrapQuery.isError) {
+      setBootstrapSettled(true);
+      return;
+    }
+    if (!groupsBootstrapQuery.isSuccess) {
+      return;
+    }
+
+    const payload = groupsBootstrapQuery.data?.payload ?? {};
+    queryClient.setQueryData(['groupRankings'], payload.rankings ?? null);
+    queryClient.setQueryData(['groupMovers', '1w'], payload.movers ?? null);
+    setBootstrapSettled(true);
+  }, [
+    groupsBootstrapQuery.data,
+    groupsBootstrapQuery.isError,
+    groupsBootstrapQuery.isSuccess,
+    queryClient,
+    snapshotEnabled,
+  ]);
 
   // Fetch current rankings
   const {
@@ -441,7 +478,9 @@ function GroupRankingsPage() {
   } = useQuery({
     queryKey: ['groupRankings'],
     queryFn: () => getCurrentRankings(197),
+    enabled: liveQueriesEnabled,
     refetchInterval: 60000,
+    staleTime: 60_000,
   });
 
   // Fetch movers for selected period
@@ -451,6 +490,8 @@ function GroupRankingsPage() {
   } = useQuery({
     queryKey: ['groupMovers', selectedPeriod],
     queryFn: () => getRankMovers(selectedPeriod, 10),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Poll calculation status while task is running

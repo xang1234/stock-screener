@@ -10,6 +10,9 @@ const runtimeState = {
     message: 'Desktop bootstrap is still preparing breadth data.',
   },
   bootstrapIncomplete: true,
+  uiSnapshots: {
+    breadth: true,
+  },
 };
 
 vi.mock('../contexts/RuntimeContext', () => ({
@@ -17,6 +20,10 @@ vi.mock('../contexts/RuntimeContext', () => ({
 }));
 
 vi.mock('../api/breadth', () => ({
+  getBreadthBootstrap: vi.fn().mockRejectedValue({
+    message: 'Not found',
+    response: { status: 404 },
+  }),
   getCurrentBreadth: vi.fn().mockRejectedValue({
     message: 'Not found',
     response: { status: 404 },

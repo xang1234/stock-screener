@@ -12,6 +12,14 @@ export const getCurrentBreadth = async () => {
 };
 
 /**
+ * Get the published breadth bootstrap snapshot for the default dashboard view.
+ */
+export const getBreadthBootstrap = async () => {
+  const response = await apiClient.get('/v1/breadth/bootstrap');
+  return response.data;
+};
+
+/**
  * Get historical market breadth data for a date range.
  *
  * @param {string} startDate - Start date in YYYY-MM-DD format

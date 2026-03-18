@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
   Typography,
@@ -21,6 +21,7 @@ import {
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import {
+  getBreadthBootstrap,
   getCurrentBreadth,
   getHistoricalBreadth,
   getBreadthSummary,
@@ -57,12 +58,65 @@ const getDateRange = (range) => {
 };
 
 function BreadthPage() {
-  const { bootstrap, bootstrapIncomplete } = useRuntime();
+  const { bootstrap, bootstrapIncomplete, uiSnapshots } = useRuntime();
+  const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
+  const [bootstrapSettled, setBootstrapSettled] = useState(false);
+  const snapshotEnabled = Boolean(uiSnapshots?.breadth);
+  const liveQueriesEnabled = !snapshotEnabled || bootstrapSettled;
 
   // Calculate date range for chart based on selected time range
   const chartDateRange = getDateRange(chartTimeRange);
+  const defaultChartDateRange = getDateRange('1M');
+  const endDate = new Date().toISOString().split('T')[0];
+  const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const spyPeriodMap = { '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y' };
+  const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
+
+  const breadthBootstrapQuery = useQuery({
+    queryKey: ['breadthBootstrap'],
+    queryFn: getBreadthBootstrap,
+    enabled: snapshotEnabled && !bootstrapSettled,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!snapshotEnabled) {
+      return;
+    }
+    if (breadthBootstrapQuery.isError) {
+      setBootstrapSettled(true);
+      return;
+    }
+    if (!breadthBootstrapQuery.isSuccess) {
+      return;
+    }
+
+    const payload = breadthBootstrapQuery.data?.payload ?? {};
+    queryClient.setQueryData(['breadth', 'current'], payload.current ?? null);
+    queryClient.setQueryData(['breadth', 'historical', startDate, endDate], payload.history_90d ?? []);
+    queryClient.setQueryData(['breadth', 'summary'], payload.summary ?? {});
+    if (payload.chart_range === '1M') {
+      queryClient.setQueryData(
+        ['breadth', 'chart', defaultChartDateRange.startDate, defaultChartDateRange.endDate],
+        payload.chart_data ?? []
+      );
+      queryClient.setQueryData(['spy', 'history', '1mo'], payload.spy_overlay ?? []);
+    }
+    setBootstrapSettled(true);
+  }, [
+    breadthBootstrapQuery.data,
+    breadthBootstrapQuery.isError,
+    breadthBootstrapQuery.isSuccess,
+    defaultChartDateRange.endDate,
+    defaultChartDateRange.startDate,
+    endDate,
+    queryClient,
+    snapshotEnabled,
+    startDate,
+  ]);
 
   // Fetch current breadth data
   const {
@@ -72,24 +126,27 @@ function BreadthPage() {
   } = useQuery({
     queryKey: ['breadth', 'current'],
     queryFn: getCurrentBreadth,
+    enabled: liveQueriesEnabled,
     refetchInterval: 60000, // Refetch every minute
+    staleTime: 60_000,
   });
 
   // Fetch historical data (last 90 days)
-  const endDate = new Date().toISOString().split('T')[0];
-  const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
   const {
     data: historicalBreadth,
   } = useQuery({
     queryKey: ['breadth', 'historical', startDate, endDate],
     queryFn: () => getHistoricalBreadth(startDate, endDate),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch summary statistics
   useQuery({
     queryKey: ['breadth', 'summary'],
     queryFn: getBreadthSummary,
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch extended breadth data for chart (up to 2 years)
@@ -100,11 +157,11 @@ function BreadthPage() {
   } = useQuery({
     queryKey: ['breadth', 'chart', chartDateRange.startDate, chartDateRange.endDate],
     queryFn: () => getHistoricalBreadth(chartDateRange.startDate, chartDateRange.endDate, 730),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   // Fetch SPY historical data for overlay
-  const spyPeriodMap = { '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y' };
-  const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
   const {
     data: spyData,
     isLoading: isLoadingSpy,
@@ -112,6 +169,8 @@ function BreadthPage() {
   } = useQuery({
     queryKey: ['spy', 'history', spyPeriod],
     queryFn: () => getPriceHistory('SPY', spyPeriod),
+    enabled: liveQueriesEnabled,
+    staleTime: 60_000,
   });
 
   const handleTabChange = (event, newValue) => {

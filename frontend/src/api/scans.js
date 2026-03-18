@@ -46,6 +46,19 @@ export const getScanStatus = async (scanId) => {
 };
 
 /**
+ * Get the published scan bootstrap snapshot for the default screen state.
+ *
+ * @param {string|null} scanId - Optional explicit scan id variant
+ * @returns {Promise<Object>} Snapshot envelope
+ */
+export const getScanBootstrap = async (scanId = null) => {
+  const response = await apiClient.get('/v1/scans/bootstrap', {
+    params: scanId ? { scan_id: scanId } : undefined,
+  });
+  return response.data;
+};
+
+/**
  * Cancel a running scan
  * @param {string} scanId - Scan ID
  * @returns {Promise<Object>} Cancellation confirmation

@@ -143,6 +143,12 @@ def calculate_daily_breadth(self, calculation_date: str = None):
             logger.info(f"Creating new breadth record for {calc_date}")
 
         db.commit()
+        try:
+            from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
+
+            safe_publish_breadth_bootstrap()
+        except Exception as snapshot_error:
+            logger.warning("Breadth snapshot publish failed: %s", snapshot_error)
 
         logger.info(f"✓ Breadth data saved to database for {calc_date}")
         logger.info("=" * 60)
@@ -301,6 +307,13 @@ def backfill_breadth_data(start_date: str, end_date: str):
     logger.info(f"Total duration: {total_duration:.2f}s")
     logger.info(f"Average per day: {total_duration / max(stats['total_days_processed'], 1):.2f}s")
     logger.info("=" * 60)
+
+    try:
+        from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
+
+        safe_publish_breadth_bootstrap()
+    except Exception as snapshot_error:
+        logger.warning("Breadth snapshot publish failed after backfill: %s", snapshot_error)
 
     return {
         'start_date': start_date,

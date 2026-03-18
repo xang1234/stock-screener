@@ -17,6 +17,14 @@ export const getCurrentRankings = async (limit = 50) => {
 };
 
 /**
+ * Get the published groups bootstrap snapshot for the default dashboard view.
+ */
+export const getGroupsBootstrap = async () => {
+  const response = await apiClient.get('/v1/groups/bootstrap');
+  return response.data;
+};
+
+/**
  * Get rank movers (gainers and losers) for a period.
  *
  * @param {string} period - Time period: '1w', '1m', '3m', or '6m'
