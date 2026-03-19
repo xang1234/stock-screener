@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 import json
+import sqlite3
 
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
 from app.db_migrations.universe_lifecycle_migration import migrate_universe_lifecycle
@@ -16,7 +17,7 @@ from app.models.scan_result import Scan
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
 from app.models.ui_view_snapshot import UIViewSnapshot
-from app.services.ui_snapshot_service import UISnapshotService
+from app.services.ui_snapshot_service import UISnapshotService, _force_forget_snapshot_tables
 
 
 def test_ui_snapshot_service_marks_outdated_pointer_reads_as_stale_and_prunes_old_revisions():
@@ -190,3 +191,75 @@ def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():
     assert snapshot.payload["history"][0]["date"] == "2026-03-18"
     assert row.payload_json["current"]["date"] == "2026-03-19"
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
+
+
+def test_ui_snapshot_service_resets_corrupt_cache_tables_and_retries():
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    migrate_ui_view_snapshot_tables(engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        service._publish(  # noqa: SLF001
+            db=db,
+            view_key="test_view",
+            variant_key="default",
+            source_revision="rev-1",
+            payload={"value": 1},
+        )
+
+    original = service._get_snapshot
+    state = {"calls": 0}
+
+    def flaky_get_snapshot(*, db, view_key, variant_key, source_revision):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return original(
+            db=db,
+            view_key=view_key,
+            variant_key=variant_key,
+            source_revision=source_revision,
+        )
+
+    service._get_snapshot = flaky_get_snapshot  # noqa: SLF001
+
+    snapshot = service._run_with_storage_recovery(  # noqa: SLF001
+        lambda db: service._get_snapshot(  # noqa: SLF001
+            db=db,
+            view_key="test_view",
+            variant_key="default",
+            source_revision="rev-1",
+        )
+    )
+
+    with Session() as db:
+        assert db.query(func.count(UIViewSnapshot.id)).scalar() == 0
+
+    assert state["calls"] == 2
+    assert snapshot is None
+
+
+def test_force_forget_snapshot_tables_removes_snapshot_schema_entries():
+    engine = create_engine("sqlite:///:memory:")
+    migrate_ui_view_snapshot_tables(engine)
+
+    with engine.begin() as conn:
+        _force_forget_snapshot_tables(conn)
+
+    with engine.connect() as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE name LIKE 'ui_view_snapshot%'
+                       OR tbl_name LIKE 'ui_view_snapshot%'
+                    """
+                )
+            ).fetchall()
+        }
+
+    assert names == set()

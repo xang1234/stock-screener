@@ -9,10 +9,11 @@ import logging
 from threading import Lock
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.database import is_corruption_error
 from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank
@@ -77,6 +78,7 @@ DEFAULT_GROUP_PERIOD = "1w"
 DEFAULT_THEME_SOURCE_TYPES = ["substack", "twitter", "news", "reddit"]
 _SNAPSHOT_SCHEMA_LOCK = Lock()
 _SNAPSHOT_SCHEMA_READY = False
+_SNAPSHOT_CACHE_TABLES = ("ui_view_snapshot_pointers", "ui_view_snapshots")
 
 
 @dataclass(frozen=True)
@@ -117,94 +119,98 @@ class UISnapshotService:
     def get_scan_bootstrap(self, scan_id: str | None = None) -> SnapshotResult | None:
         self._ensure_schema()
         variant_key = self._scan_variant_key(scan_id)
-        with self._session_factory() as db:
-            return self._get_snapshot(
+        return self._run_with_storage_recovery(
+            lambda db: self._get_snapshot(
                 db=db,
                 view_key=SCAN_VIEW_KEY,
                 variant_key=variant_key,
                 source_revision=self._resolve_scan_source_revision(db, scan_id),
             )
+        )
 
     def publish_scan_bootstrap(self, scan_id: str | None = None) -> SnapshotResult:
         self._ensure_schema()
         variant_key = self._scan_variant_key(scan_id)
-        with self._session_factory() as db:
-            source_revision = self._resolve_scan_source_revision(db, scan_id)
-            return self._publish(
+        return self._run_with_storage_recovery(
+            lambda db: self._publish(
                 db=db,
                 view_key=SCAN_VIEW_KEY,
                 variant_key=variant_key,
-                source_revision=source_revision,
+                source_revision=self._resolve_scan_source_revision(db, scan_id),
                 payload=self._build_scan_payload(scan_id),
             )
+        )
 
     def get_breadth_bootstrap(self) -> SnapshotResult | None:
         self._ensure_schema()
-        with self._session_factory() as db:
-            return self._get_snapshot(
+        return self._run_with_storage_recovery(
+            lambda db: self._get_snapshot(
                 db=db,
                 view_key=BREADTH_VIEW_KEY,
                 variant_key="default",
                 source_revision=self._resolve_breadth_source_revision(db),
             )
+        )
 
     def publish_breadth_bootstrap(self) -> SnapshotResult:
         self._ensure_schema()
-        with self._session_factory() as db:
-            source_revision = self._resolve_breadth_source_revision(db)
-            return self._publish(
+        return self._run_with_storage_recovery(
+            lambda db: self._publish(
                 db=db,
                 view_key=BREADTH_VIEW_KEY,
                 variant_key="default",
-                source_revision=source_revision,
+                source_revision=self._resolve_breadth_source_revision(db),
                 payload=self._build_breadth_payload(),
             )
+        )
 
     def get_groups_bootstrap(self) -> SnapshotResult | None:
         self._ensure_schema()
-        with self._session_factory() as db:
-            return self._get_snapshot(
+        return self._run_with_storage_recovery(
+            lambda db: self._get_snapshot(
                 db=db,
                 view_key=GROUPS_VIEW_KEY,
                 variant_key="default",
                 source_revision=self._resolve_groups_source_revision(db),
             )
+        )
 
     def publish_groups_bootstrap(self) -> SnapshotResult:
         self._ensure_schema()
-        with self._session_factory() as db:
-            source_revision = self._resolve_groups_source_revision(db)
-            return self._publish(
+        return self._run_with_storage_recovery(
+            lambda db: self._publish(
                 db=db,
                 view_key=GROUPS_VIEW_KEY,
                 variant_key="default",
-                source_revision=source_revision,
+                source_revision=self._resolve_groups_source_revision(db),
                 payload=self._build_groups_payload(),
             )
+        )
 
     def get_themes_bootstrap(self, pipeline: str = "technical", theme_view: str = "grouped") -> SnapshotResult | None:
         self._ensure_schema()
         variant_key = self._themes_variant_key(pipeline, theme_view)
-        with self._session_factory() as db:
-            return self._get_snapshot(
+        return self._run_with_storage_recovery(
+            lambda db: self._get_snapshot(
                 db=db,
                 view_key=THEMES_VIEW_KEY,
                 variant_key=variant_key,
                 source_revision=self._resolve_themes_source_revision(db, pipeline),
             )
+        )
 
     def publish_themes_bootstrap(self, pipeline: str = "technical", theme_view: str = "grouped") -> SnapshotResult:
         self._ensure_schema()
         variant_key = self._themes_variant_key(pipeline, theme_view)
-        with self._session_factory() as db:
-            source_revision = self._resolve_themes_source_revision(db, pipeline)
-            return self._publish(
+        return self._run_with_storage_recovery(
+            lambda db: self._publish(
                 db=db,
                 view_key=THEMES_VIEW_KEY,
                 variant_key=variant_key,
-                source_revision=source_revision,
+                source_revision=self._resolve_themes_source_revision(db, pipeline),
                 payload=self._build_themes_payload(pipeline=pipeline, theme_view=theme_view),
             )
+        )
 
     def publish_all(self) -> dict[str, dict[str, Any]]:
         """Rebuild all bootstrap variants."""
@@ -229,6 +235,46 @@ class UISnapshotService:
         with _SNAPSHOT_SCHEMA_LOCK:
             if _SNAPSHOT_SCHEMA_READY:
                 return
+            from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+
+            migrate_ui_view_snapshot_tables(self._engine)
+            _SNAPSHOT_SCHEMA_READY = True
+
+    def _run_with_storage_recovery(self, fn):
+        """Retry UI snapshot reads/writes once after resetting corrupt cache tables."""
+        try:
+            with self._session_factory() as db:
+                return fn(db)
+        except Exception as exc:
+            if not is_corruption_error(exc):
+                raise
+            self._reset_corrupt_snapshot_storage(exc)
+            with self._session_factory() as db:
+                return fn(db)
+
+    def _reset_corrupt_snapshot_storage(self, exc: Exception) -> None:
+        """Drop and recreate rebuildable UI snapshot cache tables after corruption."""
+        logger.warning(
+            "Resetting UI snapshot cache tables after SQLite corruption signature: %s",
+            exc,
+        )
+        global _SNAPSHOT_SCHEMA_READY
+        with _SNAPSHOT_SCHEMA_LOCK:
+            if self._engine is None:
+                return
+            with self._engine.begin() as conn:
+                try:
+                    _drop_snapshot_tables(conn)
+                except Exception as reset_exc:
+                    if not is_corruption_error(reset_exc):
+                        raise
+                    logger.warning(
+                        "Normal UI snapshot table drop failed due to SQLite corruption; "
+                        "forcing schema cleanup: %s",
+                        reset_exc,
+                    )
+                    _force_forget_snapshot_tables(conn)
+            _SNAPSHOT_SCHEMA_READY = False
             from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
 
             migrate_ui_view_snapshot_tables(self._engine)
@@ -802,6 +848,33 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return value
+
+
+def _drop_snapshot_tables(conn) -> None:
+    """Drop rebuildable UI snapshot cache tables using normal DDL."""
+    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers"))
+    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots"))
+
+
+def _force_forget_snapshot_tables(conn) -> None:
+    """Remove UI snapshot cache tables from sqlite_master when normal DDL can't read them."""
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("PRAGMA writable_schema=ON"))
+    try:
+        conn.execute(
+            text(
+                """
+                DELETE FROM sqlite_master
+                WHERE name IN ('ui_view_snapshots', 'ui_view_snapshot_pointers')
+                   OR tbl_name IN ('ui_view_snapshots', 'ui_view_snapshot_pointers')
+                """
+            )
+        )
+        current_version = conn.execute(text("PRAGMA schema_version")).scalar() or 0
+        conn.execute(text(f"PRAGMA schema_version = {int(current_version) + 1}"))
+    finally:
+        conn.execute(text("PRAGMA writable_schema=OFF"))
+        conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def _safe_publish(action: str, *, view_key: str, variant_key: str, source_revision: str | None = None, fn) -> dict[str, Any] | None:
