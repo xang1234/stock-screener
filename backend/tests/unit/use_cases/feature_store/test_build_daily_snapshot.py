@@ -241,6 +241,38 @@ class TestHappyPath:
         assert run.stats.passed_symbols == 3
 
     @_PATCH_TRADING_DAY
+    def test_passed_symbols_tracks_template_passes_only(self, _mock_td):
+        uow, scanner = _make_uow(
+            symbols=["AAPL", "MSFT", "TSLA"],
+            scanner_results={
+                "AAPL": {
+                    "composite_score": 91.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                },
+                "MSFT": {
+                    "composite_score": 88.0,
+                    "rating": "Buy",
+                    "passes_template": False,
+                },
+                "TSLA": {
+                    "composite_score": 82.0,
+                    "rating": "Watch",
+                    "passes_template": True,
+                },
+            },
+        )
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        run = uow.feature_runs.get_run(result.run_id)
+        assert run.stats is not None
+        assert run.stats.passed_symbols == 2
+
+    @_PATCH_TRADING_DAY
     def test_idempotent_rerun_creates_new_run(self, _mock_td):
         uow, scanner = _make_uow()
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)

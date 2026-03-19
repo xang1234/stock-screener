@@ -303,7 +303,13 @@ class TestFeatureRunBinding:
         """If feature run lookup raises, scan still creates successfully."""
 
         class BrokenFeatureRunRepo(FakeFeatureRunRepository):
-            def find_latest_published_exact(self, *, input_hash: str, universe_hash: str):
+            def find_latest_published_exact(
+                self,
+                *,
+                input_hash: str,
+                universe_hash: str,
+                as_of_date=None,
+            ):
                 raise RuntimeError("feature_runs table missing")
 
         uow = FakeUnitOfWork(

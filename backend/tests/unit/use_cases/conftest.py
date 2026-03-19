@@ -532,12 +532,14 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         *,
         input_hash: str,
         universe_hash: str,
+        as_of_date=None,
     ) -> FeatureRunDomain | None:
         matches = [
             run for run in self._runs.values()
             if run.status == RunStatus.PUBLISHED
             and run.input_hash == input_hash
             and run.universe_hash == universe_hash
+            and (as_of_date is None or run.as_of_date == as_of_date)
         ]
         if not matches:
             return None

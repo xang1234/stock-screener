@@ -287,6 +287,34 @@ class TestFindLatestPublishedExact:
         assert result is not None
         assert result.id == second.id
 
+    def test_can_scope_exact_lookup_to_single_date(self, repo: SqlFeatureRunRepository):
+        first = repo.start_run(
+            date(2026, 2, 16),
+            RunType.DAILY_SNAPSHOT,
+            universe_hash="u1",
+            input_hash="i1",
+        )
+        repo.mark_completed(first.id, _make_stats())
+        repo.publish_atomically(first.id)
+
+        second = repo.start_run(
+            date(2026, 2, 17),
+            RunType.DAILY_SNAPSHOT,
+            universe_hash="u1",
+            input_hash="i1",
+        )
+        repo.mark_completed(second.id, _make_stats())
+        repo.publish_atomically(second.id)
+
+        result = repo.find_latest_published_exact(
+            input_hash="i1",
+            universe_hash="u1",
+            as_of_date=date(2026, 2, 16),
+        )
+
+        assert result is not None
+        assert result.id == first.id
+
     def test_returns_none_when_signature_differs(self, repo: SqlFeatureRunRepository):
         run = repo.start_run(
             date(2026, 2, 17),

@@ -102,6 +102,7 @@ class FeatureRunRepository(abc.ABC):
         *,
         input_hash: str,
         universe_hash: str,
+        as_of_date: date | None = None,
     ) -> FeatureRunDomain | None:
         """Return the newest published run matching the exact signature."""
         ...

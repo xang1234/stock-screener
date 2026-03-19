@@ -35,6 +35,20 @@ class _FakeUseCase:
 _TASK_BODY = inspect.unwrap(build_daily_snapshot.run)
 
 
+class _NonSkippingUoW:
+    def __init__(self) -> None:
+        self.universe = SimpleNamespace(resolve_symbols=lambda _universe_def: ["AAPL", "MSFT"])
+        self.feature_runs = SimpleNamespace(
+            find_latest_published_exact=lambda **_kwargs: None,
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
 def test_build_daily_snapshot_normalizes_default_active_universe():
     fake_use_case = _FakeUseCase()
 
@@ -49,7 +63,8 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     ), patch(
         "app.database.SessionLocal"
     ), patch(
-        "app.infra.db.uow.SqlUnitOfWork"
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
     ), patch(
         "app.infra.tasks.progress_sink.CeleryProgressSink",
         return_value=object(),
@@ -78,7 +93,8 @@ def test_build_daily_snapshot_never_passes_legacy_dict_shape():
     ), patch(
         "app.database.SessionLocal"
     ), patch(
-        "app.infra.db.uow.SqlUnitOfWork"
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
     ), patch(
         "app.infra.tasks.progress_sink.CeleryProgressSink",
         return_value=object(),
@@ -104,7 +120,8 @@ def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
     ), patch(
         "app.database.SessionLocal"
     ), patch(
-        "app.infra.db.uow.SqlUnitOfWork"
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
     ), patch(
         "app.infra.tasks.progress_sink.CeleryProgressSink",
         return_value=object(),
@@ -120,32 +137,19 @@ def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
 
 
 def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match():
+    lookup_calls = []
+
     class _CheckUoW:
         def __init__(self) -> None:
             self.universe = SimpleNamespace(resolve_symbols=lambda _universe_def: ["AAPL", "MSFT"])
             self.feature_runs = SimpleNamespace(
-                list_runs_with_counts=lambda **_kwargs: [
-                    (
-                        SimpleNamespace(
-                            id=41,
-                            as_of_date=date(2026, 3, 16),
-                            input_hash="same-input",
-                            universe_hash="same-universe",
-                        ),
-                        2,
-                        False,
+                find_latest_published_exact=lambda **kwargs: (
+                    lookup_calls.append(kwargs),
+                    SimpleNamespace(
+                        id=41,
+                        as_of_date=date(2026, 3, 16),
                     ),
-                    (
-                        SimpleNamespace(
-                            id=99,
-                            as_of_date=date(2026, 3, 17),
-                            input_hash="same-input",
-                            universe_hash="same-universe",
-                        ),
-                        2,
-                        True,
-                    ),
-                ]
+                )[1]
             )
 
         def __enter__(self):
@@ -186,3 +190,8 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     assert result["reason"] == "already_published"
     assert result["existing_run_id"] == 41
     assert fake_use_case.received_cmd is None
+    assert lookup_calls == [{
+        "input_hash": "same-input",
+        "universe_hash": "same-universe",
+        "as_of_date": date(2026, 3, 16),
+    }]

@@ -232,6 +232,7 @@ class BuildDailyFeatureSnapshotUseCase:
         # ── 3. Scan symbols in chunks ───────────────────────────
         processed = 0
         failed = 0
+        passed = 0
         all_rows: list[FeatureRowWrite] = []
 
         for chunk in _chunked(symbols, cmd.chunk_size):
@@ -243,7 +244,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     processed_symbols=processed - failed,
                     failed_symbols=failed,
                     duration_seconds=round(duration, 2),
-                    passed_symbols=len(all_rows),
+                    passed_symbols=passed,
                 )
                 uow.feature_runs.mark_completed(
                     run_id, stats, warnings=("Cancelled by user",)
@@ -278,6 +279,8 @@ class BuildDailyFeatureSnapshotUseCase:
                             sym, cmd.as_of_date, result
                         )
                         chunk_rows.append(row)
+                        if result.get("passes_template"):
+                            passed += 1
                     else:
                         failed += 1
                 except Exception:
@@ -306,7 +309,7 @@ class BuildDailyFeatureSnapshotUseCase:
                 ProgressEvent(
                     current=processed,
                     total=total,
-                    passed=len(all_rows),
+                    passed=passed,
                     failed=failed,
                     throughput=(
                         round(throughput, 2) if throughput > 0 else None
@@ -322,7 +325,7 @@ class BuildDailyFeatureSnapshotUseCase:
             processed_symbols=processed - failed,
             failed_symbols=failed,
             duration_seconds=round(duration, 2),
-            passed_symbols=len(all_rows),
+            passed_symbols=passed,
         )
         uow.feature_runs.mark_completed(run_id, stats)
         uow.commit()
@@ -368,7 +371,7 @@ class BuildDailyFeatureSnapshotUseCase:
             ProgressEvent(
                 current=total,
                 total=total,
-                passed=len(all_rows),
+                passed=passed,
                 failed=failed,
             )
         )

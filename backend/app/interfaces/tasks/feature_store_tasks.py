@@ -33,9 +33,9 @@ def build_daily_snapshot(
     self,
     as_of_date_str: str | None = None,
     screener_names: list[str] | None = None,
-    universe_name: str = "active",
+    universe_name: str | None = None,
     criteria: dict | None = None,
-    composite_method: str = "weighted_average",
+    composite_method: str | None = None,
     skip_if_published: bool = True,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
@@ -47,7 +47,7 @@ def build_daily_snapshot(
     screener_names:
         Screener list, e.g. ``["minervini", "canslim"]``.
     universe_name:
-        Universe filter name (default ``"active"``).
+        Universe filter name. Defaults to the shared scan default profile.
     skip_if_published:
         If True (default), skip when a PUBLISHED run already exists for the
         date. Pass False to force a rebuild.
@@ -65,10 +65,10 @@ def build_daily_snapshot(
 
     as_of = date.fromisoformat(as_of_date_str) if as_of_date_str else date.today()
     from app.domain.scanning.defaults import get_default_scan_profile
-    from app.domain.feature_store.models import RunStatus
 
     defaults = get_default_scan_profile()
     screeners = defaults["screeners"] if screener_names is None else screener_names
+    universe_name = defaults["universe"] if universe_name is None else universe_name
     criteria = defaults["criteria"] if criteria is None else criteria
     composite_method = (
         defaults["composite_method"]
@@ -104,19 +104,10 @@ def build_daily_snapshot(
             )
             input_hash = hash_scan_signature(signature_payload)
             universe_hash = hash_universe_symbols(symbols)
-            matching_run = next(
-                (
-                    run
-                    for run, _row_count, _is_latest in uow_check.feature_runs.list_runs_with_counts(
-                        status=RunStatus.PUBLISHED,
-                        date_from=as_of,
-                        date_to=as_of,
-                        limit=200,
-                    )
-                    if run.input_hash == input_hash
-                    and run.universe_hash == universe_hash
-                ),
-                None,
+            matching_run = uow_check.feature_runs.find_latest_published_exact(
+                input_hash=input_hash,
+                universe_hash=universe_hash,
+                as_of_date=as_of,
             )
             if matching_run is not None:
                 logger.info(

@@ -139,17 +139,16 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         *,
         input_hash: str,
         universe_hash: str,
+        as_of_date: date | None = None,
     ) -> FeatureRunDomain | None:
-        row = (
-            self._session.query(FeatureRun)
-            .filter(
-                FeatureRun.status == RunStatus.PUBLISHED.value,
-                FeatureRun.input_hash == input_hash,
-                FeatureRun.universe_hash == universe_hash,
-            )
-            .order_by(FeatureRun.published_at.desc(), FeatureRun.id.desc())
-            .first()
+        query = self._session.query(FeatureRun).filter(
+            FeatureRun.status == RunStatus.PUBLISHED.value,
+            FeatureRun.input_hash == input_hash,
+            FeatureRun.universe_hash == universe_hash,
         )
+        if as_of_date is not None:
+            query = query.filter(FeatureRun.as_of_date == as_of_date)
+        row = query.order_by(FeatureRun.published_at.desc(), FeatureRun.id.desc()).first()
         if row is None:
             return None
         return self._to_domain(row)
