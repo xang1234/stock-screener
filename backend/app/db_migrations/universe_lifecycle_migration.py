@@ -37,6 +37,24 @@ def _legacy_is_active_value(value) -> int:
     return 1 if bool(value) else 0
 
 
+def _derive_lifecycle_status(
+    raw_status: str | None,
+    status_reason: str | None,
+    legacy_is_active: int,
+) -> str:
+    """Derive lifecycle status, handling partially migrated rows safely."""
+    if raw_status is None:
+        return "active" if legacy_is_active else "inactive_manual"
+
+    # If a prior startup added the column but crashed before row backfill,
+    # SQLite surfaces the default 'active' for existing rows. When the row
+    # still lacks any backfill reason, fall back to the legacy active flag.
+    if raw_status == "active" and not legacy_is_active and status_reason is None:
+        return "inactive_manual"
+
+    return raw_status
+
+
 def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     """Backfill lifecycle data row-by-row to avoid brittle full-table text scans."""
     select_columns = [
@@ -57,11 +75,12 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     now = datetime.utcnow()
     updates: list[dict[str, object]] = []
     for row in rows:
-        status = _normalize_text(row["status"])
-        if status is None:
-            status = "active" if row["legacy_is_active"] else "inactive_manual"
-
         status_reason = _normalize_text(row["status_reason"])
+        status = _derive_lifecycle_status(
+            _normalize_text(row["status"]),
+            status_reason,
+            _legacy_is_active_value(row["legacy_is_active"]),
+        )
         if status_reason is None:
             status_reason = (
                 "Existing active symbol"

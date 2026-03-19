@@ -283,3 +283,54 @@ def test_backfill_retries_row_by_row_and_skips_corrupt_rows():
     assert rows[1]["last_seen_in_source_at"] is None
     assert rows[1]["deactivated_at"] == "2024-02-01 00:00:00"
     assert rows[1]["is_active"] == 0
+
+
+def test_migration_derives_inactive_status_from_legacy_flag_after_partial_column_add():
+    engine = _make_legacy_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO stock_universe(symbol, exchange, is_active, added_at, updated_at)
+                VALUES ('OLD', 'NYSE', 0, '2024-01-01 00:00:00', '2024-02-01 00:00:00')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE stock_universe ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+            )
+        )
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN status_reason TEXT"))
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN first_seen_at DATETIME"))
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN last_seen_in_source_at DATETIME"))
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN deactivated_at DATETIME"))
+        conn.execute(
+            text(
+                """
+                ALTER TABLE stock_universe
+                ADD COLUMN consecutive_fetch_failures INTEGER NOT NULL DEFAULT 0
+                """
+            )
+        )
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN last_fetch_success_at DATETIME"))
+        conn.execute(text("ALTER TABLE stock_universe ADD COLUMN last_fetch_failure_at DATETIME"))
+
+    migrate_universe_lifecycle(engine)
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT is_active, status, status_reason, first_seen_at, deactivated_at
+                FROM stock_universe
+                WHERE symbol = 'OLD'
+                """
+            )
+        ).mappings().one()
+
+    assert row["is_active"] == 0
+    assert row["status"] == "inactive_manual"
+    assert row["status_reason"] == "Backfilled from legacy inactive flag"
+    assert row["first_seen_at"] == "2024-01-01 00:00:00"
+    assert row["deactivated_at"] == "2024-02-01 00:00:00"
