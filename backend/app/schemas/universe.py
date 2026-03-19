@@ -46,6 +46,7 @@ class UniverseDefinition(BaseModel):
     exchange: Optional[Exchange] = None
     index: Optional[IndexName] = None
     symbols: Optional[List[str]] = None
+    allow_inactive_symbols: bool = False
 
     @field_validator("symbols", mode="before")
     @classmethod
@@ -70,19 +71,24 @@ class UniverseDefinition(BaseModel):
         t = self.type
 
         if t == UniverseType.ALL:
-            if self.exchange is not None or self.index is not None or self.symbols is not None:
+            if (
+                self.exchange is not None
+                or self.index is not None
+                or self.symbols is not None
+                or self.allow_inactive_symbols
+            ):
                 raise ValueError("ALL universe must not specify exchange, index, or symbols")
 
         elif t == UniverseType.EXCHANGE:
             if self.exchange is None:
                 raise ValueError("EXCHANGE universe requires 'exchange' field")
-            if self.index is not None or self.symbols is not None:
+            if self.index is not None or self.symbols is not None or self.allow_inactive_symbols:
                 raise ValueError("EXCHANGE universe must not specify index or symbols")
 
         elif t == UniverseType.INDEX:
             if self.index is None:
                 raise ValueError("INDEX universe requires 'index' field")
-            if self.exchange is not None or self.symbols is not None:
+            if self.exchange is not None or self.symbols is not None or self.allow_inactive_symbols:
                 raise ValueError("INDEX universe must not specify exchange or symbols")
 
         elif t in (UniverseType.CUSTOM, UniverseType.TEST):
@@ -115,7 +121,8 @@ class UniverseDefinition(BaseModel):
             # CUSTOM or TEST — hash the sorted symbol list
             joined = ",".join(sorted(self.symbols))
             digest = hashlib.sha256(joined.encode()).hexdigest()[:12]
-            return f"{self.type.value}:{digest}"
+            inactive_suffix = ":inactive" if self.allow_inactive_symbols else ""
+            return f"{self.type.value}:{digest}{inactive_suffix}"
 
     def label(self) -> str:
         """
@@ -134,10 +141,12 @@ class UniverseDefinition(BaseModel):
             return self.index.value
         elif self.type == UniverseType.CUSTOM:
             n = len(self.symbols)
-            return f"Custom ({n} {'symbol' if n == 1 else 'symbols'})"
+            suffix = ", incl. inactive" if self.allow_inactive_symbols else ""
+            return f"Custom ({n} {'symbol' if n == 1 else 'symbols'}{suffix})"
         else:  # TEST
             n = len(self.symbols)
-            return f"Test ({n} {'symbol' if n == 1 else 'symbols'})"
+            suffix = ", incl. inactive" if self.allow_inactive_symbols else ""
+            return f"Test ({n} {'symbol' if n == 1 else 'symbols'}{suffix})"
 
     @classmethod
     def from_legacy(cls, universe: str, symbols: Optional[List[str]] = None) -> "UniverseDefinition":

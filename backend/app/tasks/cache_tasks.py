@@ -287,6 +287,7 @@ def weekly_full_refresh(self):
 
             batch_successes = []
             batch_failures = []
+            failure_details = {}
 
             try:
                 batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
@@ -302,10 +303,12 @@ def weekly_full_refresh(self):
                             failed += 1
                             failed_symbols.append(symbol)
                             batch_failures.append(symbol)
+                            failure_details[symbol] = "Empty data returned"
                     else:
                         failed += 1
                         failed_symbols.append(symbol)
                         batch_failures.append(symbol)
+                        failure_details[symbol] = data.get('error', 'Unknown error')
                 # Batch store in Redis (pipeline) + DB (single transaction)
                 if batch_to_store:
                     price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
@@ -314,9 +317,16 @@ def weekly_full_refresh(self):
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
                 batch_failures.extend(batch_symbols)
+                failure_details.update({symbol: str(e) for symbol in batch_symbols})
 
             # Track symbol failures for auto-deactivation
-            _track_symbol_failures(price_cache, batch_successes, batch_failures, db)
+            _track_symbol_failures(
+                price_cache,
+                batch_successes,
+                batch_failures,
+                db,
+                failure_details=failure_details,
+            )
 
             # Update progress
             progress = min((batch_start + batch_size), total)
@@ -658,37 +668,16 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
     Returns:
         Dict of symbol -> data, or empty dict if all retries fail
     """
-    import time
-    base_delay = 60  # Start with 60 second wait
-
     for attempt in range(max_retries):
         try:
-            # Use yf.download()-based batch fetch (single HTTP request per batch)
-            # instead of per-ticker fetch_batch_data() which sleeps between each symbol
-            results = bulk_fetcher.fetch_batch_prices(
+            results = bulk_fetcher.fetch_prices_in_batches(
                 symbols,
                 period=period,
+                start_batch_size=min(
+                    len(symbols),
+                    getattr(bulk_fetcher, "DEFAULT_PRICE_BATCH_SIZE", 100),
+                ),
             )
-
-            # Check for per-symbol rate limit errors that fetch_batch_data
-            # swallows (returns as has_error=True instead of raising)
-            if results:
-                rate_limit_failures = sum(
-                    1 for data in results.values()
-                    if data.get('has_error') and _is_rate_limit_error(data.get('error', ''))
-                )
-                total = len(results)
-                failure_rate = rate_limit_failures / total if total > 0 else 0
-
-                if failure_rate > 0.5 and attempt < max_retries - 1:
-                    wait_time = base_delay * (2 ** attempt)  # 60, 120, 240 seconds
-                    logger.warning(
-                        f"Rate limited: {rate_limit_failures}/{total} symbols hit rate limits. "
-                        f"Waiting {wait_time}s before retry "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(wait_time)
-                    continue  # Retry the whole batch
 
             return results
 
@@ -697,12 +686,10 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
             # Check for rate limit indicators in the exception
             if _is_rate_limit_error(error_str):
                 if attempt < max_retries - 1:
-                    wait_time = base_delay * (2 ** attempt)  # 60, 120, 240 seconds
                     logger.warning(
-                        f"Rate limited by yfinance (exception). Waiting {wait_time}s before retry "
+                        f"Rate limited by yfinance (exception). Retrying via shared batch adapter "
                         f"(attempt {attempt + 1}/{max_retries})"
                     )
-                    time.sleep(wait_time)
                 else:
                     logger.error(
                         f"Rate limit persists after {max_retries} retries. "
@@ -715,12 +702,33 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
     return {}
 
 
-def _track_symbol_failures(price_cache, successes: List[str], failures: List[str], db=None):
+def _classify_no_data_failure(error_message: str) -> bool:
+    """Heuristic classifier for delisted/no-data provider failures."""
+    lower = (error_message or "").lower()
+    indicators = (
+        "no data",
+        "possibly delisted",
+        "delisted",
+        "missing from results",
+        "symbol not in download results",
+        "returned empty",
+        "empty data",
+    )
+    return any(indicator in lower for indicator in indicators)
+
+
+def _track_symbol_failures(
+    price_cache,
+    successes: List[str],
+    failures: List[str],
+    db=None,
+    failure_details: Optional[dict[str, str]] = None,
+):
     """
     Track per-symbol fetch failures and auto-deactivate persistently failing symbols.
 
-    Symbols that fail 3+ consecutive refreshes (typically delisted tickers) are
-    marked is_active=False in stock_universe to stop wasting API calls.
+    Symbols that fail 3+ consecutive refreshes with no-data/delisted indicators
+    transition to inactive_no_data to stop wasting provider traffic.
 
     Args:
         price_cache: PriceCacheService instance
@@ -731,47 +739,47 @@ def _track_symbol_failures(price_cache, successes: List[str], failures: List[str
     if not successes and not failures:
         return
 
-    # Clear failure counters for successful symbols
-    for symbol in successes:
-        price_cache.clear_symbol_failure(symbol)
-
-    if not failures:
-        return
-
-    # Record failures and check for deactivation threshold
-    deactivated = []
-    for symbol in failures:
-        count = price_cache.record_symbol_failure(symbol)
-        if count >= price_cache.SYMBOL_FAILURE_THRESHOLD:
-            deactivated.append(symbol)
-
-    if not deactivated:
-        return
-
-    # Auto-deactivate symbols that hit the threshold
+    failure_details = failure_details or {}
     owns_db = db is None
     if owns_db:
         db = SessionLocal()
 
+    # Clear failure counters for successful symbols
+    from ..services.stock_universe_service import stock_universe_service
+
+    for symbol in successes:
+        price_cache.clear_symbol_failure(symbol)
+        stock_universe_service.record_fetch_success(db, symbol)
+
+    if not failures:
+        return
+
+    deactivated = []
+    for symbol in failures:
+        count = price_cache.record_symbol_failure(symbol)
+        details = stock_universe_service.record_fetch_failure(
+            db,
+            symbol,
+            reason=(
+                "Repeated no-data provider responses"
+                if _classify_no_data_failure(failure_details.get(symbol, ""))
+                else "Repeated provider fetch failures"
+            ),
+            trigger_source="price_refresh",
+            no_data=_classify_no_data_failure(failure_details.get(symbol, "")),
+            deactivate_threshold=price_cache.SYMBOL_FAILURE_THRESHOLD,
+        )
+        if count >= price_cache.SYMBOL_FAILURE_THRESHOLD and details.get("deactivated"):
+            deactivated.append(symbol)
+
     try:
-        from ..models.stock_universe import StockUniverse
-
-        for symbol in deactivated:
-            record = db.query(StockUniverse).filter(
-                StockUniverse.symbol == symbol,
-                StockUniverse.is_active == True
-            ).first()
-            if record:
-                record.is_active = False
-                logger.warning(
-                    f"Auto-deactivated {symbol}: failed {price_cache.SYMBOL_FAILURE_THRESHOLD}+ "
-                    f"consecutive refreshes (likely delisted)"
-                )
-
         db.commit()
-
         if deactivated:
-            logger.info(f"Auto-deactivated {len(deactivated)} persistently failing symbols: {deactivated}")
+            logger.info(
+                "Auto-deactivated %d persistently failing symbols: %s",
+                len(deactivated),
+                deactivated,
+            )
 
     except Exception as e:
         logger.error(f"Error auto-deactivating symbols: {e}", exc_info=True)
@@ -1132,6 +1140,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
 
             batch_successes = []
             batch_failures = []
+            failure_details = {}
 
             try:
                 # Batch fetch using yf.download() (single HTTP request per batch)
@@ -1150,10 +1159,12 @@ def smart_refresh_cache(self, mode: str = "auto"):
                             failed += 1
                             failed_symbols.append(symbol)
                             batch_failures.append(symbol)
+                            failure_details[symbol] = "Empty data returned"
                     else:
                         failed += 1
                         failed_symbols.append(symbol)
                         batch_failures.append(symbol)
+                        failure_details[symbol] = data.get('error', 'Unknown error')
 
                 # Batch store in Redis (pipeline) + DB (single transaction)
                 if batch_to_store:
@@ -1164,9 +1175,16 @@ def smart_refresh_cache(self, mode: str = "auto"):
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
                 batch_failures.extend(batch_symbols)
+                failure_details.update({symbol: str(e) for symbol in batch_symbols})
 
             # Track symbol failures for auto-deactivation of delisted symbols
-            _track_symbol_failures(price_cache, batch_successes, batch_failures, db)
+            _track_symbol_failures(
+                price_cache,
+                batch_successes,
+                batch_failures,
+                db,
+                failure_details=failure_details,
+            )
 
             # Update progress for UI and stuck detection
             progress = min((batch_start + batch_size), total)
@@ -1259,6 +1277,7 @@ def cleanup_old_price_data(self, keep_years: int = 5):
     """
     from datetime import date, timedelta
     from ..models.stock import StockPrice
+    from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
     from sqlalchemy import func
 
     logger.info("=" * 80)
@@ -1275,8 +1294,12 @@ def cleanup_old_price_data(self, keep_years: int = 5):
         logger.info(f"Cutoff date: {cutoff_date}")
 
         # Get count of records to delete
+        active_symbol_subquery = db.query(StockUniverse.symbol).filter(
+            StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+        )
         delete_count = db.query(func.count(StockPrice.id)).filter(
-            StockPrice.date < cutoff_date
+            StockPrice.date < cutoff_date,
+            StockPrice.symbol.in_(active_symbol_subquery),
         ).scalar() or 0
 
         if delete_count == 0:
@@ -1295,10 +1318,20 @@ def cleanup_old_price_data(self, keep_years: int = 5):
         total_deleted = 0
 
         while True:
-            # Delete a batch
+            ids_to_delete = [
+                row[0]
+                for row in db.query(StockPrice.id).filter(
+                    StockPrice.date < cutoff_date,
+                    StockPrice.symbol.in_(active_symbol_subquery),
+                ).limit(batch_size).all()
+            ]
+
+            if not ids_to_delete:
+                break
+
             deleted = db.query(StockPrice).filter(
-                StockPrice.date < cutoff_date
-            ).limit(batch_size).delete(synchronize_session=False)
+                StockPrice.id.in_(ids_to_delete)
+            ).delete(synchronize_session=False)
 
             if deleted == 0:
                 break

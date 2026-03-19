@@ -6,14 +6,22 @@ Fetches stocks from finviz and manages the stock_universe database table.
 import logging
 import csv
 import io
+import json
 import pandas as pd
-from typing import List, Dict, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_, func
+from sqlalchemy import func
 from datetime import datetime
 
-from ..models.stock_universe import StockUniverse
+from ..models.stock_universe import (
+    StockUniverse,
+    StockUniverseStatusEvent,
+    UNIVERSE_STATUS_ACTIVE,
+    UNIVERSE_STATUS_INACTIVE_MANUAL,
+    UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+    UNIVERSE_STATUS_INACTIVE_NO_DATA,
+)
 from ..database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -25,6 +33,88 @@ class StockUniverseService:
     def __init__(self):
         """Initialize stock universe service."""
         pass
+
+    @staticmethod
+    def _normalize_status(record: StockUniverse) -> str:
+        """Return a lifecycle status even for pre-migration rows."""
+        if record.status:
+            return record.status
+        return UNIVERSE_STATUS_ACTIVE if record.is_active else UNIVERSE_STATUS_INACTIVE_MANUAL
+
+    def _add_status_event(
+        self,
+        db: Session,
+        *,
+        symbol: str,
+        old_status: Optional[str],
+        new_status: str,
+        trigger_source: str,
+        reason: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        db.add(
+            StockUniverseStatusEvent(
+                symbol=symbol,
+                old_status=old_status,
+                new_status=new_status,
+                trigger_source=trigger_source,
+                reason=reason,
+                payload_json=json.dumps(payload, sort_keys=True) if payload else None,
+            )
+        )
+
+    def _apply_status_transition(
+        self,
+        db: Session,
+        record: StockUniverse,
+        *,
+        new_status: str,
+        trigger_source: str,
+        reason: str,
+        now: Optional[datetime] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        source: Optional[str] = None,
+        clear_failures: bool = False,
+        seen_in_source: bool = False,
+    ) -> bool:
+        """Apply a lifecycle transition and emit an audit event when status changes."""
+        now = now or datetime.utcnow()
+        old_status = self._normalize_status(record)
+
+        record.status = new_status
+        record.is_active = new_status == UNIVERSE_STATUS_ACTIVE
+        record.status_reason = reason
+        record.updated_at = now
+
+        if source:
+            record.source = source
+
+        if record.first_seen_at is None:
+            record.first_seen_at = now
+
+        if new_status == UNIVERSE_STATUS_ACTIVE:
+            record.deactivated_at = None
+            if seen_in_source:
+                record.last_seen_in_source_at = now
+            if clear_failures:
+                record.consecutive_fetch_failures = 0
+                record.last_fetch_failure_at = None
+        else:
+            if record.deactivated_at is None or old_status != new_status:
+                record.deactivated_at = now
+
+        changed = old_status != new_status
+        if changed or payload:
+            self._add_status_event(
+                db,
+                symbol=record.symbol,
+                old_status=old_status,
+                new_status=new_status,
+                trigger_source=trigger_source,
+                reason=reason,
+                payload=payload,
+            )
+        return changed
 
     def fetch_from_finviz(self, exchange_filter: Optional[str] = None) -> List[Dict]:
         """
@@ -211,38 +301,62 @@ class StockUniverseService:
 
             added_count = 0
             updated_count = 0
+            now = datetime.utcnow()
+            stock_map = {
+                stock.symbol: stock
+                for stock in db.query(StockUniverse).filter(
+                    StockUniverse.symbol.in_([row["symbol"] for row in stocks])
+                ).all()
+            }
 
-            # Upsert stocks
             for stock_data in stocks:
-                symbol = stock_data['symbol']
-
-                # Check if symbol exists
-                existing = db.query(StockUniverse).filter(StockUniverse.symbol == symbol).first()
+                symbol = stock_data["symbol"]
+                existing = stock_map.get(symbol)
 
                 if existing:
-                    # Update existing record
-                    existing.name = stock_data['name'] or existing.name
-                    existing.exchange = stock_data['exchange'] or existing.exchange
-                    existing.sector = stock_data['sector'] or existing.sector
-                    existing.industry = stock_data['industry'] or existing.industry
-                    existing.market_cap = stock_data['market_cap'] or existing.market_cap
-                    existing.is_active = True  # Reactivate if was deactivated
-                    existing.source = 'csv'
-                    existing.updated_at = datetime.utcnow()
+                    existing.name = stock_data["name"] or existing.name
+                    existing.exchange = stock_data["exchange"] or existing.exchange
+                    existing.sector = stock_data["sector"] or existing.sector
+                    existing.industry = stock_data["industry"] or existing.industry
+                    existing.market_cap = stock_data["market_cap"] or existing.market_cap
+                    self._apply_status_transition(
+                        db,
+                        existing,
+                        new_status=UNIVERSE_STATUS_ACTIVE,
+                        trigger_source="csv_import",
+                        reason="Imported from CSV",
+                        now=now,
+                        payload={"source": "csv"},
+                        source="csv",
+                        clear_failures=True,
+                    )
                     updated_count += 1
                 else:
-                    # Insert new record
                     new_stock = StockUniverse(
                         symbol=symbol,
-                        name=stock_data['name'],
-                        exchange=stock_data['exchange'],
-                        sector=stock_data['sector'],
-                        industry=stock_data['industry'],
-                        market_cap=stock_data['market_cap'],
+                        name=stock_data["name"],
+                        exchange=stock_data["exchange"],
+                        sector=stock_data["sector"],
+                        industry=stock_data["industry"],
+                        market_cap=stock_data["market_cap"],
                         is_active=True,
-                        source='csv',
+                        status=UNIVERSE_STATUS_ACTIVE,
+                        status_reason="Imported from CSV",
+                        source="csv",
+                        added_at=now,
+                        first_seen_at=now,
+                        updated_at=now,
                     )
                     db.add(new_stock)
+                    self._add_status_event(
+                        db,
+                        symbol=symbol,
+                        old_status=None,
+                        new_status=UNIVERSE_STATUS_ACTIVE,
+                        trigger_source="csv_import",
+                        reason="Imported from CSV",
+                        payload={"source": "csv"},
+                    )
                     added_count += 1
 
             db.commit()
@@ -327,55 +441,67 @@ class StockUniverseService:
                 logger.warning("No stocks fetched from finviz")
                 return {'added': 0, 'updated': 0, 'deactivated': 0, 'total': 0}
 
+            now = datetime.utcnow()
             added_count = 0
             updated_count = 0
 
-            # Get all existing symbols with their IDs to avoid N+1 query problem
-            existing_stocks_query = select(StockUniverse.id, StockUniverse.symbol)
-            existing_stocks = {row[1]: row[0] for row in db.execute(existing_stocks_query).all()}  # symbol -> id mapping
-
-            fetched_symbols = set([stock_data['symbol'] for stock_data in stocks])
-
-            # Separate stocks into new and existing for bulk operations
-            stocks_to_insert = []
-            stocks_to_update = []
-            now = datetime.utcnow()
+            existing_stocks = {
+                stock.symbol: stock
+                for stock in db.query(StockUniverse).all()
+            }
+            fetched_symbols = {stock_data["symbol"] for stock_data in stocks}
 
             for stock_data in stocks:
-                symbol = stock_data['symbol']
+                symbol = stock_data["symbol"]
+                existing = existing_stocks.get(symbol)
+                if existing is None:
+                    new_stock = StockUniverse(
+                        symbol=symbol,
+                        name=stock_data["name"],
+                        exchange=stock_data["exchange"],
+                        sector=stock_data["sector"],
+                        industry=stock_data["industry"],
+                        market_cap=stock_data["market_cap"],
+                        is_active=True,
+                        status=UNIVERSE_STATUS_ACTIVE,
+                        status_reason="Present in Finviz universe sync",
+                        source="finviz",
+                        added_at=now,
+                        first_seen_at=now,
+                        last_seen_in_source_at=now,
+                        updated_at=now,
+                    )
+                    db.add(new_stock)
+                    self._add_status_event(
+                        db,
+                        symbol=symbol,
+                        old_status=None,
+                        new_status=UNIVERSE_STATUS_ACTIVE,
+                        trigger_source="finviz_sync",
+                        reason="New symbol discovered in Finviz universe sync",
+                        payload={"exchange": stock_data["exchange"]},
+                    )
+                    added_count += 1
+                    continue
 
-                stock_dict = {
-                    'symbol': symbol,
-                    'name': stock_data['name'],
-                    'exchange': stock_data['exchange'],
-                    'sector': stock_data['sector'],
-                    'industry': stock_data['industry'],
-                    'market_cap': stock_data['market_cap'],
-                    'is_active': True,
-                    'updated_at': now,
-                }
-
-                if symbol in existing_stocks:
-                    # Existing stock - prepare for update (include id for bulk_update_mappings)
-                    stock_dict['id'] = existing_stocks[symbol]
-                    stocks_to_update.append(stock_dict)
-                else:
-                    # New stock - prepare for insert
-                    stock_dict['source'] = 'finviz'
-                    stock_dict['added_at'] = now
-                    stocks_to_insert.append(stock_dict)
-
-            # Bulk insert new stocks
-            if stocks_to_insert:
-                db.bulk_insert_mappings(StockUniverse, stocks_to_insert)
-                added_count = len(stocks_to_insert)
-                logger.info(f"Bulk inserted {added_count} new stocks")
-
-            # Bulk update existing stocks
-            if stocks_to_update:
-                db.bulk_update_mappings(StockUniverse, stocks_to_update)
-                updated_count = len(stocks_to_update)
-                logger.info(f"Bulk updated {updated_count} existing stocks")
+                existing.name = stock_data["name"] or existing.name
+                existing.exchange = stock_data["exchange"] or existing.exchange
+                existing.sector = stock_data["sector"] or existing.sector
+                existing.industry = stock_data["industry"] or existing.industry
+                existing.market_cap = stock_data["market_cap"]
+                self._apply_status_transition(
+                    db,
+                    existing,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="finviz_sync",
+                    reason="Present in Finviz universe sync",
+                    now=now,
+                    payload={"exchange": stock_data["exchange"]},
+                    source="finviz",
+                    clear_failures=True,
+                    seen_in_source=True,
+                )
+                updated_count += 1
 
             # Deactivate symbols that no longer exist in finviz
             # ONLY when refreshing ALL exchanges (no filter)
@@ -388,62 +514,76 @@ class StockUniverseService:
 
             if not exchange_filter:
                 # Only deactivate when doing full universe refresh
-                removed_symbols = set(existing_stocks.keys()) - fetched_symbols
+                removed_records = [
+                    stock
+                    for stock in existing_stocks.values()
+                    if self._normalize_status(stock) == UNIVERSE_STATUS_ACTIVE
+                    and stock.symbol not in fetched_symbols
+                ]
 
-                if removed_symbols:
+                if removed_records:
                     # Safety check: don't deactivate if fetch count is suspiciously low
                     if len(fetched_symbols) < MIN_EXPECTED_STOCKS:
                         logger.warning(
                             f"SAFETY: Skipping deactivation - only {len(fetched_symbols)} stocks fetched "
-                            f"(expected {MIN_EXPECTED_STOCKS}+). Would have deactivated {len(removed_symbols)} stocks."
+                            f"(expected {MIN_EXPECTED_STOCKS}+). Would have deactivated {len(removed_records)} stocks."
                         )
                     # Safety check: don't deactivate too many stocks at once
-                    elif len(removed_symbols) > len(existing_stocks) * MAX_DEACTIVATION_PERCENT / 100:
+                    elif len(removed_records) > len(existing_stocks) * MAX_DEACTIVATION_PERCENT / 100:
                         logger.warning(
-                            f"SAFETY: Skipping deactivation - {len(removed_symbols)} stocks would be deactivated "
+                            f"SAFETY: Skipping deactivation - {len(removed_records)} stocks would be deactivated "
                             f"(>{MAX_DEACTIVATION_PERCENT}% of {len(existing_stocks)} existing). "
                             f"This may indicate a finviz API issue."
                         )
                     else:
-                        db.query(StockUniverse).filter(
-                            StockUniverse.symbol.in_(removed_symbols)
-                        ).update(
-                            {'is_active': False, 'updated_at': datetime.utcnow()},
-                            synchronize_session=False
-                        )
-                        deactivated_count = len(removed_symbols)
+                        for record in removed_records:
+                            self._apply_status_transition(
+                                db,
+                                record,
+                                new_status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+                                trigger_source="finviz_sync",
+                                reason="Missing from Finviz universe sync",
+                                now=now,
+                                payload={"exchange_filter": None},
+                            )
+                        deactivated_count = len(removed_records)
                         logger.info(f"Deactivated {deactivated_count} stocks no longer in finviz")
             else:
                 # When refreshing specific exchange, only deactivate stocks from THAT exchange
                 # that are no longer in the fetch results
                 exchange_name = exchange_filter.upper()
-
-                # Get existing symbols from this exchange only
-                existing_exchange_symbols = set([
-                    row[0] for row in db.query(StockUniverse.symbol).filter(
-                        StockUniverse.exchange == exchange_name,
-                        StockUniverse.is_active == True
-                    ).all()
-                ])
-
-                removed_from_exchange = existing_exchange_symbols - fetched_symbols
+                removed_from_exchange = [
+                    stock
+                    for stock in existing_stocks.values()
+                    if stock.exchange == exchange_name
+                    and self._normalize_status(stock) == UNIVERSE_STATUS_ACTIVE
+                    and stock.symbol not in fetched_symbols
+                ]
 
                 if removed_from_exchange:
                     # Safety check: don't deactivate too many from a single exchange
-                    if len(removed_from_exchange) > len(existing_exchange_symbols) * MAX_DEACTIVATION_PERCENT / 100:
+                    existing_exchange_count = sum(
+                        1
+                        for stock in existing_stocks.values()
+                        if stock.exchange == exchange_name and self._normalize_status(stock) == UNIVERSE_STATUS_ACTIVE
+                    )
+                    if existing_exchange_count > 0 and len(removed_from_exchange) > existing_exchange_count * MAX_DEACTIVATION_PERCENT / 100:
                         logger.warning(
                             f"SAFETY: Skipping deactivation for {exchange_name} - {len(removed_from_exchange)} stocks "
-                            f"would be deactivated (>{MAX_DEACTIVATION_PERCENT}% of {len(existing_exchange_symbols)}). "
+                            f"would be deactivated (>{MAX_DEACTIVATION_PERCENT}% of {existing_exchange_count}). "
                             f"This may indicate a finviz API issue."
                         )
                     else:
-                        db.query(StockUniverse).filter(
-                            StockUniverse.symbol.in_(removed_from_exchange),
-                            StockUniverse.exchange == exchange_name
-                        ).update(
-                            {'is_active': False, 'updated_at': datetime.utcnow()},
-                            synchronize_session=False
-                        )
+                        for record in removed_from_exchange:
+                            self._apply_status_transition(
+                                db,
+                                record,
+                                new_status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+                                trigger_source="finviz_sync",
+                                reason=f"Missing from Finviz universe sync for {exchange_name}",
+                                now=now,
+                                payload={"exchange_filter": exchange_name},
+                            )
                         deactivated_count = len(removed_from_exchange)
                         logger.info(f"Deactivated {deactivated_count} {exchange_name} stocks no longer in finviz")
 
@@ -487,7 +627,9 @@ class StockUniverseService:
             List of symbol strings
         """
         try:
-            query = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+            query = db.query(StockUniverse.symbol).filter(
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+            )
 
             if sp500_only:
                 query = query.filter(StockUniverse.is_sp500 == True)
@@ -536,9 +678,21 @@ class StockUniverseService:
 
             if existing:
                 # Reactivate if inactive
-                if not existing.is_active:
-                    existing.is_active = True
-                    existing.updated_at = datetime.utcnow()
+                if self._normalize_status(existing) != UNIVERSE_STATUS_ACTIVE:
+                    existing.name = name or existing.name
+                    if existing.exchange is None:
+                        existing.exchange = 'MANUAL'
+                    self._apply_status_transition(
+                        db,
+                        existing,
+                        new_status=UNIVERSE_STATUS_ACTIVE,
+                        trigger_source="manual_add",
+                        reason="Manually reactivated by admin",
+                        now=datetime.utcnow(),
+                        payload={"source": "manual"},
+                        source="manual",
+                        clear_failures=True,
+                    )
                     db.commit()
                     logger.info(f"Reactivated symbol: {symbol}")
                     return True
@@ -552,9 +706,23 @@ class StockUniverseService:
                     name=name,
                     exchange='MANUAL',
                     is_active=True,
+                    status=UNIVERSE_STATUS_ACTIVE,
+                    status_reason="Manually added by admin",
                     source='manual',
+                    added_at=datetime.utcnow(),
+                    first_seen_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
                 )
                 db.add(new_stock)
+                self._add_status_event(
+                    db,
+                    symbol=symbol,
+                    old_status=None,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="manual_add",
+                    reason="Manually added by admin",
+                    payload={"source": "manual"},
+                )
                 db.commit()
                 logger.info(f"Added manual symbol: {symbol}")
                 return True
@@ -581,8 +749,15 @@ class StockUniverseService:
             stock = db.query(StockUniverse).filter(StockUniverse.symbol == symbol).first()
 
             if stock:
-                stock.is_active = False
-                stock.updated_at = datetime.utcnow()
+                self._apply_status_transition(
+                    db,
+                    stock,
+                    new_status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+                    trigger_source="manual_deactivate",
+                    reason="Manually deactivated by admin",
+                    now=datetime.utcnow(),
+                    payload={"source": "manual"},
+                )
                 db.commit()
                 logger.info(f"Deactivated symbol: {symbol}")
                 return True
@@ -604,7 +779,9 @@ class StockUniverseService:
         """
         try:
             total = db.query(StockUniverse).count()
-            active = db.query(StockUniverse).filter(StockUniverse.is_active == True).count()
+            active = db.query(StockUniverse).filter(
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+            ).count()
 
             # Count by exchange
             by_exchange = {}
@@ -612,7 +789,7 @@ class StockUniverseService:
                 StockUniverse.exchange,
                 func.count(StockUniverse.id),
             ).filter(
-                StockUniverse.is_active == True
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
             ).group_by(StockUniverse.exchange).all()
 
             for exchange, count in exchanges:
@@ -620,20 +797,130 @@ class StockUniverseService:
 
             # Count S&P 500 members
             sp500 = db.query(StockUniverse).filter(
-                StockUniverse.is_active == True,
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
                 StockUniverse.is_sp500 == True,
             ).count()
+
+            by_status = {
+                status: count
+                for status, count in db.query(
+                    StockUniverse.status,
+                    func.count(StockUniverse.id),
+                ).group_by(StockUniverse.status).all()
+            }
+            recent_deactivations = db.query(StockUniverseStatusEvent).filter(
+                StockUniverseStatusEvent.new_status != UNIVERSE_STATUS_ACTIVE
+            ).order_by(StockUniverseStatusEvent.created_at.desc()).limit(10).all()
 
             return {
                 'total': total,
                 'active': active,
                 'by_exchange': by_exchange,
                 'sp500': sp500,
+                'by_status': by_status,
+                'recent_deactivations': [
+                    {
+                        'symbol': event.symbol,
+                        'new_status': event.new_status,
+                        'reason': event.reason,
+                        'created_at': event.created_at.isoformat() if event.created_at else None,
+                    }
+                    for event in recent_deactivations
+                ],
             }
 
         except Exception as e:
             logger.error(f"Error getting universe stats: {e}", exc_info=True)
-            return {'total': 0, 'active': 0, 'by_exchange': {}, 'sp500': 0}
+            return {
+                'total': 0,
+                'active': 0,
+                'by_exchange': {},
+                'sp500': 0,
+                'by_status': {},
+                'recent_deactivations': [],
+            }
+
+    def filter_active_symbols(
+        self,
+        db: Session,
+        symbols: Iterable[str],
+    ) -> List[str]:
+        """Return the active subset of the supplied symbols in input order."""
+        ordered = [symbol.upper() for symbol in symbols]
+        if not ordered:
+            return []
+
+        active_set = {
+            row[0]
+            for row in db.query(StockUniverse.symbol).filter(
+                StockUniverse.symbol.in_(ordered),
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
+            ).all()
+        }
+        return [symbol for symbol in ordered if symbol in active_set]
+
+    def get_active_symbol_set(self, db: Session) -> set[str]:
+        """Return the set of currently active universe symbols."""
+        return {
+            row[0]
+            for row in db.query(StockUniverse.symbol).filter(
+                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+            ).all()
+        }
+
+    def record_fetch_success(self, db: Session, symbol: str) -> bool:
+        """Reset failure counters after a successful provider fetch."""
+        record = db.query(StockUniverse).filter(
+            StockUniverse.symbol == symbol.upper()
+        ).first()
+        if record is None:
+            return False
+
+        record.last_fetch_success_at = datetime.utcnow()
+        record.consecutive_fetch_failures = 0
+        return True
+
+    def record_fetch_failure(
+        self,
+        db: Session,
+        symbol: str,
+        *,
+        reason: str,
+        trigger_source: str,
+        no_data: bool,
+        deactivate_threshold: int = 3,
+    ) -> Dict[str, Any]:
+        """Increment failure counters and deactivate symbols that repeatedly return no data."""
+        record = db.query(StockUniverse).filter(
+            StockUniverse.symbol == symbol.upper()
+        ).first()
+        if record is None:
+            return {"count": 0, "deactivated": False}
+
+        now = datetime.utcnow()
+        record.last_fetch_failure_at = now
+        record.consecutive_fetch_failures = (record.consecutive_fetch_failures or 0) + 1
+        deactivated = False
+
+        if (
+            no_data
+            and self._normalize_status(record) == UNIVERSE_STATUS_ACTIVE
+            and record.consecutive_fetch_failures >= deactivate_threshold
+        ):
+            deactivated = self._apply_status_transition(
+                db,
+                record,
+                new_status=UNIVERSE_STATUS_INACTIVE_NO_DATA,
+                trigger_source=trigger_source,
+                reason=reason,
+                now=now,
+                payload={"consecutive_failures": record.consecutive_fetch_failures},
+            )
+
+        return {
+            "count": record.consecutive_fetch_failures,
+            "deactivated": deactivated,
+        }
 
     def fetch_sp500_symbols(self) -> List[str]:
         """

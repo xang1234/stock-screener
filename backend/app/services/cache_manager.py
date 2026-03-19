@@ -89,8 +89,7 @@ class CacheManager:
         """
         Warm price cache for multiple symbols using bulk fetching (Phase 2 optimization).
 
-        Uses yfinance.Tickers() to fetch multiple stocks in batches, which is
-        much faster than individual yf.Ticker() calls.
+        Uses the shared ``yf.download()`` batch adapter for scheduled price refreshes.
 
         Args:
             symbols: List of stock symbols to warm
@@ -147,12 +146,9 @@ class CacheManager:
             logger.info(f"Batch {batch_num + 1}/{total_batches}: Bulk fetching {len(batch)} symbols...")
 
             try:
-                # Bulk fetch this batch using yfinance.Tickers()
-                bulk_data = bulk_fetcher.fetch_batch_data(
+                bulk_data = bulk_fetcher.fetch_prices_in_batches(
                     batch,
                     period=period,
-                    include_fundamentals=False,  # Only warming price cache
-                    delay_per_ticker=settings.yfinance_per_ticker_delay,
                 )
 
                 # Store each symbol's data in cache

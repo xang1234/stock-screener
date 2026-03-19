@@ -150,6 +150,11 @@ class StockFundamental(Base):
     # Data source tracking
     data_source = Column(String(20))
     data_source_timestamp = Column(DateTime(timezone=True))
+    finviz_snapshot_revision = Column(String(128), index=True)
+    finviz_snapshot_at = Column(DateTime(timezone=True))
+    yahoo_profile_refreshed_at = Column(DateTime(timezone=True))
+    yahoo_statements_refreshed_at = Column(DateTime(timezone=True))
+    technicals_refreshed_at = Column(DateTime(timezone=True))
 
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

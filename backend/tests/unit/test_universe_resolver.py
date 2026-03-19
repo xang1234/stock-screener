@@ -99,15 +99,34 @@ class TestResolveSymbols:
             mock_db, exchange=None, sp500_only=True, limit=None
         )
 
-    def test_custom_returns_symbols_directly(self, mock_db):
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_custom_filters_to_active_symbols_by_default(self, mock_service, mock_db):
+        mock_service.filter_active_symbols.return_value = ["AAPL"]
+
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "TSLA"])
         result = resolve_symbols(mock_db, u)
-        assert result == ["AAPL", "TSLA"]
 
-    def test_test_returns_symbols_directly(self, mock_db):
-        u = UniverseDefinition(type=UniverseType.TEST, symbols=["SPY"])
+        assert result == ["AAPL"]
+        mock_service.filter_active_symbols.assert_called_once_with(mock_db, ["AAPL", "TSLA"])
+
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_test_filters_to_active_symbols_by_default(self, mock_service, mock_db):
+        mock_service.filter_active_symbols.return_value = ["SPY"]
+
+        u = UniverseDefinition(type=UniverseType.TEST, symbols=["SPY", "QQQ"])
         result = resolve_symbols(mock_db, u)
+
         assert result == ["SPY"]
+        mock_service.filter_active_symbols.assert_called_once_with(mock_db, ["SPY", "QQQ"])
+
+    def test_custom_can_include_inactive_symbols(self, mock_db):
+        u = UniverseDefinition(
+            type=UniverseType.CUSTOM,
+            symbols=["AAPL", "TSLA"],
+            allow_inactive_symbols=True,
+        )
+        result = resolve_symbols(mock_db, u)
+        assert result == ["AAPL", "TSLA"]
 
     @patch("app.services.universe_resolver.stock_universe_service")
     def test_limit_param_passed_through(self, mock_service, mock_db):
@@ -120,9 +139,13 @@ class TestResolveSymbols:
             mock_db, exchange=None, sp500_only=False, limit=10
         )
 
-    def test_custom_limit(self, mock_db):
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_custom_limit(self, mock_service, mock_db):
+        mock_service.filter_active_symbols.return_value = ["A", "B", "D"]
+
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["A", "B", "C", "D"])
         result = resolve_symbols(mock_db, u, limit=2)
+
         assert result == ["A", "B"]
 
     @patch("app.services.universe_resolver.stock_universe_service")
@@ -162,12 +185,18 @@ class TestResolveSymbols:
 class TestResolveCount:
     """Test resolve_count returns correct counts."""
 
-    def test_custom_count(self, mock_db):
+    @patch("app.services.universe_resolver.stock_universe_service")
+    def test_custom_count(self, mock_service, mock_db):
+        mock_service.filter_active_symbols.return_value = ["AAPL"]
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])
-        assert resolve_count(mock_db, u) == 2
+        assert resolve_count(mock_db, u) == 1
 
-    def test_test_count(self, mock_db):
-        u = UniverseDefinition(type=UniverseType.TEST, symbols=["TSLA"])
+    def test_test_count_with_inactive_override(self, mock_db):
+        u = UniverseDefinition(
+            type=UniverseType.TEST,
+            symbols=["TSLA"],
+            allow_inactive_symbols=True,
+        )
         assert resolve_count(mock_db, u) == 1
 
     @patch("app.services.universe_resolver.stock_universe_service")

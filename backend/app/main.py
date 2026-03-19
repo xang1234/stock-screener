@@ -189,6 +189,20 @@ def run_ui_view_snapshot_migration():
     migrate_ui_view_snapshot_tables(engine)
 
 
+def run_universe_lifecycle_migration():
+    """Run idempotent stock universe lifecycle migration on startup."""
+    from .db_migrations.universe_lifecycle_migration import migrate_universe_lifecycle
+
+    migrate_universe_lifecycle(engine)
+
+
+def run_provider_snapshot_migration():
+    """Run idempotent provider snapshot migration on startup."""
+    from .db_migrations.provider_snapshot_migration import migrate_provider_snapshot_tables
+
+    migrate_provider_snapshot_tables(engine)
+
+
 async def trigger_gapfill_on_startup():
     """
     Trigger gap-fill as a background Celery task.
@@ -300,6 +314,8 @@ async def lifespan(app: FastAPI):
     run_theme_merge_suggestion_safety_migration()
     run_theme_taxonomy_migration()
     run_ui_view_snapshot_migration()
+    run_universe_lifecycle_migration()
+    run_provider_snapshot_migration()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if not settings.desktop_mode and getattr(settings, 'group_rank_gapfill_enabled', True):

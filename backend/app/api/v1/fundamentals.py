@@ -172,6 +172,7 @@ async def get_fundamentals_cache_statistics():
         from ...database import SessionLocal
         from ...models.stock_universe import StockUniverse
         from ...services.fundamentals_cache_service import FundamentalsCacheService
+        from ...services.provider_snapshot_service import provider_snapshot_service
         from datetime import datetime
 
         db = SessionLocal()
@@ -210,6 +211,7 @@ async def get_fundamentals_cache_statistics():
             latest = db.query(StockFundamental).order_by(
                 StockFundamental.updated_at.desc()
             ).first()
+            snapshot_stats = provider_snapshot_service.get_snapshot_stats(db)
 
             return FundamentalsCacheStats(
                 total_checked=total,
@@ -220,6 +222,11 @@ async def get_fundamentals_cache_statistics():
                 redis_hit_rate=round(redis_cached / total * 100, 1) if total > 0 else 0,
                 db_hit_rate=round(db_cached / total * 100, 1) if total > 0 else 0,
                 last_refresh_date=latest.updated_at.isoformat() if latest else None,
+                published_snapshot_revision=snapshot_stats.get("published_snapshot_revision"),
+                published_snapshot_age_days=snapshot_stats.get("published_snapshot_age_days"),
+                snapshot_coverage=snapshot_stats.get("snapshot_coverage"),
+                recent_single_symbol_fallback_count=cache.get_on_demand_fallback_count(),
+                parity_summary=snapshot_stats.get("parity_summary"),
                 timestamp=datetime.now().isoformat()
             )
 

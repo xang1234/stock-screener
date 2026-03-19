@@ -39,6 +39,7 @@ class FundamentalsCacheService:
     # Redis keys
     REDIS_KEY_PREFIX = "fundamentals:"
     REDIS_KEY_FORMAT = "fundamentals:{symbol}"
+    REDIS_KEY_FALLBACK_COUNT = "fundamentals:on_demand_fallback_count"
 
     # TTL settings
     CACHE_TTL_SECONDS = 604800  # 7 days (weekly refresh)
@@ -56,6 +57,22 @@ class FundamentalsCacheService:
         "market_cap",
         "avg_volume",
     )
+
+    @staticmethod
+    def _coerce_datetime(value):
+        """Best-effort conversion for snapshot provenance timestamps."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        return None
 
     def __init__(self, redis_client: Optional[redis.Redis] = None):
         """Initialize fundamentals cache service."""
@@ -268,6 +285,17 @@ class FundamentalsCacheService:
                 "eps_years_available": record.eps_years_available,
                 # Data source tracking
                 "data_source": record.data_source,
+                "finviz_snapshot_revision": record.finviz_snapshot_revision,
+                "finviz_snapshot_at": record.finviz_snapshot_at.isoformat() if record.finviz_snapshot_at else None,
+                "yahoo_profile_refreshed_at": (
+                    record.yahoo_profile_refreshed_at.isoformat() if record.yahoo_profile_refreshed_at else None
+                ),
+                "yahoo_statements_refreshed_at": (
+                    record.yahoo_statements_refreshed_at.isoformat() if record.yahoo_statements_refreshed_at else None
+                ),
+                "technicals_refreshed_at": (
+                    record.technicals_refreshed_at.isoformat() if record.technicals_refreshed_at else None
+                ),
             }
 
             # Compute fallback description (finviz preferred, yfinance as fallback)
@@ -293,10 +321,15 @@ class FundamentalsCacheService:
         Graceful fallback: If fetch fails, return None (caller will handle).
         """
         try:
+            if not settings.provider_snapshot_on_demand_fallback_enabled:
+                logger.warning("On-demand provider fallback is disabled for %s", symbol)
+                return None
+
             # Import DataSourceService here to avoid circular dependency
             from .data_source_service import data_source_service
 
             logger.info(f"Fetching fresh fundamental data for {symbol} from data sources")
+            self.record_on_demand_fallback()
 
             # Use DataSourceService which handles finviz → yfinance fallback
             fundamentals = data_source_service.get_fundamentals(symbol)
@@ -466,8 +499,8 @@ class FundamentalsCacheService:
                 existing_record.country = data.get("country")
                 existing_record.employees = data.get("employees")
 
-                # IPO date (from yfinance firstTradeDateMilliseconds)
-                existing_record.ipo_date = self._parse_ipo_date(data.get("first_trade_date_ms"))
+                # IPO date (prefer explicit date, fall back to yfinance timestamp)
+                existing_record.ipo_date = data.get("ipo_date") or self._parse_ipo_date(data.get("first_trade_date_ms"))
 
                 # Company descriptions
                 existing_record.description_yfinance = data.get("description_yfinance")
@@ -486,6 +519,17 @@ class FundamentalsCacheService:
 
                 # Metadata
                 existing_record.data_source = data_source
+                existing_record.finviz_snapshot_revision = data.get("finviz_snapshot_revision")
+                existing_record.finviz_snapshot_at = self._coerce_datetime(data.get("finviz_snapshot_at"))
+                existing_record.yahoo_profile_refreshed_at = self._coerce_datetime(
+                    data.get("yahoo_profile_refreshed_at")
+                )
+                existing_record.yahoo_statements_refreshed_at = self._coerce_datetime(
+                    data.get("yahoo_statements_refreshed_at")
+                )
+                existing_record.technicals_refreshed_at = self._coerce_datetime(
+                    data.get("technicals_refreshed_at")
+                )
                 existing_record.updated_at = datetime.now()
 
                 logger.info(f"Updated fundamental data for {symbol} in database")
@@ -574,8 +618,8 @@ class FundamentalsCacheService:
                     industry=data.get("industry"),
                     country=data.get("country"),
                     employees=data.get("employees"),
-                    # IPO date (from yfinance firstTradeDateMilliseconds)
-                    ipo_date=self._parse_ipo_date(data.get("first_trade_date_ms")),
+                    # IPO date (prefer explicit date, fall back to yfinance timestamp)
+                    ipo_date=data.get("ipo_date") or self._parse_ipo_date(data.get("first_trade_date_ms")),
                     # Company descriptions
                     description_yfinance=data.get("description_yfinance"),
                     description_finviz=data.get("description_finviz"),
@@ -590,6 +634,17 @@ class FundamentalsCacheService:
                     eps_years_available=data.get("eps_years_available"),
                     # Metadata
                     data_source=data_source,
+                    finviz_snapshot_revision=data.get("finviz_snapshot_revision"),
+                    finviz_snapshot_at=self._coerce_datetime(data.get("finviz_snapshot_at")),
+                    yahoo_profile_refreshed_at=self._coerce_datetime(
+                        data.get("yahoo_profile_refreshed_at")
+                    ),
+                    yahoo_statements_refreshed_at=self._coerce_datetime(
+                        data.get("yahoo_statements_refreshed_at")
+                    ),
+                    technicals_refreshed_at=self._coerce_datetime(
+                        data.get("technicals_refreshed_at")
+                    ),
                 )
                 db.add(new_record)
                 logger.info(f"Inserted fundamental data for {symbol} in database")
@@ -805,6 +860,17 @@ class FundamentalsCacheService:
                     "eps_years_available": record.eps_years_available,
                     # Data source tracking
                     "data_source": record.data_source,
+                    "finviz_snapshot_revision": record.finviz_snapshot_revision,
+                    "finviz_snapshot_at": record.finviz_snapshot_at.isoformat() if record.finviz_snapshot_at else None,
+                    "yahoo_profile_refreshed_at": (
+                        record.yahoo_profile_refreshed_at.isoformat() if record.yahoo_profile_refreshed_at else None
+                    ),
+                    "yahoo_statements_refreshed_at": (
+                        record.yahoo_statements_refreshed_at.isoformat() if record.yahoo_statements_refreshed_at else None
+                    ),
+                    "technicals_refreshed_at": (
+                        record.technicals_refreshed_at.isoformat() if record.technicals_refreshed_at else None
+                    ),
                 }
 
                 # Compute fallback description
@@ -957,6 +1023,27 @@ class FundamentalsCacheService:
         self._store_in_database(symbol, data, data_source=data_source)
 
         logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
+
+    def record_on_demand_fallback(self) -> None:
+        """Track explicit single-symbol provider fallbacks for observability."""
+        if not self._redis_client:
+            return
+        try:
+            self._redis_client.incr(self.REDIS_KEY_FALLBACK_COUNT)
+            self._redis_client.expire(self.REDIS_KEY_FALLBACK_COUNT, self.CACHE_TTL_SECONDS)
+        except Exception as e:
+            logger.debug(f"Error recording on-demand fallback: {e}")
+
+    def get_on_demand_fallback_count(self) -> int:
+        """Return the recent single-symbol fallback count."""
+        if not self._redis_client:
+            return 0
+        try:
+            raw = self._redis_client.get(self.REDIS_KEY_FALLBACK_COUNT)
+            return int(raw) if raw is not None else 0
+        except Exception as e:
+            logger.debug(f"Error reading on-demand fallback count: {e}")
+            return 0
 
     def invalidate_cache(self, symbol: str) -> None:
         """

@@ -1,8 +1,9 @@
 """
-Bulk Data Fetcher using yfinance.Tickers() for efficient batch operations.
+Bulk data fetcher for Yahoo-first batch price ingestion.
 
-Fetches multiple stocks in a single operation to reduce API overhead
-and improve throughput for large-scale scanning operations.
+Scheduled/background price ingestion must use batched ``yf.download()`` only.
+Per-symbol Yahoo metadata/history fetches remain legacy fallback tools and are
+not used by the hot-path price refresh jobs.
 
 Canonical price contract ADR:
 docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
@@ -16,17 +17,51 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+from ..config import settings
+
 logger = logging.getLogger(__name__)
 
 
 class BulkDataFetcher:
     """
-    Fetch data for multiple stocks efficiently using yfinance.Tickers().
-
-    yfinance.Tickers() is more efficient than individual yf.Ticker() calls
-    because it batches API requests internally, reducing overhead and
-    potentially getting better rate treatment from Yahoo Finance.
+    Fetch data for multiple stocks efficiently using ``yf.download()``.
     """
+
+    DEFAULT_PRICE_BATCH_SIZE = 100
+    MAX_PRICE_BATCH_SIZE = 200
+    MIN_PRICE_BATCH_SIZE = 25
+    PRICE_BATCH_GROWTH_STEP = 25
+    PRICE_BATCH_SUCCESS_STREAK_TO_GROW = 5
+    PRICE_BATCH_RETRY_BACKOFF_SECONDS = (30, 60, 120)
+
+    @staticmethod
+    def _build_error_result(symbol: str, error: str) -> Dict[str, Any]:
+        return {
+            'symbol': symbol,
+            'price_data': None,
+            'info': None,
+            'fundamentals': None,
+            'has_error': True,
+            'error': error,
+        }
+
+    @staticmethod
+    def _is_rate_limit_error(error: str) -> bool:
+        lower = (error or "").lower()
+        return any(indicator in lower for indicator in ("rate", "429", "too many", "limit", "throttl"))
+
+    def _transient_failure_rate(self, results: Dict[str, Dict[str, Any]]) -> float:
+        if not results:
+            return 1.0
+
+        transient_failures = 0
+        for data in results.values():
+            if not data.get("has_error"):
+                continue
+            error = data.get("error", "")
+            if self._is_rate_limit_error(error) or "empty" in error.lower():
+                transient_failures += 1
+        return transient_failures / len(results)
 
     def fetch_batch_data(
         self,
@@ -36,104 +71,25 @@ class BulkDataFetcher:
         delay_per_ticker: float = 0.0
     ) -> Dict[str, Dict]:
         """
-        Fetch data for multiple symbols in a single efficient operation.
+        Deprecated compatibility wrapper for legacy bulk price callers.
 
-        Args:
-            symbols: List of ticker symbols to fetch
-            period: Time period for historical data (default: 2y)
-            include_fundamentals: Whether to include fundamental data
-            delay_per_ticker: Seconds to wait between individual ticker.history()
-                calls within the batch (default: 0.0, use settings.yfinance_per_ticker_delay
-                for rate-limited contexts)
-
-        Returns:
-            Dict mapping symbols to their data:
-            {
-                'AAPL': {
-                    'symbol': 'AAPL',
-                    'price_data': pd.DataFrame,
-                    'info': dict,
-                    'fundamentals': dict,
-                    'has_error': False
-                },
-                ...
-            }
+        Scheduled/background jobs must not request fundamentals through this path.
         """
         if not symbols:
             return {}
 
-        logger.info(f"Bulk fetching data for {len(symbols)} symbols using yfinance.Tickers()")
-
-        try:
-            # Use Tickers for efficient multi-symbol fetching
-            # This creates a single request for multiple stocks
-            tickers = yf.Tickers(' '.join(symbols))
-
-            results = {}
-            for i, symbol in enumerate(symbols):
-                try:
-                    ticker = tickers.tickers[symbol]
-
-                    # Fetch historical price data
-                    hist = ticker.history(period=period)
-
-                    # Optionally fetch fundamental info
-                    info = None
-                    fundamentals = None
-                    if include_fundamentals:
-                        try:
-                            info = ticker.info
-                            fundamentals = self._extract_fundamentals(info)
-                        except Exception as e:
-                            logger.warning(f"Could not fetch fundamentals for {symbol}: {e}")
-
-                    # Store result
-                    results[symbol] = {
-                        'symbol': symbol,
-                        'price_data': hist,
-                        'info': info,
-                        'fundamentals': fundamentals,
-                        'has_error': False,
-                        'error': None
-                    }
-
-                    logger.debug(f"✓ {symbol}: {len(hist)} price rows")
-
-                except Exception as e:
-                    logger.warning(f"Error fetching {symbol}: {e}")
-                    results[symbol] = {
-                        'symbol': symbol,
-                        'price_data': None,
-                        'info': None,
-                        'fundamentals': None,
-                        'has_error': True,
-                        'error': str(e)
-                    }
-
-                # Per-symbol rate limiting within the batch
-                if delay_per_ticker > 0 and i < len(symbols) - 1:
-                    time.sleep(delay_per_ticker)
-
-            logger.info(
-                f"Bulk fetch completed: {len([r for r in results.values() if not r['has_error']])} "
-                f"successful, {len([r for r in results.values() if r['has_error']])} failed"
+        if include_fundamentals:
+            raise RuntimeError(
+                "Bulk fundamentals fetching through fetch_batch_data() is disabled. "
+                "Use the provider snapshot pipeline or explicit single-symbol fallback."
             )
-            return results
 
-        except Exception as e:
-            logger.error(f"Bulk fetch failed: {e}", exc_info=True)
-            # Return error results for all symbols
-            return {
-                symbol: {
-                    'symbol': symbol,
-                    'price_data': None,
-                    'info': None,
-                    'fundamentals': None,
-                    'has_error': True,
-                    'error': f"Bulk fetch error: {str(e)}"
-                }
-                for symbol in symbols
-            }
+        logger.warning(
+            "fetch_batch_data() is deprecated for scheduled price ingestion. "
+            "Delegating to fetch_prices_in_batches() for %d symbols.",
+            len(symbols),
+        )
+        return self.fetch_prices_in_batches(symbols, period=period)
 
     def _extract_fundamentals(self, info: Dict) -> Dict:
         """
@@ -439,16 +395,14 @@ class BulkDataFetcher:
                 group_by='ticker',
                 threads=False,
                 progress=False,
+                auto_adjust=False,
+                actions=True,
             )
 
             if raw is None or raw.empty:
                 logger.warning("yf.download returned empty DataFrame")
                 for symbol in symbols:
-                    results[symbol] = {
-                        'symbol': symbol, 'price_data': None, 'info': None,
-                        'fundamentals': None, 'has_error': True,
-                        'error': 'yf.download returned empty'
-                    }
+                    results[symbol] = self._build_error_result(symbol, 'yf.download returned empty')
                 return results
 
             # Single symbol: yf.download returns flat columns (Open, High, etc.)
@@ -462,10 +416,7 @@ class BulkDataFetcher:
                         'fundamentals': None, 'has_error': False, 'error': None
                     }
                 else:
-                    results[symbol] = {
-                        'symbol': symbol, 'price_data': None, 'info': None,
-                        'fundamentals': None, 'has_error': True, 'error': 'No data returned'
-                    }
+                    results[symbol] = self._build_error_result(symbol, 'No data returned')
             else:
                 # Multi-symbol: split by ticker
                 for symbol in symbols:
@@ -480,23 +431,12 @@ class BulkDataFetcher:
                                     'fundamentals': None, 'has_error': False, 'error': None
                                 }
                             else:
-                                results[symbol] = {
-                                    'symbol': symbol, 'price_data': None, 'info': None,
-                                    'fundamentals': None, 'has_error': True,
-                                    'error': 'No data after filtering NaN rows'
-                                }
+                                results[symbol] = self._build_error_result(symbol, 'No data after filtering NaN rows')
                         else:
-                            results[symbol] = {
-                                'symbol': symbol, 'price_data': None, 'info': None,
-                                'fundamentals': None, 'has_error': True,
-                                'error': 'Symbol not in download results'
-                            }
+                            results[symbol] = self._build_error_result(symbol, 'Symbol not in download results')
                     except Exception as e:
                         logger.warning(f"Error extracting {symbol} from download: {e}")
-                        results[symbol] = {
-                            'symbol': symbol, 'price_data': None, 'info': None,
-                            'fundamentals': None, 'has_error': True, 'error': str(e)
-                        }
+                        results[symbol] = self._build_error_result(symbol, str(e))
 
             success = len([r for r in results.values() if not r['has_error']])
             failed = len(results) - success
@@ -505,24 +445,116 @@ class BulkDataFetcher:
             # Add missing symbols as errors
             for symbol in symbols:
                 if symbol not in results:
-                    results[symbol] = {
-                        'symbol': symbol, 'price_data': None, 'info': None,
-                        'fundamentals': None, 'has_error': True,
-                        'error': 'Missing from results'
-                    }
+                    results[symbol] = self._build_error_result(symbol, 'Missing from results')
 
             return results
 
         except Exception as e:
             logger.error(f"yf.download batch failed: {e}", exc_info=True)
             return {
-                symbol: {
-                    'symbol': symbol, 'price_data': None, 'info': None,
-                    'fundamentals': None, 'has_error': True,
-                    'error': f"Batch download error: {str(e)}"
-                }
+                symbol: self._build_error_result(symbol, f"Batch download error: {str(e)}")
                 for symbol in symbols
             }
+
+    def fetch_prices_in_batches(
+        self,
+        symbols: List[str],
+        period: str = '2y',
+        start_batch_size: Optional[int] = None,
+    ) -> Dict[str, Dict]:
+        """
+        Fetch prices for many symbols using adaptive ``yf.download()`` batches.
+
+        Background jobs should call this method instead of any per-symbol Yahoo path.
+        """
+        if not symbols:
+            return {}
+
+        from .rate_limiter import rate_limiter
+
+        batch_size = max(
+            self.MIN_PRICE_BATCH_SIZE,
+            min(start_batch_size or self.DEFAULT_PRICE_BATCH_SIZE, self.MAX_PRICE_BATCH_SIZE),
+        )
+        success_streak = 0
+        combined_results: Dict[str, Dict] = {}
+        batch_start = 0
+        while batch_start < len(symbols):
+            batch_symbols = symbols[batch_start:batch_start + batch_size]
+            batch_results = self._fetch_price_batch_with_retries(
+                batch_symbols,
+                period=period,
+                initial_batch_size=batch_size,
+            )
+            combined_results.update(batch_results)
+
+            failure_rate = self._transient_failure_rate(batch_results)
+            if failure_rate > 0.20:
+                success_streak = 0
+                batch_size = max(self.MIN_PRICE_BATCH_SIZE, batch_size // 2)
+            elif failure_rate < 0.02:
+                success_streak += 1
+                if success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
+                    batch_size = min(
+                        self.MAX_PRICE_BATCH_SIZE,
+                        batch_size + self.PRICE_BATCH_GROWTH_STEP,
+                    )
+                    success_streak = 0
+            else:
+                success_streak = 0
+
+            if batch_start + len(batch_symbols) < len(symbols):
+                rate_limiter.wait(
+                    "yfinance:batch",
+                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                )
+            batch_start += len(batch_symbols)
+
+        return combined_results
+
+    def _fetch_price_batch_with_retries(
+        self,
+        symbols: List[str],
+        *,
+        period: str,
+        initial_batch_size: int,
+    ) -> Dict[str, Dict]:
+        """Retry transient batch failures using degraded sub-batches."""
+        current_batch_size = max(
+            self.MIN_PRICE_BATCH_SIZE,
+            min(initial_batch_size, self.MAX_PRICE_BATCH_SIZE),
+        )
+        last_results: Dict[str, Dict] = {
+            symbol: self._build_error_result(symbol, "Batch not attempted")
+            for symbol in symbols
+        }
+
+        for attempt in range(len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS) + 1):
+            attempt_results: Dict[str, Dict] = {}
+            for chunk_start in range(0, len(symbols), current_batch_size):
+                chunk_symbols = symbols[chunk_start:chunk_start + current_batch_size]
+                attempt_results.update(self.fetch_batch_prices(chunk_symbols, period=period))
+
+            last_results = attempt_results
+            failure_rate = self._transient_failure_rate(attempt_results)
+            if failure_rate <= 0.20 or attempt == len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS):
+                return attempt_results
+
+            current_batch_size = max(self.MIN_PRICE_BATCH_SIZE, current_batch_size // 2)
+            wait_seconds = self.PRICE_BATCH_RETRY_BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "Transient Yahoo batch failure rate %.1f%% for %d symbols; "
+                "retrying with batch size %d after %ds (attempt %d/%d)",
+                failure_rate * 100,
+                len(symbols),
+                current_batch_size,
+                wait_seconds,
+                attempt + 1,
+                len(self.PRICE_BATCH_RETRY_BACKOFF_SECONDS),
+            )
+            time.sleep(wait_seconds)
+
+        return last_results
 
     def fetch_batch_with_cache_check(
         self,
@@ -554,7 +586,7 @@ class BulkDataFetcher:
         )
 
         # Fetch missing symbols in bulk
-        fresh_data = self.fetch_batch_data(cache_misses, period=period)
+        fresh_data = self.fetch_prices_in_batches(cache_misses, period=period)
 
         # Combine cached and fresh data
         combined = {**cached_data}

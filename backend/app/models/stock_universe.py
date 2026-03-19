@@ -1,7 +1,12 @@
-"""Stock universe database model for managing scannable stock lists"""
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Index
+"""Stock universe database models for scannable symbol lifecycle management."""
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Index, Text
 from sqlalchemy.sql import func
 from ..database import Base
+
+UNIVERSE_STATUS_ACTIVE = "active"
+UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE = "inactive_missing_source"
+UNIVERSE_STATUS_INACTIVE_NO_DATA = "inactive_no_data"
+UNIVERSE_STATUS_INACTIVE_MANUAL = "inactive_manual"
 
 
 class StockUniverse(Base):
@@ -21,16 +26,49 @@ class StockUniverse(Base):
     sector = Column(String(100), index=True)
     industry = Column(String(100))
     market_cap = Column(Float, nullable=True)
-    is_active = Column(Boolean, default=True, index=True)  # User can deactivate
+    is_active = Column(Boolean, default=True, index=True)  # Derived from lifecycle status
+    status = Column(String(32), nullable=False, default=UNIVERSE_STATUS_ACTIVE, index=True)
+    status_reason = Column(String(255))
     is_sp500 = Column(Boolean, default=False, index=True)  # S&P 500 membership
     source = Column(String(20), default="finviz")  # finviz, manual
     added_at = Column(DateTime(timezone=True), server_default=func.now())
+    first_seen_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen_in_source_at = Column(DateTime(timezone=True))
+    deactivated_at = Column(DateTime(timezone=True))
+    consecutive_fetch_failures = Column(Integer, nullable=False, default=0)
+    last_fetch_success_at = Column(DateTime(timezone=True))
+    last_fetch_failure_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index("idx_universe_exchange_active", "exchange", "is_active"),
         Index("idx_universe_sector_active", "sector", "is_active"),
+        Index("idx_universe_exchange_status", "exchange", "status"),
+        Index("idx_universe_status_active", "status", "is_active"),
     )
 
     def __repr__(self):
-        return f"<StockUniverse(symbol='{self.symbol}', exchange='{self.exchange}', active={self.is_active})>"
+        return (
+            f"<StockUniverse(symbol='{self.symbol}', exchange='{self.exchange}', "
+            f"status='{self.status}', active={self.is_active})>"
+        )
+
+
+class StockUniverseStatusEvent(Base):
+    """Audit log for universe lifecycle state transitions."""
+
+    __tablename__ = "stock_universe_status_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    old_status = Column(String(32), nullable=True)
+    new_status = Column(String(32), nullable=False, index=True)
+    trigger_source = Column(String(64), nullable=False)
+    reason = Column(String(255))
+    payload_json = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("idx_universe_status_events_symbol_created", "symbol", "created_at"),
+        Index("idx_universe_status_events_status_created", "new_status", "created_at"),
+    )

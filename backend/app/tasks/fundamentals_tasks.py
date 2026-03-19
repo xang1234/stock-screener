@@ -19,11 +19,42 @@ from ..database import SessionLocal
 from ..models.stock_universe import StockUniverse
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.hybrid_fundamentals_service import HybridFundamentalsService
+from ..services.provider_snapshot_service import provider_snapshot_service
+from ..services.stock_universe_service import stock_universe_service
 from ..services.ticker_validation_service import ticker_validation_service, TickerValidationService
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+
+def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
+    """
+    Execute the snapshot-backed fundamentals refresh flow.
+
+    Preview mode stores only snapshot artifacts. Publish mode also refreshes
+    the universe first, hydrates stock_fundamentals/cache, and returns the
+    published revision metadata.
+    """
+    universe_stats = None
+    if publish:
+        universe_stats = stock_universe_service.populate_universe(db)
+
+    snapshot_stats = provider_snapshot_service.create_snapshot_run(
+        db,
+        run_mode="publish" if publish else "preview",
+        publish=publish,
+    )
+    hydrate_stats = None
+    if publish:
+        hydrate_stats = provider_snapshot_service.hydrate_published_snapshot(db)
+
+    return {
+        "mode": "snapshot_publish" if publish else "snapshot_preview",
+        "universe": universe_stats,
+        "snapshot": snapshot_stats,
+        "hydrate": hydrate_stats,
+    }
 
 
 @celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.refresh_all_fundamentals')
@@ -55,6 +86,18 @@ def refresh_all_fundamentals(self):
     start_time = time.time()
 
     try:
+        if settings.provider_snapshot_cutover_enabled:
+            logger.info("Provider snapshot cutover enabled - using snapshot publish pipeline")
+            result = _run_snapshot_pipeline(db, publish=True)
+            eps_task = calculate_eps_rating_percentiles.delay()
+            duration = time.time() - start_time
+            return {
+                **result,
+                "duration_seconds": round(duration, 2),
+                "timestamp": datetime.now().isoformat(),
+                "eps_rating_task_id": eps_task.id,
+            }
+
         # Get all active stocks from universe
         universe_stocks = db.query(StockUniverse).filter(
             StockUniverse.is_active == True
@@ -484,6 +527,26 @@ def refresh_all_fundamentals_hybrid(
     start_time = time.time()
 
     try:
+        if settings.provider_snapshot_cutover_enabled or settings.provider_snapshot_ingestion_enabled:
+            publish = settings.provider_snapshot_cutover_enabled
+            logger.info(
+                "Provider snapshot pipeline enabled (publish=%s) - bypassing legacy hybrid fetch",
+                publish,
+            )
+            result = _run_snapshot_pipeline(db, publish=publish)
+            duration = time.time() - start_time
+            response = {
+                **result,
+                "include_finviz": include_finviz,
+                "duration_seconds": round(duration, 2),
+                "duration_minutes": round(duration / 60, 1),
+                "timestamp": datetime.now().isoformat(),
+            }
+            if publish:
+                eps_task = calculate_eps_rating_percentiles.delay()
+                response["eps_rating_task_id"] = eps_task.id
+            return response
+
         # Get all active stocks from universe
         universe_stocks = db.query(StockUniverse).filter(
             StockUniverse.is_active == True

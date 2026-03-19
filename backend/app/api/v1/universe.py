@@ -123,6 +123,8 @@ async def get_universe_stats(db: Session = Depends(get_db)):
             "active": stats['active'],
             "by_exchange": stats['by_exchange'],
             "sp500": stats.get('sp500', 0),
+            "by_status": stats.get('by_status', {}),
+            "recent_deactivations": stats.get('recent_deactivations', []),
         }
 
     except Exception as e:

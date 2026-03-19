@@ -48,6 +48,14 @@ class TestUniverseDefinitionConstruction:
         assert u.type == UniverseType.TEST
         assert u.symbols == ["TSLA"]
 
+    def test_custom_universe_can_allow_inactive_symbols(self):
+        u = UniverseDefinition(
+            type=UniverseType.CUSTOM,
+            symbols=["AAPL", "MSFT"],
+            allow_inactive_symbols=True,
+        )
+        assert u.allow_inactive_symbols is True
+
 
 class TestUniverseDefinitionValidation:
     """Test validation errors for invalid field combinations."""
@@ -155,6 +163,15 @@ class TestKey:
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL"])
         assert u.key().startswith("custom:")
 
+    def test_custom_key_changes_when_inactive_symbols_allowed(self):
+        active_only = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL"])
+        include_inactive = UniverseDefinition(
+            type=UniverseType.CUSTOM,
+            symbols=["AAPL"],
+            allow_inactive_symbols=True,
+        )
+        assert active_only.key() != include_inactive.key()
+
     def test_test_key_starts_with_test(self):
         u = UniverseDefinition(type=UniverseType.TEST, symbols=["AAPL"])
         assert u.key().startswith("test:")
@@ -182,6 +199,14 @@ class TestLabel:
     def test_custom_label(self):
         u = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])
         assert u.label() == "Custom (2 symbols)"
+
+    def test_custom_label_with_inactive_override(self):
+        u = UniverseDefinition(
+            type=UniverseType.CUSTOM,
+            symbols=["AAPL", "MSFT"],
+            allow_inactive_symbols=True,
+        )
+        assert u.label() == "Custom (2 symbols, incl. inactive)"
 
     def test_test_label(self):
         u = UniverseDefinition(type=UniverseType.TEST, symbols=["AAPL"])

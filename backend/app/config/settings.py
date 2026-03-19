@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
     yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
-    yfinance_per_ticker_delay: float = 0.2  # seconds between ticker.history() calls within a batch
+    yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
 
     # Scanning
     default_universe: str = "all"
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     scan_rate_limit: float = 1.0  # requests per second (legacy, kept for backward compatibility)
 
     # Phase 2: Bulk Data Fetching Configuration
-    use_bulk_fetching: bool = True  # Use yfinance.Tickers() for batch fetching (ENABLED for performance)
+    use_bulk_fetching: bool = True  # Use shared yf.download() batch fetching for scheduled jobs
 
     # Scan use-case configuration
     scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
@@ -206,6 +206,11 @@ class Settings(BaseSettings):
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()
     price_cache_yfinance_rate_limit: float = 5.0  # Seconds to wait between batches
+
+    # Snapshot fundamentals / universe lifecycle cutover
+    provider_snapshot_ingestion_enabled: bool = False
+    provider_snapshot_cutover_enabled: bool = False
+    provider_snapshot_on_demand_fallback_enabled: bool = True
 
     # Deep Research Configuration
     deep_research_enabled: bool = True  # Enable deep research mode in chatbot

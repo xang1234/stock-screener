@@ -82,6 +82,18 @@ def resolve_symbols(
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):
         symbols = universe_def.symbols
+        if not universe_def.allow_inactive_symbols:
+            filtered = stock_universe_service.filter_active_symbols(db, symbols)
+            filtered_set = set(filtered)
+            dropped = [symbol for symbol in symbols if symbol not in filtered_set]
+            if dropped:
+                logger.warning(
+                    "Dropped %d inactive or unknown symbols from %s universe: %s",
+                    len(dropped),
+                    t.value,
+                    ", ".join(dropped[:10]),
+                )
+            symbols = filtered
         if limit is not None:
             return symbols[:limit]
         return symbols
@@ -109,5 +121,5 @@ def resolve_count(
     """
     universe_def = normalize_universe_definition(universe_def)
     if universe_def.type in (UniverseType.CUSTOM, UniverseType.TEST):
-        return len(universe_def.symbols)
+        return len(resolve_symbols(db, universe_def))
     return len(resolve_symbols(db, universe_def))

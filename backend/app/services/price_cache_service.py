@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models.stock import StockPrice
+from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from ..config import settings
 from ..utils.market_hours import (
     is_market_open, get_eastern_now, EASTERN, MARKET_CLOSE_TIME,
@@ -1324,22 +1325,39 @@ class PriceCacheService:
         """
         Store price data in database (StockPrice table).
 
-        Uses bulk insert to avoid N+1 query problem.
+        Uses insert for historical rows and upsert/replace for the latest row so
+        intraday partial bars can be corrected after the close.
         """
         db = SessionLocal()
 
         try:
             # Reset index to get Date as a column
             df = data.reset_index()
+            if 'Date' not in df.columns and len(df.columns) > 0:
+                df = df.rename(columns={df.columns[0]: 'Date'})
+            if df.empty:
+                return
 
-            # Fetch all existing dates for this symbol upfront (avoid N+1 queries)
-            existing_dates_query = db.query(StockPrice.date).filter(
-                StockPrice.symbol == symbol
-            )
-            existing_dates = set([row[0] for row in existing_dates_query.all()])
+            normalized_dates = []
+            for _, row in df.iterrows():
+                row_date = row["Date"]
+                if isinstance(row_date, pd.Timestamp):
+                    row_date = row_date.date()
+                elif isinstance(row_date, datetime):
+                    row_date = row_date.date()
+                normalized_dates.append(row_date)
 
-            # Prepare bulk insert data - only for dates that don't exist
+            latest_row_date = max(normalized_dates)
+            existing_rows = {
+                record.date: record.id
+                for record in db.query(StockPrice.id, StockPrice.date).filter(
+                    StockPrice.symbol == symbol,
+                    StockPrice.date.in_(normalized_dates),
+                ).all()
+            }
+
             rows_to_insert = []
+            rows_to_update = []
 
             for _, row in df.iterrows():
                 row_date = row['Date']
@@ -1349,10 +1367,6 @@ class PriceCacheService:
                     row_date = row_date.date()
                 elif isinstance(row_date, datetime):
                     row_date = row_date.date()
-
-                # Skip if already exists
-                if row_date in existing_dates:
-                    continue
 
                 # Prepare row for bulk insert
                 try:
@@ -1364,19 +1378,34 @@ class PriceCacheService:
                         'low': float(row.get('Low', 0)),
                         'close': float(row.get('Close', 0)),
                         'volume': int(row.get('Volume', 0)) if pd.notna(row.get('Volume')) else 0,
-                        'adj_close': float(row.get('Close', 0))  # Use close as adj_close
+                        'adj_close': float(row.get('Adj Close', row.get('Close', 0))),
                     }
-                    rows_to_insert.append(price_dict)
+                    existing_id = existing_rows.get(row_date)
+                    if existing_id is None:
+                        rows_to_insert.append(price_dict)
+                    elif row_date == latest_row_date:
+                        price_dict["id"] = existing_id
+                        rows_to_update.append(price_dict)
 
                 except Exception as e:
                     logger.warning(f"Error preparing row for {symbol} on {row.get('Date')}: {e}")
                     continue
 
-            # Bulk insert all new rows in one operation
+            # Bulk insert historical rows, overwrite the latest day if it already exists.
             if rows_to_insert:
                 db.bulk_insert_mappings(StockPrice, rows_to_insert)
-                db.commit()
-                logger.info(f"Bulk inserted {len(rows_to_insert)} new rows for {symbol} to database")
+            if rows_to_update:
+                db.bulk_update_mappings(StockPrice, rows_to_update)
+
+            db.commit()
+            if rows_to_insert or rows_to_update:
+                logger.info(
+                    "Persisted %s price rows for %s (%d inserts, %d latest-day updates)",
+                    len(rows_to_insert) + len(rows_to_update),
+                    symbol,
+                    len(rows_to_insert),
+                    len(rows_to_update),
+                )
             else:
                 logger.debug(f"No new rows to persist for {symbol}")
 
@@ -1524,8 +1553,8 @@ class PriceCacheService:
         """
         Store multiple symbols' price data in database in a single transaction.
 
-        Queries existing dates for ALL symbols at once, then bulk inserts
-        only new rows. Much more efficient than per-symbol _store_in_database().
+        Queries existing dates for ALL symbols at once, bulk inserts historical
+        rows, and replaces the latest row when it already exists.
 
         Args:
             batch_data: Dict mapping symbol to price DataFrame
@@ -1538,24 +1567,45 @@ class PriceCacheService:
         try:
             symbols = list(batch_data.keys())
 
-            # Query all existing (symbol, date) pairs at once
-            from sqlalchemy import and_, tuple_
-            existing_pairs = set()
-            # Query in chunks to respect SQLite's variable limit (999 max)
+            symbol_dates: Dict[str, set] = {}
+            latest_dates: Dict[str, date] = {}
+            for symbol, data in batch_data.items():
+                if data is None or data.empty:
+                    continue
+                normalized = set()
+                latest = None
+                for raw_date in data.reset_index()["Date"]:
+                    row_date = raw_date
+                    if isinstance(row_date, pd.Timestamp):
+                        row_date = row_date.date()
+                    elif isinstance(row_date, datetime):
+                        row_date = row_date.date()
+                    normalized.add(row_date)
+                    latest = row_date if latest is None or row_date > latest else latest
+                if normalized:
+                    symbol_dates[symbol] = normalized
+                    latest_dates[symbol] = latest
+
+            existing_pairs: Dict[tuple[str, date], int] = {}
             for chunk_start in range(0, len(symbols), 100):
                 chunk_symbols = symbols[chunk_start:chunk_start + 100]
-                rows = db.query(StockPrice.symbol, StockPrice.date).filter(
+                rows = db.query(StockPrice.id, StockPrice.symbol, StockPrice.date).filter(
                     StockPrice.symbol.in_(chunk_symbols)
                 ).all()
-                existing_pairs.update((r[0], r[1]) for r in rows)
+                for record_id, record_symbol, record_date in rows:
+                    target_dates = symbol_dates.get(record_symbol)
+                    if target_dates and record_date in target_dates:
+                        existing_pairs[(record_symbol, record_date)] = record_id
 
-            # Prepare all insert rows
             rows_to_insert = []
+            rows_to_update = []
             for symbol, data in batch_data.items():
                 if data is None or data.empty:
                     continue
 
                 df = data.reset_index()
+                if 'Date' not in df.columns and len(df.columns) > 0:
+                    df = df.rename(columns={df.columns[0]: 'Date'})
                 for _, row in df.iterrows():
                     row_date = row['Date']
                     if isinstance(row_date, pd.Timestamp):
@@ -1563,11 +1613,8 @@ class PriceCacheService:
                     elif isinstance(row_date, datetime):
                         row_date = row_date.date()
 
-                    if (symbol, row_date) in existing_pairs:
-                        continue
-
                     try:
-                        rows_to_insert.append({
+                        price_dict = {
                             'symbol': symbol,
                             'date': row_date,
                             'open': float(row.get('Open', 0)),
@@ -1575,8 +1622,14 @@ class PriceCacheService:
                             'low': float(row.get('Low', 0)),
                             'close': float(row.get('Close', 0)),
                             'volume': int(row.get('Volume', 0)) if pd.notna(row.get('Volume')) else 0,
-                            'adj_close': float(row.get('Close', 0))
-                        })
+                            'adj_close': float(row.get('Adj Close', row.get('Close', 0))),
+                        }
+                        existing_id = existing_pairs.get((symbol, row_date))
+                        if existing_id is None:
+                            rows_to_insert.append(price_dict)
+                        elif row_date == latest_dates.get(symbol):
+                            price_dict["id"] = existing_id
+                            rows_to_update.append(price_dict)
                     except Exception as e:
                         logger.warning(f"Error preparing row for {symbol}: {e}")
 
@@ -1586,8 +1639,21 @@ class PriceCacheService:
                 for i in range(0, len(rows_to_insert), chunk_size):
                     chunk = rows_to_insert[i:i + chunk_size]
                     db.bulk_insert_mappings(StockPrice, chunk)
+            if rows_to_update:
+                chunk_size = 100
+                for i in range(0, len(rows_to_update), chunk_size):
+                    chunk = rows_to_update[i:i + chunk_size]
+                    db.bulk_update_mappings(StockPrice, chunk)
+
+            if rows_to_insert or rows_to_update:
                 db.commit()
-                logger.info(f"Batch inserted {len(rows_to_insert)} new rows for {len(batch_data)} symbols")
+                logger.info(
+                    "Batch persisted %d price rows for %d symbols (%d inserts, %d latest-day updates)",
+                    len(rows_to_insert) + len(rows_to_update),
+                    len(batch_data),
+                    len(rows_to_insert),
+                    len(rows_to_update),
+                )
             else:
                 logger.debug(f"No new rows to persist for batch of {len(batch_data)} symbols")
 
@@ -1732,48 +1798,56 @@ class PriceCacheService:
 
                 # STEP 2: Batch yfinance fetch for remaining symbols
                 if yfinance_needed:
-                    import time
                     from .bulk_data_fetcher import BulkDataFetcher
 
-                    logger.info(f"Batch fetching {len(yfinance_needed)} symbols from yfinance...")
+                    active_query_db = SessionLocal()
+                    try:
+                        active_symbols = {
+                            row[0]
+                            for row in active_query_db.query(StockUniverse.symbol).filter(
+                                StockUniverse.symbol.in_(yfinance_needed),
+                                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
+                            ).all()
+                        }
+                    finally:
+                        active_query_db.close()
+                    inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_symbols]
+                    active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_symbols]
+
+                    logger.info(
+                        "Batch fetching %d active symbols from yfinance (%d inactive skipped)",
+                        len(active_yfinance_needed),
+                        len(inactive_symbols),
+                    )
 
                     bulk_fetcher = BulkDataFetcher()
-                    batch_size = getattr(settings, 'price_cache_yfinance_batch_size', 50)
-                    rate_limit = getattr(settings, 'price_cache_yfinance_rate_limit', 1.0)
 
                     yfinance_success = 0
                     yfinance_failed = 0
 
-                    # Process in batches with rate limiting
-                    for batch_start in range(0, len(yfinance_needed), batch_size):
-                        batch_symbols = yfinance_needed[batch_start:batch_start + batch_size]
-                        batch_num = (batch_start // batch_size) + 1
-                        total_batches = (len(yfinance_needed) + batch_size - 1) // batch_size
+                    if inactive_symbols:
+                        for symbol in inactive_symbols:
+                            df, _ = db_results.get(symbol, (None, None))
+                            cached_data[symbol] = df
 
-                        logger.info(f"yfinance batch {batch_num}/{total_batches}: fetching {len(batch_symbols)} symbols")
-
-                        bulk_results = bulk_fetcher.fetch_batch_data(
-                            batch_symbols,
+                    if active_yfinance_needed:
+                        bulk_results = bulk_fetcher.fetch_prices_in_batches(
+                            active_yfinance_needed,
                             period=period,
-                            include_fundamentals=False
+                            start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
                         )
-
+                        batch_to_store = {}
                         for symbol, data in bulk_results.items():
                             if not data.get('has_error') and data.get('price_data') is not None:
                                 price_df = data['price_data']
                                 cached_data[symbol] = price_df
                                 yfinance_success += 1
-                                # Store in both caches for future use
-                                self._store_recent_in_redis(symbol, price_df)
-                                self._store_in_database(symbol, price_df)
+                                batch_to_store[symbol] = price_df
                             else:
                                 cached_data[symbol] = None
                                 yfinance_failed += 1
-
-                        # Rate limit between batches (Redis-backed distributed limiter)
-                        if batch_start + batch_size < len(yfinance_needed):
-                            from .rate_limiter import rate_limiter
-                            rate_limiter.wait("yfinance:batch", min_interval_s=rate_limit)
+                        if batch_to_store:
+                            self.store_batch_in_cache(batch_to_store, also_store_db=True)
 
                     logger.info(f"yfinance batch fetch complete: {yfinance_success} success, {yfinance_failed} failed")
 
