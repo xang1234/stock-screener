@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 import logging
 from threading import Lock
@@ -284,6 +284,7 @@ class UISnapshotService:
         source_revision: str,
         payload: dict[str, Any],
     ) -> SnapshotResult:
+        payload = _json_safe(payload)
         current = self._get_current(db, view_key=view_key, variant_key=variant_key)
         row = (
             db.query(UIViewSnapshot)
@@ -790,6 +791,17 @@ def market_breadth_to_dict(row: MarketBreadth | None) -> dict[str, Any] | None:
         "stocks_down_13pct_34days": row.stocks_down_13pct_34days,
         "total_stocks_scanned": row.total_stocks_scanned,
     }
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert snapshot payloads into plain JSON-serializable values."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
 
 
 def _safe_publish(action: str, *, view_key: str, variant_key: str, source_revision: str | None = None, fn) -> dict[str, Any] | None:

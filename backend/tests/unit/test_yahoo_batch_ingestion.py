@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pickle
 from datetime import date, datetime, timedelta
+import sqlite3
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -333,6 +334,76 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
     record = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
     assert record.consecutive_fetch_failures == 0
     assert record.last_fetch_success_at is not None
+    db.close()
+
+
+def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    import app.tasks.cache_tasks as module
+    import app.services.stock_universe_service as universe_module
+
+    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+                consecutive_fetch_failures=2,
+            ),
+            StockUniverse(
+                symbol="MSFT",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+                consecutive_fetch_failures=2,
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    original = universe_module.stock_universe_service.record_fetch_success
+
+    def corrupt_one_symbol(session, symbol):
+        if symbol == "MSFT":
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return original(session, symbol)
+
+    monkeypatch.setattr(
+        universe_module.stock_universe_service,
+        "record_fetch_success",
+        corrupt_one_symbol,
+    )
+
+    class _StubPriceCache:
+        SYMBOL_FAILURE_THRESHOLD = 3
+
+        @staticmethod
+        def clear_symbol_failure(symbol):
+            return None
+
+        @staticmethod
+        def record_symbol_failure(symbol):
+            return 0
+
+    _track_symbol_failures(_StubPriceCache(), successes=["AAPL", "MSFT"], failures=[])
+
+    db = TestingSessionLocal()
+    aapl = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    msft = db.query(StockUniverse).filter(StockUniverse.symbol == "MSFT").one()
+    assert aapl.consecutive_fetch_failures == 0
+    assert aapl.last_fetch_success_at is not None
+    assert msft.consecutive_fetch_failures == 2
+    assert msft.last_fetch_success_at is None
     db.close()
 
 

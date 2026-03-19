@@ -748,29 +748,68 @@ def _track_symbol_failures(
         # Clear failure counters for successful symbols
         from ..services.stock_universe_service import stock_universe_service
 
+        skipped_corrupt_symbols: List[str] = []
+
         for symbol in successes:
             price_cache.clear_symbol_failure(symbol)
-            stock_universe_service.record_fetch_success(db, symbol)
+            try:
+                with db.begin_nested():
+                    stock_universe_service.record_fetch_success(db, symbol)
+                    db.flush()
+            except Exception as exc:
+                if not is_corruption_error(exc):
+                    raise
+                skipped_corrupt_symbols.append(symbol)
+                db.expire_all()
 
         deactivated = []
         for symbol in failures:
             count = price_cache.record_symbol_failure(symbol)
-            details = stock_universe_service.record_fetch_failure(
-                db,
-                symbol,
-                reason=(
-                    "Repeated no-data provider responses"
-                    if _classify_no_data_failure(failure_details.get(symbol, ""))
-                    else "Repeated provider fetch failures"
-                ),
-                trigger_source="price_refresh",
-                no_data=_classify_no_data_failure(failure_details.get(symbol, "")),
-                deactivate_threshold=price_cache.SYMBOL_FAILURE_THRESHOLD,
-            )
+            try:
+                with db.begin_nested():
+                    details = stock_universe_service.record_fetch_failure(
+                        db,
+                        symbol,
+                        reason=(
+                            "Repeated no-data provider responses"
+                            if _classify_no_data_failure(failure_details.get(symbol, ""))
+                            else "Repeated provider fetch failures"
+                        ),
+                        trigger_source="price_refresh",
+                        no_data=_classify_no_data_failure(failure_details.get(symbol, "")),
+                        deactivate_threshold=price_cache.SYMBOL_FAILURE_THRESHOLD,
+                    )
+                    db.flush()
+            except Exception as exc:
+                if not is_corruption_error(exc):
+                    raise
+                skipped_corrupt_symbols.append(symbol)
+                db.expire_all()
+                continue
             if count >= price_cache.SYMBOL_FAILURE_THRESHOLD and details.get("deactivated"):
                 deactivated.append(symbol)
 
-        db.commit()
+        try:
+            db.commit()
+        except Exception as exc:
+            if not is_corruption_error(exc):
+                raise
+            logger.warning(
+                "Skipping stock_universe fetch tracking commit for %d symbols due to SQLite "
+                "corruption signature: %s",
+                len(successes) + len(failures),
+                exc,
+            )
+            safe_rollback(db)
+            return
+
+        if skipped_corrupt_symbols:
+            logger.warning(
+                "Skipped stock_universe fetch-tracking writes for %d symbols due to SQLite "
+                "corruption signatures. Sample symbols: %s",
+                len(skipped_corrupt_symbols),
+                skipped_corrupt_symbols[:10],
+            )
         if deactivated:
             logger.info(
                 "Auto-deactivated %d persistently failing symbols: %s",

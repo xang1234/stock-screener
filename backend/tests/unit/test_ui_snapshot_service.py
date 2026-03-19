@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
+from app.db_migrations.universe_lifecycle_migration import migrate_universe_lifecycle
 from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
@@ -127,6 +128,7 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
         ],
     )
     migrate_ui_view_snapshot_tables(engine)
+    migrate_universe_lifecycle(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -148,5 +150,43 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
         "active": 3,
         "by_exchange": {"NASDAQ": 2, "NYSE": 1},
         "sp500": 2,
+        "by_status": {"active": 3, "inactive_manual": 1},
+        "recent_deactivations": [],
     }
+    assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
+
+
+def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    migrate_ui_view_snapshot_tables(engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        snapshot = service._publish(  # noqa: SLF001 - persistence semantics
+            db=db,
+            view_key="test_view",
+            variant_key="default",
+            source_revision="rev-date",
+            payload={
+                "current": {
+                    "date": date(2026, 3, 19),
+                    "published_at": datetime(2026, 3, 19, 12, 34, 56),
+                },
+                "history": [
+                    {"date": date(2026, 3, 18)},
+                    {"date": date(2026, 3, 17)},
+                ],
+            },
+        )
+        row = db.query(UIViewSnapshot).filter(
+            UIViewSnapshot.view_key == "test_view",
+            UIViewSnapshot.variant_key == "default",
+            UIViewSnapshot.source_revision == "rev-date",
+        ).one()
+
+    assert snapshot.payload["current"]["date"] == "2026-03-19"
+    assert snapshot.payload["current"]["published_at"] == "2026-03-19T12:34:56"
+    assert snapshot.payload["history"][0]["date"] == "2026-03-18"
+    assert row.payload_json["current"]["date"] == "2026-03-19"
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
