@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import text
 
@@ -12,6 +13,97 @@ logger = logging.getLogger(__name__)
 def _get_columns(conn, table_name: str) -> set[str]:
     rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
     return {row[1] for row in rows}
+
+
+def _normalize_text(value) -> str | None:
+    """Normalize legacy text values without using SQLite string functions."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _build_select_expr(columns: set[str], column_name: str) -> str:
+    if column_name in columns:
+        return column_name
+    return f"NULL AS {column_name}"
+
+
+def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
+    """Backfill lifecycle data row-by-row to avoid brittle full-table text scans."""
+    select_columns = [
+        "id",
+        "COALESCE(is_active, 1) AS legacy_is_active",
+        _build_select_expr(columns, "status"),
+        _build_select_expr(columns, "status_reason"),
+        _build_select_expr(columns, "first_seen_at"),
+        _build_select_expr(columns, "last_seen_in_source_at"),
+        _build_select_expr(columns, "deactivated_at"),
+        _build_select_expr(columns, "added_at"),
+        _build_select_expr(columns, "updated_at"),
+    ]
+    rows = conn.execute(
+        text(f"SELECT {', '.join(select_columns)} FROM stock_universe")
+    ).mappings().all()
+
+    now = datetime.utcnow()
+    updates: list[dict[str, object]] = []
+    for row in rows:
+        status = _normalize_text(row["status"])
+        if status is None:
+            status = "active" if row["legacy_is_active"] else "inactive_manual"
+
+        status_reason = _normalize_text(row["status_reason"])
+        if status_reason is None:
+            status_reason = (
+                "Existing active symbol"
+                if status == "active"
+                else "Backfilled from legacy inactive flag"
+            )
+
+        first_seen_at = row["first_seen_at"] or row["added_at"] or row["updated_at"] or now
+        last_seen_in_source_at = row["last_seen_in_source_at"]
+        if status == "active" and last_seen_in_source_at is None:
+            last_seen_in_source_at = row["updated_at"] or row["added_at"] or now
+        elif status != "active":
+            last_seen_in_source_at = None
+
+        deactivated_at = row["deactivated_at"]
+        if status != "active" and deactivated_at is None:
+            deactivated_at = row["updated_at"] or now
+        elif status == "active":
+            deactivated_at = None
+
+        updates.append(
+            {
+                "id": row["id"],
+                "status": status,
+                "status_reason": status_reason,
+                "first_seen_at": first_seen_at,
+                "last_seen_in_source_at": last_seen_in_source_at,
+                "deactivated_at": deactivated_at,
+                "is_active": 1 if status == "active" else 0,
+            }
+        )
+
+    if not updates:
+        return
+
+    conn.execute(
+        text(
+            """
+            UPDATE stock_universe
+            SET status = :status,
+                status_reason = :status_reason,
+                first_seen_at = :first_seen_at,
+                last_seen_in_source_at = :last_seen_in_source_at,
+                deactivated_at = :deactivated_at,
+                is_active = :is_active
+            WHERE id = :id
+            """
+        ),
+        updates,
+    )
 
 
 def migrate_universe_lifecycle(engine) -> None:
@@ -28,7 +120,7 @@ def migrate_universe_lifecycle(engine) -> None:
             logger.info("stock_universe table not present yet; lifecycle migration skipped")
             return
 
-        columns = _get_columns(conn, "stock_universe")
+        legacy_columns = _get_columns(conn, "stock_universe")
 
         add_columns = {
             "status": "ALTER TABLE stock_universe ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
@@ -44,68 +136,10 @@ def migrate_universe_lifecycle(engine) -> None:
         }
 
         for name, ddl in add_columns.items():
-            if name not in columns:
+            if name not in legacy_columns:
                 conn.execute(text(ddl))
 
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET status = CASE
-                    WHEN COALESCE(is_active, 1) = 1 THEN 'active'
-                    ELSE 'inactive_manual'
-                END
-                WHERE status IS NULL OR TRIM(status) = ''
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET status_reason = CASE
-                    WHEN status = 'active' THEN COALESCE(status_reason, 'Existing active symbol')
-                    ELSE COALESCE(status_reason, 'Backfilled from legacy inactive flag')
-                END
-                WHERE status_reason IS NULL OR TRIM(status_reason) = ''
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET first_seen_at = COALESCE(first_seen_at, added_at, updated_at, CURRENT_TIMESTAMP)
-                WHERE first_seen_at IS NULL
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET last_seen_in_source_at = COALESCE(last_seen_in_source_at, updated_at, added_at, CURRENT_TIMESTAMP)
-                WHERE status = 'active' AND last_seen_in_source_at IS NULL
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET deactivated_at = COALESCE(deactivated_at, updated_at, CURRENT_TIMESTAMP)
-                WHERE status <> 'active' AND deactivated_at IS NULL
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                UPDATE stock_universe
-                SET is_active = CASE WHEN status = 'active' THEN 1 ELSE 0 END
-                """
-            )
-        )
+        _backfill_stock_universe_rows(conn, legacy_columns)
 
         conn.execute(
             text(
