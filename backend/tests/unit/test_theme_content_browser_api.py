@@ -7,6 +7,7 @@ from datetime import datetime
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy.exc import DatabaseError
 
 from app.main import app
 from app.schemas.theme import ContentItemWithThemesResponse
@@ -101,3 +102,66 @@ async def test_export_content_items_includes_processing_status_column(
     csv_text = response.content.decode("utf-8-sig")
     assert "Processing Status" in csv_text.splitlines()[0]
     assert "in_progress" in csv_text
+
+
+@pytest.mark.asyncio
+async def test_list_content_items_recovers_from_corrupt_theme_content_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    client,
+):
+    calls = {"count": 0, "reset": 0}
+
+    class _DummySession:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _mock_fetch(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise DatabaseError(
+                "SELECT * FROM content_items",
+                {},
+                Exception("database disk image is malformed"),
+            )
+        return (
+            [
+                ContentItemWithThemesResponse(
+                    id=103,
+                    title="Recovered article",
+                    content="Recovered content",
+                    url="https://example.com/recovered",
+                    source_type="news",
+                    source_name="Recovered Source",
+                    author="Reporter",
+                    published_at=datetime(2026, 3, 2, 9, 0, 0),
+                    themes=[],
+                    sentiments=[],
+                    primary_sentiment=None,
+                    tickers=[],
+                    processing_status="processed",
+                )
+            ],
+            1,
+        )
+
+    monkeypatch.setattr("app.api.v1.themes._fetch_content_items_with_themes", _mock_fetch)
+    monkeypatch.setattr(
+        "app.api.v1.themes._reset_corrupt_theme_content_storage",
+        lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
+    )
+    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+
+    response = await client.get(
+        "/api/v1/themes/content",
+        params={"pipeline": "fundamental", "limit": 10, "offset": 0},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["title"] == "Recovered article"
+    assert calls["count"] == 2
+    assert calls["reset"] == 1

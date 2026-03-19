@@ -12,14 +12,16 @@ import csv
 import io
 import logging
 from collections import Counter, defaultdict
+from threading import Lock
 from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from datetime import datetime, timedelta
 from typing import Annotated, Optional
 
-from ...database import get_db
+from ...database import SessionLocal, engine, get_db, is_corruption_error, safe_rollback
 from ...models.theme import (
     ContentSource,
     ContentItem,
@@ -130,6 +132,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _VALID_THEME_PIPELINES = {"technical", "fundamental"}
+_THEME_CONTENT_STORAGE_LOCK = Lock()
+_THEME_CONTENT_STORAGE_TABLES = (
+    "content_item_pipeline_state",
+    "theme_mentions",
+    "content_items",
+)
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
@@ -1220,6 +1228,83 @@ def _fetch_content_items_with_themes(
     return items, total
 
 
+def _fetch_content_items_with_themes_with_recovery(
+    db: Session,
+    **kwargs,
+) -> tuple[list[ContentItemWithThemesResponse], int]:
+    """Retry theme content queries once after resetting rebuildable storage on corruption."""
+    try:
+        return _fetch_content_items_with_themes(db, **kwargs)
+    except Exception as exc:
+        if not is_corruption_error(exc):
+            raise
+        safe_rollback(db)
+        _reset_corrupt_theme_content_storage(exc)
+        with SessionLocal() as retry_db:
+            return _fetch_content_items_with_themes(retry_db, **kwargs)
+
+
+def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
+    """Drop and recreate rebuildable theme content tables after SQLite corruption."""
+    logger.warning(
+        "Resetting theme content storage after SQLite corruption signature: %s",
+        exc,
+    )
+    with _THEME_CONTENT_STORAGE_LOCK:
+        with engine.begin() as conn:
+            try:
+                _drop_theme_content_tables(conn)
+            except Exception as reset_exc:
+                if not is_corruption_error(reset_exc):
+                    raise
+                logger.warning(
+                    "Normal theme content table drop failed due to SQLite corruption; "
+                    "forcing schema cleanup: %s",
+                    reset_exc,
+                )
+                _force_forget_theme_content_tables(conn)
+        _recreate_theme_content_tables()
+
+
+def _drop_theme_content_tables(conn) -> None:
+    """Drop rebuildable theme content storage tables using normal DDL."""
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state"))
+        conn.execute(text("DROP TABLE IF EXISTS theme_mentions"))
+        conn.execute(text("DROP TABLE IF EXISTS content_items"))
+    finally:
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _force_forget_theme_content_tables(conn) -> None:
+    """Remove theme content storage tables from sqlite_master when normal DDL can't read them."""
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("PRAGMA writable_schema=ON"))
+    try:
+        conn.execute(
+            text(
+                """
+                DELETE FROM sqlite_master
+                WHERE name IN ('content_items', 'theme_mentions', 'content_item_pipeline_state')
+                   OR tbl_name IN ('content_items', 'theme_mentions', 'content_item_pipeline_state')
+                """
+            )
+        )
+        current_version = conn.execute(text("PRAGMA schema_version")).scalar() or 0
+        conn.execute(text(f"PRAGMA schema_version = {int(current_version) + 1}"))
+    finally:
+        conn.execute(text("PRAGMA writable_schema=OFF"))
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _recreate_theme_content_tables() -> None:
+    """Recreate theme content storage tables after a corruption reset."""
+    ContentItem.__table__.create(bind=engine, checkfirst=True)
+    ThemeMention.__table__.create(bind=engine, checkfirst=True)
+    ContentItemPipelineState.__table__.create(bind=engine, checkfirst=True)
+
+
 @router.get("/content", response_model=ContentItemsListResponse)
 async def list_content_items(
     search: Optional[str] = Query(None, description="Search in title, source_name, tickers"),
@@ -1243,7 +1328,7 @@ async def list_content_items(
     if pipeline and pipeline not in _VALID_THEME_PIPELINES:
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
-    items, total = _fetch_content_items_with_themes(
+    items, total = _fetch_content_items_with_themes_with_recovery(
         db, search=search, source_type=source_type, sentiment=sentiment,
         date_from=date_from, date_to=date_to, sort_by=sort_by,
         sort_order=sort_order, limit=limit, offset=offset, pipeline=pipeline,
@@ -1279,7 +1364,7 @@ async def export_content_items(
     if pipeline and pipeline not in _VALID_THEME_PIPELINES:
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
-    items, total = _fetch_content_items_with_themes(
+    items, total = _fetch_content_items_with_themes_with_recovery(
         db, search=search, source_type=source_type, sentiment=sentiment,
         date_from=date_from, date_to=date_to, sort_by=sort_by,
         sort_order=sort_order, pipeline=pipeline,
