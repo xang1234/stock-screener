@@ -744,35 +744,32 @@ def _track_symbol_failures(
     if owns_db:
         db = SessionLocal()
 
-    # Clear failure counters for successful symbols
-    from ..services.stock_universe_service import stock_universe_service
-
-    for symbol in successes:
-        price_cache.clear_symbol_failure(symbol)
-        stock_universe_service.record_fetch_success(db, symbol)
-
-    if not failures:
-        return
-
-    deactivated = []
-    for symbol in failures:
-        count = price_cache.record_symbol_failure(symbol)
-        details = stock_universe_service.record_fetch_failure(
-            db,
-            symbol,
-            reason=(
-                "Repeated no-data provider responses"
-                if _classify_no_data_failure(failure_details.get(symbol, ""))
-                else "Repeated provider fetch failures"
-            ),
-            trigger_source="price_refresh",
-            no_data=_classify_no_data_failure(failure_details.get(symbol, "")),
-            deactivate_threshold=price_cache.SYMBOL_FAILURE_THRESHOLD,
-        )
-        if count >= price_cache.SYMBOL_FAILURE_THRESHOLD and details.get("deactivated"):
-            deactivated.append(symbol)
-
     try:
+        # Clear failure counters for successful symbols
+        from ..services.stock_universe_service import stock_universe_service
+
+        for symbol in successes:
+            price_cache.clear_symbol_failure(symbol)
+            stock_universe_service.record_fetch_success(db, symbol)
+
+        deactivated = []
+        for symbol in failures:
+            count = price_cache.record_symbol_failure(symbol)
+            details = stock_universe_service.record_fetch_failure(
+                db,
+                symbol,
+                reason=(
+                    "Repeated no-data provider responses"
+                    if _classify_no_data_failure(failure_details.get(symbol, ""))
+                    else "Repeated provider fetch failures"
+                ),
+                trigger_source="price_refresh",
+                no_data=_classify_no_data_failure(failure_details.get(symbol, "")),
+                deactivate_threshold=price_cache.SYMBOL_FAILURE_THRESHOLD,
+            )
+            if count >= price_cache.SYMBOL_FAILURE_THRESHOLD and details.get("deactivated"):
+                deactivated.append(symbol)
+
         db.commit()
         if deactivated:
             logger.info(
@@ -788,6 +785,29 @@ def _track_symbol_failures(
     finally:
         if owns_db:
             db.close()
+
+
+def _filter_active_symbols(symbols: List[str]) -> List[str]:
+    """Limit stale-refresh batches to active universe symbols only."""
+    if not symbols:
+        return []
+
+    from ..services.stock_universe_service import stock_universe_service
+
+    db = SessionLocal()
+    try:
+        filtered = stock_universe_service.filter_active_symbols(db, symbols)
+        filtered_set = set(filtered)
+        dropped = [symbol for symbol in symbols if symbol.upper() not in filtered_set]
+        if dropped:
+            logger.info(
+                "Skipping %d inactive/unknown symbols during stale refresh: %s",
+                len(dropped),
+                ", ".join(dropped[:10]),
+            )
+        return filtered
+    finally:
+        db.close()
 
 
 def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None) -> dict:
@@ -826,6 +846,9 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         else:
             logger.info(f"Refreshing {len(symbols)} specified symbols")
 
+        symbols = _filter_active_symbols(symbols)
+        logger.info(f"Stale intraday refresh scoped to {len(symbols)} active symbols")
+
         if not symbols:
             logger.info("No symbols to refresh - all data is fresh")
             return {
@@ -841,7 +864,7 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         failed = 0
         failed_symbols = []
 
-        # Process symbols in batches using yfinance.Tickers()
+        # Process symbols in batches using shared yf.download() adapter
         batch_size = 100  # Reduced from 200 to avoid rate limiting
 
         for batch_start in range(0, total, batch_size):
@@ -849,7 +872,12 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
             batch_num = (batch_start // batch_size) + 1
             total_batches = (total + batch_size - 1) // batch_size
 
-            logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols using yfinance.Tickers()")
+            logger.info(
+                "Batch %d/%d: Fetching %d active symbols using yf.download() batches",
+                batch_num,
+                total_batches,
+                len(batch_symbols),
+            )
 
             try:
                 # Batch fetch using yf.download() with rate limit backoff
@@ -937,7 +965,7 @@ def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
     that was incomplete during market hours is replaced with actual
     closing data.
 
-    Uses yfinance.Tickers() for efficient batch fetching.
+    Uses the shared yf.download() batch adapter for efficient fetching.
 
     Args:
         symbols: List of symbols to refresh. If None, auto-detects

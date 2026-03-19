@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+import json
+import pickle
+from datetime import date, datetime, timedelta
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,7 +16,11 @@ from app.models.stock_universe import (
 )
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.price_cache_service import PriceCacheService
-from app.tasks.cache_tasks import cleanup_old_price_data
+from app.tasks.cache_tasks import (
+    _force_refresh_stale_intraday_impl,
+    _track_symbol_failures,
+    cleanup_old_price_data,
+)
 
 
 def _price_df(day: date, close: float) -> pd.DataFrame:
@@ -40,6 +46,25 @@ def _success_result(symbol: str) -> dict:
         "has_error": False,
         "error": None,
     }
+
+
+class _FakePipeline:
+    def __init__(self, results):
+        self._results = results
+
+    def get(self, key):
+        return self
+
+    def execute(self):
+        return list(self._results)
+
+
+class _FakeRedis:
+    def __init__(self, results):
+        self._results = results
+
+    def pipeline(self):
+        return _FakePipeline(self._results)
 
 
 def test_fetch_batch_prices_uses_required_yfinance_flags(monkeypatch):
@@ -205,3 +230,169 @@ def test_cleanup_old_price_data_skips_inactive_symbols(monkeypatch):
     }
     assert remaining_symbols == {"DEAD"}
     db.close()
+
+
+def test_get_many_reloads_after_close_if_redis_meta_marks_intraday_stale(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    import app.services.price_cache_service as module
+
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    db.commit()
+    db.close()
+
+    stale_df = _price_df(date(2026, 3, 18), 100.0)
+    fake_redis = _FakeRedis(
+        [
+            pickle.dumps(stale_df),
+            json.dumps({"needs_refresh_after_close": True}),
+        ]
+    )
+
+    service = PriceCacheService(redis_client=fake_redis)
+
+    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(module, "get_bulk_redis_client", lambda: None)
+    monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 3, 18, 17, 0, 0))
+    monkeypatch.setattr(module, "is_market_open", lambda now=None: False)
+    monkeypatch.setattr(service, "_get_expected_data_date", lambda: date(2026, 3, 18))
+    monkeypatch.setattr(service, "_get_many_from_database", lambda symbols, period: {"AAPL": (None, None)})
+    monkeypatch.setattr(service, "store_batch_in_cache", lambda batch_data, also_store_db=True: None)
+
+    fetched_symbols = []
+
+    def fake_fetch(self, symbols, period="2y", start_batch_size=None):
+        fetched_symbols.append(list(symbols))
+        return {
+            "AAPL": {
+                "symbol": "AAPL",
+                "price_data": _price_df(date(2026, 3, 18), 200.0),
+                "info": None,
+                "fundamentals": None,
+                "has_error": False,
+                "error": None,
+            }
+        }
+
+    monkeypatch.setattr(BulkDataFetcher, "fetch_prices_in_batches", fake_fetch)
+
+    result = service.get_many(["AAPL"], period="2y")
+
+    assert fetched_symbols == [["AAPL"]]
+    assert float(result["AAPL"]["Close"].iloc[-1]) == 200.0
+
+
+def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    import app.tasks.cache_tasks as module
+
+    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+            consecutive_fetch_failures=2,
+        )
+    )
+    db.commit()
+    db.close()
+
+    class _StubPriceCache:
+        SYMBOL_FAILURE_THRESHOLD = 3
+
+        @staticmethod
+        def clear_symbol_failure(symbol):
+            return None
+
+        @staticmethod
+        def record_symbol_failure(symbol):
+            return 0
+
+    _track_symbol_failures(_StubPriceCache(), successes=["AAPL"], failures=[])
+
+    db = TestingSessionLocal()
+    record = db.query(StockUniverse).filter(StockUniverse.symbol == "AAPL").one()
+    assert record.consecutive_fetch_failures == 0
+    assert record.last_fetch_success_at is not None
+    db.close()
+
+
+def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    import app.tasks.cache_tasks as module
+
+    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="DEAD",
+                exchange="NASDAQ",
+                is_active=False,
+                status=UNIVERSE_STATUS_INACTIVE_NO_DATA,
+                status_reason="inactive",
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    class _StubPriceCache:
+        @staticmethod
+        def get_stale_intraday_symbols():
+            return ["AAPL", "DEAD"]
+
+        @staticmethod
+        def store_batch_in_cache(batch_data, also_store_db=True):
+            return None
+
+    fetched_batches = []
+
+    def fake_fetch(self, symbols, period="2y", start_batch_size=None):
+        fetched_batches.append(list(symbols))
+        return {symbol: _success_result(symbol) for symbol in symbols}
+
+    monkeypatch.setattr(
+        "app.services.price_cache_service.PriceCacheService.get_instance",
+        lambda: _StubPriceCache(),
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher.fetch_prices_in_batches",
+        fake_fetch,
+    )
+
+    result = _force_refresh_stale_intraday_impl(task=None, symbols=None)
+
+    assert fetched_batches == [["AAPL"]]
+    assert result["total"] == 1
+    assert result["refreshed"] == 1

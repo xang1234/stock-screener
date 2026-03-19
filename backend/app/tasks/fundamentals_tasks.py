@@ -46,7 +46,7 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
         publish=publish,
     )
     hydrate_stats = None
-    if publish:
+    if publish and snapshot_stats.get("published"):
         hydrate_stats = provider_snapshot_service.hydrate_published_snapshot(db)
 
     return {
@@ -89,14 +89,16 @@ def refresh_all_fundamentals(self):
         if settings.provider_snapshot_cutover_enabled:
             logger.info("Provider snapshot cutover enabled - using snapshot publish pipeline")
             result = _run_snapshot_pipeline(db, publish=True)
-            eps_task = calculate_eps_rating_percentiles.delay()
             duration = time.time() - start_time
-            return {
+            response = {
                 **result,
                 "duration_seconds": round(duration, 2),
                 "timestamp": datetime.now().isoformat(),
-                "eps_rating_task_id": eps_task.id,
             }
+            if result.get("snapshot", {}).get("published"):
+                eps_task = calculate_eps_rating_percentiles.delay()
+                response["eps_rating_task_id"] = eps_task.id
+            return response
 
         # Get all active stocks from universe
         universe_stocks = db.query(StockUniverse).filter(
@@ -542,7 +544,7 @@ def refresh_all_fundamentals_hybrid(
                 "duration_minutes": round(duration / 60, 1),
                 "timestamp": datetime.now().isoformat(),
             }
-            if publish:
+            if publish and result.get("snapshot", {}).get("published"):
                 eps_task = calculate_eps_rating_percentiles.delay()
                 response["eps_rating_task_id"] = eps_task.id
             return response

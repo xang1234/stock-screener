@@ -118,7 +118,8 @@ class PriceCacheService:
 
         if cached_data is not None and not cached_data.empty:
             # Check if data is fresh
-            if self._is_data_fresh(last_date):
+            intraday_stale = self._is_intraday_data_stale(symbol)
+            if self._is_data_fresh(last_date) and not intraday_stale:
                 logger.info(f"Cache HIT for {symbol} (Database, last: {last_date})")
 
                 # Also store in Redis for faster next access
@@ -127,8 +128,22 @@ class PriceCacheService:
                 return cached_data
             else:
                 # Data is stale - fetch incremental update
-                logger.info(f"Cache HIT but STALE for {symbol} (last: {last_date}) - fetching incremental")
-                return self._fetch_incremental_and_merge(symbol, period, cached_data, last_date)
+                if intraday_stale:
+                    logger.info(
+                        "Cache HIT but STALE for %s (intraday bar requires after-close refresh) - fetching incremental",
+                        symbol,
+                    )
+                else:
+                    logger.info(
+                        f"Cache HIT but STALE for {symbol} (last: {last_date}) - fetching incremental"
+                    )
+                return self._fetch_incremental_and_merge(
+                    symbol,
+                    period,
+                    cached_data,
+                    last_date,
+                    force_same_day_refresh=intraday_stale,
+                )
 
         # No cached data - fetch full history
         logger.info(f"Cache MISS for {symbol} - fetching full history")
@@ -366,7 +381,8 @@ class PriceCacheService:
         symbol: str,
         period: str,
         cached_data: pd.DataFrame,
-        last_cached_date: date
+        last_cached_date: date,
+        force_same_day_refresh: bool = False,
     ) -> Optional[pd.DataFrame]:
         """
         Fetch only new data since last_cached_date and merge with cached data.
@@ -381,11 +397,17 @@ class PriceCacheService:
             today = datetime.now().date()
             days_missing = (today - last_cached_date).days
 
-            if days_missing <= 0:
+            if days_missing <= 0 and not force_same_day_refresh:
                 logger.info(f"{symbol} cache is current (last: {last_cached_date})")
                 return cached_data
 
-            logger.info(f"{symbol} is {days_missing} days old - fetching incremental update")
+            if force_same_day_refresh and days_missing <= 0:
+                logger.info(
+                    "%s has a same-day intraday bar that needs after-close refresh - fetching overlap update",
+                    symbol,
+                )
+            else:
+                logger.info(f"{symbol} is {days_missing} days old - fetching incremental update")
 
             # Fetch only recent data (last 7 days to ensure overlap)
             yfinance_service = YFinanceService()
@@ -401,7 +423,10 @@ class PriceCacheService:
             last_cached_ts = pd.Timestamp(last_cached_date)
             if new_data.index.tz is not None and last_cached_ts.tz is None:
                 last_cached_ts = last_cached_ts.tz_localize(new_data.index.tz)
-            new_data_filtered = new_data[new_data.index > last_cached_ts]
+            if force_same_day_refresh:
+                new_data_filtered = new_data[new_data.index >= last_cached_ts]
+            else:
+                new_data_filtered = new_data[new_data.index > last_cached_ts]
 
             if new_data_filtered.empty:
                 logger.info(f"No new data available for {symbol}")
@@ -439,7 +464,7 @@ class PriceCacheService:
 
             # Update cache with merged data
             self._store_recent_in_redis(symbol, merged_data)
-            self._store_in_database(symbol, new_data_filtered)  # Only persist new rows
+            self._store_in_database(symbol, new_data_filtered)  # Only persist new/updated rows
 
             return merged_data
 
@@ -567,6 +592,22 @@ class PriceCacheService:
             logger.error(f"Error getting fetch metadata for {symbol}: {e}", exc_info=True)
             return None
 
+    def _is_fetch_metadata_stale(
+        self,
+        meta: Optional[Dict],
+        *,
+        now_et: Optional[datetime] = None,
+    ) -> bool:
+        """Return True when a fetch-meta record marks a same-day bar stale after close."""
+        if not meta or not meta.get("needs_refresh_after_close", False):
+            return False
+
+        now_et = now_et or get_eastern_now()
+        if is_market_open(now_et):
+            return False
+
+        return now_et.time() >= time(16, 30)
+
     def _is_intraday_data_stale(self, symbol: str) -> bool:
         """
         Check if cached data is stale intraday data.
@@ -579,29 +620,10 @@ class PriceCacheService:
         incomplete "today" bar, but user is now scanning at 6 PM.
         """
         meta = self._get_fetch_metadata(symbol)
-
-        if not meta:
-            return False  # No metadata - can't determine staleness
-
-        # If data was marked as needing refresh after close
-        if not meta.get("needs_refresh_after_close", False):
-            return False  # Already closing data, not stale
-
-        # Check if market is now closed
-        now_et = get_eastern_now()
-        market_open = is_market_open(now_et)
-
-        if market_open:
-            return False  # Market still open, data is current intraday
-
-        # Market is closed - check if we're past the close buffer (4:30 PM ET)
-        post_close_buffer = time(16, 30)
-        if now_et.time() >= post_close_buffer:
-            # We're after market close, and data was fetched during market hours
+        is_stale = self._is_fetch_metadata_stale(meta)
+        if is_stale:
             logger.debug(f"{symbol}: intraday data is stale (fetched during market, now after close)")
-            return True
-
-        return False
+        return is_stale
 
     def get_stale_intraday_symbols(self) -> List[str]:
         """
@@ -1699,6 +1721,7 @@ class PriceCacheService:
 
             # Pre-compute expected_date once (avoids per-symbol market hours calculation)
             expected_date = self._get_expected_data_date()
+            now_et = get_eastern_now()
 
             # Parse results
             cached_data = {}
@@ -1706,6 +1729,8 @@ class PriceCacheService:
             redis_misses = []
             insufficient_data = []
             stale_data = []
+            stale_intraday_data = []
+            fetch_meta_by_symbol: Dict[str, Optional[Dict]] = {}
 
             # Chunked pipeline: process symbols in batches to avoid timeout on huge responses
             total_chunks = (len(symbols) + chunk_size - 1) // chunk_size
@@ -1718,6 +1743,7 @@ class PriceCacheService:
                     for symbol in chunk_symbols:
                         redis_key = self.REDIS_KEY_RECENT.format(symbol=symbol)
                         pipeline.get(redis_key)
+                        pipeline.get(self.REDIS_KEY_FETCH_META.format(symbol=symbol))
                     chunk_results = pipeline.execute()
                 except (redis.exceptions.TimeoutError, redis.exceptions.ConnectionError, OSError) as pipe_err:
                     logger.warning(
@@ -1730,7 +1756,16 @@ class PriceCacheService:
                     continue
 
                 chunk_hits = 0
-                for symbol, raw_data in zip(chunk_symbols, chunk_results):
+                recent_results = chunk_results[0::2]
+                meta_results = chunk_results[1::2]
+                for symbol, raw_data, meta_raw in zip(chunk_symbols, recent_results, meta_results):
+                    meta = None
+                    if meta_raw:
+                        try:
+                            meta = json.loads(meta_raw)
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            meta = None
+                    fetch_meta_by_symbol[symbol] = meta
                     if raw_data:
                         try:
                             df = pickle.loads(raw_data)
@@ -1744,6 +1779,9 @@ class PriceCacheService:
                                     last_date = last_date.date()
 
                                 is_fresh = last_date >= expected_date if expected_date else True
+                                meta_is_stale = self._is_fetch_metadata_stale(meta, now_et=now_et)
+                                if meta_is_stale:
+                                    is_fresh = False
                                 if is_fresh:
                                     cached_data[symbol] = df
                                     redis_hits.append(symbol)
@@ -1751,8 +1789,18 @@ class PriceCacheService:
                                     logger.debug(f"Bulk cache HIT for {symbol} (Redis, {len(df)} days, fresh)")
                                 else:
                                     cached_data[symbol] = None
-                                    stale_data.append(symbol)
-                                    logger.debug(f"Bulk cache HIT but STALE for {symbol} (Redis, last: {last_date})")
+                                    if meta_is_stale:
+                                        stale_intraday_data.append(symbol)
+                                        logger.debug(
+                                            "Bulk cache HIT but STALE_INTRADAY for %s (Redis, last: %s)",
+                                            symbol,
+                                            last_date,
+                                        )
+                                    else:
+                                        stale_data.append(symbol)
+                                        logger.debug(
+                                            f"Bulk cache HIT but STALE for {symbol} (Redis, last: {last_date})"
+                                        )
                             else:
                                 cached_data[symbol] = None
                                 insufficient_data.append(symbol)
@@ -1772,9 +1820,16 @@ class PriceCacheService:
                 )
 
             # Fallback to database for misses, insufficient data, and stale data
-            needs_db_fallback = redis_misses + insufficient_data + stale_data
+            needs_db_fallback = redis_misses + insufficient_data + stale_data + stale_intraday_data
             if needs_db_fallback:
-                logger.info(f"Fetching {len(needs_db_fallback)} symbols from database (Redis misses: {len(redis_misses)}, insufficient: {len(insufficient_data)}, stale: {len(stale_data)})")
+                logger.info(
+                    "Fetching %d symbols from database (Redis misses: %d, insufficient: %d, stale: %d, stale intraday: %d)",
+                    len(needs_db_fallback),
+                    len(redis_misses),
+                    len(insufficient_data),
+                    len(stale_data),
+                    len(stale_intraday_data),
+                )
 
                 # STEP 1: Bulk database query (single DB session for all symbols)
                 db_results = self._get_many_from_database(needs_db_fallback, period)
@@ -1786,6 +1841,8 @@ class PriceCacheService:
                 for symbol in needs_db_fallback:
                     df, last_date = db_results.get(symbol, (None, None))
                     is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
+                    if self._is_fetch_metadata_stale(fetch_meta_by_symbol.get(symbol), now_et=now_et):
+                        is_fresh = False
                     if df is not None and not df.empty and is_fresh:
                         cached_data[symbol] = df
                         db_hits.append(symbol)
@@ -1851,7 +1908,15 @@ class PriceCacheService:
 
                     logger.info(f"yfinance batch fetch complete: {yfinance_success} success, {yfinance_failed} failed")
 
-            logger.info(f"Bulk fetched {len(symbols)} symbols: {len(redis_hits)} Redis hits, {len(stale_data)} stale, {len(insufficient_data)} insufficient, {len(redis_misses)} misses")
+            logger.info(
+                "Bulk fetched %d symbols: %d Redis hits, %d stale, %d stale intraday, %d insufficient, %d misses",
+                len(symbols),
+                len(redis_hits),
+                len(stale_data),
+                len(stale_intraday_data),
+                len(insufficient_data),
+                len(redis_misses),
+            )
 
             return cached_data
 

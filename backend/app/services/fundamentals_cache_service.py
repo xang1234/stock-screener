@@ -136,6 +136,14 @@ class FundamentalsCacheService:
                         if db_data is not None and self._is_data_fresh(last_update):
                             fundamentals = self._merge_fundamentals(fundamentals, db_data)
                             self._store_in_redis(symbol, fundamentals)
+                    if self._needs_on_demand_enrichment(fundamentals):
+                        logger.info(
+                            "Cache HIT but incomplete for %s fundamentals - fetching on-demand enrichment",
+                            symbol,
+                        )
+                        enriched = self._fetch_and_cache(symbol)
+                        if enriched is not None:
+                            return enriched
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except Exception as e:
@@ -147,6 +155,14 @@ class FundamentalsCacheService:
         if cached_data is not None:
             # Check if data is fresh
             if self._is_data_fresh(last_update):
+                if self._needs_on_demand_enrichment(cached_data):
+                    logger.info(
+                        "Cache HIT but incomplete for %s fundamentals in database - fetching on-demand enrichment",
+                        symbol,
+                    )
+                    enriched = self._fetch_and_cache(symbol)
+                    if enriched is not None:
+                        return enriched
                 logger.info(f"Cache HIT for {symbol} (Database, updated: {last_update})")
 
                 # Also store in Redis for faster next access
@@ -707,7 +723,17 @@ class FundamentalsCacheService:
         """True when a cached payload is missing keys needed by scan enrichment."""
         if not isinstance(fundamentals, dict):
             return True
-        return any(key not in fundamentals for key in self.REQUIRED_SCAN_KEYS)
+        return any(
+            key not in fundamentals or fundamentals.get(key) in (None, "")
+            for key in self.REQUIRED_SCAN_KEYS
+        )
+
+    def _needs_on_demand_enrichment(self, fundamentals: Optional[Dict]) -> bool:
+        """True when a single-symbol lookup should hydrate missing required fields."""
+        return (
+            settings.provider_snapshot_on_demand_fallback_enabled
+            and self._needs_db_enrichment(fundamentals)
+        )
 
     @staticmethod
     def _merge_fundamentals(primary: Dict, fallback: Dict) -> Dict:

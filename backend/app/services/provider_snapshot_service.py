@@ -12,12 +12,14 @@ from typing import Any, Dict, Iterable, Optional
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models.provider_snapshot import (
     ProviderSnapshotPointer,
     ProviderSnapshotRow,
     ProviderSnapshotRun,
 )
 from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
+from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .fundamentals_cache_service import FundamentalsCacheService
 from .price_cache_service import PriceCacheService
@@ -38,12 +40,28 @@ class ProviderSnapshotService:
     }
     EXCHANGES = ("NYSE", "NASDAQ", "AMEX")
     HYDRATE_CHUNK_SIZE = 200
+    YAHOO_ONLY_REQUIRED_KEYS = (
+        "ipo_date",
+        "first_trade_date",
+        "eps_growth_qq",
+        "sales_growth_qq",
+        "eps_growth_yy",
+        "sales_growth_yy",
+        "recent_quarter_date",
+        "previous_quarter_date",
+        "eps_5yr_cagr",
+        "eps_q1_yoy",
+        "eps_q2_yoy",
+        "eps_raw_score",
+        "eps_years_available",
+    )
 
     def __init__(self) -> None:
         self.parser = FinvizParser()
         self.price_cache = PriceCacheService.get_instance()
         self.fundamentals_cache = FundamentalsCacheService.get_instance()
         self.technical_calc = TechnicalCalculatorService()
+        self.bulk_fetcher = BulkDataFetcher()
 
     def _load_screener_class(self, category: str):
         module_name, class_name = self.CATEGORY_LOADERS[category]
@@ -120,6 +138,90 @@ class ProviderSnapshotService:
             row["row_hash"] = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         return merged_rows
 
+    @staticmethod
+    def _has_value(value: Any) -> bool:
+        return value not in (None, "")
+
+    def _needs_yahoo_hydration(self, payload: Dict[str, Any]) -> bool:
+        return any(not self._has_value(payload.get(key)) for key in self.YAHOO_ONLY_REQUIRED_KEYS)
+
+    def _coverage_gate(
+        self,
+        coverage_stats: Dict[str, Any],
+    ) -> tuple[bool, list[str]]:
+        active_symbols = coverage_stats.get("active_symbols", 0) or 0
+        covered_active_symbols = coverage_stats.get("covered_active_symbols", 0) or 0
+        missing_active_symbols = coverage_stats.get("missing_active_symbols", 0) or 0
+        active_coverage = (
+            covered_active_symbols / active_symbols
+            if active_symbols > 0 else 1.0
+        )
+        warnings: list[str] = []
+
+        if active_coverage < settings.provider_snapshot_min_active_coverage:
+            warnings.append(
+                "Active snapshot coverage "
+                f"{active_coverage:.2%} below minimum "
+                f"{settings.provider_snapshot_min_active_coverage:.2%}"
+            )
+        if missing_active_symbols > settings.provider_snapshot_max_missing_active_symbols:
+            warnings.append(
+                "Missing active symbols "
+                f"{missing_active_symbols} above maximum "
+                f"{settings.provider_snapshot_max_missing_active_symbols}"
+            )
+        return (not warnings), warnings
+
+    def _fetch_yahoo_only_fields(self, symbol: str) -> Dict[str, Any]:
+        from .rate_limiter import rate_limiter
+        import yfinance as yf
+
+        yahoo_payload: Dict[str, Any] = {}
+        now_iso = datetime.utcnow().isoformat()
+
+        try:
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            ticker = yf.Ticker(symbol)
+        except Exception as exc:
+            logger.warning("Failed to initialize Yahoo hydrator for %s: %s", symbol, exc)
+            return yahoo_payload
+
+        try:
+            quarterly_growth = self.bulk_fetcher._extract_quarterly_growth(ticker)
+            yahoo_payload.update(
+                {
+                    key: value
+                    for key, value in quarterly_growth.items()
+                    if key != "_raw_data" and self._has_value(value)
+                }
+            )
+            eps_rating = self.bulk_fetcher._extract_eps_rating_data(ticker)
+            yahoo_payload.update(
+                {key: value for key, value in eps_rating.items() if self._has_value(value)}
+            )
+            yahoo_payload["yahoo_statements_refreshed_at"] = now_iso
+        except Exception as exc:
+            logger.warning("Failed Yahoo statement hydration for %s: %s", symbol, exc)
+
+        try:
+            info = ticker.info or {}
+            first_trade_date_ms = info.get("firstTradeDateMilliseconds")
+            if first_trade_date_ms:
+                yahoo_payload["first_trade_date_ms"] = first_trade_date_ms
+                ipo_date = self.fundamentals_cache._parse_ipo_date(first_trade_date_ms)
+                if ipo_date is not None:
+                    yahoo_payload["ipo_date"] = ipo_date
+                    yahoo_payload["first_trade_date"] = int(
+                        datetime.combine(ipo_date, datetime.min.time()).timestamp()
+                    )
+            if info.get("longBusinessSummary"):
+                yahoo_payload["description_yfinance"] = info.get("longBusinessSummary")
+            yahoo_payload["yahoo_profile_refreshed_at"] = now_iso
+        except Exception as exc:
+            logger.warning("Failed Yahoo profile hydration for %s: %s", symbol, exc)
+
+        return yahoo_payload
+
     def create_snapshot_run(
         self,
         db: Session,
@@ -157,6 +259,7 @@ class ProviderSnapshotService:
         parity_stats = {
             "missing_active_symbols": missing_active[:100],
         }
+        coverage_ok, coverage_warnings = self._coverage_gate(coverage_stats)
 
         rows = [
             ProviderSnapshotRow(
@@ -176,8 +279,10 @@ class ProviderSnapshotService:
         run.symbols_published = len(active_symbols.intersection(merged_rows))
         run.coverage_stats_json = json.dumps(coverage_stats, sort_keys=True)
         run.parity_stats_json = json.dumps(parity_stats, sort_keys=True)
+        run.warnings_json = json.dumps(coverage_warnings, sort_keys=True) if coverage_warnings else None
         run.status = "preview_ready" if not publish else "published"
-        if publish:
+        published = False
+        if publish and coverage_ok:
             published_at = datetime.utcnow()
             run.published_at = published_at
             pointer = db.query(ProviderSnapshotPointer).filter(
@@ -194,6 +299,9 @@ class ProviderSnapshotService:
             else:
                 pointer.run_id = run.id
                 pointer.updated_at = published_at
+            published = True
+        elif publish and not coverage_ok:
+            run.status = "publish_blocked"
 
         db.commit()
         return {
@@ -201,6 +309,8 @@ class ProviderSnapshotService:
             "source_revision": run.source_revision,
             "coverage": coverage_stats,
             "parity": parity_stats,
+            "published": published,
+            "warnings": coverage_warnings,
         }
 
     def get_published_run(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Optional[ProviderSnapshotRun]:
@@ -240,6 +350,8 @@ class ProviderSnapshotService:
         active_rows = [row for row in rows if row.symbol in active_symbols]
         hydrated = 0
         missing_prices = 0
+        yahoo_hydrated = 0
+        missing_yahoo = 0
 
         for chunk_start in range(0, len(active_rows), self.HYDRATE_CHUNK_SIZE):
             chunk_rows = active_rows[chunk_start:chunk_start + self.HYDRATE_CHUNK_SIZE]
@@ -262,14 +374,23 @@ class ProviderSnapshotService:
                 snapshot_payload["finviz_snapshot_at"] = (
                     run.published_at.isoformat() if run.published_at else run.created_at.isoformat()
                 )
-                snapshot_payload["description"] = (
-                    snapshot_payload.get("description_finviz")
-                    or snapshot_payload.get("description_yfinance")
-                )
-
                 merged_payload = self.fundamentals_cache._merge_fundamentals(
                     snapshot_payload,
                     existing_data.get(row.symbol) or {},
+                )
+                if self._needs_yahoo_hydration(merged_payload):
+                    yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
+                    if yahoo_payload:
+                        merged_payload = self.fundamentals_cache._merge_fundamentals(
+                            merged_payload,
+                            yahoo_payload,
+                        )
+                        yahoo_hydrated += 1
+                    if self._needs_yahoo_hydration(merged_payload):
+                        missing_yahoo += 1
+                merged_payload["description"] = (
+                    merged_payload.get("description_finviz")
+                    or merged_payload.get("description_yfinance")
                 )
                 self.fundamentals_cache.store(
                     row.symbol,
@@ -283,6 +404,8 @@ class ProviderSnapshotService:
             "snapshot_revision": run.source_revision,
             "hydrated": hydrated,
             "missing_prices": missing_prices,
+            "yahoo_hydrated": yahoo_hydrated,
+            "missing_yahoo": missing_yahoo,
         }
 
     def get_snapshot_stats(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Dict[str, Any]:

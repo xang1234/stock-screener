@@ -211,6 +211,8 @@ class Settings(BaseSettings):
     provider_snapshot_ingestion_enabled: bool = False
     provider_snapshot_cutover_enabled: bool = False
     provider_snapshot_on_demand_fallback_enabled: bool = True
+    provider_snapshot_min_active_coverage: float = 0.98
+    provider_snapshot_max_missing_active_symbols: int = 50
 
     # Deep Research Configuration
     deep_research_enabled: bool = True  # Enable deep research mode in chatbot
