@@ -139,6 +139,12 @@ _THEME_CONTENT_STORAGE_TABLES = (
     "theme_mentions",
     "content_items",
 )
+_THEME_CONTENT_REINDEX_TARGETS = (
+    "content_items",
+    "content_sources",
+    "theme_mentions",
+    "content_item_pipeline_state",
+)
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
@@ -1233,34 +1239,114 @@ def _fetch_content_items_with_themes_with_recovery(
     db: Session,
     **kwargs,
 ) -> tuple[list[ContentItemWithThemesResponse], int]:
-    """Retry theme content queries once after resetting rebuildable storage on corruption."""
+    """Retry theme content queries after reindexing or rebuilding recoverable storage."""
     try:
         return _fetch_content_items_with_themes(db, **kwargs)
     except Exception as exc:
         if not is_corruption_error(exc):
             raise
         safe_rollback(db)
-        if not _corruption_targets_theme_content_storage():
+        _attempt_reindex_theme_content_storage(exc)
+        try:
+            with SessionLocal() as retry_db:
+                return _fetch_content_items_with_themes(retry_db, **kwargs)
+        except Exception as retry_exc:
+            if not is_corruption_error(retry_exc):
+                raise
+            logger.warning(
+                "Theme content browser query still hits SQLite corruption after REINDEX; "
+                "checking whether rebuildable theme-content storage can be reset: %s",
+                retry_exc,
+            )
+            if not _corruption_targets_theme_content_storage():
+                logger.error(
+                    "Theme content browser detected SQLite corruption outside rebuildable "
+                    "theme-content storage. Run backend/scripts/check_db_integrity.py --repair "
+                    "or restore the latest valid backup. Initial error: %s. Retry error: %s",
+                    exc,
+                    retry_exc,
+                )
+                raise
+            _reset_corrupt_theme_content_storage(retry_exc)
+            with SessionLocal() as reset_retry_db:
+                return _fetch_content_items_with_themes(reset_retry_db, **kwargs)
+
+
+def _attempt_reindex_theme_content_storage(exc: Exception) -> bool:
+    """Try to repair theme browser read paths by rebuilding relevant SQLite indexes."""
+    logger.warning(
+        "Attempting SQLite REINDEX for theme content browser after corruption signature: %s",
+        exc,
+    )
+    try:
+        with _THEME_CONTENT_STORAGE_LOCK:
+            with engine.begin() as conn:
+                for target in _THEME_CONTENT_REINDEX_TARGETS:
+                    conn.execute(text(f'REINDEX "{target}"'))
+    except Exception as reindex_exc:
+        if not is_corruption_error(reindex_exc):
             raise
-        _reset_corrupt_theme_content_storage(exc)
-        with SessionLocal() as retry_db:
-            return _fetch_content_items_with_themes(retry_db, **kwargs)
+        logger.warning(
+            "SQLite REINDEX did not clear theme content browser corruption: %s",
+            reindex_exc,
+        )
+        return False
+    logger.warning("SQLite REINDEX completed for theme content browser recovery")
+    return True
+
+
+def _theme_content_storage_probe_queries() -> tuple[str, ...]:
+    """Return representative queries that exercise the theme content browser read path."""
+    return (
+        "SELECT id, source_id, published_at FROM content_items ORDER BY published_at DESC LIMIT 1",
+        """
+        SELECT content_items.id
+        FROM content_items
+        JOIN content_sources ON content_items.source_id = content_sources.id
+        WHERE content_sources.is_active = 1
+        ORDER BY content_items.published_at DESC
+        LIMIT 1
+        """,
+        """
+        SELECT content_item_id, theme_cluster_id, sentiment
+        FROM theme_mentions
+        WHERE content_item_id IN (
+            SELECT id
+            FROM content_items
+            ORDER BY published_at DESC
+            LIMIT 1
+        )
+        LIMIT 1
+        """,
+        """
+        SELECT content_item_id, status
+        FROM content_item_pipeline_state
+        WHERE content_item_id IN (
+            SELECT id
+            FROM content_items
+            ORDER BY published_at DESC
+            LIMIT 1
+        )
+          AND pipeline = 'technical'
+        LIMIT 1
+        """,
+    )
 
 
 def _corruption_targets_theme_content_storage() -> bool:
-    """Return True when one of the rebuildable theme content tables itself looks corrupt."""
-    probe_queries = (
-        "SELECT id, source_id, published_at FROM content_items ORDER BY published_at DESC LIMIT 1",
-        "SELECT id, content_item_id, mentioned_at FROM theme_mentions ORDER BY mentioned_at DESC LIMIT 1",
-        "SELECT id, content_item_id, updated_at FROM content_item_pipeline_state ORDER BY updated_at DESC LIMIT 1",
-    )
+    """Return True when representative theme browser queries hit rebuildable storage corruption."""
     with engine.connect() as conn:
-        for sql in probe_queries:
+        for sql in _theme_content_storage_probe_queries():
             try:
                 conn.execute(text(sql)).fetchall()
             except Exception as exc:
                 if is_corruption_error(exc):
+                    logger.warning(
+                        "Theme content storage probe detected SQLite corruption on query path: %s",
+                        " ".join(sql.split()),
+                    )
                     return True
+                raise
     return False
 
 
