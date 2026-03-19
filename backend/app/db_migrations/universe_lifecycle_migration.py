@@ -180,12 +180,6 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
                 if not is_corruption_error(row_exc):
                     raise
                 skipped_ids.append(params["id"])
-                logger.error(
-                    "Skipping universe lifecycle backfill for stock_universe id=%s "
-                    "due to SQLite corruption signature: %s",
-                    params["id"],
-                    row_exc,
-                )
 
     if skipped_ids:
         logger.error(

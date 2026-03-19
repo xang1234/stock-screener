@@ -1863,7 +1863,7 @@ class PriceCacheService:
                             row[0]
                             for row in active_query_db.query(StockUniverse.symbol).filter(
                                 StockUniverse.symbol.in_(yfinance_needed),
-                                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
+                                StockUniverse.active_filter(),
                             ).all()
                         }
                     finally:

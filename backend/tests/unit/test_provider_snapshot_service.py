@@ -182,6 +182,50 @@ def test_hydrate_published_snapshot_fetches_yahoo_only_fields_for_missing_scan_d
     db.close()
 
 
+def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="OLD",
+                exchange="NYSE",
+                is_active=False,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason=None,
+            ),
+        ]
+    )
+    db.commit()
+
+    service = ProviderSnapshotService()
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None: {
+            "AAPL": {
+                "exchange": "NASDAQ",
+                "row_hash": "hash-aapl",
+                "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                "raw_payload": {"overview": {"Ticker": "AAPL"}},
+            }
+        },
+    )
+    result = service.create_snapshot_run(db, run_mode="preview", publish=False)
+
+    assert result["coverage"]["active_symbols"] == 1
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 0
+    db.close()
+
+
 def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required_fields(monkeypatch):
     service = FundamentalsCacheService(redis_client=None)
     incomplete = {

@@ -37,8 +37,13 @@ class StockUniverseService:
     @staticmethod
     def _normalize_status(record: StockUniverse) -> str:
         """Return a lifecycle status even for pre-migration rows."""
-        if record.status:
-            return record.status
+        raw_status = (record.status or "").strip()
+        if raw_status == UNIVERSE_STATUS_ACTIVE and record.is_active is False:
+            return UNIVERSE_STATUS_INACTIVE_MANUAL
+        if raw_status and raw_status != UNIVERSE_STATUS_ACTIVE and record.is_active is True:
+            return UNIVERSE_STATUS_ACTIVE
+        if raw_status:
+            return raw_status
         return UNIVERSE_STATUS_ACTIVE if record.is_active else UNIVERSE_STATUS_INACTIVE_MANUAL
 
     def _add_status_event(
@@ -628,7 +633,7 @@ class StockUniverseService:
         """
         try:
             query = db.query(StockUniverse.symbol).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             )
 
             if sp500_only:
@@ -780,7 +785,7 @@ class StockUniverseService:
         try:
             total = db.query(StockUniverse).count()
             active = db.query(StockUniverse).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             ).count()
 
             # Count by exchange
@@ -789,7 +794,7 @@ class StockUniverseService:
                 StockUniverse.exchange,
                 func.count(StockUniverse.id),
             ).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             ).group_by(StockUniverse.exchange).all()
 
             for exchange, count in exchanges:
@@ -797,17 +802,14 @@ class StockUniverseService:
 
             # Count S&P 500 members
             sp500 = db.query(StockUniverse).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
+                StockUniverse.active_filter(),
                 StockUniverse.is_sp500 == True,
             ).count()
 
-            by_status = {
-                status: count
-                for status, count in db.query(
-                    StockUniverse.status,
-                    func.count(StockUniverse.id),
-                ).group_by(StockUniverse.status).all()
-            }
+            by_status: Dict[str, int] = {}
+            for record in db.query(StockUniverse).all():
+                normalized = self._normalize_status(record)
+                by_status[normalized] = by_status.get(normalized, 0) + 1
             recent_deactivations = db.query(StockUniverseStatusEvent).filter(
                 StockUniverseStatusEvent.new_status != UNIVERSE_STATUS_ACTIVE
             ).order_by(StockUniverseStatusEvent.created_at.desc()).limit(10).all()
@@ -854,7 +856,7 @@ class StockUniverseService:
             row[0]
             for row in db.query(StockUniverse.symbol).filter(
                 StockUniverse.symbol.in_(ordered),
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE,
+                StockUniverse.active_filter(),
             ).all()
         }
         return [symbol for symbol in ordered if symbol in active_set]
@@ -864,7 +866,7 @@ class StockUniverseService:
         return {
             row[0]
             for row in db.query(StockUniverse.symbol).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             ).all()
         }
 

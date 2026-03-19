@@ -246,7 +246,7 @@ class ProviderSnapshotService:
         active_symbols = {
             row[0]
             for row in db.query(StockUniverse.symbol).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             ).all()
         }
         missing_active = sorted(symbol for symbol in active_symbols if symbol not in merged_rows)
@@ -344,7 +344,7 @@ class ProviderSnapshotService:
         active_symbols = {
             row[0]
             for row in db.query(StockUniverse.symbol).filter(
-                StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+                StockUniverse.active_filter()
             ).all()
         }
         active_rows = [row for row in rows if row.symbol in active_symbols]

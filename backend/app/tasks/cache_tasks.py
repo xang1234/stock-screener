@@ -1323,7 +1323,7 @@ def cleanup_old_price_data(self, keep_years: int = 5):
 
         # Get count of records to delete
         active_symbol_subquery = db.query(StockUniverse.symbol).filter(
-            StockUniverse.status == UNIVERSE_STATUS_ACTIVE
+            StockUniverse.active_filter()
         )
         delete_count = db.query(func.count(StockPrice.id)).filter(
             StockPrice.date < cutoff_date,

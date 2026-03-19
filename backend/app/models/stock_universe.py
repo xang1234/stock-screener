@@ -53,6 +53,11 @@ class StockUniverse(Base):
             f"status='{self.status}', active={self.is_active})>"
         )
 
+    @classmethod
+    def active_filter(cls):
+        """Return the authoritative DB predicate for active-universe membership."""
+        return cls.is_active.is_(True)
+
 
 class StockUniverseStatusEvent(Base):
     """Audit log for universe lifecycle state transitions."""
