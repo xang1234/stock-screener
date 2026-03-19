@@ -202,6 +202,9 @@ def test_backfill_is_noop_for_already_migrated_rows():
                 self.conn = conn
                 self.update_calls = 0
 
+            def begin_nested(self):
+                return self.conn.begin_nested()
+
             def execute(self, statement, params=None):
                 sql = str(statement)
                 if sql.lstrip().startswith("UPDATE stock_universe"):
@@ -244,6 +247,9 @@ def test_backfill_retries_row_by_row_and_skips_corrupt_rows():
                 self.conn = conn
                 self.batch_calls = 0
 
+            def begin_nested(self):
+                return self.conn.begin_nested()
+
             def execute(self, statement, params=None):
                 sql = str(statement)
                 if sql.lstrip().startswith("UPDATE stock_universe"):
@@ -283,6 +289,66 @@ def test_backfill_retries_row_by_row_and_skips_corrupt_rows():
     assert rows[1]["last_seen_in_source_at"] is None
     assert rows[1]["deactivated_at"] == "2024-02-01 00:00:00"
     assert rows[1]["is_active"] == 0
+
+
+def test_backfill_skips_metadata_only_updates_when_lifecycle_columns_already_exist():
+    engine = _make_legacy_engine()
+    migrate_universe_lifecycle(engine)
+
+    with engine.connect() as raw_conn:
+        columns = _get_columns(raw_conn, "stock_universe")
+        raw_conn.execute(
+            text(
+                """
+                INSERT INTO stock_universe(
+                    symbol, exchange, is_active, added_at, updated_at,
+                    status, status_reason, first_seen_at, last_seen_in_source_at, deactivated_at
+                )
+                VALUES (
+                    'AAPL', 'NASDAQ', 1, '2025-01-01 00:00:00', '2025-01-02 00:00:00',
+                    'active', NULL, NULL, NULL, NULL
+                )
+                """
+            )
+        )
+        raw_conn.commit()
+
+        class RecordingConnection:
+            def __init__(self, conn):
+                self.conn = conn
+                self.update_calls = 0
+
+            def begin_nested(self):
+                return self.conn.begin_nested()
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                if sql.lstrip().startswith("UPDATE stock_universe"):
+                    self.update_calls += 1
+                if params is None:
+                    return self.conn.execute(statement)
+                return self.conn.execute(statement, params)
+
+        recording_conn = RecordingConnection(raw_conn)
+        _backfill_stock_universe_rows(recording_conn, columns)
+
+        row = raw_conn.execute(
+            text(
+                """
+                SELECT status, status_reason, first_seen_at, last_seen_in_source_at, deactivated_at, is_active
+                FROM stock_universe
+                WHERE symbol = 'AAPL'
+                """
+            )
+        ).mappings().one()
+
+    assert recording_conn.update_calls == 0
+    assert row["status"] == "active"
+    assert row["status_reason"] is None
+    assert row["first_seen_at"] is None
+    assert row["last_seen_in_source_at"] is None
+    assert row["deactivated_at"] is None
+    assert row["is_active"] == 1
 
 
 def test_migration_derives_inactive_status_from_legacy_flag_after_partial_column_add():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import logging
 from datetime import datetime
 
@@ -37,6 +38,12 @@ def _legacy_is_active_value(value) -> int:
     return 1 if bool(value) else 0
 
 
+def _nested_savepoint(conn):
+    if hasattr(conn, "begin_nested"):
+        return conn.begin_nested()
+    return nullcontext()
+
+
 def _derive_lifecycle_status(
     raw_status: str | None,
     status_reason: str | None,
@@ -57,6 +64,7 @@ def _derive_lifecycle_status(
 
 def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     """Backfill lifecycle data row-by-row to avoid brittle full-table text scans."""
+    full_metadata_backfill = "status" not in columns
     select_columns = [
         "id",
         "COALESCE(is_active, 1) AS legacy_is_active",
@@ -75,9 +83,10 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     now = datetime.utcnow()
     updates: list[dict[str, object]] = []
     for row in rows:
+        raw_status = _normalize_text(row["status"])
         status_reason = _normalize_text(row["status_reason"])
         status = _derive_lifecycle_status(
-            _normalize_text(row["status"]),
+            raw_status,
             status_reason,
             _legacy_is_active_value(row["legacy_is_active"]),
         )
@@ -100,13 +109,20 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
             deactivated_at = None
 
         target_is_active = 1 if status == "active" else 0
-        if (
-            row["status"] == status
-            and row["status_reason"] == status_reason
-            and row["first_seen_at"] == first_seen_at
-            and row["last_seen_in_source_at"] == last_seen_in_source_at
-            and row["deactivated_at"] == deactivated_at
-            and _legacy_is_active_value(row["legacy_is_active"]) == target_is_active
+        core_fields_need_repair = (
+            raw_status != status
+            or _legacy_is_active_value(row["legacy_is_active"]) != target_is_active
+            or (status != "active" and row["deactivated_at"] != deactivated_at)
+        )
+        metadata_fields_need_repair = (
+            row["status_reason"] != status_reason
+            or row["first_seen_at"] != first_seen_at
+            or row["last_seen_in_source_at"] != last_seen_in_source_at
+            or row["deactivated_at"] != deactivated_at
+        )
+
+        if not core_fields_need_repair and not (
+            full_metadata_backfill and metadata_fields_need_repair
         ):
             continue
 
@@ -142,7 +158,8 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     for start in range(0, len(updates), _ROW_UPDATE_BATCH_SIZE):
         batch = updates[start:start + _ROW_UPDATE_BATCH_SIZE]
         try:
-            conn.execute(update_stmt, batch)
+            with _nested_savepoint(conn):
+                conn.execute(update_stmt, batch)
             continue
         except Exception as exc:
             if not is_corruption_error(exc):
@@ -157,7 +174,8 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
 
         for params in batch:
             try:
-                conn.execute(update_stmt, params)
+                with _nested_savepoint(conn):
+                    conn.execute(update_stmt, params)
             except Exception as row_exc:
                 if not is_corruption_error(row_exc):
                     raise
