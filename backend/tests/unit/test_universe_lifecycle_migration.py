@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db_migrations.universe_lifecycle_migration import (
     _backfill_stock_universe_rows,
+    _ensure_index,
     _get_columns,
     migrate_universe_lifecycle,
 )
@@ -351,7 +352,7 @@ def test_backfill_skips_metadata_only_updates_when_lifecycle_columns_already_exi
     assert row["is_active"] == 1
 
 
-def test_migration_derives_inactive_status_from_legacy_flag_after_partial_column_add():
+def test_migration_skips_row_rewrites_after_partial_column_add():
     engine = _make_legacy_engine()
     with engine.begin() as conn:
         conn.execute(
@@ -396,7 +397,103 @@ def test_migration_derives_inactive_status_from_legacy_flag_after_partial_column
         ).mappings().one()
 
     assert row["is_active"] == 0
-    assert row["status"] == "inactive_manual"
-    assert row["status_reason"] == "Backfilled from legacy inactive flag"
-    assert row["first_seen_at"] == "2024-01-01 00:00:00"
-    assert row["deactivated_at"] == "2024-02-01 00:00:00"
+    assert row["status"] == "active"
+    assert row["status_reason"] is None
+    assert row["first_seen_at"] is None
+    assert row["deactivated_at"] is None
+
+
+def test_migration_reuses_equivalent_existing_status_event_indexes():
+    engine = _make_legacy_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE stock_universe_status_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    old_status TEXT,
+                    new_status TEXT NOT NULL,
+                    trigger_source TEXT NOT NULL,
+                    reason TEXT,
+                    payload_json TEXT,
+                    created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE INDEX idx_universe_status_events_symbol_created
+                ON stock_universe_status_events(symbol, created_at)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE INDEX idx_universe_status_events_status_created
+                ON stock_universe_status_events(new_status, created_at)
+                """
+            )
+        )
+
+    migrate_universe_lifecycle(engine)
+
+    with engine.connect() as conn:
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'index' AND tbl_name = 'stock_universe_status_events'
+                    """
+                )
+            ).fetchall()
+        }
+
+    assert "idx_universe_status_events_symbol_created" in indexes
+    assert "idx_universe_status_events_status_created" in indexes
+    assert "idx_stock_universe_status_events_symbol_created" not in indexes
+    assert "idx_stock_universe_status_events_status_created" not in indexes
+
+
+def test_ensure_index_skips_optional_index_creation_on_corruption():
+    engine = _make_legacy_engine()
+
+    with engine.connect() as raw_conn:
+        class CorruptingConnection:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                if "CREATE INDEX IF NOT EXISTS idx_test_corrupt" in sql:
+                    raise sqlite3.DatabaseError("database disk image is malformed")
+                if params is None:
+                    return self.conn.execute(statement)
+                return self.conn.execute(statement, params)
+
+        corrupting_conn = CorruptingConnection(raw_conn)
+        _ensure_index(
+            corrupting_conn,
+            table_name="stock_universe",
+            index_name="idx_test_corrupt",
+            columns=("exchange",),
+            ddl="""
+                CREATE INDEX IF NOT EXISTS idx_test_corrupt
+                ON stock_universe(exchange)
+            """,
+        )
+
+        indexes = {
+            row[1]
+            for row in raw_conn.execute(
+                text("PRAGMA index_list('stock_universe')")
+            ).fetchall()
+        }
+
+    assert "idx_test_corrupt" not in indexes

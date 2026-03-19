@@ -20,6 +20,18 @@ def _get_columns(conn, table_name: str) -> set[str]:
     return {row[1] for row in rows}
 
 
+def _get_index_columns(conn, table_name: str) -> dict[str, tuple[str, ...]]:
+    """Return existing index column tuples keyed by index name."""
+    indexes: dict[str, tuple[str, ...]] = {}
+    for row in conn.execute(text(f"PRAGMA index_list('{table_name}')")).fetchall():
+        index_name = row[1]
+        index_columns = conn.execute(
+            text(f"PRAGMA index_info('{index_name}')")
+        ).fetchall()
+        indexes[index_name] = tuple(column[2] for column in index_columns)
+    return indexes
+
+
 def _normalize_text(value) -> str | None:
     """Normalize legacy text values without using SQLite string functions."""
     if value is None:
@@ -42,6 +54,63 @@ def _nested_savepoint(conn):
     if hasattr(conn, "begin_nested"):
         return conn.begin_nested()
     return nullcontext()
+
+
+def _ensure_index(
+    conn,
+    *,
+    table_name: str,
+    index_name: str,
+    columns: tuple[str, ...],
+    ddl: str,
+) -> None:
+    """Create an index only when no equivalent index already exists."""
+    try:
+        existing_indexes = _get_index_columns(conn, table_name)
+    except Exception as exc:
+        if not is_corruption_error(exc):
+            raise
+        logger.warning(
+            "Universe lifecycle migration skipped optional index %s on %s while "
+            "inspecting existing indexes due to SQLite corruption signature: %s",
+            index_name,
+            table_name,
+            exc,
+        )
+        return
+
+    if index_name in existing_indexes:
+        return
+    matching_name = next(
+        (
+            name
+            for name, existing_columns in existing_indexes.items()
+            if existing_columns == columns
+        ),
+        None,
+    )
+    if matching_name is not None:
+        logger.info(
+            "Universe lifecycle migration reusing existing index %s on %s for columns %s",
+            matching_name,
+            table_name,
+            columns,
+        )
+        return
+
+    try:
+        with _nested_savepoint(conn):
+            conn.execute(text(ddl))
+    except Exception as exc:
+        if not is_corruption_error(exc):
+            raise
+        logger.warning(
+            "Universe lifecycle migration skipped optional index %s on %s due to SQLite "
+            "corruption signature: %s",
+            index_name,
+            table_name,
+            exc,
+        )
 
 
 def _derive_lifecycle_status(
@@ -90,6 +159,13 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
             status_reason,
             _legacy_is_active_value(row["legacy_is_active"]),
         )
+        if (
+            not full_metadata_backfill
+            and raw_status == "active"
+            and not _legacy_is_active_value(row["legacy_is_active"])
+            and status_reason is None
+        ):
+            continue
         if status_reason is None:
             status_reason = (
                 "Existing active symbol"
@@ -164,7 +240,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
         except Exception as exc:
             if not is_corruption_error(exc):
                 raise
-            logger.error(
+            logger.warning(
                 "Universe lifecycle batch backfill hit SQLite corruption signature; "
                 "retrying row-by-row for ids %s-%s: %s",
                 batch[0]["id"],
@@ -182,7 +258,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
                 skipped_ids.append(params["id"])
 
     if skipped_ids:
-        logger.error(
+        logger.warning(
             "Universe lifecycle migration skipped %d stock_universe rows during backfill "
             "because SQLite reported corruption signatures. Sample ids: %s",
             len(skipped_ids),
@@ -241,37 +317,45 @@ def migrate_universe_lifecycle(engine) -> None:
                 """
             )
         )
-        conn.execute(
-            text(
-                """
+        _ensure_index(
+            conn,
+            table_name="stock_universe_status_events",
+            index_name="idx_stock_universe_status_events_symbol_created",
+            columns=("symbol", "created_at"),
+            ddl="""
                 CREATE INDEX IF NOT EXISTS idx_stock_universe_status_events_symbol_created
                 ON stock_universe_status_events(symbol, created_at)
-                """
-            )
+            """,
         )
-        conn.execute(
-            text(
-                """
+        _ensure_index(
+            conn,
+            table_name="stock_universe_status_events",
+            index_name="idx_stock_universe_status_events_status_created",
+            columns=("new_status", "created_at"),
+            ddl="""
                 CREATE INDEX IF NOT EXISTS idx_stock_universe_status_events_status_created
                 ON stock_universe_status_events(new_status, created_at)
-                """
-            )
+            """,
         )
-        conn.execute(
-            text(
-                """
+        _ensure_index(
+            conn,
+            table_name="stock_universe",
+            index_name="idx_stock_universe_exchange_status",
+            columns=("exchange", "status"),
+            ddl="""
                 CREATE INDEX IF NOT EXISTS idx_stock_universe_exchange_status
                 ON stock_universe(exchange, status)
-                """
-            )
+            """,
         )
-        conn.execute(
-            text(
-                """
+        _ensure_index(
+            conn,
+            table_name="stock_universe",
+            index_name="idx_stock_universe_status_active",
+            columns=("status", "is_active"),
+            ddl="""
                 CREATE INDEX IF NOT EXISTS idx_stock_universe_status_active
                 ON stock_universe(status, is_active)
-                """
-            )
+            """,
         )
         conn.commit()
 
