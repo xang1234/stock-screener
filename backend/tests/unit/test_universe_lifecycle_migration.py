@@ -125,3 +125,44 @@ def test_migration_normalizes_blank_status_values_without_sql_trim():
     assert row["first_seen_at"] == "2025-03-01 00:00:00"
     assert row["last_seen_in_source_at"] == "2025-03-02 00:00:00"
     assert row["deactivated_at"] is None
+
+
+def test_migration_preserves_inactive_last_seen_in_source_timestamp():
+    engine = _make_legacy_engine()
+    migrate_universe_lifecycle(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO stock_universe(
+                    symbol, exchange, is_active, added_at, updated_at,
+                    status, status_reason, first_seen_at, last_seen_in_source_at, deactivated_at
+                )
+                VALUES (
+                    'DEAD', 'NASDAQ', 0, '2024-03-01 00:00:00', '2024-06-01 00:00:00',
+                    'inactive_missing_source', 'Missing from Finviz universe sync',
+                    '2024-03-01 00:00:00', '2024-05-15 00:00:00', '2024-06-01 00:00:00'
+                )
+                """
+            )
+        )
+
+    migrate_universe_lifecycle(engine)
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT is_active, status, status_reason, first_seen_at, last_seen_in_source_at, deactivated_at
+                FROM stock_universe
+                WHERE symbol = 'DEAD'
+                """
+            )
+        ).mappings().one()
+
+    assert row["is_active"] == 0
+    assert row["status"] == "inactive_missing_source"
+    assert row["status_reason"] == "Missing from Finviz universe sync"
+    assert row["first_seen_at"] == "2024-03-01 00:00:00"
+    assert row["last_seen_in_source_at"] == "2024-05-15 00:00:00"
+    assert row["deactivated_at"] == "2024-06-01 00:00:00"

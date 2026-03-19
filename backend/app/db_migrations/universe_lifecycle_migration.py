@@ -65,8 +65,6 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
         last_seen_in_source_at = row["last_seen_in_source_at"]
         if status == "active" and last_seen_in_source_at is None:
             last_seen_in_source_at = row["updated_at"] or row["added_at"] or now
-        elif status != "active":
-            last_seen_in_source_at = None
 
         deactivated_at = row["deactivated_at"]
         if status != "active" and deactivated_at is None:
