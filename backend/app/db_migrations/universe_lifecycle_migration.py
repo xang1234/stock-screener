@@ -7,7 +7,11 @@ from datetime import datetime
 
 from sqlalchemy import text
 
+from ..database import is_corruption_error
+
 logger = logging.getLogger(__name__)
+
+_ROW_UPDATE_BATCH_SIZE = 250
 
 
 def _get_columns(conn, table_name: str) -> set[str]:
@@ -27,6 +31,10 @@ def _build_select_expr(columns: set[str], column_name: str) -> str:
     if column_name in columns:
         return column_name
     return f"NULL AS {column_name}"
+
+
+def _legacy_is_active_value(value) -> int:
+    return 1 if bool(value) else 0
 
 
 def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
@@ -72,6 +80,17 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
         elif status == "active":
             deactivated_at = None
 
+        target_is_active = 1 if status == "active" else 0
+        if (
+            row["status"] == status
+            and row["status_reason"] == status_reason
+            and row["first_seen_at"] == first_seen_at
+            and row["last_seen_in_source_at"] == last_seen_in_source_at
+            and row["deactivated_at"] == deactivated_at
+            and _legacy_is_active_value(row["legacy_is_active"]) == target_is_active
+        ):
+            continue
+
         updates.append(
             {
                 "id": row["id"],
@@ -80,28 +99,64 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
                 "first_seen_at": first_seen_at,
                 "last_seen_in_source_at": last_seen_in_source_at,
                 "deactivated_at": deactivated_at,
-                "is_active": 1 if status == "active" else 0,
+                "is_active": target_is_active,
             }
         )
 
     if not updates:
         return
 
-    conn.execute(
-        text(
-            """
-            UPDATE stock_universe
-            SET status = :status,
-                status_reason = :status_reason,
-                first_seen_at = :first_seen_at,
-                last_seen_in_source_at = :last_seen_in_source_at,
-                deactivated_at = :deactivated_at,
-                is_active = :is_active
-            WHERE id = :id
-            """
-        ),
-        updates,
+    update_stmt = text(
+        """
+        UPDATE stock_universe
+        SET status = :status,
+            status_reason = :status_reason,
+            first_seen_at = :first_seen_at,
+            last_seen_in_source_at = :last_seen_in_source_at,
+            deactivated_at = :deactivated_at,
+            is_active = :is_active
+        WHERE id = :id
+        """
     )
+
+    skipped_ids: list[int] = []
+    for start in range(0, len(updates), _ROW_UPDATE_BATCH_SIZE):
+        batch = updates[start:start + _ROW_UPDATE_BATCH_SIZE]
+        try:
+            conn.execute(update_stmt, batch)
+            continue
+        except Exception as exc:
+            if not is_corruption_error(exc):
+                raise
+            logger.error(
+                "Universe lifecycle batch backfill hit SQLite corruption signature; "
+                "retrying row-by-row for ids %s-%s: %s",
+                batch[0]["id"],
+                batch[-1]["id"],
+                exc,
+            )
+
+        for params in batch:
+            try:
+                conn.execute(update_stmt, params)
+            except Exception as row_exc:
+                if not is_corruption_error(row_exc):
+                    raise
+                skipped_ids.append(params["id"])
+                logger.error(
+                    "Skipping universe lifecycle backfill for stock_universe id=%s "
+                    "due to SQLite corruption signature: %s",
+                    params["id"],
+                    row_exc,
+                )
+
+    if skipped_ids:
+        logger.error(
+            "Universe lifecycle migration skipped %d stock_universe rows during backfill "
+            "because SQLite reported corruption signatures. Sample ids: %s",
+            len(skipped_ids),
+            skipped_ids[:20],
+        )
 
 
 def migrate_universe_lifecycle(engine) -> None:
