@@ -33,6 +33,7 @@ def migrate_feature_store_tables(engine) -> None:
         _create_feature_run_universe_symbols(conn, existing)
         _create_stock_feature_daily(conn, existing)
         _create_feature_run_pointers(conn, existing)
+        _ensure_feature_store_indexes(conn)
 
         conn.commit()
 
@@ -178,3 +179,11 @@ def _create_feature_run_pointers(conn, existing: set) -> None:
         )
     """))
     logger.info("Created table feature_run_pointers")
+
+
+def _ensure_feature_store_indexes(conn) -> None:
+    """Ensure indexes exist even when tables predate newer migrations."""
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_feature_runs_exact_lookup "
+        "ON feature_runs(status, universe_hash, input_hash, published_at DESC)"
+    ))

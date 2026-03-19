@@ -5,7 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from ...config import settings
-from ...schemas.app_runtime import AppCapabilitiesResponse, BootstrapStatusResponse
+from ...domain.scanning.defaults import get_default_scan_profile
+from ...schemas.app_runtime import (
+    AppCapabilitiesResponse,
+    BootstrapStatusResponse,
+    ScanDefaultsResponse,
+)
 
 router = APIRouter()
 
@@ -45,6 +50,7 @@ async def get_app_capabilities() -> AppCapabilitiesResponse:
         desktop_mode=settings.desktop_mode,
         features=settings.capability_flags(),
         ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
+        scan_defaults=ScanDefaultsResponse(**get_default_scan_profile()),
         bootstrap_required=settings.desktop_mode and bootstrap["status"] != "completed",
         bootstrap=BootstrapStatusResponse(**bootstrap),
     )

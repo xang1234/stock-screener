@@ -167,10 +167,57 @@ class TestIdempotency:
 
 
 class TestFeatureRunBinding:
-    """Scan binds to latest published feature run at creation time."""
+    """Scan binds only when an exact published feature run matches."""
 
-    def test_binds_to_published_feature_run(self):
-        """When a published feature run exists, scan gets its ID."""
+    def test_exact_match_completes_instantly_without_dispatch(self):
+        """Exact ALL-universe match reuses a published snapshot."""
+        from datetime import date
+        from app.domain.feature_store.models import RunStats, RunType
+        from app.domain.scanning.signature import (
+            build_scan_signature_payload,
+            hash_scan_signature,
+            hash_universe_symbols,
+        )
+
+        feature_runs = FakeFeatureRunRepository()
+        symbols = ["AAPL"]
+        signature = build_scan_signature_payload(
+            universe_type="all",
+            screeners=["minervini"],
+            composite_method="weighted_average",
+            criteria=None,
+        )
+        run = feature_runs.start_run(
+            as_of_date=date(2026, 2, 18),
+            run_type=RunType.DAILY_SNAPSHOT,
+            universe_hash=hash_universe_symbols(symbols),
+            input_hash=hash_scan_signature(signature),
+        )
+        feature_runs.mark_completed(run.id, stats=RunStats(
+            total_symbols=100, processed_symbols=100,
+            failed_symbols=0, duration_seconds=1.0, passed_symbols=42,
+        ))
+        feature_runs.publish_atomically(run.id)
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.status == "completed"
+        assert result.feature_run_id == run.id
+        scan = uow.scans.rows[0]
+        assert scan.status == "completed"
+        assert scan.feature_run_id == run.id
+        assert scan.task_id is None
+        assert scan.passed_stocks == 42
+        assert len(dispatcher.dispatched) == 0
+
+    def test_non_matching_published_run_leaves_feature_run_id_none(self):
         from datetime import date
         from app.domain.feature_store.models import RunStats, RunType
 
@@ -178,10 +225,12 @@ class TestFeatureRunBinding:
         run = feature_runs.start_run(
             as_of_date=date(2026, 2, 18),
             run_type=RunType.DAILY_SNAPSHOT,
+            universe_hash="different-universe",
+            input_hash="different-input",
         )
         feature_runs.mark_completed(run.id, stats=RunStats(
             total_symbols=100, processed_symbols=100,
-            failed_symbols=0, duration_seconds=1.0,
+            failed_symbols=0, duration_seconds=1.0, passed_symbols=10,
         ))
         feature_runs.publish_atomically(run.id)
 
@@ -194,27 +243,67 @@ class TestFeatureRunBinding:
 
         result = uc.execute(uow, _make_command())
 
-        assert result.feature_run_id == run.id
-        scan = uow.scans.rows[0]
-        assert scan.feature_run_id == run.id
-
-    def test_no_published_run_leaves_feature_run_id_none(self):
-        """When no feature run is published, feature_run_id is None."""
-        uow = _make_uow(["AAPL"])
-        dispatcher = FakeTaskDispatcher()
-        uc = CreateScanUseCase(dispatcher=dispatcher)
-
-        result = uc.execute(uow, _make_command())
-
         assert result.feature_run_id is None
         scan = uow.scans.rows[0]
         assert scan.feature_run_id is None
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_non_all_universe_stays_async_even_if_exact_run_exists(self):
+        from datetime import date
+        from app.domain.feature_store.models import RunStats, RunType
+        from app.domain.scanning.signature import (
+            build_scan_signature_payload,
+            hash_scan_signature,
+            hash_universe_symbols,
+        )
+
+        symbols = ["AAPL"]
+        signature = build_scan_signature_payload(
+            universe_type="exchange",
+            screeners=["minervini"],
+            composite_method="weighted_average",
+            criteria=None,
+        )
+        feature_runs = FakeFeatureRunRepository()
+        run = feature_runs.start_run(
+            as_of_date=date(2026, 2, 18),
+            run_type=RunType.DAILY_SNAPSHOT,
+            universe_hash=hash_universe_symbols(symbols),
+            input_hash=hash_scan_signature(signature),
+        )
+        feature_runs.mark_completed(run.id, stats=RunStats(
+            total_symbols=1, processed_symbols=1,
+            failed_symbols=0, duration_seconds=1.0, passed_symbols=1,
+        ))
+        feature_runs.publish_atomically(run.id)
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _make_command(
+                universe_label="NYSE",
+                universe_key="exchange:NYSE",
+                universe_type="exchange",
+                universe_exchange="NYSE",
+            ),
+        )
+
+        assert result.status == "queued"
+        assert result.feature_run_id is None
+        assert len(dispatcher.dispatched) == 1
 
     def test_feature_run_lookup_failure_does_not_block_scan(self):
         """If feature run lookup raises, scan still creates successfully."""
 
         class BrokenFeatureRunRepo(FakeFeatureRunRepository):
-            def get_latest_published(self):
+            def find_latest_published_exact(self, *, input_hash: str, universe_hash: str):
                 raise RuntimeError("feature_runs table missing")
 
         uow = FakeUnitOfWork(

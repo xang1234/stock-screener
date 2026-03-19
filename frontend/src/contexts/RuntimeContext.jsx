@@ -7,6 +7,7 @@ import {
   getDesktopBootstrapStatus,
   startDesktopBootstrap,
 } from '../api/appRuntime';
+import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 
 export const DEFAULT_BOOTSTRAP = {
   status: 'completed',
@@ -37,6 +38,7 @@ export const DEFAULT_CAPABILITIES = {
     groups: false,
     themes: false,
   },
+  scan_defaults: DEFAULT_SCAN_DEFAULTS,
   api_base_path: '/api',
   bootstrap_required: false,
   bootstrap: DEFAULT_BOOTSTRAP,
@@ -108,6 +110,7 @@ export function RuntimeProvider({ children }) {
       features,
       runtimeReady: !capabilitiesQuery.isPlaceholderData,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
+      scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
       bootstrapIncomplete,
       bootstrapRunning: bootstrap.status === 'queued' || bootstrap.status === 'running',
       bootstrapFailed: bootstrap.status === 'failed',

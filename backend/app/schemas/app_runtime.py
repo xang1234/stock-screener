@@ -34,12 +34,22 @@ class BootstrapStatusResponse(BaseModel):
     error: str | None = None
 
 
+class ScanDefaultsResponse(BaseModel):
+    """Backend-owned default scan profile exposed to the frontend."""
+
+    universe: str
+    screeners: list[str] = Field(default_factory=list)
+    composite_method: str
+    criteria: dict[str, Any] = Field(default_factory=dict)
+
+
 class AppCapabilitiesResponse(BaseModel):
     """Feature/capability flags exposed to the frontend."""
 
     desktop_mode: bool
     features: dict[str, bool]
     ui_snapshots: dict[str, bool] = Field(default_factory=dict)
+    scan_defaults: ScanDefaultsResponse
     api_base_path: str = "/api"
     bootstrap_required: bool
     bootstrap: BootstrapStatusResponse

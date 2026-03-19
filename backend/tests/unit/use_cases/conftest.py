@@ -129,6 +129,8 @@ class FakeScanRepository(ScanRepository):
         for k, v in fields.items():
             if hasattr(scan, k):
                 setattr(scan, k, v)
+        if status in {"completed", "cancelled"}:
+            scan.completed_at = datetime.now()
         self.status_history.append((scan_id, status))
 
     def list_recent(self, limit: int = 20) -> list[FakeScan]:
@@ -454,6 +456,7 @@ class FakeFeatureRunRepository(FeatureRunRepository):
 
     def start_run(self, as_of_date, run_type, code_version=None,
                   universe_hash=None, input_hash=None,
+                  config_json=None,
                   correlation_id=None) -> FeatureRunDomain:
         run = FeatureRunDomain(
             id=self._next_id,
@@ -467,6 +470,7 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             code_version=code_version,
             universe_hash=universe_hash,
             input_hash=input_hash,
+            config=config_json,
         )
         self._runs[self._next_id] = run
         self._next_id += 1
@@ -481,7 +485,8 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             completed_at=datetime.now(), published_at=None,
             correlation_id=run.correlation_id,
             code_version=run.code_version, universe_hash=run.universe_hash,
-            input_hash=run.input_hash, stats=stats, warnings=tuple(warnings),
+            input_hash=run.input_hash, config=run.config,
+            stats=stats, warnings=tuple(warnings),
         )
         self._runs[run_id] = updated
         return updated
@@ -495,7 +500,7 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             completed_at=run.completed_at, published_at=None,
             correlation_id=run.correlation_id,
             code_version=run.code_version, universe_hash=run.universe_hash,
-            input_hash=run.input_hash, stats=run.stats,
+            input_hash=run.input_hash, config=run.config, stats=run.stats,
             warnings=tuple(r.message for r in dq_results),
         )
         self._runs[run_id] = updated
@@ -510,7 +515,8 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             completed_at=run.completed_at, published_at=datetime.now(),
             correlation_id=run.correlation_id,
             code_version=run.code_version, universe_hash=run.universe_hash,
-            input_hash=run.input_hash, stats=run.stats, warnings=run.warnings,
+            input_hash=run.input_hash, config=run.config,
+            stats=run.stats, warnings=run.warnings,
         )
         self._runs[run_id] = updated
         self._pointer_run_id = run_id
@@ -520,6 +526,26 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         if self._pointer_run_id is None:
             return None
         return self._runs.get(self._pointer_run_id)
+
+    def find_latest_published_exact(
+        self,
+        *,
+        input_hash: str,
+        universe_hash: str,
+    ) -> FeatureRunDomain | None:
+        matches = [
+            run for run in self._runs.values()
+            if run.status == RunStatus.PUBLISHED
+            and run.input_hash == input_hash
+            and run.universe_hash == universe_hash
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda run: (run.published_at or datetime.min, run.id or 0),
+            reverse=True,
+        )
+        return matches[0]
 
     def get_run(self, run_id) -> FeatureRunDomain:
         return self._get_or_raise(run_id)

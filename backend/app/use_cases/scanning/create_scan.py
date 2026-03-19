@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
+from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
 
 logger = logging.getLogger(__name__)
@@ -100,24 +106,37 @@ class CreateScanUseCase:
                     "Try refreshing the universe."
                 )
 
-            # ── Bind to latest published feature run (best-effort) ──
             feature_run_id = None
-            try:
-                latest_run = uow.feature_runs.get_latest_published()
-                if latest_run is not None:
-                    feature_run_id = latest_run.id
-                    logger.info(
-                        "Binding scan to feature run %d (as_of=%s)",
-                        latest_run.id,
-                        latest_run.as_of_date,
+            instant_match = None
+            should_attempt_instant = cmd.universe_type == UniverseType.ALL.value
+            signature_payload = build_scan_signature_payload(
+                universe_type=cmd.universe_type,
+                screeners=cmd.screeners,
+                composite_method=cmd.composite_method,
+                criteria=cmd.criteria,
+            )
+            input_hash = hash_scan_signature(signature_payload)
+            universe_hash = hash_universe_symbols(symbols)
+
+            if should_attempt_instant:
+                try:
+                    instant_match = uow.feature_runs.find_latest_published_exact(
+                        input_hash=input_hash,
+                        universe_hash=universe_hash,
                     )
-                else:
-                    logger.info("No published feature run — scan uses legacy path")
-            except Exception:
-                logger.warning(
-                    "Feature run lookup failed — proceeding without binding",
-                    exc_info=True,
-                )
+                    if instant_match is not None:
+                        feature_run_id = instant_match.id
+                        logger.info(
+                            "Creating instant snapshot-backed scan from feature run %d",
+                            instant_match.id,
+                        )
+                    else:
+                        logger.info("No exact published feature run match — scan uses async path")
+                except Exception:
+                    logger.warning(
+                        "Exact feature run lookup failed — proceeding with async scan",
+                        exc_info=True,
+                    )
 
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
@@ -139,6 +158,24 @@ class CreateScanUseCase:
                 idempotency_key=cmd.idempotency_key,
                 feature_run_id=feature_run_id,
             )
+
+            if instant_match is not None:
+                uow.scans.update_status(
+                    scan_id,
+                    "completed",
+                    total_stocks=len(symbols),
+                    passed_stocks=instant_match.stats.passed_symbols
+                    if instant_match.stats and instant_match.stats.passed_symbols is not None
+                    else 0,
+                )
+                uow.commit()
+                return CreateScanResult(
+                    scan_id=scan_id,
+                    status="completed",
+                    total_stocks=len(symbols),
+                    is_duplicate=False,
+                    feature_run_id=feature_run_id,
+                )
 
             # Commit so the scan row is visible to the Celery worker.
             uow.commit()

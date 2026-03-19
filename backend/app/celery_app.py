@@ -20,6 +20,7 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_ready, worker_shutting_down
 from .config import settings
+from .domain.scanning.defaults import get_default_scan_profile
 
 
 def _offset_schedule(hour: int, minute: int, offset_minutes: int) -> tuple[int, int]:
@@ -63,6 +64,7 @@ celery_app.conf.update(
 )
 
 _logger = logging.getLogger(__name__)
+_default_scan_profile = get_default_scan_profile()
 
 
 @celery_app.on_after_configure.connect
@@ -243,8 +245,10 @@ if settings.cache_warmup_enabled:
             ),
             'options': {'queue': 'data_fetch'},
             'kwargs': {
-                'screener_names': ['minervini', 'canslim'],
-                'universe_name': 'active',
+                'screener_names': _default_scan_profile['screeners'],
+                'criteria': _default_scan_profile['criteria'],
+                'composite_method': _default_scan_profile['composite_method'],
+                'universe_name': _default_scan_profile['universe'],
             },
         },
 

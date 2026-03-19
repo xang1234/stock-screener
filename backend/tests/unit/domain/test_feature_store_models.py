@@ -36,6 +36,7 @@ def _make_stats(**overrides: object) -> RunStats:
         "processed_symbols": 95,
         "failed_symbols": 5,
         "duration_seconds": 12.5,
+        "passed_symbols": 60,
     }
     defaults.update(overrides)
     return RunStats(**defaults)  # type: ignore[arg-type]
@@ -110,6 +111,7 @@ class TestRunStats:
         assert stats.processed_symbols == 95
         assert stats.failed_symbols == 5
         assert stats.duration_seconds == 12.5
+        assert stats.passed_symbols == 60
 
     def test_frozen(self):
         stats = _make_stats()
@@ -128,6 +130,10 @@ class TestRunStats:
         stats = _make_stats(duration_seconds=0.0)
         assert stats.duration_seconds == 0.0
 
+    def test_passed_symbols_cannot_exceed_processed(self):
+        with pytest.raises(ValueError, match="passed_symbols"):
+            _make_stats(processed_symbols=5, passed_symbols=6)
+
     def test_all_zeros_valid(self):
         stats = RunStats(
             total_symbols=0,
@@ -138,7 +144,12 @@ class TestRunStats:
         assert stats.total_symbols == 0
 
     def test_processed_plus_failed_equals_total_valid(self):
-        stats = _make_stats(total_symbols=10, processed_symbols=7, failed_symbols=3)
+        stats = _make_stats(
+            total_symbols=10,
+            processed_symbols=7,
+            failed_symbols=3,
+            passed_symbols=7,
+        )
         assert stats.processed_symbols + stats.failed_symbols == stats.total_symbols
 
 
@@ -167,6 +178,10 @@ class TestFeatureRunDomain:
     def test_default_warnings_empty_tuple(self):
         run = _make_run()
         assert run.warnings == ()
+
+    def test_config_defaults_none(self):
+        run = _make_run()
+        assert run.config is None
 
     def test_with_stats(self):
         stats = _make_stats()

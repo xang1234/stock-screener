@@ -213,6 +213,34 @@ class TestHappyPath:
         assert saved_universe == ["AAPL", "TSLA"]
 
     @_PATCH_TRADING_DAY
+    def test_run_persists_signature_and_config(self, _mock_td):
+        uow, scanner = _make_uow(symbols=["AAPL", "TSLA"])
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        run = uow.feature_runs.get_run(result.run_id)
+        assert run.input_hash is not None
+        assert run.universe_hash is not None
+        assert run.config is not None
+        assert run.config["signature_version"] == 1
+
+    @_PATCH_TRADING_DAY
+    def test_run_stats_include_passed_symbols(self, _mock_td):
+        uow, scanner = _make_uow()
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        run = uow.feature_runs.get_run(result.run_id)
+        assert run.stats is not None
+        assert run.stats.passed_symbols == 3
+
+    @_PATCH_TRADING_DAY
     def test_idempotent_rerun_creates_new_run(self, _mock_td):
         uow, scanner = _make_uow()
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)

@@ -35,6 +35,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         code_version=None,
         universe_hash=None,
         input_hash=None,
+        config_json=None,
         correlation_id=None,
     ) -> FeatureRunDomain:
         row = FeatureRun(
@@ -44,6 +45,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
             code_version=code_version,
             universe_hash=universe_hash,
             input_hash=input_hash,
+            config_json=config_json,
             correlation_id=correlation_id,
         )
         self._session.add(row)
@@ -66,6 +68,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
             "processed_symbols": stats.processed_symbols,
             "failed_symbols": stats.failed_symbols,
             "duration_seconds": stats.duration_seconds,
+            "passed_symbols": stats.passed_symbols,
         }
         row.warnings_json = list(warnings)
         self._session.flush()
@@ -127,6 +130,26 @@ class SqlFeatureRunRepository(FeatureRunRepository):
             return None
 
         row = self._session.get(FeatureRun, pointer.run_id)
+        if row is None:
+            return None
+        return self._to_domain(row)
+
+    def find_latest_published_exact(
+        self,
+        *,
+        input_hash: str,
+        universe_hash: str,
+    ) -> FeatureRunDomain | None:
+        row = (
+            self._session.query(FeatureRun)
+            .filter(
+                FeatureRun.status == RunStatus.PUBLISHED.value,
+                FeatureRun.input_hash == input_hash,
+                FeatureRun.universe_hash == universe_hash,
+            )
+            .order_by(FeatureRun.published_at.desc(), FeatureRun.id.desc())
+            .first()
+        )
         if row is None:
             return None
         return self._to_domain(row)
@@ -200,6 +223,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
                 processed_symbols=row.stats_json["processed_symbols"],
                 failed_symbols=row.stats_json["failed_symbols"],
                 duration_seconds=row.stats_json["duration_seconds"],
+                passed_symbols=row.stats_json.get("passed_symbols"),
             )
 
         warnings: tuple[str, ...] = ()
@@ -223,6 +247,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
             code_version=row.code_version,
             universe_hash=row.universe_hash,
             input_hash=row.input_hash,
+            config=row.config_json,
             stats=stats,
             warnings=warnings,
         )

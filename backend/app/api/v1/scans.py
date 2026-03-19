@@ -124,11 +124,21 @@ async def create_scan(
         logger.error(f"Failed to create scan: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to queue scan task")
 
+    if result.status == "completed":
+        from ...services.ui_snapshot_service import safe_publish_scan_bootstrap
+
+        safe_publish_scan_bootstrap(result.scan_id)
+        safe_publish_scan_bootstrap()
+
     return ScanCreateResponse(
         scan_id=result.scan_id,
         status=result.status,
         total_stocks=result.total_stocks,
-        message=f"Scan queued for {result.total_stocks} stocks",
+        message=(
+            f"Scan completed instantly for {result.total_stocks} stocks"
+            if result.status == "completed"
+            else f"Scan queued for {result.total_stocks} stocks"
+        ),
         feature_run_id=result.feature_run_id,
     )
 

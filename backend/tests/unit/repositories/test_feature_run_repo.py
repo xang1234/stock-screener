@@ -40,6 +40,7 @@ def _make_stats() -> RunStats:
         processed_symbols=95,
         failed_symbols=5,
         duration_seconds=12.5,
+        passed_symbols=60,
     )
 
 
@@ -66,6 +67,7 @@ class TestStartRun:
             correlation_id="corr-123",
             universe_hash="abc",
             input_hash="def",
+            config_json={"signature_version": 1},
         )
         assert isinstance(result, FeatureRunDomain)
         assert result.id is not None
@@ -73,6 +75,7 @@ class TestStartRun:
         assert result.correlation_id == "corr-123"
         assert result.universe_hash == "abc"
         assert result.input_hash == "def"
+        assert result.config == {"signature_version": 1}
         assert result.completed_at is None
         assert result.stats is None
         assert result.warnings == ()
@@ -89,6 +92,14 @@ class TestMarkCompleted:
         assert result.completed_at is not None
         assert result.stats == stats
         assert result.warnings == ("low coverage",)
+
+    def test_stats_round_trip_passed_symbols(self, repo: SqlFeatureRunRepository):
+        run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+
+        result = repo.mark_completed(run.id, _make_stats())
+
+        assert result.stats is not None
+        assert result.stats.passed_symbols == 60
 
     def test_nonexistent_raises_not_found(self, repo: SqlFeatureRunRepository):
         with pytest.raises(EntityNotFoundError):
@@ -246,6 +257,48 @@ class TestGetLatestPublished:
 
     def test_returns_none_when_no_pointer(self, repo: SqlFeatureRunRepository):
         assert repo.get_latest_published() is None
+
+
+class TestFindLatestPublishedExact:
+    def test_returns_newest_matching_run(self, repo: SqlFeatureRunRepository):
+        first = repo.start_run(
+            date(2026, 2, 16),
+            RunType.DAILY_SNAPSHOT,
+            universe_hash="u1",
+            input_hash="i1",
+        )
+        repo.mark_completed(first.id, _make_stats())
+        repo.publish_atomically(first.id)
+
+        second = repo.start_run(
+            date(2026, 2, 17),
+            RunType.DAILY_SNAPSHOT,
+            universe_hash="u1",
+            input_hash="i1",
+        )
+        repo.mark_completed(second.id, _make_stats())
+        repo.publish_atomically(second.id)
+
+        result = repo.find_latest_published_exact(
+            input_hash="i1",
+            universe_hash="u1",
+        )
+
+        assert result is not None
+        assert result.id == second.id
+
+    def test_returns_none_when_signature_differs(self, repo: SqlFeatureRunRepository):
+        run = repo.start_run(
+            date(2026, 2, 17),
+            RunType.DAILY_SNAPSHOT,
+            universe_hash="u1",
+            input_hash="i1",
+        )
+        repo.mark_completed(run.id, _make_stats())
+        repo.publish_atomically(run.id)
+
+        assert repo.find_latest_published_exact(input_hash="x", universe_hash="u1") is None
+        assert repo.find_latest_published_exact(input_hash="i1", universe_hash="x") is None
 
 
 class TestGetRun:

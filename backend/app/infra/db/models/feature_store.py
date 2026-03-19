@@ -57,6 +57,13 @@ class FeatureRun(Base):
 
     __table_args__ = (
         Index("ix_feature_runs_date_status", "as_of_date", "status"),
+        Index(
+            "ix_feature_runs_exact_lookup",
+            "status",
+            "universe_hash",
+            "input_hash",
+            "published_at",
+        ),
     )
 
 

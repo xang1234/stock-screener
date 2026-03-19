@@ -79,6 +79,7 @@ class RunStats:
     processed_symbols: int
     failed_symbols: int
     duration_seconds: float
+    passed_symbols: int | None = None
 
     def __post_init__(self) -> None:
         if self.duration_seconds < 0:
@@ -89,6 +90,18 @@ class RunStats:
             raise ValueError(
                 f"processed ({self.processed_symbols}) + failed "
                 f"({self.failed_symbols}) exceeds total ({self.total_symbols})"
+            )
+        if self.passed_symbols is not None and self.passed_symbols < 0:
+            raise ValueError(
+                f"passed_symbols must be >= 0, got {self.passed_symbols}"
+            )
+        if (
+            self.passed_symbols is not None
+            and self.passed_symbols > self.processed_symbols
+        ):
+            raise ValueError(
+                f"passed_symbols ({self.passed_symbols}) exceeds "
+                f"processed_symbols ({self.processed_symbols})"
             )
 
 
@@ -111,6 +124,7 @@ class FeatureRunDomain:
     code_version: str | None = None
     universe_hash: str | None = None
     input_hash: str | None = None
+    config: dict[str, Any] | None = None
     stats: RunStats | None = None
     warnings: tuple[str, ...] = ()
 

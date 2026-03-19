@@ -10,6 +10,11 @@ import logging
 from datetime import date
 
 from app.celery_app import celery_app
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
 from app.tasks.data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,8 @@ def build_daily_snapshot(
     as_of_date_str: str | None = None,
     screener_names: list[str] | None = None,
     universe_name: str = "active",
+    criteria: dict | None = None,
+    composite_method: str = "weighted_average",
     skip_if_published: bool = True,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
@@ -57,15 +64,25 @@ def build_daily_snapshot(
     from app.wiring.bootstrap import get_build_daily_snapshot_use_case
 
     as_of = date.fromisoformat(as_of_date_str) if as_of_date_str else date.today()
-    screeners = screener_names or ["minervini", "canslim"]
+    from app.domain.scanning.defaults import get_default_scan_profile
+    from app.domain.feature_store.models import RunStatus
+
+    defaults = get_default_scan_profile()
+    screeners = defaults["screeners"] if screener_names is None else screener_names
+    criteria = defaults["criteria"] if criteria is None else criteria
+    composite_method = (
+        defaults["composite_method"]
+        if composite_method is None
+        else composite_method
+    )
     correlation_id = self.request.id
 
     logger.info(
         "┌─── build_daily_snapshot ───────────────────┐\n"
         "│  date=%s  correlation_id=%s\n"
-        "│  screeners=%s  universe=%s\n"
+        "│  screeners=%s  universe=%s  composite=%s\n"
         "└────────────────────────────────────────────┘",
-        as_of, correlation_id, screeners, universe_name,
+        as_of, correlation_id, screeners, universe_name, composite_method,
     )
 
     # ── Trading-day guard (fast exit — lock released immediately) ─
@@ -77,16 +94,39 @@ def build_daily_snapshot(
     if skip_if_published:
         uow_check = SqlUnitOfWork(SessionLocal)
         with uow_check:
-            latest = uow_check.feature_runs.get_latest_published()
-            if latest and latest.as_of_date == as_of:
+            universe_def = normalize_universe_definition(universe_name)
+            symbols = uow_check.universe.resolve_symbols(universe_def)
+            signature_payload = build_scan_signature_payload(
+                universe_type=getattr(universe_def, "type", "all"),
+                screeners=screeners,
+                composite_method=composite_method,
+                criteria=criteria,
+            )
+            input_hash = hash_scan_signature(signature_payload)
+            universe_hash = hash_universe_symbols(symbols)
+            matching_run = next(
+                (
+                    run
+                    for run, _row_count, _is_latest in uow_check.feature_runs.list_runs_with_counts(
+                        status=RunStatus.PUBLISHED,
+                        date_from=as_of,
+                        date_to=as_of,
+                        limit=200,
+                    )
+                    if run.input_hash == input_hash
+                    and run.universe_hash == universe_hash
+                ),
+                None,
+            )
+            if matching_run is not None:
                 logger.info(
                     "Skipping build_daily_snapshot: run %d already published for %s",
-                    latest.id, as_of,
+                    matching_run.id, as_of,
                 )
                 return {
                     "status": "skipped",
                     "reason": "already_published",
-                    "existing_run_id": latest.id,
+                    "existing_run_id": matching_run.id,
                     "as_of_date": str(as_of),
                 }
 
@@ -97,6 +137,8 @@ def build_daily_snapshot(
         as_of_date=as_of,
         screener_names=screeners,
         universe_def=normalize_universe_definition(universe_name),
+        criteria=criteria,
+        composite_method=composite_method,
         correlation_id=correlation_id,
     )
 

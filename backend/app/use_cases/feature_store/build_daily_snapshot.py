@@ -37,6 +37,11 @@ from app.domain.feature_store.models import (
     RunType,
 )
 from app.domain.feature_store.quality import DQInputs, DQThresholds
+from app.domain.scanning.signature import (
+    build_scan_signature_payload,
+    hash_scan_signature,
+    hash_universe_symbols,
+)
 from app.domain.scanning.models import ProgressEvent
 from app.domain.scanning.ports import (
     CancellationToken,
@@ -162,12 +167,27 @@ class BuildDailyFeatureSnapshotUseCase:
             )
 
         with uow:
+            symbols = uow.universe.resolve_symbols(cmd.universe_def)
+            if not symbols:
+                raise ValidationError("Universe resolved to zero symbols")
+            total = len(symbols)
+
+            signature_payload = build_scan_signature_payload(
+                universe_type=getattr(cmd.universe_def, "type", "all"),
+                screeners=cmd.screener_names,
+                composite_method=cmd.composite_method,
+                criteria=cmd.criteria,
+            )
+
             # Start run BEFORE the try-except so run_id is available
             # for best-effort error handling.
             run = uow.feature_runs.start_run(
                 as_of_date=cmd.as_of_date,
                 run_type=RunType.DAILY_SNAPSHOT,
                 code_version=cmd.code_version,
+                universe_hash=hash_universe_symbols(symbols),
+                input_hash=hash_scan_signature(signature_payload),
+                config_json=signature_payload,
                 correlation_id=cmd.correlation_id,
             )
             run_id = run.id
@@ -177,7 +197,7 @@ class BuildDailyFeatureSnapshotUseCase:
             )
 
             try:
-                return self._run(uow, run_id, cmd, progress, cancel)
+                return self._run(uow, run_id, cmd, progress, cancel, symbols)
             except Exception:
                 # Best-effort: don't attempt status transition here.
                 # The run may be in RUNNING or COMPLETED depending on
@@ -197,13 +217,11 @@ class BuildDailyFeatureSnapshotUseCase:
         cmd: BuildDailySnapshotCommand,
         progress: ProgressSink,
         cancel: CancellationToken,
+        symbols: list[str],
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
 
         # ── 1. Resolve universe ─────────────────────────────────
-        symbols = uow.universe.resolve_symbols(cmd.universe_def)
-        if not symbols:
-            raise ValidationError("Universe resolved to zero symbols")
         total = len(symbols)
         logger.info("Resolved %d symbols for run %d", total, run_id)
 
@@ -225,6 +243,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     processed_symbols=processed - failed,
                     failed_symbols=failed,
                     duration_seconds=round(duration, 2),
+                    passed_symbols=len(all_rows),
                 )
                 uow.feature_runs.mark_completed(
                     run_id, stats, warnings=("Cancelled by user",)
@@ -303,6 +322,7 @@ class BuildDailyFeatureSnapshotUseCase:
             processed_symbols=processed - failed,
             failed_symbols=failed,
             duration_seconds=round(duration, 2),
+            passed_symbols=len(all_rows),
         )
         uow.feature_runs.mark_completed(run_id, stats)
         uow.commit()

@@ -42,6 +42,7 @@ class FeatureRunRepository(abc.ABC):
         code_version: str | None = None,
         universe_hash: str | None = None,
         input_hash: str | None = None,
+        config_json: dict | None = None,
         correlation_id: str | None = None,
     ) -> FeatureRunDomain:
         """Create a new run in RUNNING status and return its domain object."""
@@ -93,6 +94,16 @@ class FeatureRunRepository(abc.ABC):
     @abc.abstractmethod
     def get_latest_published(self) -> FeatureRunDomain | None:
         """Return the run pointed to by 'latest_published', or None."""
+        ...
+
+    @abc.abstractmethod
+    def find_latest_published_exact(
+        self,
+        *,
+        input_hash: str,
+        universe_hash: str,
+    ) -> FeatureRunDomain | None:
+        """Return the newest published run matching the exact signature."""
         ...
 
     @abc.abstractmethod

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -41,6 +41,7 @@ import { buildFilterParams, getStableFilterKey } from '../utils/filterUtils';
 import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../api/priceHistory';
 import { useFilterPresets } from '../hooks/useFilterPresets';
 import { useRuntime } from '../contexts/RuntimeContext';
+import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 
 // Test list of 20 popular stocks for quick testing
 const TEST_SYMBOLS = [
@@ -102,7 +103,8 @@ const buildDefaultFilters = () => ({
 const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultFilters());
 
 function ScanPage() {
-  const { runtimeReady, uiSnapshots } = useRuntime();
+  const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
+  const scanDefaultsAppliedRef = useRef(false);
   // Scan state
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
@@ -110,25 +112,15 @@ function ScanPage() {
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
 
   // Scan creation options
-  const [universe, setUniverse] = useState('all');
-  const [includeVcp, setIncludeVcp] = useState(true);
+  const [universe, setUniverse] = useState(DEFAULT_SCAN_DEFAULTS.universe);
+  const [includeVcp, setIncludeVcp] = useState(DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
 
   // Multi-screener options
-  const [selectedScreeners, setSelectedScreeners] = useState(['minervini', 'canslim', 'ipo', 'custom', 'volume_breakthrough', 'setup_engine']);
-  const [compositeMethod, setCompositeMethod] = useState('weighted_average');
+  const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
+  const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
 
   // Custom screener filters
-  const [customFilters, setCustomFilters] = useState({
-    price_min: 20,
-    price_max: 500,
-    rs_rating_min: 75,
-    volume_min: 1000000,
-    market_cap_min: 1000000000,
-    eps_growth_min: 20,
-    sales_growth_min: 15,
-    ma_alignment: true,
-    min_score: 70,
-  });
+  const [customFilters, setCustomFilters] = useState(DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
 
   // Results pagination and sorting
   const [page, setPage] = useState(1);
@@ -165,6 +157,19 @@ function ScanPage() {
   const queryClient = useQueryClient();
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.scan);
   const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
+
+  useEffect(() => {
+    if (!runtimeReady || scanDefaultsAppliedRef.current) {
+      return;
+    }
+    const nextDefaults = scanDefaults ?? DEFAULT_SCAN_DEFAULTS;
+    setUniverse(nextDefaults.universe ?? DEFAULT_SCAN_DEFAULTS.universe);
+    setIncludeVcp(nextDefaults.criteria?.include_vcp ?? DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
+    setSelectedScreeners(nextDefaults.screeners ?? DEFAULT_SCAN_DEFAULTS.screeners);
+    setCompositeMethod(nextDefaults.composite_method ?? DEFAULT_SCAN_DEFAULTS.composite_method);
+    setCustomFilters(nextDefaults.criteria?.custom_filters ?? DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
+    scanDefaultsAppliedRef.current = true;
+  }, [runtimeReady, scanDefaults]);
 
   const applyScanBootstrapSnapshot = useCallback((snapshot, requestedScanId = null) => {
     const payload = snapshot?.payload ?? {};

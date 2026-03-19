@@ -33,6 +33,7 @@ class RunStatsResponse(BaseModel):
     processed_symbols: int
     failed_symbols: int
     duration_seconds: float
+    passed_symbols: Optional[int] = None
 
     @classmethod
     def from_domain(cls, stats: RunStats) -> Self:
@@ -42,6 +43,7 @@ class RunStatsResponse(BaseModel):
             processed_symbols=stats.processed_symbols,
             failed_symbols=stats.failed_symbols,
             duration_seconds=stats.duration_seconds,
+            passed_symbols=stats.passed_symbols,
         )
 
 
