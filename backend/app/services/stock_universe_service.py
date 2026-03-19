@@ -10,7 +10,7 @@ import pandas as pd
 from typing import List, Dict, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from datetime import datetime
 
 from ..models.stock_universe import StockUniverse
@@ -610,7 +610,7 @@ class StockUniverseService:
             by_exchange = {}
             exchanges = db.query(
                 StockUniverse.exchange,
-                StockUniverse
+                func.count(StockUniverse.id),
             ).filter(
                 StockUniverse.is_active == True
             ).group_by(StockUniverse.exchange).all()
@@ -633,7 +633,7 @@ class StockUniverseService:
 
         except Exception as e:
             logger.error(f"Error getting universe stats: {e}", exc_info=True)
-            return {'total': 0, 'active': 0, 'by_exchange': {}}
+            return {'total': 0, 'active': 0, 'by_exchange': {}, 'sp500': 0}
 
     def fetch_sp500_symbols(self) -> List[str]:
         """

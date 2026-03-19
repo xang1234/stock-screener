@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 
 from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+from app.database import Base
+from app.infra.db.models.feature_store import FeatureRun
+from app.models.scan_result import Scan
+from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
 from app.models.ui_view_snapshot import UIViewSnapshot
 from app.services.ui_snapshot_service import UISnapshotService
@@ -78,7 +83,6 @@ def test_ui_snapshot_service_marks_outdated_pointer_reads_as_stale_and_prunes_ol
 
 def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_global():
     engine = create_engine("sqlite:///:memory:")
-    from app.database import Base
 
     Base.metadata.create_all(
         engine,
@@ -110,3 +114,39 @@ def test_resolve_themes_source_revision_filters_pipeline_runs_to_pipeline_or_glo
 
         assert technical_revision.split("|")[2] == "2026-03-18T11:00:00"
         assert fundamental_revision.split("|")[2] == "2026-03-18T12:00:00"
+
+
+def test_publish_scan_bootstrap_serializes_universe_stats_counts():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            Scan.__table__,
+            StockUniverse.__table__,
+        ],
+    )
+    migrate_ui_view_snapshot_tables(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        db.add_all(
+            [
+                StockUniverse(symbol="AAPL", exchange="NASDAQ", is_active=True, is_sp500=True),
+                StockUniverse(symbol="MSFT", exchange="NASDAQ", is_active=True, is_sp500=True),
+                StockUniverse(symbol="IBM", exchange="NYSE", is_active=True, is_sp500=False),
+                StockUniverse(symbol="ZZZZ", exchange="AMEX", is_active=False, is_sp500=False),
+            ]
+        )
+        db.commit()
+
+    snapshot = service.publish_scan_bootstrap()
+
+    assert snapshot.payload["universe_stats"] == {
+        "total": 4,
+        "active": 3,
+        "by_exchange": {"NASDAQ": 2, "NYSE": 1},
+        "sp500": 2,
+    }
+    assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
