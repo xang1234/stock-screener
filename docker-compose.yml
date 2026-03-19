@@ -251,18 +251,43 @@ services:
       - -c
       - |
         apk add --no-cache sqlite && \
+        is_valid_backup() {
+          [ -f "$$1" ] && [ "$$(sqlite3 "$$1" "PRAGMA integrity_check;" 2>/dev/null)" = "ok" ]
+        } && \
+        prune_backups() {
+          KEEP_PATH="$$1"
+          mkdir -p /app/data/backups
+          find /app/data/backups -maxdepth 1 -type f \
+            \( -name 'stockscanner_*.db' -o -name 'stockscanner_*.db-journal' -o -name '.stockscanner_backup_in_progress.db' \) \
+            ! -path "$$KEEP_PATH" \
+            -exec rm -f {} +
+        } && \
+        EXISTING_KEEP="" && \
+        for CANDIDATE in $$(ls -1t /app/data/backups/stockscanner_*.db 2>/dev/null); do \
+          if is_valid_backup "$$CANDIDATE"; then \
+            EXISTING_KEEP="$$CANDIDATE"; \
+            break; \
+          fi; \
+        done && \
+        if [ -n "$$EXISTING_KEEP" ]; then \
+          prune_backups "$$EXISTING_KEEP"; \
+          echo "Retained existing valid backup: $$EXISTING_KEEP"; \
+        fi && \
         echo "Backup service started. Running every 24h." && \
         sleep 300 && \
         while true; do
-          DEST="/app/data/backups/stockscanner_$$(date +%Y%m%d_%H%M%S).db"
           mkdir -p /app/data/backups
-          sqlite3 /app/data/stockscanner.db ".backup '$$DEST'" 2>&1
-          if [ $$? -eq 0 ]; then
-            echo "$$(date): Backup OK -> $$DEST ($$(du -h $$DEST | cut -f1))"
-            # Keep only last 3 backups
-            ls -t /app/data/backups/stockscanner_*.db | tail -n +4 | xargs rm -f 2>/dev/null
+          TMP_DEST="/app/data/backups/.stockscanner_backup_in_progress.db"
+          DEST="/app/data/backups/stockscanner_$$(date +%Y%m%d_%H%M%S).db"
+          rm -f "$$TMP_DEST"
+          sqlite3 /app/data/stockscanner.db ".backup '$$TMP_DEST'" 2>&1
+          if [ $$? -eq 0 ] && is_valid_backup "$$TMP_DEST"; then
+            mv "$$TMP_DEST" "$$DEST"
+            prune_backups "$$DEST"
+            echo "$$(date): Backup OK -> $$DEST ($$(du -h $$DEST | cut -f1)); retained newest valid backup only"
           else
-            echo "$$(date): Backup FAILED"
+            rm -f "$$TMP_DEST"
+            echo "$$(date): Backup FAILED or validation failed"
           fi
           sleep 86400
         done
