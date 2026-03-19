@@ -133,6 +133,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 _VALID_THEME_PIPELINES = {"technical", "fundamental"}
 _THEME_CONTENT_STORAGE_LOCK = Lock()
+_THEME_CONTENT_RESET_LOOKBACK_DAYS = 365
 _THEME_CONTENT_STORAGE_TABLES = (
     "content_item_pipeline_state",
     "theme_mentions",
@@ -1239,9 +1240,28 @@ def _fetch_content_items_with_themes_with_recovery(
         if not is_corruption_error(exc):
             raise
         safe_rollback(db)
+        if not _corruption_targets_theme_content_storage():
+            raise
         _reset_corrupt_theme_content_storage(exc)
         with SessionLocal() as retry_db:
             return _fetch_content_items_with_themes(retry_db, **kwargs)
+
+
+def _corruption_targets_theme_content_storage() -> bool:
+    """Return True when one of the rebuildable theme content tables itself looks corrupt."""
+    probe_queries = (
+        "SELECT id, source_id, published_at FROM content_items ORDER BY published_at DESC LIMIT 1",
+        "SELECT id, content_item_id, mentioned_at FROM theme_mentions ORDER BY mentioned_at DESC LIMIT 1",
+        "SELECT id, content_item_id, updated_at FROM content_item_pipeline_state ORDER BY updated_at DESC LIMIT 1",
+    )
+    with engine.connect() as conn:
+        for sql in probe_queries:
+            try:
+                conn.execute(text(sql)).fetchall()
+            except Exception as exc:
+                if is_corruption_error(exc):
+                    return True
+    return False
 
 
 def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
@@ -1263,6 +1283,8 @@ def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
                     reset_exc,
                 )
                 _force_forget_theme_content_tables(conn)
+        with engine.begin() as conn:
+            _rewind_theme_content_source_cursors(conn)
         _recreate_theme_content_tables()
 
 
@@ -1303,6 +1325,21 @@ def _recreate_theme_content_tables() -> None:
     ContentItem.__table__.create(bind=engine, checkfirst=True)
     ThemeMention.__table__.create(bind=engine, checkfirst=True)
     ContentItemPipelineState.__table__.create(bind=engine, checkfirst=True)
+
+
+def _rewind_theme_content_source_cursors(conn) -> None:
+    """Rewind content-source cursors so the next normal poll repopulates dropped article history."""
+    rewind_at = datetime.utcnow() - timedelta(days=_THEME_CONTENT_RESET_LOOKBACK_DAYS)
+    conn.execute(
+        text(
+            """
+            UPDATE content_sources
+            SET last_fetched_at = :rewind_at,
+                total_items_fetched = 0
+            """
+        ),
+        {"rewind_at": rewind_at},
+    )
 
 
 @router.get("/content", response_model=ContentItemsListResponse)

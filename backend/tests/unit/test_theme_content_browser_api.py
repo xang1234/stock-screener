@@ -7,9 +7,12 @@ from datetime import datetime
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DatabaseError
 
+import app.api.v1.themes as themes_api
 from app.main import app
+from app.models.theme import ContentSource
 from app.schemas.theme import ContentItemWithThemesResponse
 
 
@@ -148,6 +151,7 @@ async def test_list_content_items_recovers_from_corrupt_theme_content_storage(
         )
 
     monkeypatch.setattr("app.api.v1.themes._fetch_content_items_with_themes", _mock_fetch)
+    monkeypatch.setattr("app.api.v1.themes._corruption_targets_theme_content_storage", lambda: True)
     monkeypatch.setattr(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
@@ -165,3 +169,61 @@ async def test_list_content_items_recovers_from_corrupt_theme_content_storage(
     assert payload["items"][0]["title"] == "Recovered article"
     assert calls["count"] == 2
     assert calls["reset"] == 1
+
+
+def test_theme_content_recovery_does_not_reset_for_non_resettable_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    reset_calls = {"count": 0}
+
+    def _raise_non_resettable_corruption(*_args, **_kwargs):
+        raise DatabaseError(
+            "SELECT * FROM content_sources",
+            {},
+            Exception("database disk image is malformed"),
+        )
+
+    monkeypatch.setattr("app.api.v1.themes._fetch_content_items_with_themes", _raise_non_resettable_corruption)
+    monkeypatch.setattr("app.api.v1.themes._corruption_targets_theme_content_storage", lambda: False)
+    monkeypatch.setattr(
+        "app.api.v1.themes._reset_corrupt_theme_content_storage",
+        lambda exc: reset_calls.__setitem__("count", reset_calls["count"] + 1),
+    )
+
+    with pytest.raises(DatabaseError):
+        themes_api._fetch_content_items_with_themes_with_recovery(object(), pipeline="fundamental")
+
+    assert reset_calls["count"] == 0
+
+
+def test_rewind_theme_content_source_cursors_rewinds_fetch_window():
+    engine = create_engine("sqlite:///:memory:")
+    ContentSource.__table__.create(engine)
+    now = datetime.utcnow()
+
+    with engine.begin() as conn:
+        conn.execute(
+            ContentSource.__table__.insert(),
+            [
+                {
+                    "name": "Source A",
+                    "source_type": "news",
+                    "url": "https://example.com/a",
+                    "is_active": True,
+                    "priority": 50,
+                    "fetch_interval_minutes": 60,
+                    "last_fetched_at": now,
+                    "total_items_fetched": 123,
+                    "pipelines": '["fundamental"]',
+                }
+            ],
+        )
+        themes_api._rewind_theme_content_source_cursors(conn)
+        row = conn.execute(
+            text("SELECT last_fetched_at, total_items_fetched FROM content_sources WHERE name = 'Source A'")
+        ).fetchone()
+
+    rewind_at = datetime.fromisoformat(str(row[0]))
+    assert row[1] == 0
+    assert rewind_at <= now
+    assert (now - rewind_at).days >= themes_api._THEME_CONTENT_RESET_LOOKBACK_DAYS - 1
