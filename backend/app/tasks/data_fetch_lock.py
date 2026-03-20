@@ -4,11 +4,12 @@ Distributed lock and queue management for data-fetching tasks.
 Ensures only one data-fetching job runs at a time to prevent API rate limiting
 from yfinance, finviz, and other external data sources.
 """
-import redis
 import logging
-from functools import wraps
 from datetime import datetime
-from typing import Optional, Dict, Any, Tuple
+from functools import wraps
+from typing import Any, Dict, Optional, Tuple
+
+import redis
 
 from ..config import settings
 
@@ -52,6 +53,26 @@ def _parse_lock_task_id(lock_value: bytes) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def _build_lock_contention_payload(
+    requested_task_name: str,
+    current_task: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Return a standardized response when another fetch task already holds the lock."""
+    current_task = current_task or {}
+    holder_name = current_task.get("task_name", "unknown")
+    holder_task_id = current_task.get("task_id")
+    message = f"Data fetch already in progress ({holder_name})"
+    return {
+        "status": "already_running",
+        "skipped": True,
+        "task_name": requested_task_name,
+        "running_task_name": holder_name,
+        "task_id": holder_task_id,
+        "running_task_id": holder_task_id,
+        "message": message,
+    }
 
 
 class DataFetchLock:
@@ -276,17 +297,17 @@ def serialized_data_fetch(task_name: str):
             if args and hasattr(args[0], 'request'):
                 task_id = args[0].request.id or 'unknown'
 
-            # Acquire lock (for visibility - queue handles actual serialization)
+            # Acquire lock and skip duplicate execution when another live task owns it.
             acquired, is_reentrant = lock.acquire(task_name, task_id)
             if not acquired:
-                current = lock.get_current_holder()
+                current = lock.get_current_task() or lock.get_current_holder()
                 logger.warning(
-                    "Data fetch lock held by %s (task_id=%s) — proceeding anyway. "
-                    "Queue serialization (concurrency=1) ensures ordering. "
-                    "This may indicate a stale lock or misconfigured workers.",
-                    current.get('task_name', 'unknown') if current else 'unknown',
-                    current.get('task_id', 'unknown') if current else 'unknown',
+                    "Data fetch lock held by %s (task_id=%s) — skipping duplicate task %s.",
+                    current.get("task_name", "unknown") if current else "unknown",
+                    current.get("task_id", "unknown") if current else "unknown",
+                    task_name,
                 )
+                return _build_lock_contention_payload(task_name, current)
 
             try:
                 logger.info(f"Starting data fetch task: {task_name} (task_id={task_id})")

@@ -240,22 +240,33 @@ class TestSerializedDataFetchDecorator:
 
     @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_proceeds_when_lock_held(self, mock_settings, mock_get_instance):
-        """When acquire fails, the decorated function still executes (no polling)."""
+    def test_decorator_skips_when_lock_held(self, mock_settings, mock_get_instance):
+        """When acquire fails, the decorated function returns a skip payload."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (False, False)
         mock_lock.get_current_holder.return_value = {
             'task_name': 'stale_task', 'task_id': 'stale-id',
         }
+        mock_lock.get_current_task.return_value = {
+            'task_name': 'smart_refresh_cache', 'task_id': 'live-task-id',
+        }
         mock_get_instance.return_value = mock_lock
+        executed = False
 
         @serialized_data_fetch("test_task")
         def my_func():
+            nonlocal executed
+            executed = True
             return "executed"
 
         result = my_func()
 
-        assert result == "executed"
+        assert executed is False
+        assert result["status"] == "already_running"
+        assert result["skipped"] is True
+        assert result["task_name"] == "test_task"
+        assert result["running_task_name"] == "smart_refresh_cache"
+        assert result["task_id"] == "live-task-id"
         mock_lock.acquire.assert_called_once()  # no retry loop
 
     @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
@@ -377,10 +388,10 @@ class TestForceRefreshStaleIntradayImpl:
             "AAPL": {"has_error": False, "price_data": mock_price_df},
             "MSFT": {"has_error": True, "error": "rate limited"},
         }
-
-        result = _force_refresh_stale_intraday_impl(
-            task=None, symbols=["AAPL", "MSFT"]
-        )
+        with patch("app.tasks.cache_tasks._filter_active_symbols", return_value=["AAPL", "MSFT"]):
+            result = _force_refresh_stale_intraday_impl(
+                task=None, symbols=["AAPL", "MSFT"]
+            )
 
         assert result['refreshed'] == 1
         assert result['failed'] == 1

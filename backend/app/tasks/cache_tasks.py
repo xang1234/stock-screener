@@ -142,58 +142,18 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
 @serialized_data_fetch('daily_cache_warmup')
 def daily_cache_warmup(self):
     """
-    Daily cache warmup task.
+    Compatibility wrapper for the daily full smart refresh.
 
-    Runs after market close to prepare cache for next trading day.
-    Warms SPY + ALL active symbols in the universe.
+    The scheduler and manual refresh entrypoints now use the batched smart refresh
+    path directly. This task remains as a stable compatibility name for legacy
+    callers, but delegates to the same SPY-first, full-universe batch refresh
+    implementation used by ``smart_refresh_cache(mode="full")``.
 
     Returns:
-        Dict with combined results
+        Dict with refresh results
     """
-    logger.info("=" * 80)
-    logger.info("TASK: Daily Cache Warmup")
-    logger.info(f"Market status: {format_market_status()}")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 80)
-
-    # Skip on non-trading days (weekends, holidays)
-    today = get_eastern_now().date()
-    if not is_trading_day(today):
-        logger.info(f"Skipping daily cache warmup - {today} is not a trading day")
-        return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat()}
-
-    # Check if market is still open (task should run after close)
-    if is_market_open():
-        logger.warning("Market is still open - cache warmup may fetch incomplete data")
-
-    results = {
-        'spy': None,
-        'symbols': None,
-        'started_at': datetime.now().isoformat()
-    }
-
-    try:
-        # 1. Warm SPY benchmark cache
-        logger.info("\n[1/2] Warming SPY benchmark cache...")
-        results['spy'] = warm_spy_cache()
-
-        # 2. Warm ALL active symbols from universe
-        logger.info(f"\n[2/2] Warming ALL active symbols from universe...")
-        results['symbols'] = warm_top_symbols(count=None)  # None = fetch all active stocks
-
-        results['completed_at'] = datetime.now().isoformat()
-
-        logger.info("=" * 80)
-        logger.info("✓ Daily cache warmup completed successfully")
-        logger.info("=" * 80)
-
-        return results
-
-    except Exception as e:
-        logger.error(f"Error in daily_cache_warmup task: {e}", exc_info=True)
-        results['error'] = str(e)
-        results['completed_at'] = datetime.now().isoformat()
-        return results
+    logger.info("Delegating daily_cache_warmup to smart_refresh_cache(mode='full')")
+    return smart_refresh_cache(self, mode="full")
 
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.weekly_full_refresh')

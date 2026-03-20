@@ -53,7 +53,7 @@ async def trigger_task(
     Use the status endpoint to poll for completion.
 
     Args:
-        task_name: Name of the task to trigger (e.g., 'daily-cache-warmup')
+        task_name: Name of the task to trigger (e.g., 'daily-smart-refresh')
 
     Returns:
         Task ID for status polling

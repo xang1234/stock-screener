@@ -19,7 +19,7 @@ class LastRunInfo(BaseModel):
 class ScheduledTaskResponse(BaseModel):
     """Response model for a single scheduled task"""
 
-    name: str = Field(..., description="Task identifier (e.g., 'daily-cache-warmup')")
+    name: str = Field(..., description="Task identifier (e.g., 'daily-smart-refresh')")
     display_name: str = Field(..., description="Human-readable task name")
     task_function: str = Field(..., description="Full task function path")
     description: str = Field(..., description="Description of what the task does")

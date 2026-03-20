@@ -27,7 +27,6 @@ from ...services.cache_manager import CacheManager
 from ...tasks.cache_tasks import (
     warm_spy_cache,
     warm_top_symbols,
-    daily_cache_warmup,
     invalidate_cache as invalidate_cache_task,
     get_cache_stats as get_cache_stats_task,
     force_refresh_stale_intraday,
@@ -40,6 +39,42 @@ from ...database import SessionLocal
 from ...models.stock import StockFundamental
 
 router = APIRouter(prefix="/cache", tags=["cache"])
+
+
+def _get_running_refresh_response() -> SmartRefreshResponse | None:
+    """Return the active refresh task when a data-fetch job is already running."""
+    lock = DataFetchLock.get_instance()
+    running = lock.get_current_task()
+    if not running:
+        return None
+
+    return SmartRefreshResponse(
+        status="already_running",
+        task_id=running.get("task_id"),
+        message=f"Refresh already in progress ({running.get('task_name')})",
+    )
+
+
+def _queue_manual_smart_refresh(mode: str) -> SmartRefreshResponse:
+    """Queue a smart refresh after rejecting duplicate active refreshes."""
+    running_response = _get_running_refresh_response()
+    if running_response is not None:
+        return running_response
+
+    task = smart_refresh_cache.apply_async(
+        kwargs={"mode": mode},
+        headers={"origin": "manual"},
+    )
+    mode_desc = (
+        "full universe (skips recently refreshed)"
+        if mode == "auto"
+        else "entire universe, force re-fetch (~2 hours)"
+    )
+    return SmartRefreshResponse(
+        status="queued",
+        task_id=task.id,
+        message=f"Smart refresh started for {mode_desc}",
+    )
 
 
 # Endpoints
@@ -151,23 +186,20 @@ async def warm_symbol_cache(
 @router.post("/warm/all")
 async def warm_all_caches(background_tasks: BackgroundTasks):
     """
-    Warm all caches (SPY + ALL active stocks).
+    Compatibility alias for the full smart refresh.
 
-    This triggers the daily cache warmup task which warms:
-    - SPY benchmark cache
-    - ALL active symbols in the stock universe
+    Keeps the legacy endpoint stable while routing the work to the unified
+    batched full-universe refresh path.
 
     Returns:
         Task information
     """
     try:
-        # Run daily warmup task in background
-        task = daily_cache_warmup.delay()
-
+        response = _queue_manual_smart_refresh(mode="full")
         return TaskResponse(
-            task_id=task.id,
-            message="Full cache warming task queued for ALL active stocks in universe",
-            status="queued"
+            task_id=response.task_id,
+            message=response.message,
+            status=response.status,
         )
 
     except Exception as e:
@@ -415,29 +447,7 @@ async def smart_refresh(request: SmartRefreshRequest):
         SmartRefreshResponse with status and task_id
     """
     try:
-        # Check if task is already running
-        lock = DataFetchLock.get_instance()
-        running = lock.get_current_task()
-
-        if running:
-            return SmartRefreshResponse(
-                status="already_running",
-                task_id=running.get("task_id"),
-                message=f"Refresh already in progress ({running.get('task_name')})"
-            )
-
-        # Queue smart refresh task (mark as manual to bypass time-window guard)
-        task = smart_refresh_cache.apply_async(
-            kwargs={'mode': request.mode},
-            headers={'origin': 'manual'}
-        )
-
-        mode_desc = "full universe (skips recently refreshed)" if request.mode == "auto" else "entire universe, force re-fetch (~2 hours)"
-        return SmartRefreshResponse(
-            status="queued",
-            task_id=task.id,
-            message=f"Smart refresh started for {mode_desc}"
-        )
+        return _queue_manual_smart_refresh(mode=request.mode)
 
     except Exception as e:
         raise HTTPException(

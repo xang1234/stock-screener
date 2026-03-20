@@ -151,20 +151,32 @@ class CacheManager:
                     period=period,
                 )
 
-                # Store each symbol's data in cache
+                batch_to_store = {}
                 batch_failed = 0
                 for symbol, data in bulk_data.items():
                     if not data.get('has_error') and data.get('price_data') is not None:
-                        # Store in cache
-                        self.price_cache.store_in_cache(symbol, data['price_data'], also_store_db=True)
-                        stats['successful'] += 1
-                        logger.debug(f"✓ {symbol}: Cached {len(data['price_data'])} rows")
+                        price_df = data['price_data']
+                        if price_df is not None and not price_df.empty:
+                            batch_to_store[symbol] = price_df
+                            stats['successful'] += 1
+                            logger.debug(f"✓ {symbol}: Cached {len(price_df)} rows")
+                        else:
+                            stats['failed'] += 1
+                            batch_failed += 1
+                            stats['errors'].append(f"{symbol}: Empty data")
+                            logger.debug(f"✗ {symbol}: Empty data")
                     else:
                         stats['failed'] += 1
                         batch_failed += 1
                         error_msg = data.get('error', 'No data')
                         stats['errors'].append(f"{symbol}: {error_msg}")
                         logger.debug(f"✗ {symbol}: {error_msg}")
+
+                if batch_to_store:
+                    self.price_cache.store_batch_in_cache(
+                        batch_to_store,
+                        also_store_db=True,
+                    )
 
                 # Progress logging
                 logger.info(

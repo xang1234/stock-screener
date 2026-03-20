@@ -4,11 +4,12 @@ Service for managing and tracking scheduled Celery tasks.
 Provides task metadata, execution history, and manual triggering capabilities.
 """
 import logging
-from typing import Optional, Dict, List
 from datetime import datetime
+from typing import Dict, List, Optional
+
 from celery.result import AsyncResult
-from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
@@ -51,17 +52,14 @@ SCHEDULED_TASKS = {
     },
 
     # ===== WEEKDAYS (After Market Close) =====
-    'auto-refresh-after-close': {
-        'task_function': 'app.tasks.cache_tasks.auto_refresh_after_close',
-        'display_name': 'Auto Refresh After Close',
-        'description': 'Refreshes symbols with stale intraday data',
-        'schedule_description': '4:45 PM ET, Mon-Fri',
-    },
-    'daily-cache-warmup': {
-        'task_function': 'app.tasks.cache_tasks.daily_cache_warmup',
-        'display_name': 'Daily Cache Warmup',
-        'description': 'Warms SPY benchmark and all active symbols cache',
+    'daily-smart-refresh': {
+        'task_function': 'app.tasks.cache_tasks.smart_refresh_cache',
+        'display_name': 'Daily Smart Refresh',
+        'description': 'Runs the SPY-first full-universe batched price refresh',
         'schedule_description': f'{settings.cache_warm_hour}:{settings.cache_warm_minute:02d} ET, Mon-Fri',
+        'history_task_names': ['daily-smart-refresh', 'daily-cache-warmup'],
+        'manual_dispatch_kwargs': {'mode': 'full'},
+        'manual_dispatch_headers': {'origin': 'manual'},
     },
     'daily-breadth-calculation': {
         'task_function': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
@@ -146,9 +144,10 @@ class TaskRegistryService:
         result = []
 
         for task_name, task_info in SCHEDULED_TASKS.items():
+            history_task_names = task_info.get('history_task_names', [task_name])
             # Get last execution from history
             last_run = db.query(TaskExecutionHistory).filter(
-                TaskExecutionHistory.task_name == task_name
+                TaskExecutionHistory.task_name.in_(history_task_names)
             ).order_by(desc(TaskExecutionHistory.started_at)).first()
 
             task_data = {
@@ -196,7 +195,15 @@ class TaskRegistryService:
 
         # Get the task function and dispatch it
         task_func = self._get_task(task_name)
-        celery_task = task_func.delay()
+        manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
+        manual_dispatch_headers = task_info.get('manual_dispatch_headers')
+        if manual_dispatch_kwargs or manual_dispatch_headers:
+            celery_task = task_func.apply_async(
+                kwargs=manual_dispatch_kwargs or {},
+                headers=manual_dispatch_headers,
+            )
+        else:
+            celery_task = task_func.delay()
 
         # Record the execution in history
         execution = TaskExecutionHistory(
