@@ -1015,6 +1015,53 @@ async def get_pipeline_observability(
 # ==================== Content Item Browser (MUST be before /{theme_id}) ====================
 
 
+def _build_content_items_browser_base_query(
+    db: Session,
+    *,
+    source_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    pipeline: Optional[str] = None,
+    pipeline_source_ids: Optional[list[int]] = None,
+):
+    """Build the shared base query for content browser list/export reads."""
+    from datetime import datetime as dt, timedelta
+
+    base_query = db.query(ContentItem).join(
+        ContentSource, ContentItem.source_id == ContentSource.id
+    ).filter(
+        ContentSource.is_active == True
+    )
+
+    if pipeline:
+        if pipeline_source_ids is None:
+            pipeline_source_ids = _resolve_source_ids_for_pipeline(db, pipeline)
+        if not pipeline_source_ids:
+            return None
+        base_query = base_query.filter(ContentItem.source_id.in_(pipeline_source_ids))
+    else:
+        base_query = base_query.filter(ContentItem.is_processed == True)
+
+    if source_type:
+        base_query = base_query.filter(ContentItem.source_type == source_type)
+
+    if date_from:
+        try:
+            from_date = dt.strptime(date_from, "%Y-%m-%d")
+            base_query = base_query.filter(ContentItem.published_at >= from_date)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            to_date = dt.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            base_query = base_query.filter(ContentItem.published_at < to_date)
+        except ValueError:
+            pass
+
+    return base_query
+
+
 def _fetch_content_items_with_themes(
     db: Session,
     search: Optional[str] = None,
@@ -1035,43 +1082,18 @@ def _fetch_content_items_with_themes(
     When limit/offset are None, returns all matching items (used by export).
     """
     from sqlalchemy import or_, desc, asc, func
-    from datetime import datetime as dt
 
     # Base query defaults to the historical processed-only behavior.
     # With a pipeline provided, scope to assigned sources and include all fetched items.
-    base_query = db.query(ContentItem).join(
-        ContentSource, ContentItem.source_id == ContentSource.id
-    ).filter(
-        ContentSource.is_active == True
+    base_query = _build_content_items_browser_base_query(
+        db,
+        source_type=source_type,
+        date_from=date_from,
+        date_to=date_to,
+        pipeline=pipeline,
     )
-    if pipeline:
-        pipeline_source_ids = _resolve_source_ids_for_pipeline(db, pipeline)
-        if not pipeline_source_ids:
-            return [], 0
-        base_query = base_query.filter(ContentItem.source_id.in_(pipeline_source_ids))
-    else:
-        base_query = base_query.filter(ContentItem.is_processed == True)
-
-    # Apply source_type filter
-    if source_type:
-        base_query = base_query.filter(ContentItem.source_type == source_type)
-
-    # Apply date filters
-    if date_from:
-        try:
-            from_date = dt.strptime(date_from, "%Y-%m-%d")
-            base_query = base_query.filter(ContentItem.published_at >= from_date)
-        except ValueError:
-            pass
-
-    if date_to:
-        try:
-            to_date = dt.strptime(date_to, "%Y-%m-%d")
-            from datetime import timedelta
-            to_date = to_date + timedelta(days=1)
-            base_query = base_query.filter(ContentItem.published_at < to_date)
-        except ValueError:
-            pass
+    if base_query is None:
+        return [], 0
 
     # Apply sentiment filter before pagination/count so pages are accurate.
     if sentiment:
@@ -1258,7 +1280,7 @@ def _fetch_content_items_with_themes_with_recovery(
                 "checking whether rebuildable theme-content storage can be reset: %s",
                 retry_exc,
             )
-            if not _corruption_targets_theme_content_storage():
+            if not _corruption_targets_theme_content_storage(**kwargs):
                 logger.error(
                     "Theme content browser detected SQLite corruption outside rebuildable "
                     "theme-content storage. Run backend/scripts/check_db_integrity.py --repair "
@@ -1295,58 +1317,85 @@ def _attempt_reindex_theme_content_storage(exc: Exception) -> bool:
     return True
 
 
-def _theme_content_storage_probe_queries() -> tuple[str, ...]:
-    """Return representative queries that exercise the theme content browser read path."""
-    return (
-        "SELECT id, source_id, published_at FROM content_items ORDER BY published_at DESC LIMIT 1",
-        """
-        SELECT content_items.id
-        FROM content_items
-        JOIN content_sources ON content_items.source_id = content_sources.id
-        WHERE content_sources.is_active = 1
-        ORDER BY content_items.published_at DESC
-        LIMIT 1
-        """,
-        """
-        SELECT content_item_id, theme_cluster_id, sentiment
-        FROM theme_mentions
-        WHERE content_item_id IN (
-            SELECT id
-            FROM content_items
-            ORDER BY published_at DESC
-            LIMIT 1
-        )
-        LIMIT 1
-        """,
-        """
-        SELECT content_item_id, status
-        FROM content_item_pipeline_state
-        WHERE content_item_id IN (
-            SELECT id
-            FROM content_items
-            ORDER BY published_at DESC
-            LIMIT 1
-        )
-          AND pipeline = 'technical'
-        LIMIT 1
-        """,
-    )
+def _corruption_targets_theme_content_storage(
+    *,
+    source_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    pipeline: Optional[str] = None,
+    **_ignored,
+) -> bool:
+    """Return True when filtered browser probes hit rebuildable theme-content storage corruption."""
+    with SessionLocal() as probe_db:
+        try:
+            probe_db.query(ContentSource.id).filter(
+                ContentSource.is_active == True
+            ).limit(1).all()
 
+            pipeline_source_ids = None
+            if pipeline:
+                pipeline_source_ids = _resolve_source_ids_for_pipeline(probe_db, pipeline)
+        except Exception as exc:
+            if is_corruption_error(exc):
+                logger.warning(
+                    "Theme content storage probe hit SQLite corruption while reading content_sources; "
+                    "skipping destructive reset: %s",
+                    exc,
+                )
+                return False
+            raise
 
-def _corruption_targets_theme_content_storage() -> bool:
-    """Return True when representative theme browser queries hit rebuildable storage corruption."""
-    with engine.connect() as conn:
-        for sql in _theme_content_storage_probe_queries():
-            try:
-                conn.execute(text(sql)).fetchall()
-            except Exception as exc:
-                if is_corruption_error(exc):
-                    logger.warning(
-                        "Theme content storage probe detected SQLite corruption on query path: %s",
-                        " ".join(sql.split()),
-                    )
-                    return True
-                raise
+        try:
+            base_query = _build_content_items_browser_base_query(
+                probe_db,
+                source_type=source_type,
+                date_from=date_from,
+                date_to=date_to,
+                pipeline=pipeline,
+                pipeline_source_ids=pipeline_source_ids,
+            )
+            if base_query is None:
+                return False
+
+            base_query.count()
+            ordered_query = base_query.order_by(ContentItem.published_at.desc())
+            content_ids = [
+                row.id
+                for row in ordered_query.with_entities(ContentItem.id).limit(1).all()
+            ]
+
+            mentions_query = probe_db.query(
+                ThemeMention.content_item_id,
+                ThemeMention.theme_cluster_id,
+                ThemeMention.sentiment,
+            )
+            if content_ids:
+                mentions_query = mentions_query.filter(
+                    ThemeMention.content_item_id.in_(content_ids)
+                )
+            if pipeline:
+                mentions_query = mentions_query.filter(ThemeMention.pipeline == pipeline)
+            mentions_query.limit(1).all()
+
+            pipeline_probe = probe_db.query(
+                ContentItemPipelineState.content_item_id,
+                ContentItemPipelineState.status,
+            )
+            if content_ids:
+                pipeline_probe = pipeline_probe.filter(
+                    ContentItemPipelineState.content_item_id.in_(content_ids)
+                )
+            pipeline_probe.filter(
+                ContentItemPipelineState.pipeline == (pipeline or "technical")
+            ).limit(1).all()
+        except Exception as exc:
+            if is_corruption_error(exc):
+                logger.warning(
+                    "Theme content storage probe detected SQLite corruption on query path: %s",
+                    exc,
+                )
+                return True
+            raise
     return False
 
 
