@@ -105,11 +105,16 @@ class BreadthCalculatorService:
             total_batches = (total_stocks + batch_size - 1) // batch_size
 
             logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} stocks)")
+            batch_symbols = [stock.symbol for stock in batch]
+            cached_price_data = self.price_cache.get_many_cached_only(
+                batch_symbols,
+                period="2y",
+            )
 
             for stock in batch:
                 try:
-                    stock_metrics = self._calculate_stock_metrics(
-                        symbol=stock.symbol,
+                    stock_metrics = self._calculate_stock_metrics_from_prices(
+                        prices_df=cached_price_data.get(stock.symbol),
                         end_date=calculation_date
                     )
 
@@ -164,6 +169,29 @@ class BreadthCalculatorService:
 
         return metrics
 
+    def _calculate_stock_metrics_from_prices(
+        self,
+        prices_df: Optional[pd.DataFrame],
+        end_date: date,
+    ) -> Optional[Dict]:
+        """Calculate breadth metrics from an already-cached price DataFrame."""
+        if prices_df is None or prices_df.empty:
+            return None
+
+        prices_df = prices_df[prices_df.index <= pd.Timestamp(end_date)]
+
+        if len(prices_df) < 70:  # Need at least 70 days for quarterly calculations
+            logger.debug(f"Insufficient cached data: {len(prices_df)} days")
+            return None
+
+        metrics = {
+            'pct_change_1d': self._get_price_change(prices_df, 1),
+            'pct_change_21d': self._get_price_change(prices_df, 21),
+            'pct_change_34d': self._get_price_change(prices_df, 34),
+            'pct_change_63d': self._get_price_change(prices_df, 63),
+        }
+        return metrics
+
     def _calculate_stock_metrics(self, symbol: str, end_date: date) -> Optional[Dict]:
         """
         Calculate percentage changes for a single stock across multiple periods.
@@ -182,39 +210,20 @@ class BreadthCalculatorService:
             }
         """
         try:
-            # Get 2-year historical data (enough for all calculations)
-            prices_df = self.price_cache.get_historical_data(
+            # Breadth calculations should only use already-cached data and never trigger Yahoo fetches.
+            prices_df = self.price_cache.get_cached_only(
                 symbol=symbol,
                 period="2y"
             )
 
             if prices_df is None or prices_df.empty:
-                logger.debug(f"No price data for {symbol}")
+                logger.debug(f"No cached price data for {symbol}")
                 return None
 
-            # Filter data up to end_date
-            prices_df = prices_df[prices_df.index <= pd.Timestamp(end_date)]
-
-            if len(prices_df) < 70:  # Need at least 70 days for quarterly calculations
-                logger.debug(f"Insufficient data for {symbol}: {len(prices_df)} days")
-                return None
-
-            # Calculate percentage changes for different periods
-            metrics = {}
-
-            # 1-day change
-            metrics['pct_change_1d'] = self._get_price_change(prices_df, 1)
-
-            # 21-day change (monthly)
-            metrics['pct_change_21d'] = self._get_price_change(prices_df, 21)
-
-            # 34-day change (IBD-style)
-            metrics['pct_change_34d'] = self._get_price_change(prices_df, 34)
-
-            # 63-day change (quarterly)
-            metrics['pct_change_63d'] = self._get_price_change(prices_df, 63)
-
-            return metrics
+            return self._calculate_stock_metrics_from_prices(
+                prices_df=prices_df,
+                end_date=end_date,
+            )
 
         except Exception as e:
             logger.debug(f"Error calculating metrics for {symbol}: {e}")
