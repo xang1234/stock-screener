@@ -252,7 +252,8 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
     seed_session.add(source)
     seed_session.flush()
 
-    for i in range(40):
+    # Use enough requests that p95 is not effectively the single worst sample.
+    for i in range(110):
         seed_session.add(
             ContentItem(
                 source_id=source.id,
@@ -318,7 +319,7 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
             assert warmup_response.status_code == 200
 
             started = time.perf_counter()
-            for _ in range(8):
+            for _ in range(20):
                 t0 = time.perf_counter()
                 response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=5")
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -330,7 +331,7 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
 
         p95 = _p95(latencies_ms)
         throughput = float(total_processed) / max(elapsed_s, 1e-9)
-        assert total_processed >= 35, f"Unexpected low extraction volume in benchmark: {total_processed}"
+        assert total_processed >= 95, f"Unexpected low extraction volume in benchmark: {total_processed}"
         assert p95 <= API_EXTRACT_P95_BUDGET_MS, (
             f"/themes/extract p95 {p95:.2f}ms exceeded {API_EXTRACT_P95_BUDGET_MS:.2f}ms"
         )
