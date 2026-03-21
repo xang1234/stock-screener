@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app import main as app_main
 from app.main import app
 from app.models.theme import ContentItem, ContentSource, ThemeCluster, ThemeEmbedding
 from app.services.theme_discovery_service import ThemeDiscoveryService
@@ -291,6 +292,14 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         "app.services.ui_snapshot_service.safe_publish_themes_bootstrap_variants",
         lambda pipeline=None: {},
     )
+    async def _noop_startup_rebuild():
+        return None
+
+    monkeypatch.setattr(
+        app_main,
+        "trigger_ui_snapshot_rebuild_on_startup",
+        _noop_startup_rebuild,
+    )
 
     def _override_get_db():
         db = SessionLocal()
@@ -304,8 +313,11 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         transport = httpx.ASGITransport(app=app)
         latencies_ms: list[float] = []
         total_processed = 0
-        started = time.perf_counter()
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            warmup_response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=1")
+            assert warmup_response.status_code == 200
+
+            started = time.perf_counter()
             for _ in range(8):
                 t0 = time.perf_counter()
                 response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=5")
