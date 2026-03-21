@@ -41,7 +41,7 @@ class BreadthCalculatorService:
         self.db = db
         self.price_cache = PriceCacheService.get_instance()
 
-    def calculate_daily_breadth(self, calculation_date: date = None) -> Dict:
+    def calculate_daily_breadth(self, calculation_date: date = None, cache_only: bool = False) -> Dict:
         """
         Calculate and return all market breadth indicators for a given date.
 
@@ -92,7 +92,10 @@ class BreadthCalculatorService:
             'stocks_up_13pct_34days': 0,
             'stocks_down_13pct_34days': 0,
             'total_stocks_scanned': 0,
-            'skipped_stocks': 0
+            'skipped_stocks': 0,
+            'cache_miss_stocks': 0,
+            'insufficient_data_stocks': 0,
+            'error_stocks': 0,
         }
 
         # Process stocks in batches for memory management
@@ -113,12 +116,24 @@ class BreadthCalculatorService:
 
             for stock in batch:
                 try:
-                    stock_metrics = self._calculate_stock_metrics_from_prices(
-                        prices_df=cached_price_data.get(stock.symbol),
-                        end_date=calculation_date
-                    )
+                    cached_prices = cached_price_data.get(stock.symbol)
+                    if cached_prices is None or cached_prices.empty:
+                        metrics['cache_miss_stocks'] += 1
+                        if cache_only:
+                            metrics['skipped_stocks'] += 1
+                            continue
+                        stock_metrics = self._calculate_stock_metrics(
+                            symbol=stock.symbol,
+                            end_date=calculation_date
+                        )
+                    else:
+                        stock_metrics = self._calculate_stock_metrics_from_prices(
+                            prices_df=cached_prices,
+                            end_date=calculation_date
+                        )
 
                     if stock_metrics is None:
+                        metrics['insufficient_data_stocks'] += 1
                         metrics['skipped_stocks'] += 1
                         continue
 
@@ -157,10 +172,18 @@ class BreadthCalculatorService:
 
                 except Exception as e:
                     logger.warning(f"Error processing {stock.symbol}: {e}")
+                    metrics['error_stocks'] += 1
                     metrics['skipped_stocks'] += 1
                     continue
 
-        logger.info(f"Processed {metrics['total_stocks_scanned']} stocks, skipped {metrics['skipped_stocks']}")
+        logger.info(
+            "Processed %s stocks, skipped %s (cache misses=%s, insufficient=%s, errors=%s)",
+            metrics['total_stocks_scanned'],
+            metrics['skipped_stocks'],
+            metrics['cache_miss_stocks'],
+            metrics['insufficient_data_stocks'],
+            metrics['error_stocks'],
+        )
 
         # Calculate multi-day ratios from historical breadth data
         ratios = self._calculate_ratios(calculation_date)
@@ -210,14 +233,13 @@ class BreadthCalculatorService:
             }
         """
         try:
-            # Breadth calculations should only use already-cached data and never trigger Yahoo fetches.
-            prices_df = self.price_cache.get_cached_only(
+            prices_df = self.price_cache.get_historical_data(
                 symbol=symbol,
                 period="2y"
             )
 
             if prices_df is None or prices_df.empty:
-                logger.debug(f"No cached price data for {symbol}")
+                logger.debug(f"No price data for {symbol}")
                 return None
 
             return self._calculate_stock_metrics_from_prices(

@@ -1059,6 +1059,10 @@ class PriceCacheService:
             logger.error(f"Error getting warmup metadata: {e}")
             return None
 
+    def get_warmup_metadata(self) -> Optional[Dict]:
+        """Public wrapper for last warmup metadata used by downstream scheduled tasks."""
+        return self._get_warmup_metadata()
+
     def save_warmup_metadata(self, status: str, count: int, total: int, error: str = None) -> None:
         """
         Save warmup operation metadata.

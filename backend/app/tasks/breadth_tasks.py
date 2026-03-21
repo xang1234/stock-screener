@@ -24,6 +24,38 @@ from .data_fetch_lock import serialized_data_fetch
 logger = logging.getLogger(__name__)
 
 
+def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optional[str]:
+    """Block publishing daily breadth when the same-day warmup/cache state is incomplete."""
+    warmup_meta = price_cache.get_warmup_metadata() if price_cache else None
+    if not warmup_meta:
+        return "Missing cache warmup metadata for same-day breadth run"
+
+    if warmup_meta.get("status") != "completed":
+        return (
+            f"Cache warmup not complete for same-day breadth run "
+            f"({warmup_meta.get('status')}, {warmup_meta.get('count')}/{warmup_meta.get('total')})"
+        )
+
+    completed_at_raw = warmup_meta.get("completed_at")
+    if completed_at_raw:
+        try:
+            completed_at = datetime.fromisoformat(completed_at_raw)
+            if datetime.now() - completed_at > timedelta(hours=12):
+                return "Cache warmup metadata is stale for same-day breadth run"
+        except ValueError:
+            return "Cache warmup metadata timestamp is invalid"
+
+    cache_misses = int(metrics.get("cache_miss_stocks", 0) or 0)
+    errors = int(metrics.get("error_stocks", 0) or 0)
+    if cache_misses > 0 or errors > 0:
+        return (
+            f"Cache-only breadth run is incomplete "
+            f"(cache_misses={cache_misses}, errors={errors})"
+        )
+
+    return None
+
+
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth')
 @serialized_data_fetch('calculate_daily_breadth')
 def calculate_daily_breadth(self, calculation_date: str = None):
@@ -51,6 +83,9 @@ def calculate_daily_breadth(self, calculation_date: str = None):
     logger.info("TASK: Calculate Daily Market Breadth")
 
     # Parse date
+    from ..utils.market_hours import is_trading_day, get_eastern_now
+
+    today_et = get_eastern_now().date()
     if calculation_date:
         try:
             calc_date = datetime.strptime(calculation_date, '%Y-%m-%d').date()
@@ -59,8 +94,7 @@ def calculate_daily_breadth(self, calculation_date: str = None):
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
     else:
-        from ..utils.market_hours import is_trading_day, get_eastern_now
-        calc_date = get_eastern_now().date()
+        calc_date = today_et
 
         if not is_trading_day(calc_date):
             logger.warning(f"Today ({calc_date}) is not a trading day. Skipping.")
@@ -81,14 +115,39 @@ def calculate_daily_breadth(self, calculation_date: str = None):
     try:
         # Initialize breadth calculator service
         calculator = BreadthCalculatorService(db)
+        cache_only = calc_date == today_et
 
         # Calculate breadth indicators
         logger.info(f"Starting breadth calculation for {calc_date}...")
-        metrics = calculator.calculate_daily_breadth(calculation_date=calc_date)
+        metrics = calculator.calculate_daily_breadth(
+            calculation_date=calc_date,
+            cache_only=cache_only,
+        )
 
         # Calculate duration
         duration = time.time() - start_time
         metrics['calculation_duration_seconds'] = round(duration, 2)
+
+        if cache_only:
+            completeness_error = _validate_same_day_cache_only_breadth(
+                calculator.price_cache,
+                metrics,
+            )
+            if completeness_error:
+                logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
+                logger.info("=" * 60)
+                return {
+                    'error': completeness_error,
+                    'date': calc_date.strftime('%Y-%m-%d'),
+                    'timestamp': datetime.now().isoformat(),
+                    'cache_only': True,
+                    'metrics': {
+                        'total_stocks_scanned': metrics['total_stocks_scanned'],
+                        'skipped_stocks': metrics.get('skipped_stocks', 0),
+                        'cache_miss_stocks': metrics.get('cache_miss_stocks', 0),
+                        'error_stocks': metrics.get('error_stocks', 0),
+                    },
+                }
 
         logger.info(f"✓ Breadth calculation completed in {duration:.2f}s")
         logger.info(f"  Stocks scanned: {metrics['total_stocks_scanned']}")
