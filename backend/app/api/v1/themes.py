@@ -1420,7 +1420,6 @@ def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
                 _force_forget_theme_content_tables(conn)
         with engine.begin() as conn:
             _rewind_theme_content_source_cursors(conn)
-        _attempt_compact_theme_content_storage()
         _recreate_theme_content_tables()
 
 
@@ -1454,39 +1453,6 @@ def _force_forget_theme_content_tables(conn) -> None:
     finally:
         conn.execute(text("PRAGMA writable_schema=OFF"))
         conn.execute(text("PRAGMA foreign_keys=ON"))
-
-
-def _attempt_compact_theme_content_storage() -> bool:
-    """Checkpoint WAL and VACUUM after dropping corrupt theme-content tables."""
-    try:
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            checkpoint_row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
-            if checkpoint_row:
-                busy, _log_pages, _checkpointed = checkpoint_row
-                if busy:
-                    logger.warning(
-                        "Theme content reset WAL checkpoint blocked by an active reader; "
-                        "skipping VACUUM for this recovery pass (busy=%s)",
-                        busy,
-                    )
-                    return False
-            conn.execute(text("VACUUM"))
-    except Exception as compact_exc:
-        if is_corruption_error(compact_exc) or _is_sqlite_lock_or_busy_error(compact_exc):
-            logger.warning(
-                "SQLite compaction could not complete after theme content reset: %s",
-                compact_exc,
-            )
-            return False
-        raise
-    logger.warning("SQLite compaction completed after theme content reset")
-    return True
-
-
-def _is_sqlite_lock_or_busy_error(exc: Exception) -> bool:
-    """Detect transient SQLite maintenance failures caused by active readers/writers."""
-    msg = str(exc).lower()
-    return any(token in msg for token in ("database is locked", "database table is locked", "busy"))
 
 
 def _recreate_theme_content_tables() -> None:
