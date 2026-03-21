@@ -1410,7 +1410,3 @@ class IBDGroupRankService:
         )
 
         return total_stats
-
-
-# Singleton instance
-ibd_group_rank_service = IBDGroupRankService.get_instance()
