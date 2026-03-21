@@ -199,7 +199,10 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
         BuildDailyFeatureSnapshotUseCase,
     )
 
-    return BuildDailyFeatureSnapshotUseCase(scanner=get_scan_orchestrator())
+    return BuildDailyFeatureSnapshotUseCase(
+        scanner=get_scan_orchestrator(),
+        data_provider=get_stock_data_provider(),
+    )
 
 
 # ── Providers ────────────────────────────────────────────────────────────

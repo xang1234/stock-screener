@@ -23,6 +23,7 @@ from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
     FakeProgressSink,
     FakeScanner,
+    FakeStockDataProvider,
     FakeUnitOfWork,
     FakeUniverseRepository,
 )
@@ -288,6 +289,162 @@ class TestHappyPath:
         assert r1.run_id != r2.run_id
         assert r1.status == RunStatus.PUBLISHED.value
         assert r2.status == RunStatus.PUBLISHED.value
+
+
+class TestBulkDataPreparation:
+    @_PATCH_TRADING_DAY
+    def test_uses_bulk_data_prep_per_chunk(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT", "GOOGL"])
+
+        class RecordingProvider(FakeStockDataProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bulk_calls: list[tuple[tuple[str, ...], object, bool]] = []
+
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+            ) -> dict[str, object]:
+                self.bulk_calls.append((tuple(symbols), requirements, allow_partial))
+                return super().prepare_data_bulk(
+                    symbols,
+                    requirements,
+                    allow_partial=allow_partial,
+                )
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.requirements_calls: list[tuple[tuple[str, ...], dict]] = []
+                self.calls: list[dict[str, object]] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                self.requirements_calls.append((tuple(screener_names), criteria or {}))
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(
+                self,
+                symbol: str,
+                screener_names: list[str],
+                criteria: dict | None = None,
+                composite_method: str = "weighted_average",
+                pre_merged_requirements: object | None = None,
+                pre_fetched_data: object | None = None,
+            ) -> dict:
+                self.calls.append(
+                    {
+                        "symbol": symbol,
+                        "pre_merged_requirements": pre_merged_requirements,
+                        "pre_fetched_data": pre_fetched_data,
+                    }
+                )
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        provider = RecordingProvider()
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=provider,
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(chunk_size=2),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert scanner.requirements_calls == [(("minervini",), {})]
+        assert provider.bulk_calls == [
+            (("AAPL", "MSFT"), {"needs": "price+fundamentals"}, True),
+            (("GOOGL",), {"needs": "price+fundamentals"}, True),
+        ]
+        assert [call["symbol"] for call in scanner.calls] == ["AAPL", "MSFT", "GOOGL"]
+        assert all(
+            call["pre_merged_requirements"] == {"needs": "price+fundamentals"}
+            for call in scanner.calls
+        )
+        assert all(call["pre_fetched_data"] is not None for call in scanner.calls)
+
+    @_PATCH_TRADING_DAY
+    def test_bulk_data_prep_failure_falls_back_to_symbol_fetch(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT"])
+
+        class FailingProvider(FakeStockDataProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bulk_calls = 0
+
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+            ) -> dict[str, object]:
+                self.bulk_calls += 1
+                raise RuntimeError("bulk prep failed")
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(
+                self,
+                symbol: str,
+                screener_names: list[str],
+                criteria: dict | None = None,
+                composite_method: str = "weighted_average",
+                pre_merged_requirements: object | None = None,
+                pre_fetched_data: object | None = None,
+            ) -> dict:
+                self.calls.append(
+                    {
+                        "symbol": symbol,
+                        "pre_merged_requirements": pre_merged_requirements,
+                        "pre_fetched_data": pre_fetched_data,
+                    }
+                )
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        provider = FailingProvider()
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=provider,
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(chunk_size=2),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert provider.bulk_calls == 1
+        assert [call["symbol"] for call in scanner.calls] == ["AAPL", "MSFT"]
+        assert all(
+            call["pre_merged_requirements"] == {"needs": "price+fundamentals"}
+            for call in scanner.calls
+        )
+        assert all(call["pre_fetched_data"] is None for call in scanner.calls)
 
 
 # ---------------------------------------------------------------------------

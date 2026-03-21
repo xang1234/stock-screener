@@ -15,11 +15,38 @@ import time
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
-from ..services.ibd_group_rank_service import IBDGroupRankService
+from ..services.ibd_group_rank_service import (
+    IBDGroupRankService,
+    IncompleteGroupRankingCacheError,
+)
 from ..utils.market_hours import is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
+    """Block same-day group rankings when the post-close warmup is incomplete."""
+    warmup_meta = price_cache.get_warmup_metadata() if price_cache else None
+    if not warmup_meta:
+        return "Missing cache warmup metadata for same-day group ranking run"
+
+    if warmup_meta.get("status") != "completed":
+        return (
+            f"Cache warmup not complete for same-day group ranking run "
+            f"({warmup_meta.get('status')}, {warmup_meta.get('count')}/{warmup_meta.get('total')})"
+        )
+
+    completed_at_raw = warmup_meta.get("completed_at")
+    if completed_at_raw:
+        try:
+            completed_at = datetime.fromisoformat(completed_at_raw)
+            if datetime.now() - completed_at > timedelta(hours=12):
+                return "Cache warmup metadata is stale for same-day group ranking run"
+        except ValueError:
+            return "Cache warmup metadata timestamp is invalid"
+
+    return None
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.calculate_daily_group_rankings')
@@ -39,6 +66,7 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
     """
     logger.info("=" * 60)
     logger.info("TASK: Calculate Daily IBD Group Rankings")
+    today_et = get_eastern_now().date()
 
     # Parse date
     if calculation_date:
@@ -49,7 +77,7 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
     else:
-        calc_date = get_eastern_now().date()
+        calc_date = today_et
 
         # Skip on non-trading days (weekends, holidays)
         if not is_trading_day(calc_date):
@@ -66,10 +94,30 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
     try:
         # Initialize service
         service = IBDGroupRankService.get_instance()
+        same_day_cache_only = calculation_date is None and calc_date == today_et
+
+        if same_day_cache_only:
+            completeness_error = _validate_same_day_cache_only_group_rankings(
+                service.price_cache,
+            )
+            if completeness_error:
+                logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
+                logger.info("=" * 60)
+                return {
+                    'error': completeness_error,
+                    'date': calc_date.strftime('%Y-%m-%d'),
+                    'timestamp': datetime.now().isoformat(),
+                    'cache_only': True,
+                }
 
         # Calculate rankings
         logger.info(f"Starting group ranking calculation for {calc_date}...")
-        results = service.calculate_group_rankings(db, calc_date)
+        results = service.calculate_group_rankings(
+            db,
+            calc_date,
+            cache_only=same_day_cache_only,
+            require_complete_cache=same_day_cache_only,
+        )
 
         # Calculate duration
         duration = time.time() - start_time
@@ -109,9 +157,21 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
             'top_group': results[0]['industry_group'] if results else None,
             'top_avg_rs': results[0]['avg_rs_rating'] if results else None,
             'calculation_duration_seconds': round(duration, 2),
+            'cache_only': same_day_cache_only,
             'timestamp': datetime.now().isoformat()
         }
 
+    except IncompleteGroupRankingCacheError as e:
+        db.rollback()
+        logger.error("✗ Refusing to publish daily group rankings: %s", e)
+        logger.info("=" * 60)
+        return {
+            'error': str(e),
+            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
+            'timestamp': datetime.now().isoformat(),
+            'cache_only': True,
+            'prefetch_stats': e.stats,
+        }
     except Exception as e:
         db.rollback()
         logger.error(f"Error in calculate_daily_group_rankings task: {e}", exc_info=True)

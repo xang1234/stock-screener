@@ -46,6 +46,7 @@ from app.domain.scanning.models import ProgressEvent
 from app.domain.scanning.ports import (
     CancellationToken,
     ProgressSink,
+    StockDataProvider,
     StockScanner,
 )
 from app.use_cases.feature_store.publish_run import (
@@ -149,8 +150,13 @@ class BuildDailyFeatureSnapshotUseCase:
     ``execute()`` receives a fresh UoW per invocation.
     """
 
-    def __init__(self, scanner: StockScanner) -> None:
+    def __init__(
+        self,
+        scanner: StockScanner,
+        data_provider: StockDataProvider | None = None,
+    ) -> None:
         self._scanner = scanner
+        self._data_provider = data_provider
 
     def execute(
         self,
@@ -234,6 +240,31 @@ class BuildDailyFeatureSnapshotUseCase:
         failed = 0
         passed = 0
         all_rows: list[FeatureRowWrite] = []
+        merged_requirements = None
+        bulk_prefetch_enabled = self._data_provider is not None
+
+        if bulk_prefetch_enabled:
+            get_requirements = getattr(self._scanner, "get_merged_requirements", None)
+            if callable(get_requirements):
+                try:
+                    merged_requirements = get_requirements(
+                        cmd.screener_names,
+                        cmd.criteria,
+                    )
+                    logger.info(
+                        "Run %d: pre-merged data requirements for batch processing",
+                        run_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Run %d: failed to pre-merge data requirements; "
+                        "falling back to per-symbol fetch",
+                        run_id,
+                        exc_info=True,
+                    )
+                    bulk_prefetch_enabled = False
+            else:
+                bulk_prefetch_enabled = False
 
         for chunk in _chunked(symbols, cmd.chunk_size):
             # 3a — Cancellation gate
@@ -264,15 +295,39 @@ class BuildDailyFeatureSnapshotUseCase:
                 )
 
             # 3b — Scan each symbol in the chunk
+            pre_fetched_data: dict[str, object] = {}
+            if bulk_prefetch_enabled and merged_requirements is not None:
+                try:
+                    pre_fetched_data = self._data_provider.prepare_data_bulk(
+                        [symbol.upper() for symbol in chunk],
+                        merged_requirements,
+                        allow_partial=True,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Run %d: bulk data fetch failed for chunk; "
+                        "falling back to per-symbol fetch",
+                        run_id,
+                        exc_info=True,
+                    )
+                    bulk_prefetch_enabled = False
+                    pre_fetched_data = {}
+
             chunk_rows: list[FeatureRowWrite] = []
             for symbol in chunk:
                 sym = symbol.upper()
                 try:
+                    scan_kwargs: dict[str, object] = {}
+                    if merged_requirements is not None:
+                        scan_kwargs["pre_merged_requirements"] = merged_requirements
+                    if sym in pre_fetched_data:
+                        scan_kwargs["pre_fetched_data"] = pre_fetched_data[sym]
                     result = self._scanner.scan_stock_multi(
                         symbol=sym,
                         screener_names=cmd.screener_names,
                         criteria=cmd.criteria,
                         composite_method=cmd.composite_method,
+                        **scan_kwargs,
                     )
                     if result and "error" not in result:
                         row = _map_orchestrator_to_feature_row(

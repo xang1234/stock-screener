@@ -23,6 +23,19 @@ from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 logger = logging.getLogger(__name__)
 
 
+class IncompleteGroupRankingCacheError(RuntimeError):
+    """Raised when a cache-only same-day group ranking run lacks required inputs."""
+
+    def __init__(self, stats: Dict[str, int | bool]):
+        self.stats = stats
+        reason = "SPY benchmark data is missing from cache"
+        if stats.get("spy_cached"):
+            reason = (
+                f"{stats.get('cache_miss_symbols', 0)} symbols are missing cached price data"
+            )
+        super().__init__(reason)
+
+
 class IBDGroupRankService:
     """
     Service for calculating and managing IBD Industry Group Rankings.
@@ -53,7 +66,10 @@ class IBDGroupRankService:
     def calculate_group_rankings(
         self,
         db: Session,
-        calculation_date: date = None
+        calculation_date: date = None,
+        *,
+        cache_only: bool = False,
+        require_complete_cache: bool = False,
     ) -> List[Dict]:
         """
         Calculate and store rankings for all IBD groups for a given date.
@@ -80,7 +96,18 @@ class IBDGroupRankService:
         logger.info(f"Found {len(all_groups)} IBD industry groups")
 
         # Pre-fetch ALL data upfront (SPY + all stock prices in single bulk fetch)
-        spy_data, all_prices, active_symbols, market_caps = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
+            self._prefetch_all_data(
+                db,
+                cache_only=cache_only,
+            )
+        )
+
+        if require_complete_cache and (
+            not prefetch_stats.get("spy_cached")
+            or prefetch_stats.get("cache_miss_symbols", 0) > 0
+        ):
+            raise IncompleteGroupRankingCacheError(prefetch_stats)
 
         if spy_data is None or spy_data.empty:
             logger.error("Failed to get SPY benchmark data")
@@ -710,7 +737,9 @@ class IBDGroupRankService:
 
     def _prefetch_all_data(
         self,
-        db: Session
+        db: Session,
+        *,
+        cache_only: bool = False,
     ) -> tuple:
         """
         Pre-fetch all data needed for backfill in one batch.
@@ -728,10 +757,18 @@ class IBDGroupRankService:
         logger.info("Pre-fetching all data for optimized backfill...")
 
         # 1. Get SPY data once
-        spy_data = self.benchmark_cache.get_spy_data(period="2y")
+        if cache_only:
+            spy_data = self.price_cache.get_cached_only("SPY", period="2y")
+        else:
+            spy_data = self.benchmark_cache.get_spy_data(period="2y")
         if spy_data is None or spy_data.empty:
             logger.error("Failed to get SPY benchmark data")
-            return None, {}, set()
+            return None, {}, set(), {}, {
+                "target_symbols": 0,
+                "symbols_with_prices": 0,
+                "cache_miss_symbols": 0,
+                "spy_cached": False,
+            }
 
         logger.info(f"Fetched SPY data: {len(spy_data)} days")
 
@@ -755,15 +792,30 @@ class IBDGroupRankService:
         )
 
         # 4. Batch fetch ALL prices in one call
-        all_prices = self.price_cache.get_many(list(symbols_to_fetch), period="2y")
+        if cache_only:
+            all_prices = self.price_cache.get_many_cached_only(
+                list(symbols_to_fetch),
+                period="2y",
+            )
+        else:
+            all_prices = self.price_cache.get_many(list(symbols_to_fetch), period="2y")
 
         # 5. Fetch market caps for weighting
         market_caps = self._get_market_caps_for_symbols(db, list(symbols_to_fetch))
 
-        valid_count = sum(1 for v in all_prices.values() if v is not None)
+        valid_count = sum(
+            1 for v in all_prices.values() if v is not None and not v.empty
+        )
         logger.info(f"Pre-fetched prices: {valid_count}/{len(all_prices)} symbols have data")
 
-        return spy_data, all_prices, active_symbols, market_caps
+        stats = {
+            "target_symbols": len(symbols_to_fetch),
+            "symbols_with_prices": valid_count,
+            "cache_miss_symbols": len(symbols_to_fetch) - valid_count,
+            "spy_cached": True,
+        }
+
+        return spy_data, all_prices, active_symbols, market_caps, stats
 
     def _delete_rankings_for_range(
         self,
