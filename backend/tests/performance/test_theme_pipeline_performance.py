@@ -287,6 +287,10 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         "update_all_theme_metrics",
         lambda self: {"themes_updated": 0},
     )
+    monkeypatch.setattr(
+        "app.services.ui_snapshot_service.safe_publish_themes_bootstrap_variants",
+        lambda pipeline=None: {},
+    )
 
     def _override_get_db():
         db = SessionLocal()
