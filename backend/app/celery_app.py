@@ -390,11 +390,11 @@ if settings.cache_warmup_enabled:
         },
 
         # Extract themes from pending content items via LLM
-        # Runs at :07 and :37, staggered 7 min after poll_due_sources
-        # to allow freshly ingested articles to be queued first
+        # Runs at :10 and :40, staggered 5 min after reprocess_failed_themes
+        # and 10 min after poll_due_sources to let ingestion complete
         'periodic-theme-extraction': {
             'task': 'app.tasks.theme_discovery_tasks.extract_themes',
-            'schedule': crontab(minute='7,37'),  # Twice per hour
+            'schedule': crontab(minute='10,40'),  # Twice per hour
             'kwargs': {'limit': 200},
         },
 
