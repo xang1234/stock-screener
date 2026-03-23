@@ -381,6 +381,30 @@ if settings.cache_warmup_enabled:
             'schedule': crontab(minute='*/15'),  # Every 15 minutes
         },
 
+        # Retry failed-retryable items before extracting new ones
+        # Runs at :05 past the hour so retries are picked up each cycle
+        'hourly-reprocess-failed-themes': {
+            'task': 'app.tasks.theme_discovery_tasks.reprocess_failed_themes',
+            'schedule': crontab(minute=5),  # :05 every hour
+            'kwargs': {'limit': 200},
+        },
+
+        # Extract themes from pending content items via LLM
+        # Runs at :07 and :37, staggered 7 min after poll_due_sources
+        # to allow freshly ingested articles to be queued first
+        'periodic-theme-extraction': {
+            'task': 'app.tasks.theme_discovery_tasks.extract_themes',
+            'schedule': crontab(minute='7,37'),  # Twice per hour
+            'kwargs': {'limit': 50},
+        },
+
+        # Recalculate theme metrics (rankings, velocity, correlations)
+        # Runs at :20 and :50, after extraction batches have completed
+        'periodic-theme-metrics': {
+            'task': 'app.tasks.theme_discovery_tasks.calculate_theme_metrics',
+            'schedule': crontab(minute='20,50'),
+        },
+
         # L1 Taxonomy: recompute centroid embeddings from children
         # Run after stale L2 embedding refresh (5:10 AM), before L1 metrics
         'daily-l1-centroid-embeddings': {
