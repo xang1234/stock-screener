@@ -395,7 +395,7 @@ if settings.cache_warmup_enabled:
         'periodic-theme-extraction': {
             'task': 'app.tasks.theme_discovery_tasks.extract_themes',
             'schedule': crontab(minute='7,37'),  # Twice per hour
-            'kwargs': {'limit': 50},
+            'kwargs': {'limit': 200},
         },
 
         # Recalculate theme metrics (rankings, velocity, correlations)
