@@ -18,7 +18,7 @@ os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_ready, worker_shutting_down
+from celery.signals import worker_process_init, worker_ready, worker_shutting_down
 from .config import settings
 from .domain.scanning.defaults import get_default_scan_profile
 
@@ -104,6 +104,23 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
             _logger.info("No stale data fetch lock found on startup")
     except Exception as e:
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
+
+
+@worker_process_init.connect
+def _dispose_engine_after_fork(sender=None, **kwargs):
+    """Dispose inherited SQLAlchemy engine after Celery prefork.
+
+    When using prefork pool, the child process inherits the parent's
+    engine and open file descriptors. For SQLite, shared FDs across
+    processes bypass locking and cause corruption. Disposing forces
+    the child to create fresh connections.
+    """
+    try:
+        from .database import engine
+        engine.dispose()
+        _logger.debug("Disposed inherited DB engine after fork")
+    except Exception as e:
+        _logger.warning("Failed to dispose engine after fork (non-fatal): %s", e)
 
 
 @worker_shutting_down.connect

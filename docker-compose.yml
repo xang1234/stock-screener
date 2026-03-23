@@ -74,7 +74,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q celery -n general@%h
+    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q celery -n general@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
@@ -122,7 +122,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
+    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
@@ -170,7 +170,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=1 -Q user_scans -n userscans@%h
+    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q user_scans -n userscans@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
