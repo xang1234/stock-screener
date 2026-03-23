@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -160,3 +161,56 @@ jobs:
           if (Test-Path "dist/StockScanner/StockScanner.exe") {
             & "dist/StockScanner/StockScanner.exe" --stop
           }
+
+      - name: Build Windows installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" backend\desktop\windows_installer.iss
+
+      - name: Upload installer artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/installer/StockScanner-Setup.exe
+
+      - name: Upload portable bundle artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: dist/StockScanner/
+
+  release:
+    name: Create GitHub Release
+    needs: [backend, frontend, windows-desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: release/
+
+      - name: Download portable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-portable
+          path: portable/
+
+      - name: Zip portable bundle
+        run: cd portable && zip -r ../release/StockScanner-Portable.zip .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/StockScanner-Setup.exe
+            release/StockScanner-Portable.zip
