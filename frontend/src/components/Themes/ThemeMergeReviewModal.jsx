@@ -4,7 +4,6 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
   Button,
   Table,
   TableBody,
@@ -293,7 +292,7 @@ function HistoryRow({ entry }) {
   );
 }
 
-function ThemeMergeReviewModal({ open, onClose }) {
+export function ThemeMergeReviewContent({ onClose }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
   const [error, setError] = useState(null);
@@ -315,7 +314,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     },
     onSuccess: (data) => {
       setSuccessMessage(`Consolidation started (Task ID: ${data.task_id}). New suggestions will appear shortly.`);
-      // Refetch suggestions after a delay to allow task to complete
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['mergeSuggestions'] });
       }, 5000);
@@ -332,11 +330,10 @@ function ThemeMergeReviewModal({ open, onClose }) {
   const {
     data: pendingSuggestions,
     isLoading: isLoadingPending,
-    refetch: refetchPending,
   } = useQuery({
     queryKey: ['mergeSuggestions', 'pending'],
     queryFn: () => getMergeSuggestions('pending', 100),
-    enabled: open && activeTab === 0,
+    enabled: activeTab === 0,
   });
 
   // Fetch merge history
@@ -346,7 +343,7 @@ function ThemeMergeReviewModal({ open, onClose }) {
   } = useQuery({
     queryKey: ['mergeHistory'],
     queryFn: () => getMergeHistory(50),
-    enabled: open && activeTab === 1,
+    enabled: activeTab === 1,
   });
 
   // Auto-select all pending suggestions when they load
@@ -357,7 +354,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     }
   }, [suggestionsList.length]);
 
-  // Toggle individual selection
   const handleToggleSelection = (id) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -370,7 +366,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     });
   };
 
-  // Toggle all selections
   const handleToggleAll = () => {
     if (selectedIds.size === suggestionsList.length) {
       setSelectedIds(new Set());
@@ -379,7 +374,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     }
   };
 
-  // Batch approve selected suggestions
   const handleBatchApprove = async () => {
     const idsToApprove = Array.from(selectedIds);
     if (idsToApprove.length === 0) return;
@@ -399,7 +393,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
         const result = await approveMergeSuggestion(id);
         if (result.success) {
           successCount++;
-          // Only remove from selected on actual success
           setSelectedIds((prev) => {
             const next = new Set(prev);
             next.delete(id);
@@ -418,7 +411,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     setIsApprovingBatch(false);
     setBatchProgress({ current: 0, total: 0 });
 
-    // Refresh data
     queryClient.invalidateQueries({ queryKey: ['mergeSuggestions'] });
     queryClient.invalidateQueries({ queryKey: ['mergeHistory'] });
     queryClient.refetchQueries({ queryKey: ['themeRankings'] });
@@ -431,7 +423,6 @@ function ThemeMergeReviewModal({ open, onClose }) {
     }
   };
 
-  // Reject mutation
   const rejectMutation = useMutation({
     mutationFn: rejectMergeSuggestion,
     onMutate: (id) => {
@@ -464,165 +455,154 @@ function ThemeMergeReviewModal({ open, onClose }) {
   const selectedCount = selectedIds.size;
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>
-        <Box display="flex" justifyContent="space-between" alignItems="center">
-          <Box display="flex" alignItems="center" gap={1}>
-            <CompareArrowsIcon color="primary" />
-            <Typography variant="h6">Review Theme Merge Suggestions</Typography>
-          </Box>
-          <Box display="flex" alignItems="center" gap={1}>
-            <Tooltip title="Run theme consolidation to find new duplicate themes">
-              <span>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={isConsolidating ? <CircularProgress size={16} /> : <PlayArrowIcon />}
-                  onClick={() => consolidationMutation.mutate()}
-                  disabled={isConsolidating}
-                >
-                  {isConsolidating ? 'Running...' : 'Run Consolidation'}
-                </Button>
-              </span>
-            </Tooltip>
-            <IconButton onClick={onClose} size="small">
-              <CloseIcon />
-            </IconButton>
-          </Box>
-        </Box>
-      </DialogTitle>
+    <>
+      {/* Run Consolidation toolbar */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', p: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <Tooltip title="Run theme consolidation to find new duplicate themes">
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={isConsolidating ? <CircularProgress size={16} /> : <PlayArrowIcon />}
+              onClick={() => consolidationMutation.mutate()}
+              disabled={isConsolidating}
+            >
+              {isConsolidating ? 'Running...' : 'Run Consolidation'}
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
 
-      <DialogContent dividers sx={{ p: 0 }}>
-        {error && (
-          <Alert severity="error" sx={{ m: 2, mb: 0 }} onClose={() => setError(null)}>
-            {error}
-          </Alert>
-        )}
-        {successMessage && (
-          <Alert severity="success" sx={{ m: 2, mb: 0 }} onClose={() => setSuccessMessage(null)}>
-            {successMessage}
-          </Alert>
-        )}
-        <Alert severity="info" sx={{ m: 2, mb: 0 }}>
-          Decision guide: prioritize merges when <strong>Relationship=identical</strong> and <strong>Confidence is high</strong>.
-          For <strong>subset/related</strong>, verify intent before approving.
+      {error && (
+        <Alert severity="error" sx={{ m: 2, mb: 0 }} onClose={() => setError(null)}>
+          {error}
         </Alert>
+      )}
+      {successMessage && (
+        <Alert severity="success" sx={{ m: 2, mb: 0 }} onClose={() => setSuccessMessage(null)}>
+          {successMessage}
+        </Alert>
+      )}
+      <Alert severity="info" sx={{ m: 2, mb: 0 }}>
+        Decision guide: prioritize merges when <strong>Relationship=identical</strong> and <strong>Confidence is high</strong>.
+        For <strong>subset/related</strong>, verify intent before approving.
+      </Alert>
 
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
-            <Tab
-              label={
-                <Box display="flex" alignItems="center" gap={1}>
-                  Pending Review
-                  {pendingCount > 0 && (
-                    <Chip label={pendingCount} size="small" color="warning" />
-                  )}
-                </Box>
-              }
-            />
-            <Tab label="History" />
-          </Tabs>
-        </Box>
+      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs value={activeTab} onChange={(e, v) => setActiveTab(v)}>
+          <Tab
+            label={
+              <Box display="flex" alignItems="center" gap={1}>
+                Pending Review
+                {pendingCount > 0 && (
+                  <Chip label={pendingCount} size="small" color="warning" />
+                )}
+              </Box>
+            }
+          />
+          <Tab label="History" />
+        </Tabs>
+      </Box>
 
-        {/* Pending Tab */}
-        {activeTab === 0 && (
-          <Box sx={{ minHeight: 400 }}>
-            {isLoadingPending ? (
-              <Box display="flex" justifyContent="center" alignItems="center" p={4}>
-                <CircularProgress />
-              </Box>
-            ) : pendingCount === 0 ? (
-              <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" p={4}>
-                <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 2 }} />
-                <Typography variant="h6" color="text.secondary">
-                  No pending merge suggestions
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  All theme merge suggestions have been reviewed
-                </Typography>
-              </Box>
-            ) : (
-              <TableContainer sx={{ maxHeight: 500 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ width: 40 }}>
-                        <Checkbox
-                          checked={selectedIds.size === suggestionsList.length && suggestionsList.length > 0}
-                          indeterminate={selectedIds.size > 0 && selectedIds.size < suggestionsList.length}
-                          onChange={handleToggleAll}
-                          disabled={isApprovingBatch}
-                          size="small"
-                        />
-                      </TableCell>
-                      <TableCell sx={{ width: 40 }} />
-                      <TableCell>Source Theme</TableCell>
-                      <TableCell>Target Theme</TableCell>
-                      <TableCell align="center" sx={{ width: 80 }}>Similarity</TableCell>
-                      <TableCell align="center" sx={{ width: 80 }}>Confidence</TableCell>
-                      <TableCell align="center" sx={{ width: 100 }}>Relationship</TableCell>
-                      <TableCell align="right" sx={{ width: 80 }}>Reject</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {suggestionsList.map((suggestion) => (
-                      <SuggestionRow
-                        key={suggestion.id}
-                        suggestion={suggestion}
-                        onReject={handleReject}
-                        isRejecting={actioningId === suggestion.id && actionType === 'reject'}
-                        checked={selectedIds.has(suggestion.id)}
-                        onToggle={handleToggleSelection}
+      {/* Pending Tab */}
+      {activeTab === 0 && (
+        <Box sx={{ minHeight: 400 }}>
+          {isLoadingPending ? (
+            <Box display="flex" justifyContent="center" alignItems="center" p={4}>
+              <CircularProgress />
+            </Box>
+          ) : pendingCount === 0 ? (
+            <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" p={4}>
+              <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 2 }} />
+              <Typography variant="h6" color="text.secondary">
+                No pending merge suggestions
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                All theme merge suggestions have been reviewed
+              </Typography>
+            </Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 500 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: 40 }}>
+                      <Checkbox
+                        checked={selectedIds.size === suggestionsList.length && suggestionsList.length > 0}
+                        indeterminate={selectedIds.size > 0 && selectedIds.size < suggestionsList.length}
+                        onChange={handleToggleAll}
                         disabled={isApprovingBatch}
+                        size="small"
                       />
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-        )}
+                    </TableCell>
+                    <TableCell sx={{ width: 40 }} />
+                    <TableCell>Source Theme</TableCell>
+                    <TableCell>Target Theme</TableCell>
+                    <TableCell align="center" sx={{ width: 80 }}>Similarity</TableCell>
+                    <TableCell align="center" sx={{ width: 80 }}>Confidence</TableCell>
+                    <TableCell align="center" sx={{ width: 100 }}>Relationship</TableCell>
+                    <TableCell align="right" sx={{ width: 80 }}>Reject</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {suggestionsList.map((suggestion) => (
+                    <SuggestionRow
+                      key={suggestion.id}
+                      suggestion={suggestion}
+                      onReject={handleReject}
+                      isRejecting={actioningId === suggestion.id && actionType === 'reject'}
+                      checked={selectedIds.has(suggestion.id)}
+                      onToggle={handleToggleSelection}
+                      disabled={isApprovingBatch}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
+      )}
 
-        {/* History Tab */}
-        {activeTab === 1 && (
-          <Box sx={{ minHeight: 400 }}>
-            {isLoadingHistory ? (
-              <Box display="flex" justifyContent="center" alignItems="center" p={4}>
-                <CircularProgress />
-              </Box>
-            ) : (history?.history?.length || history?.length || 0) === 0 ? (
-              <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" p={4}>
-                <Typography variant="h6" color="text.secondary">
-                  No merge history yet
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Approved merges will appear here
-                </Typography>
-              </Box>
-            ) : (
-              <TableContainer sx={{ maxHeight: 500 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Source Theme</TableCell>
-                      <TableCell>Target Theme</TableCell>
-                      <TableCell sx={{ width: 100 }}>Action</TableCell>
-                      <TableCell sx={{ width: 180 }}>Date</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {(history?.history || history || []).map((entry, index) => (
-                      <HistoryRow key={entry.id || index} entry={entry} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Box>
-        )}
-      </DialogContent>
+      {/* History Tab */}
+      {activeTab === 1 && (
+        <Box sx={{ minHeight: 400 }}>
+          {isLoadingHistory ? (
+            <Box display="flex" justifyContent="center" alignItems="center" p={4}>
+              <CircularProgress />
+            </Box>
+          ) : (history?.history?.length || history?.length || 0) === 0 ? (
+            <Box display="flex" flexDirection="column" alignItems="center" justifyContent="center" p={4}>
+              <Typography variant="h6" color="text.secondary">
+                No merge history yet
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Approved merges will appear here
+              </Typography>
+            </Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 500 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Source Theme</TableCell>
+                    <TableCell>Target Theme</TableCell>
+                    <TableCell sx={{ width: 100 }}>Action</TableCell>
+                    <TableCell sx={{ width: 180 }}>Date</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(history?.history || history || []).map((entry, index) => (
+                    <HistoryRow key={entry.id || index} entry={entry} />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
+      )}
 
-      <DialogActions sx={{ justifyContent: 'space-between' }}>
+      {/* Actions bar */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', p: 2, borderTop: 1, borderColor: 'divider' }}>
         <Box>
           {activeTab === 0 && pendingCount > 0 && (
             <Button
@@ -638,8 +618,31 @@ function ThemeMergeReviewModal({ open, onClose }) {
             </Button>
           )}
         </Box>
-        <Button onClick={onClose} disabled={isApprovingBatch}>Close</Button>
-      </DialogActions>
+        {onClose && (
+          <Button onClick={onClose} disabled={isApprovingBatch}>Close</Button>
+        )}
+      </Box>
+    </>
+  );
+}
+
+function ThemeMergeReviewModal({ open, onClose }) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+      <DialogTitle>
+        <Box display="flex" justifyContent="space-between" alignItems="center">
+          <Box display="flex" alignItems="center" gap={1}>
+            <CompareArrowsIcon color="primary" />
+            <Typography variant="h6">Review Theme Merge Suggestions</Typography>
+          </Box>
+          <IconButton onClick={onClose} size="small">
+            <CloseIcon />
+          </IconButton>
+        </Box>
+      </DialogTitle>
+      <DialogContent dividers sx={{ p: 0 }}>
+        <ThemeMergeReviewContent onClose={onClose} />
+      </DialogContent>
     </Dialog>
   );
 }

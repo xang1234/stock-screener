@@ -48,6 +48,7 @@ import NewReleasesIcon from '@mui/icons-material/NewReleases';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import SettingsIcon from '@mui/icons-material/Settings';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import Replay30Icon from '@mui/icons-material/Replay30';
 import {
   XAxis,
   YAxis,
@@ -77,11 +78,9 @@ import {
 } from '../api/themes';
 import ArticleIcon from '@mui/icons-material/Article';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
-import ManageSourcesModal from '../components/Themes/ManageSourcesModal';
 import ThemeSourcesModal from '../components/Themes/ThemeSourcesModal';
-import ThemeMergeReviewModal from '../components/Themes/ThemeMergeReviewModal';
-import ThemeCandidateReviewModal from '../components/Themes/ThemeCandidateReviewModal';
-import ThemePolicySettingsModal from '../components/Themes/ThemePolicySettingsModal';
+import ThemeReviewDialog from '../components/Themes/ThemeReviewDialog';
+import ThemeSettingsDialog from '../components/Themes/ThemeSettingsDialog';
 import ArticleBrowserModal from '../components/Themes/ArticleBrowserModal';
 import ModelSettingsModal from '../components/Themes/ModelSettingsModal';
 import ThemeTaxonomyTable from '../components/Themes/ThemeTaxonomyTable';
@@ -857,14 +856,14 @@ function ThemesPage() {
   const [selectedTheme, setSelectedTheme] = useState(null);
   const [orderBy, setOrderBy] = useState('rank');
   const [order, setOrder] = useState('asc');
-  const [sourcesModalOpen, setSourcesModalOpen] = useState(false);
   const [sourcesTheme, setSourcesTheme] = useState(null);
   const [selectedSourceTypes, setSelectedSourceTypes] = useState(DEFAULT_SOURCE_TYPES);
-  const [mergeModalOpen, setMergeModalOpen] = useState(false);
-  const [candidateModalOpen, setCandidateModalOpen] = useState(false);
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [reviewDialogTab, setReviewDialogTab] = useState(0);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [settingsDialogTab, setSettingsDialogTab] = useState(0);
   const [articleBrowserOpen, setArticleBrowserOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const [policySettingsOpen, setPolicySettingsOpen] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState('technical');
   const [page, setPage] = useState(0);
   const [themeView, setThemeView] = useState(() => localStorage.getItem('themeView') || 'grouped');
@@ -1230,9 +1229,12 @@ function ThemesPage() {
             }
           </Typography>
         </Box>
-        <Box display="flex" gap={1}>
+        <Box display="flex" gap={1} alignItems="center">
           <Badge
-            badgeContent={pendingMerges?.total ?? pendingMerges?.suggestions?.length ?? pendingMerges?.length ?? 0}
+            badgeContent={
+              (pendingMerges?.total ?? pendingMerges?.suggestions?.length ?? pendingMerges?.length ?? 0) +
+              (candidateQueueSummary?.total || 0)
+            }
             color="warning"
             max={99}
           >
@@ -1240,25 +1242,10 @@ function ThemesPage() {
               size="small"
               variant="outlined"
               startIcon={<CompareArrowsIcon />}
-              onClick={() => setMergeModalOpen(true)}
+              onClick={() => { setReviewDialogTab(0); setReviewDialogOpen(true); }}
               sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
             >
-              Review Merges
-            </Button>
-          </Badge>
-          <Badge
-            badgeContent={candidateQueueSummary?.total || 0}
-            color="info"
-            max={99}
-          >
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<AutoAwesomeIcon />}
-              onClick={() => setCandidateModalOpen(true)}
-              sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
-            >
-              Review Candidates
+              Review
             </Button>
           </Badge>
           <Button
@@ -1268,25 +1255,16 @@ function ThemesPage() {
             onClick={() => setArticleBrowserOpen(true)}
             sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
           >
-            Browse Articles
+            Articles
           </Button>
           <Button
             size="small"
             variant="outlined"
             startIcon={<SettingsIcon />}
-            onClick={() => setPolicySettingsOpen(true)}
+            onClick={() => { setSettingsDialogTab(0); setSettingsDialogOpen(true); }}
             sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
           >
-            Policy Controls
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<SettingsIcon />}
-            onClick={() => setSourcesModalOpen(true)}
-            sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
-          >
-            Manage Sources
+            Settings
           </Button>
           <Button
             size="small"
@@ -1295,46 +1273,51 @@ function ThemesPage() {
             onClick={() => setModelSettingsOpen(true)}
             sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
           >
-            LLM Settings
+            LLM
           </Button>
-          <Tooltip title={failedCount?.failed_count > 0 ? `${failedCount.failed_count} items pending retry` : ''}>
+          <Box sx={{ borderLeft: 1, borderColor: 'divider', height: 24, mx: 0.5 }} />
+          <Tooltip title={
+            isPipelineRunning ? 'Pipeline running...' :
+            failedCount?.failed_count > 0 ? `Run Pipeline (${failedCount.failed_count} pending retry)` :
+            'Run Pipeline'
+          }>
             <Badge
               badgeContent={failedCount?.failed_count || 0}
               color="error"
               max={999}
               invisible={!failedCount?.failed_count}
             >
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={isPipelineRunning ? <CircularProgress size={12} /> : <PlayArrowIcon />}
-                onClick={() => handleRunPipeline()}
-                disabled={isPipelineRunning}
-                sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
-              >
-                {isPipelineRunning ? 'Running...' : 'Run Pipeline'}
-              </Button>
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => handleRunPipeline()}
+                  disabled={isPipelineRunning}
+                  color="primary"
+                >
+                  {isPipelineRunning ? <CircularProgress size={18} /> : <PlayArrowIcon fontSize="small" />}
+                </IconButton>
+              </span>
             </Badge>
           </Tooltip>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={() => handleRunPipeline(30)}
-            disabled={isPipelineRunning}
-            sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
-          >
-            Backfill 30d
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={() => (themeView === 'grouped' ? refetchGroupedRankings() : refetchRankings())}
-            sx={{ fontSize: '0.65rem', py: 0.15, px: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.85rem' } }}
-          >
-            Refresh
-          </Button>
+          <Tooltip title="Backfill 30d">
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => handleRunPipeline(30)}
+                disabled={isPipelineRunning}
+              >
+                <Replay30Icon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Refresh">
+            <IconButton
+              size="small"
+              onClick={() => (themeView === 'grouped' ? refetchGroupedRankings() : refetchRankings())}
+            >
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Box>
       </Box>
 
@@ -1745,13 +1728,7 @@ function ThemesPage() {
         />
       )}
 
-      {/* Manage Sources Modal */}
-      <ManageSourcesModal
-        open={sourcesModalOpen}
-        onClose={() => setSourcesModalOpen(false)}
-      />
-
-      {/* Theme Sources Modal */}
+      {/* Theme Sources Modal (per-theme) */}
       {sourcesTheme && (
         <ThemeSourcesModal
           open={!!sourcesTheme}
@@ -1761,16 +1738,22 @@ function ThemesPage() {
         />
       )}
 
-      {/* Theme Merge Review Modal */}
-      <ThemeMergeReviewModal
-        open={mergeModalOpen}
-        onClose={() => setMergeModalOpen(false)}
+      {/* Combined Review Dialog (Merges + Candidates) */}
+      <ThemeReviewDialog
+        open={reviewDialogOpen}
+        onClose={() => setReviewDialogOpen(false)}
+        pipeline={selectedPipeline}
+        initialTab={reviewDialogTab}
+        mergeCount={pendingMerges?.total ?? pendingMerges?.suggestions?.length ?? pendingMerges?.length ?? 0}
+        candidateCount={candidateQueueSummary?.total || 0}
       />
 
-      <ThemeCandidateReviewModal
-        open={candidateModalOpen}
-        onClose={() => setCandidateModalOpen(false)}
+      {/* Combined Settings Dialog (Sources + Policy) */}
+      <ThemeSettingsDialog
+        open={settingsDialogOpen}
+        onClose={() => setSettingsDialogOpen(false)}
         pipeline={selectedPipeline}
+        initialTab={settingsDialogTab}
       />
 
       {/* Article Browser Modal */}
@@ -1784,12 +1767,6 @@ function ThemesPage() {
       <ModelSettingsModal
         open={modelSettingsOpen}
         onClose={() => setModelSettingsOpen(false)}
-      />
-
-      <ThemePolicySettingsModal
-        open={policySettingsOpen}
-        onClose={() => setPolicySettingsOpen(false)}
-        pipeline={selectedPipeline}
       />
     </Container>
   );
