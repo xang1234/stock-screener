@@ -6,6 +6,16 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import (
+    column_names,
+    index_names,
+    is_sqlite,
+    sql_timestamp_type,
+    table_names,
+    trigger_names,
+)
+from ..models.theme import ThemeRelationship
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "theme_relationships"
@@ -51,29 +61,32 @@ def migrate_theme_relationships(engine) -> dict[str, Any]:
     with engine.connect() as conn:
         tables = _get_existing_tables(conn)
         if TABLE_NAME not in tables:
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE IF NOT EXISTS theme_relationships (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        source_cluster_id INTEGER NOT NULL,
-                        target_cluster_id INTEGER NOT NULL,
-                        pipeline TEXT NOT NULL DEFAULT 'technical',
-                        relationship_type TEXT NOT NULL,
-                        confidence FLOAT NOT NULL DEFAULT 0.5,
-                        provenance TEXT NOT NULL DEFAULT 'rule_inference',
-                        evidence JSON,
-                        is_active BOOLEAN NOT NULL DEFAULT 1,
-                        created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                        updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                        CHECK (relationship_type IN ('subset', 'related', 'distinct')),
-                        CHECK (source_cluster_id != target_cluster_id),
-                        FOREIGN KEY (source_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE,
-                        FOREIGN KEY (target_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE
+            if is_sqlite(conn):
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS theme_relationships (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            source_cluster_id INTEGER NOT NULL,
+                            target_cluster_id INTEGER NOT NULL,
+                            pipeline TEXT NOT NULL DEFAULT 'technical',
+                            relationship_type TEXT NOT NULL,
+                            confidence FLOAT NOT NULL DEFAULT 0.5,
+                            provenance TEXT NOT NULL DEFAULT 'rule_inference',
+                            evidence JSON,
+                            is_active BOOLEAN NOT NULL DEFAULT 1,
+                            created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                            updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                            CHECK (relationship_type IN ('subset', 'related', 'distinct')),
+                            CHECK (source_cluster_id != target_cluster_id),
+                            FOREIGN KEY (source_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE,
+                            FOREIGN KEY (target_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE
+                        )
+                        """
                     )
-                    """
                 )
-            )
+            else:
+                ThemeRelationship.__table__.create(bind=conn, checkfirst=True)
             stats["table_created"] = True
         else:
             stats["columns_added"] = _add_missing_columns(conn)
@@ -113,7 +126,7 @@ def verify_theme_relationships_schema(engine) -> dict[str, Any]:
         triggers = _get_table_triggers(conn) if table_exists else set()
         missing_columns = sorted(REQUIRED_COLUMNS - columns)
         missing_indexes = sorted(EXPECTED_INDEXES - indexes)
-        missing_triggers = sorted(EXPECTED_TRIGGERS - triggers)
+        missing_triggers = sorted(EXPECTED_TRIGGERS - triggers) if is_sqlite(conn) else []
         return {
             "table_exists": table_exists,
             "missing_columns": missing_columns,
@@ -124,30 +137,24 @@ def verify_theme_relationships_schema(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_table_indexes(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return index_names(conn, TABLE_NAME)
 
 
 def _get_table_triggers(conn) -> set[str]:
-    rows = conn.execute(
-        text("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name = :table_name"),
-        {"table_name": TABLE_NAME},
-    ).fetchall()
-    return {row[0] for row in rows}
+    return trigger_names(conn, TABLE_NAME)
 
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
+    timestamp_type = sql_timestamp_type(conn)
     add_statements = {
         "source_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN source_cluster_id INTEGER",
         "target_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN target_cluster_id INTEGER",
@@ -157,8 +164,8 @@ def _add_missing_columns(conn) -> list[str]:
         "provenance": "ALTER TABLE theme_relationships ADD COLUMN provenance TEXT NOT NULL DEFAULT 'rule_inference'",
         "evidence": "ALTER TABLE theme_relationships ADD COLUMN evidence JSON",
         "is_active": "ALTER TABLE theme_relationships ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
-        "created_at": "ALTER TABLE theme_relationships ADD COLUMN created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
-        "updated_at": "ALTER TABLE theme_relationships ADD COLUMN updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
+        "created_at": f"ALTER TABLE theme_relationships ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": f"ALTER TABLE theme_relationships ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }
     added: list[str] = []
     for column, ddl in add_statements.items():
@@ -215,6 +222,9 @@ def _ensure_indexes(conn) -> list[str]:
 
 
 def _ensure_validation_triggers(conn) -> list[str]:
+    if not is_sqlite(conn):
+        return []
+
     ensured: list[str] = []
 
     conn.execute(

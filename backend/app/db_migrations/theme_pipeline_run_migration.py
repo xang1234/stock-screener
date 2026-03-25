@@ -7,6 +7,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "theme_pipeline_runs"
@@ -49,5 +51,4 @@ def migrate_theme_pipeline_run_schema(engine) -> dict[str, Any]:
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)

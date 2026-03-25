@@ -6,6 +6,9 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names, sql_timestamp_type, table_names
+from ..models.theme import ThemeLifecycleTransition
+
 logger = logging.getLogger(__name__)
 
 THEME_TABLE = "theme_clusters"
@@ -23,15 +26,16 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
     }
     with engine.connect() as conn:
         columns = _get_table_columns(conn, THEME_TABLE)
+        timestamp_type = sql_timestamp_type(conn)
         add_statements = {
             "lifecycle_state": "ALTER TABLE theme_clusters ADD COLUMN lifecycle_state TEXT",
-            "lifecycle_state_updated_at": "ALTER TABLE theme_clusters ADD COLUMN lifecycle_state_updated_at DATETIME",
+            "lifecycle_state_updated_at": f"ALTER TABLE theme_clusters ADD COLUMN lifecycle_state_updated_at {timestamp_type}",
             "lifecycle_state_metadata": "ALTER TABLE theme_clusters ADD COLUMN lifecycle_state_metadata JSON",
-            "candidate_since_at": "ALTER TABLE theme_clusters ADD COLUMN candidate_since_at DATETIME",
-            "activated_at": "ALTER TABLE theme_clusters ADD COLUMN activated_at DATETIME",
-            "dormant_at": "ALTER TABLE theme_clusters ADD COLUMN dormant_at DATETIME",
-            "reactivated_at": "ALTER TABLE theme_clusters ADD COLUMN reactivated_at DATETIME",
-            "retired_at": "ALTER TABLE theme_clusters ADD COLUMN retired_at DATETIME",
+            "candidate_since_at": f"ALTER TABLE theme_clusters ADD COLUMN candidate_since_at {timestamp_type}",
+            "activated_at": f"ALTER TABLE theme_clusters ADD COLUMN activated_at {timestamp_type}",
+            "dormant_at": f"ALTER TABLE theme_clusters ADD COLUMN dormant_at {timestamp_type}",
+            "reactivated_at": f"ALTER TABLE theme_clusters ADD COLUMN reactivated_at {timestamp_type}",
+            "retired_at": f"ALTER TABLE theme_clusters ADD COLUMN retired_at {timestamp_type}",
         }
 
         for name, statement in add_statements.items():
@@ -88,25 +92,7 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
         )
         stats["clusters_backfilled"] += int(invalid_result.rowcount or 0)
 
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS theme_lifecycle_transitions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    theme_cluster_id INTEGER NOT NULL,
-                    from_state TEXT NOT NULL,
-                    to_state TEXT NOT NULL,
-                    actor TEXT NOT NULL DEFAULT 'system',
-                    job_name TEXT,
-                    rule_version TEXT,
-                    reason TEXT,
-                    transition_metadata JSON,
-                    transitioned_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                    FOREIGN KEY (theme_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE
-                )
-                """
-            )
-        )
+        ThemeLifecycleTransition.__table__.create(bind=conn, checkfirst=True)
         if TRANSITION_TABLE in _get_existing_tables(conn):
             stats["transition_table_created"] = True
 
@@ -127,10 +113,8 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn, table_name: str) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, table_name)

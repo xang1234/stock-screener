@@ -84,7 +84,7 @@ AI-powered identification of market themes and trends:
 
 ### Backend
 - **Framework**: FastAPI
-- **ORM**: SQLAlchemy with SQLite
+- **ORM**: SQLAlchemy with SQLite for local/desktop and PostgreSQL for Docker
 - **Task Queue**: Celery with Redis broker
 - **Caching**: Redis (3 databases: broker, results, application cache)
 
@@ -152,6 +152,8 @@ cd backend
 ./venv/bin/celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@%h
 ./venv/bin/celery -A app.celery_app beat --loglevel=info  # Scheduler
 ```
+
+On macOS and other local non-Docker workflows, keep `--pool=solo`. The Docker deployment now uses PostgreSQL plus Linux `prefork` workers; that change does not apply to local desktop/dev runs.
 
 ### Frontend Setup
 
@@ -288,6 +290,8 @@ If PowerShell blocks virtualenv activation, run `Set-ExecutionPolicy -Scope Proc
 
 The project uses a layered Docker Compose architecture supporting three deployment scenarios:
 
+Docker now uses PostgreSQL as the authoritative application database. Local development and desktop mode still default to SQLite. The shared `./data` mount remains in Docker for non-app-db state such as `xui-reader` config/session data, Celery beat schedule files, and caches.
+
 #### Local Development (Zero Config)
 ```bash
 # 1. Set up environment (required for chatbot/LLM features)
@@ -297,7 +301,7 @@ cp .env.docker.example .env
 # 2. Start all services
 docker-compose up
 ```
-Starts Redis, Backend API, Celery workers, and Frontend. Access at http://localhost
+Starts PostgreSQL, Redis, Backend API, Celery workers, backup service, and Frontend. Access at http://localhost
 
 > **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). Without this file, LLM API keys will be empty and the chatbot won't work. Scanning and other features work without API keys.
 
@@ -342,6 +346,37 @@ The backend runs as non-root user (uid 1000). If upgrading from an older version
 ```bash
 sudo chown -R 1000:1000 ./data
 ```
+
+#### Docker Cutover from SQLite
+Use this one-time sequence when migrating an existing Docker deployment from SQLite to PostgreSQL:
+
+```bash
+# 1. Stop backend, workers, and beat so SQLite is quiescent
+docker-compose stop backend celery-worker celery-datafetch celery-userscans celery-beat
+
+# 2. Take a final SQLite backup
+sqlite3 data/stockscanner.db ".backup 'data/backups/stockscanner_final_pre_pg.db'"
+
+# 3. Start PostgreSQL only
+docker-compose up -d postgres
+
+# 4. Prepare schema against PostgreSQL
+docker-compose run --rm backend python -c "from app.database import init_db; init_db()"
+
+# 5. Import data into PostgreSQL
+docker-compose run --rm \
+  -e SQLITE_DB_PATH=/app/data/stockscanner.db \
+  backend \
+  python scripts/migrate_sqlite_to_postgres.py --source /app/data/stockscanner.db
+
+# 6. Start backend first and smoke test the API
+docker-compose up -d backend
+
+# 7. Start workers and beat after API validation passes
+docker-compose up -d celery-worker celery-datafetch celery-userscans celery-beat frontend db-backup
+```
+
+PostgreSQL backups are written by `db-backup` via `pg_dump`. Restore with `pg_restore -d <database> <dump-file>`.
 
 ## Documentation
 
@@ -429,13 +464,17 @@ Clean separation: `domain/` (business rules, ports) → `use_cases/` (applicatio
 
 ## Database
 
-**Important**: The application uses an absolute path for the database to prevent working-directory issues.
+Local development and desktop mode use an absolute SQLite path to prevent
+working-directory issues. Docker deployments use PostgreSQL via `DATABASE_URL`
+plus `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`.
 
 ```env
 DATABASE_URL=sqlite:////Users/admin/StockScreenClaude/data/stockscanner.db
 ```
 
-The production database is located at `data/stockscanner.db` in the project root. Do not create databases in `backend/data/` or other subdirectories.
+For local and desktop workflows, the SQLite database lives at
+`data/stockscanner.db` in the project root. Do not create local SQLite
+databases in `backend/data/` or other subdirectories.
 
 ### Key Tables
 - `stock_prices`, `stock_fundamentals`, `stock_universe` — Core stock data

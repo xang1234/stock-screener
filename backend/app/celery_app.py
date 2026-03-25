@@ -128,11 +128,13 @@ def _graceful_db_shutdown(sender=None, **kwargs):
     """Checkpoint WAL and close DB connections on worker shutdown."""
     try:
         from .database import engine
+        from .infra.db.portability import is_sqlite
         from sqlalchemy import text
-        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+        if is_sqlite(engine):
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
         engine.dispose()
-        _logger.info("Worker shutdown: WAL checkpoint complete, DB connections closed")
+        _logger.info("Worker shutdown: DB connections closed")
     except Exception as e:
         _logger.warning("Worker shutdown DB cleanup failed (non-fatal): %s", e)
 

@@ -12,13 +12,32 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # PostgreSQL (authoritative app database for Docker deployments)
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockscanner} -d ${POSTGRES_DB:-stockscanner}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   # FastAPI Backend
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     environment:
-      - DATABASE_URL=sqlite:////app/data/stockscanner.db
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -58,6 +77,8 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -69,18 +90,21 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # Celery Worker - General Queue (concurrency=1 for SQLite safety)
+  # Celery Worker - General Queue
   celery-worker:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q celery -n general@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q celery -n general@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
       - TZ=${CELERY_TIMEZONE:-America/New_York}
       - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=sqlite:////app/data/stockscanner.db
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -112,23 +136,30 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # Celery Worker - Data Fetch Queue (serialized, concurrency=1)
+  # Celery Worker - Data Fetch Queue (serialized; keeps xui-reader single-writer)
   celery-datafetch:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
       - TZ=${CELERY_TIMEZONE:-America/New_York}
       - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=sqlite:////app/data/stockscanner.db
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -160,8 +191,12 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     stop_grace_period: 30s
     restart: unless-stopped
 
@@ -170,13 +205,16 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.celery_app worker --pool=solo --loglevel=info --concurrency=1 -Q user_scans -n userscans@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans -n userscans@%h
     environment:
       # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
       - HOME=/app/data
       - TZ=${CELERY_TIMEZONE:-America/New_York}
       - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=sqlite:////app/data/stockscanner.db
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -208,8 +246,12 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     stop_grace_period: 30s
     restart: unless-stopped
 
@@ -222,7 +264,10 @@ services:
     environment:
       - TZ=${CELERY_TIMEZONE:-America/New_York}
       - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=sqlite:////app/data/stockscanner.db
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -238,32 +283,39 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     stop_grace_period: 15s
     restart: unless-stopped
 
-  # SQLite backup - daily safe copy via .backup API (no corruption risk)
+  # PostgreSQL backup - daily pg_dump to the shared data volume
   db-backup:
-    image: alpine:3.19
+    image: postgres:16-alpine
     entrypoint: /bin/sh
+    environment:
+      - PGPASSWORD=${POSTGRES_PASSWORD:-stockscanner}
+      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
+      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
     command:
       - -c
       - |
-        apk add --no-cache sqlite && \
         is_valid_backup() {
-          [ -f "$$1" ] && [ "$$(sqlite3 "$$1" "PRAGMA integrity_check;" 2>/dev/null)" = "ok" ]
+          [ -s "$$1" ]
         } && \
         prune_backups() {
           KEEP_PATH="$$1"
           mkdir -p /app/data/backups
           find /app/data/backups -maxdepth 1 -type f \
-            \( -name 'stockscanner_*.db' -o -name 'stockscanner_*.db-journal' -o -name '.stockscanner_backup_in_progress.db' \) \
+            \( -name 'stockscanner_*.dump' -o -name '.stockscanner_backup_in_progress.dump' \) \
             ! -path "$$KEEP_PATH" \
             -exec rm -f {} +
         } && \
         EXISTING_KEEP="" && \
-        for CANDIDATE in $$(ls -1t /app/data/backups/stockscanner_*.db 2>/dev/null); do \
+        for CANDIDATE in $$(ls -1t /app/data/backups/stockscanner_*.dump 2>/dev/null); do \
           if is_valid_backup "$$CANDIDATE"; then \
             EXISTING_KEEP="$$CANDIDATE"; \
             break; \
@@ -277,10 +329,15 @@ services:
         sleep 300 && \
         while true; do
           mkdir -p /app/data/backups
-          TMP_DEST="/app/data/backups/.stockscanner_backup_in_progress.db"
-          DEST="/app/data/backups/stockscanner_$$(date +%Y%m%d_%H%M%S).db"
+          TMP_DEST="/app/data/backups/.stockscanner_backup_in_progress.dump"
+          DEST="/app/data/backups/stockscanner_$$(date +%Y%m%d_%H%M%S).dump"
           rm -f "$$TMP_DEST"
-          sqlite3 /app/data/stockscanner.db ".backup '$$TMP_DEST'" 2>&1
+          pg_dump \
+            --host=postgres \
+            --username="$${POSTGRES_USER}" \
+            --dbname="$${POSTGRES_DB}" \
+            --format=custom \
+            --file="$$TMP_DEST" 2>&1
           if [ $$? -eq 0 ] && is_valid_backup "$$TMP_DEST"; then
             mv "$$TMP_DEST" "$$DEST"
             prune_backups "$$DEST"
@@ -294,7 +351,8 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   # Frontend (React served by nginx)
@@ -312,3 +370,4 @@ services:
 
 volumes:
   redis_data:
+  postgres_data:

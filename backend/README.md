@@ -59,6 +59,8 @@ xui auth login --profile default --path ../data/xui-reader/config.toml
 
 > **macOS note**: Celery requires `--pool=solo` to avoid fork() crashes from Objective-C fork safety checks. The `start_celery.sh` script handles this automatically along with the required `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` export.
 
+> **Docker note**: the Docker deployment now uses PostgreSQL and Linux `prefork` workers. Keep local/macOS workflows on `solo`; do not copy the Docker pool settings back into local startup scripts.
+
 ### 7. Start the API Server
 
 ```bash
@@ -153,8 +155,8 @@ Key files: `domain/feature_store/ports.py`, `domain/feature_store/models.py`, `i
 
 Two Celery queues prevent API rate limit violations:
 
-- **`celery`** queue: General compute tasks (4 workers locally, 1 in Docker for SQLite safety)
-- **`data_fetch`** queue: External API calls (1 worker, serialized to respect rate limits)
+- **`celery`** queue: General compute tasks
+- **`data_fetch`** queue: External API calls and xui ingestion, kept at single-worker concurrency in Docker to preserve the shared `xui-reader` SQLite store as single-writer
 
 | Task File | Description |
 |-----------|-------------|
@@ -186,7 +188,7 @@ Located in `services/chatbot/` and `services/llm/`.
 
 ## Database
 
-SQLite at `data/stockscanner.db` (project root). Uses absolute path in `DATABASE_URL` to prevent working-directory issues.
+Local development and desktop mode default to SQLite at `data/stockscanner.db` (project root). Docker deployments use PostgreSQL via `DATABASE_URL`, while still mounting `./data` for non-app-db state such as `xui-reader` config/session data and the Celery beat schedule file.
 
 ### Tables by Category
 

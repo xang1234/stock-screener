@@ -1425,17 +1425,31 @@ def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
 
 def _drop_theme_content_tables(conn) -> None:
     """Drop rebuildable theme content storage tables using normal DDL."""
-    conn.execute(text("PRAGMA foreign_keys=OFF"))
-    try:
-        conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state"))
-        conn.execute(text("DROP TABLE IF EXISTS theme_mentions"))
-        conn.execute(text("DROP TABLE IF EXISTS content_items"))
-    finally:
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+    from ...infra.db.portability import is_sqlite
+
+    if is_sqlite(conn):
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
+        try:
+            conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state"))
+            conn.execute(text("DROP TABLE IF EXISTS theme_mentions"))
+            conn.execute(text("DROP TABLE IF EXISTS content_items"))
+        finally:
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+        return
+
+    conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS theme_mentions CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS content_items CASCADE"))
 
 
 def _force_forget_theme_content_tables(conn) -> None:
     """Remove theme content storage tables from sqlite_master when normal DDL can't read them."""
+    from ...infra.db.portability import is_sqlite
+
+    if not is_sqlite(conn):
+        _drop_theme_content_tables(conn)
+        return
+
     conn.execute(text("PRAGMA foreign_keys=OFF"))
     conn.execute(text("PRAGMA writable_schema=ON"))
     try:

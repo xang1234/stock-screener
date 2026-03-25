@@ -13,6 +13,20 @@
 # =============================================================================
 
 services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
   redis:
     deploy:
       resources:
@@ -91,6 +105,22 @@ services:
         max-file: "3"
 
   celery-beat:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db-backup:
     env_file:
       - .env.docker
     deploy:

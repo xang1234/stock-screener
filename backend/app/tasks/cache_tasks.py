@@ -1637,6 +1637,15 @@ def wal_checkpoint():
 
     try:
         from ..database import engine
+        from ..infra.db.portability import is_sqlite
+
+        if not is_sqlite(engine):
+            logger.info("Skipping WAL checkpoint for non-SQLite database")
+            return {
+                'status': 'skipped',
+                'reason': 'non_sqlite_database',
+                'completed_at': datetime.now().isoformat(),
+            }
 
         with engine.connect() as conn:
             result = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
@@ -1681,10 +1690,29 @@ def daily_integrity_check():
     """
     from sqlalchemy import text
 
-    logger.info("TASK: Daily database integrity check (PRAGMA quick_check)")
+    logger.info("TASK: Daily database integrity check")
 
     try:
         from ..database import engine
+        from ..infra.db.portability import is_sqlite, table_exists
+
+        if not is_sqlite(engine):
+            with engine.connect() as conn:
+                required_tables = ("scans", "scan_results", "stock_universe")
+                missing = [name for name in required_tables if not table_exists(conn, name)]
+            if missing:
+                logger.warning("Database schema check failed; missing tables: %s", ", ".join(missing))
+                return {
+                    'status': 'schema_incomplete',
+                    'missing_tables': missing,
+                    'completed_at': datetime.now().isoformat(),
+                }
+            logger.info("Database schema sanity check passed")
+            return {
+                'status': 'ok',
+                'mode': 'schema_sanity',
+                'completed_at': datetime.now().isoformat(),
+            }
 
         with engine.connect() as conn:
             result = conn.execute(text("PRAGMA quick_check")).scalar()

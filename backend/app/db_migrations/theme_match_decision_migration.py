@@ -6,6 +6,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names, index_names, table_names
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "theme_mentions"
@@ -73,18 +75,15 @@ def verify_theme_match_decision_schema(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_table_indexes(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return index_names(conn, TABLE_NAME)
 
 
 def _add_missing_columns(conn) -> list[str]:

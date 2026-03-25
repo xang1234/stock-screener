@@ -12,6 +12,8 @@ import json
 import logging
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names
+
 logger = logging.getLogger(__name__)
 
 # Columns to add (name, type_spec)
@@ -68,8 +70,7 @@ def migrate_scan_universe_schema_and_backfill(engine) -> None:
 
 def _get_existing_columns(conn) -> set:
     """Get set of column names currently on the scans table."""
-    result = conn.execute(text("PRAGMA table_info(scans)"))
-    return {row[1] for row in result.fetchall()}
+    return column_names(conn, "scans")
 
 
 def _add_missing_columns(conn, existing_columns: set) -> int:

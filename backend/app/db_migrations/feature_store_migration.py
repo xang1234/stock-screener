@@ -13,6 +13,14 @@ CREATE INDEX IF NOT EXISTS throughout.
 import logging
 from sqlalchemy import text
 
+from ..infra.db.models.feature_store import (
+    FeatureRun,
+    FeatureRunPointer,
+    FeatureRunUniverseSymbol,
+    StockFeatureDaily,
+)
+from ..infra.db.portability import is_sqlite, table_names
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,16 +50,17 @@ def migrate_feature_store_tables(engine) -> None:
 
 def _get_existing_tables(conn) -> set:
     """Return set of table names currently in the database."""
-    result = conn.execute(text(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ))
-    return {row[0] for row in result.fetchall()}
+    return table_names(conn)
 
 
 def _create_feature_runs(conn, existing: set) -> None:
     """Create the feature_runs table."""
     if "feature_runs" in existing:
         logger.info("Table feature_runs already exists, skipping")
+        return
+    if not is_sqlite(conn):
+        FeatureRun.__table__.create(bind=conn, checkfirst=True)
+        logger.info("Created table feature_runs")
         return
 
     conn.execute(text("""
@@ -97,6 +106,10 @@ def _create_feature_run_universe_symbols(conn, existing: set) -> None:
     if "feature_run_universe_symbols" in existing:
         logger.info("Table feature_run_universe_symbols already exists, skipping")
         return
+    if not is_sqlite(conn):
+        FeatureRunUniverseSymbol.__table__.create(bind=conn, checkfirst=True)
+        logger.info("Created table feature_run_universe_symbols")
+        return
 
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS feature_run_universe_symbols (
@@ -120,6 +133,10 @@ def _create_stock_feature_daily(conn, existing: set) -> None:
     """Create the stock_feature_daily table."""
     if "stock_feature_daily" in existing:
         logger.info("Table stock_feature_daily already exists, skipping")
+        return
+    if not is_sqlite(conn):
+        StockFeatureDaily.__table__.create(bind=conn, checkfirst=True)
+        logger.info("Created table stock_feature_daily")
         return
 
     conn.execute(text("""
@@ -169,6 +186,10 @@ def _create_feature_run_pointers(conn, existing: set) -> None:
     """Create the feature_run_pointers table."""
     if "feature_run_pointers" in existing:
         logger.info("Table feature_run_pointers already exists, skipping")
+        return
+    if not is_sqlite(conn):
+        FeatureRunPointer.__table__.create(bind=conn, checkfirst=True)
+        logger.info("Created table feature_run_pointers")
         return
 
     conn.execute(text("""

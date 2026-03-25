@@ -6,6 +6,9 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names, index_names, is_postgres, sql_timestamp_type, table_names
+from ..models.theme import ThemeAlias
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "theme_aliases"
@@ -113,21 +116,21 @@ def verify_theme_aliases_schema(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_table_indexes(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return index_names(conn, TABLE_NAME)
 
 
 def _create_theme_aliases_table(conn) -> None:
+    if is_postgres(conn):
+        ThemeAlias.__table__.create(bind=conn, checkfirst=True)
+        return
     conn.execute(
         text(
             """
@@ -154,15 +157,16 @@ def _create_theme_aliases_table(conn) -> None:
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
+    timestamp_type = sql_timestamp_type(conn)
     column_ddl = {
         "source": "ALTER TABLE theme_aliases ADD COLUMN source TEXT NOT NULL DEFAULT 'llm_extraction'",
         "confidence": "ALTER TABLE theme_aliases ADD COLUMN confidence FLOAT NOT NULL DEFAULT 0.5",
         "evidence_count": "ALTER TABLE theme_aliases ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1",
-        "first_seen_at": "ALTER TABLE theme_aliases ADD COLUMN first_seen_at DATETIME",
-        "last_seen_at": "ALTER TABLE theme_aliases ADD COLUMN last_seen_at DATETIME",
+        "first_seen_at": f"ALTER TABLE theme_aliases ADD COLUMN first_seen_at {timestamp_type}",
+        "last_seen_at": f"ALTER TABLE theme_aliases ADD COLUMN last_seen_at {timestamp_type}",
         "is_active": "ALTER TABLE theme_aliases ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
-        "created_at": "ALTER TABLE theme_aliases ADD COLUMN created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
-        "updated_at": "ALTER TABLE theme_aliases ADD COLUMN updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
+        "created_at": f"ALTER TABLE theme_aliases ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": f"ALTER TABLE theme_aliases ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }
     added: list[str] = []
     for column, ddl in column_ddl.items():

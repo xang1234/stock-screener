@@ -12,6 +12,17 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import (
+    check_constraints,
+    column_names,
+    foreign_keys,
+    index_names,
+    is_sqlite,
+    sql_timestamp_type,
+    table_names,
+)
+from ..models.theme import ContentItemPipelineState
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "content_item_pipeline_state"
@@ -104,15 +115,9 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
         indexes = _get_table_indexes(conn) if table_exists else set()
         missing_indexes = sorted(EXPECTED_INDEXES - indexes)
 
-        create_sql = None
-        if table_exists:
-            create_sql = conn.execute(
-                text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:name"),
-                {"name": TABLE_NAME},
-            ).scalar()
-
-        status_check_present = bool(create_sql and "CHECK (status IN" in create_sql)
-        pipeline_check_present = bool(create_sql and "CHECK (pipeline IN" in create_sql)
+        constraints = check_constraints(conn, TABLE_NAME) if table_exists else []
+        status_check_present = any("status" in (constraint.get("sqltext") or "") for constraint in constraints)
+        pipeline_check_present = any("pipeline" in (constraint.get("sqltext") or "") for constraint in constraints)
         fk_cascade_present = _has_required_fk_cascade(conn) if table_exists else False
 
         duplicate_rows = 0
@@ -169,21 +174,21 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_table_indexes(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return index_names(conn, TABLE_NAME)
 
 
 def _create_pipeline_state_table(conn) -> None:
+    if not is_sqlite(conn):
+        ContentItemPipelineState.__table__.create(bind=conn, checkfirst=True)
+        return
     status_values = ", ".join(f"'{v}'" for v in STATUS_VALUES)
     pipeline_values = ", ".join(f"'{v}'" for v in PIPELINE_VALUES)
     conn.execute(
@@ -209,6 +214,8 @@ def _create_pipeline_state_table(conn) -> None:
 
 
 def _create_pipeline_state_table_with_name(conn, table_name: str) -> None:
+    if not is_sqlite(conn):
+        raise RuntimeError("table rebuild helper is SQLite-only")
     status_values = ", ".join(f"'{v}'" for v in STATUS_VALUES)
     pipeline_values = ", ".join(f"'{v}'" for v in PIPELINE_VALUES)
     conn.execute(
@@ -234,31 +241,29 @@ def _create_pipeline_state_table_with_name(conn, table_name: str) -> None:
 
 
 def _has_required_fk_cascade(conn) -> bool:
-    rows = conn.execute(text(f"PRAGMA foreign_key_list({TABLE_NAME})")).fetchall()
-    for row in rows:
-        # PRAGMA foreign_key_list columns: id, seq, table, from, to, on_update, on_delete, match
-        ref_table = row[2]
-        from_col = row[3]
-        to_col = row[4]
-        on_delete = (row[6] or "").upper()
-        if ref_table == "content_items" and from_col == "content_item_id" and to_col == "id" and on_delete == "CASCADE":
+    for row in foreign_keys(conn, TABLE_NAME):
+        ref_table = row.get("referred_table")
+        constrained_cols = row.get("constrained_columns") or []
+        referred_cols = row.get("referred_columns") or []
+        on_delete = (row.get("options") or {}).get("ondelete", "").upper()
+        if ref_table == "content_items" and constrained_cols == ["content_item_id"] and referred_cols == ["id"] and on_delete == "CASCADE":
             return True
     return False
 
 
 def _needs_table_rebuild(conn) -> bool:
-    create_sql = conn.execute(
-        text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:name"),
-        {"name": TABLE_NAME},
-    ).scalar() or ""
-
-    has_status_check = "CHECK (status IN" in create_sql
-    has_pipeline_check = "CHECK (pipeline IN" in create_sql
+    if not is_sqlite(conn):
+        return False
+    constraints = check_constraints(conn, TABLE_NAME)
+    has_status_check = any("status" in (constraint.get("sqltext") or "") for constraint in constraints)
+    has_pipeline_check = any("pipeline" in (constraint.get("sqltext") or "") for constraint in constraints)
     has_fk_cascade = _has_required_fk_cascade(conn)
     return not (has_status_check and has_pipeline_check and has_fk_cascade)
 
 
 def _rebuild_pipeline_state_table(conn) -> None:
+    if not is_sqlite(conn):
+        return
     old_table = TABLE_NAME
     new_table = f"{TABLE_NAME}__new"
 
@@ -314,14 +319,15 @@ def _rebuild_pipeline_state_table(conn) -> None:
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
+    timestamp_type = sql_timestamp_type(conn)
     column_ddl = {
         "attempt_count": "ALTER TABLE content_item_pipeline_state ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
         "error_code": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_code TEXT",
         "error_message": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_message TEXT",
-        "last_attempt_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at DATETIME",
-        "processed_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at DATETIME",
-        "created_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
-        "updated_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)",
+        "last_attempt_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at {timestamp_type}",
+        "processed_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at {timestamp_type}",
+        "created_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }
     added: list[str] = []
     for column, ddl in column_ddl.items():

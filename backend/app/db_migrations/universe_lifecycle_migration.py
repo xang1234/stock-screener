@@ -9,6 +9,8 @@ from datetime import datetime
 from sqlalchemy import text
 
 from ..database import is_corruption_error
+from ..infra.db.portability import column_names, index_defs, is_sqlite, sql_timestamp_type, table_names
+from ..models.stock_universe import StockUniverseStatusEvent
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +18,16 @@ _ROW_UPDATE_BATCH_SIZE = 250
 
 
 def _get_columns(conn, table_name: str) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, table_name)
 
 
 def _get_index_columns(conn, table_name: str) -> dict[str, tuple[str, ...]]:
     """Return existing index column tuples keyed by index name."""
-    indexes: dict[str, tuple[str, ...]] = {}
-    for row in conn.execute(text(f"PRAGMA index_list('{table_name}')")).fetchall():
-        index_name = row[1]
-        index_columns = conn.execute(
-            text(f"PRAGMA index_info('{index_name}')")
-        ).fetchall()
-        indexes[index_name] = tuple(column[2] for column in index_columns)
-    return indexes
+    return {
+        index["name"]: tuple(index["columns"])
+        for index in index_defs(conn, table_name)
+        if index.get("name")
+    }
 
 
 def _normalize_text(value) -> str | None:
@@ -269,12 +267,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
 def migrate_universe_lifecycle(engine) -> None:
     """Add lifecycle columns to stock_universe and create audit tables."""
     with engine.connect() as conn:
-        existing_tables = {
-            row[0]
-            for row in conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            ).fetchall()
-        }
+        existing_tables = table_names(conn)
 
         if "stock_universe" not in existing_tables:
             logger.info("stock_universe table not present yet; lifecycle migration skipped")
@@ -282,17 +275,18 @@ def migrate_universe_lifecycle(engine) -> None:
 
         legacy_columns = _get_columns(conn, "stock_universe")
 
+        timestamp_type = sql_timestamp_type(conn)
         add_columns = {
             "status": "ALTER TABLE stock_universe ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "status_reason": "ALTER TABLE stock_universe ADD COLUMN status_reason TEXT",
-            "first_seen_at": "ALTER TABLE stock_universe ADD COLUMN first_seen_at DATETIME",
-            "last_seen_in_source_at": "ALTER TABLE stock_universe ADD COLUMN last_seen_in_source_at DATETIME",
-            "deactivated_at": "ALTER TABLE stock_universe ADD COLUMN deactivated_at DATETIME",
+            "first_seen_at": f"ALTER TABLE stock_universe ADD COLUMN first_seen_at {timestamp_type}",
+            "last_seen_in_source_at": f"ALTER TABLE stock_universe ADD COLUMN last_seen_in_source_at {timestamp_type}",
+            "deactivated_at": f"ALTER TABLE stock_universe ADD COLUMN deactivated_at {timestamp_type}",
             "consecutive_fetch_failures": (
                 "ALTER TABLE stock_universe ADD COLUMN consecutive_fetch_failures INTEGER NOT NULL DEFAULT 0"
             ),
-            "last_fetch_success_at": "ALTER TABLE stock_universe ADD COLUMN last_fetch_success_at DATETIME",
-            "last_fetch_failure_at": "ALTER TABLE stock_universe ADD COLUMN last_fetch_failure_at DATETIME",
+            "last_fetch_success_at": f"ALTER TABLE stock_universe ADD COLUMN last_fetch_success_at {timestamp_type}",
+            "last_fetch_failure_at": f"ALTER TABLE stock_universe ADD COLUMN last_fetch_failure_at {timestamp_type}",
         }
 
         for name, ddl in add_columns.items():
@@ -301,22 +295,25 @@ def migrate_universe_lifecycle(engine) -> None:
 
         _backfill_stock_universe_rows(conn, legacy_columns)
 
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS stock_universe_status_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT NOT NULL,
-                    old_status TEXT,
-                    new_status TEXT NOT NULL,
-                    trigger_source TEXT NOT NULL,
-                    reason TEXT,
-                    payload_json TEXT,
-                    created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+        if is_sqlite(conn):
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS stock_universe_status_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        old_status TEXT,
+                        new_status TEXT NOT NULL,
+                        trigger_source TEXT NOT NULL,
+                        reason TEXT,
+                        payload_json TEXT,
+                        created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+                    )
+                    """
                 )
-                """
             )
-        )
+        else:
+            StockUniverseStatusEvent.__table__.create(bind=conn, checkfirst=True)
         _ensure_index(
             conn,
             table_name="stock_universe_status_events",

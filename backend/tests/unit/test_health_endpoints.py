@@ -29,17 +29,14 @@ class TestReadyz:
     async def test_healthy_when_db_and_redis_up(self, client):
         mock_redis = MagicMock()
         mock_redis.ping.return_value = True
-        # Mock engine.connect() to return a table count > 0
-        mock_result = MagicMock()
-        mock_result.scalar.return_value = 15  # 15 tables in schema
         mock_conn = MagicMock()
-        mock_conn.execute.return_value = mock_result
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
         with patch("app.main.get_redis_client", return_value=mock_redis), \
-             patch("app.main.engine", mock_engine):
+             patch("app.main.engine", mock_engine), \
+             patch("app.main.table_exists", side_effect=lambda _conn, table: table == "scans"):
             response = await client.get("/readyz")
             assert response.status_code == 200
             data = response.json()
@@ -77,16 +74,14 @@ class TestReadyz:
             assert "error" in data["checks"]["database"]
 
     async def test_503_when_db_has_no_tables(self, client):
-        """Empty schema (count=0 from sqlite_master) is treated as unhealthy."""
-        mock_result = MagicMock()
-        mock_result.scalar.return_value = 0  # No tables
+        """Empty schema is treated as unhealthy."""
         mock_conn = MagicMock()
-        mock_conn.execute.return_value = mock_result
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_engine = MagicMock()
         mock_engine.connect.return_value = mock_conn
-        with patch("app.main.engine", mock_engine):
+        with patch("app.main.engine", mock_engine), \
+             patch("app.main.table_exists", return_value=False):
             response = await client.get("/readyz")
             assert response.status_code == 503
             data = response.json()

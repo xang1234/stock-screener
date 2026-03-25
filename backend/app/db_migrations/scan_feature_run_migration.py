@@ -10,6 +10,8 @@ Safe to run on every startup — checks prerequisites and skips if present.
 import logging
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names, table_names
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,10 +29,8 @@ def migrate_scan_feature_run_id(engine) -> None:
     with engine.connect() as conn:
         # Prerequisite: feature_runs table must exist for FK
         tables = {
-            r[0]
-            for r in conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            ).fetchall()
+            name
+            for name in table_names(conn)
         }
         if "feature_runs" not in tables:
             logger.warning(
@@ -39,9 +39,7 @@ def migrate_scan_feature_run_id(engine) -> None:
             return
 
         # Detect existing columns
-        existing = {
-            r[1] for r in conn.execute(text("PRAGMA table_info(scans)")).fetchall()
-        }
+        existing = column_names(conn, "scans")
         if "feature_run_id" in existing:
             return  # Already migrated
 

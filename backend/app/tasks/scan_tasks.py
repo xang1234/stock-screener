@@ -183,14 +183,26 @@ def compute_industry_peer_metrics(db: Session, scan_id: str):
 def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:
     """Log setup_engine score distribution for observability."""
     try:
-        from sqlalchemy import func, select
+        from sqlalchemy import select
+        from app.infra.db.portability import json_number, json_text
+
+        score_expr = json_number(
+            ScanResult.details,
+            ("setup_engine", "setup_score"),
+            bind_or_session=db,
+        )
+        ready_expr = json_text(
+            ScanResult.details,
+            ("setup_engine", "setup_ready"),
+            bind_or_session=db,
+        )
         scores_rows = db.execute(
             select(
-                func.json_extract(ScanResult.details, '$.setup_engine.setup_score'),
-                func.json_extract(ScanResult.details, '$.setup_engine.setup_ready'),
+                score_expr,
+                ready_expr,
             ).where(
                 ScanResult.scan_id == scan_id,
-                func.json_extract(ScanResult.details, '$.setup_engine.setup_score').isnot(None),
+                score_expr.isnot(None),
             )
         ).all()
 

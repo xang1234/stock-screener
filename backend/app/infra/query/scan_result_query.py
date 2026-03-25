@@ -1,15 +1,10 @@
-"""SQLAlchemy query builder for scan results.
-
-Translates domain FilterSpec / SortSpec / PageSpec into SQLAlchemy
-WHERE, ORDER BY, and LIMIT/OFFSET clauses.  Handles both indexed
-SQL columns and json_extract() for fields stored in the details blob.
-"""
+"""SQLAlchemy query builder for scan results."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Float as SAFloat, and_, asc, cast, desc, func
+from sqlalchemy import and_, asc, desc, func
 from sqlalchemy.orm import Query
 
 from app.domain.scanning.filter_spec import (
@@ -23,6 +18,7 @@ from app.domain.scanning.filter_spec import (
     SortSpec,
     TextSearchFilter,
 )
+from app.infra.db.portability import is_postgres, json_number, json_text
 from app.models.scan_result import ScanResult
 
 # ── Column resolution ───────────────────────────────────────────────────
@@ -82,44 +78,44 @@ _COLUMN_MAP: dict[str, Any] = {
 }
 
 # JSON details paths for fields stored in the details blob.
-# Maps domain field name → json_extract path.
-_JSON_FIELD_MAP: dict[str, str] = {
+# Maps domain field name to nested path segments.
+_JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     # VCP
-    "vcp_score": "$.vcp_score",
-    "vcp_pivot": "$.vcp_pivot",
-    "vcp_detected": "$.vcp_detected",
-    "vcp_ready_for_breakout": "$.vcp_ready_for_breakout",
-    "ma_alignment": "$.ma_alignment",
+    "vcp_score": ("vcp_score",),
+    "vcp_pivot": ("vcp_pivot",),
+    "vcp_detected": ("vcp_detected",),
+    "vcp_ready_for_breakout": ("vcp_ready_for_breakout",),
+    "ma_alignment": ("ma_alignment",),
     # Setup Engine (numeric)
-    "se_setup_score": "$.setup_engine.setup_score",
-    "se_quality_score": "$.setup_engine.quality_score",
-    "se_readiness_score": "$.setup_engine.readiness_score",
-    "se_pattern_confidence": "$.setup_engine.pattern_confidence",
-    "se_pivot_price": "$.setup_engine.pivot_price",
-    "se_distance_to_pivot_pct": "$.setup_engine.distance_to_pivot_pct",
-    "se_base_length_weeks": "$.setup_engine.base_length_weeks",
-    "se_base_depth_pct": "$.setup_engine.base_depth_pct",
-    "se_support_tests_count": "$.setup_engine.support_tests_count",
-    "se_tight_closes_count": "$.setup_engine.tight_closes_count",
-    "se_atr14_pct": "$.setup_engine.atr14_pct",
-    "se_atr14_pct_trend": "$.setup_engine.atr14_pct_trend",
-    "se_bb_width_pct": "$.setup_engine.bb_width_pct",
-    "se_bb_width_pctile_252": "$.setup_engine.bb_width_pctile_252",
-    "se_volume_vs_50d": "$.setup_engine.volume_vs_50d",
-    "se_up_down_volume_ratio_10d": "$.setup_engine.up_down_volume_ratio_10d",
-    "se_quiet_days_10d": "$.setup_engine.quiet_days_10d",
-    "se_rs": "$.setup_engine.rs",
-    "se_rs_vs_spy_65d": "$.setup_engine.rs_vs_spy_65d",
-    "se_rs_vs_spy_trend_20d": "$.setup_engine.rs_vs_spy_trend_20d",
+    "se_setup_score": ("setup_engine", "setup_score"),
+    "se_quality_score": ("setup_engine", "quality_score"),
+    "se_readiness_score": ("setup_engine", "readiness_score"),
+    "se_pattern_confidence": ("setup_engine", "pattern_confidence"),
+    "se_pivot_price": ("setup_engine", "pivot_price"),
+    "se_distance_to_pivot_pct": ("setup_engine", "distance_to_pivot_pct"),
+    "se_base_length_weeks": ("setup_engine", "base_length_weeks"),
+    "se_base_depth_pct": ("setup_engine", "base_depth_pct"),
+    "se_support_tests_count": ("setup_engine", "support_tests_count"),
+    "se_tight_closes_count": ("setup_engine", "tight_closes_count"),
+    "se_atr14_pct": ("setup_engine", "atr14_pct"),
+    "se_atr14_pct_trend": ("setup_engine", "atr14_pct_trend"),
+    "se_bb_width_pct": ("setup_engine", "bb_width_pct"),
+    "se_bb_width_pctile_252": ("setup_engine", "bb_width_pctile_252"),
+    "se_volume_vs_50d": ("setup_engine", "volume_vs_50d"),
+    "se_up_down_volume_ratio_10d": ("setup_engine", "up_down_volume_ratio_10d"),
+    "se_quiet_days_10d": ("setup_engine", "quiet_days_10d"),
+    "se_rs": ("setup_engine", "rs"),
+    "se_rs_vs_spy_65d": ("setup_engine", "rs_vs_spy_65d"),
+    "se_rs_vs_spy_trend_20d": ("setup_engine", "rs_vs_spy_trend_20d"),
     # Setup Engine (boolean)
-    "se_setup_ready": "$.setup_engine.setup_ready",
-    "se_rs_line_new_high": "$.setup_engine.rs_line_new_high",
-    "se_in_early_zone": "$.setup_engine.in_early_zone",
-    "se_extended_from_pivot": "$.setup_engine.extended_from_pivot",
-    "se_bb_squeeze": "$.setup_engine.bb_squeeze",
+    "se_setup_ready": ("setup_engine", "setup_ready"),
+    "se_rs_line_new_high": ("setup_engine", "rs_line_new_high"),
+    "se_in_early_zone": ("setup_engine", "in_early_zone"),
+    "se_extended_from_pivot": ("setup_engine", "extended_from_pivot"),
+    "se_bb_squeeze": ("setup_engine", "bb_squeeze"),
     # Setup Engine (string)
-    "se_pattern_primary": "$.setup_engine.pattern_primary",
-    "se_pivot_type": "$.setup_engine.pivot_type",
+    "se_pattern_primary": ("setup_engine", "pattern_primary"),
+    "se_pivot_type": ("setup_engine", "pivot_type"),
 }
 
 # JSON fields requiring CAST(... AS FLOAT) for correct numeric sorting.
@@ -147,10 +143,13 @@ _PYTHON_SORT_FIELDS = frozenset({
 _PYTHON_SORT_LIMIT = 1000
 
 
-def _json_sort_expr(field: str, column, json_path: str, order: SortOrder):
+def _json_sort_expr(query: Query, field: str, column, json_path: tuple[str, ...], order: SortOrder):
     """ORDER BY expression for a JSON field: numeric cast + nulls-last."""
-    json_val = func.json_extract(column, json_path)
-    expr = cast(json_val, SAFloat) if field in _JSON_SORT_NUMERIC else json_val
+    expr = (
+        json_number(column, json_path, bind_or_session=query)
+        if field in _JSON_SORT_NUMERIC
+        else json_text(column, json_path, bind_or_session=query)
+    )
     order_fn = asc if order == SortOrder.ASC else desc
     return order_fn(expr).nullslast()
 
@@ -201,9 +200,7 @@ def apply_sort_and_paginate(
             query = query.order_by(order_fn(col))
         elif sort.field in _JSON_FIELD_MAP:
             json_path = _JSON_FIELD_MAP[sort.field]
-            query = query.order_by(
-                _json_sort_expr(sort.field, ScanResult.details, json_path, sort.order)
-            )
+            query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
         else:
             # Unknown sort field — fall back to composite_score desc
             query = query.order_by(desc(ScanResult.composite_score))
@@ -228,9 +225,7 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
         query = query.order_by(order_fn(col))
     elif sort.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[sort.field]
-        query = query.order_by(
-            _json_sort_expr(sort.field, ScanResult.details, json_path, sort.order)
-        )
+        query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
     else:
         query = query.order_by(desc(ScanResult.composite_score))
     return query.all()
@@ -240,7 +235,7 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
 
 
 def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
-    """Apply a numeric range filter — SQL column or json_extract."""
+    """Apply a numeric range filter — SQL column or dialect-aware JSON."""
     col = _COLUMN_MAP.get(rf.field)
     if col is not None:
         # Regular SQL column
@@ -249,18 +244,17 @@ def _apply_range_filter(query: Query, rf: RangeFilter) -> Query:
         if rf.max_value is not None:
             query = query.filter(col <= rf.max_value)
     elif rf.field in _JSON_FIELD_MAP:
-        # JSON-extracted numeric field
         json_path = _JSON_FIELD_MAP[rf.field]
-        json_val = func.json_extract(ScanResult.details, json_path)
+        json_val = json_number(ScanResult.details, json_path, bind_or_session=query)
         if rf.min_value is not None:
             query = query.filter(and_(
                 json_val.isnot(None),
-                cast(json_val, SAFloat) >= rf.min_value,
+                json_val >= rf.min_value,
             ))
         if rf.max_value is not None:
             query = query.filter(and_(
                 json_val.isnot(None),
-                cast(json_val, SAFloat) <= rf.max_value,
+                json_val <= rf.max_value,
             ))
     return query
 
@@ -275,7 +269,7 @@ def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
             query = query.filter(col.in_(cf.values))
     elif cf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[cf.field]
-        json_val = func.json_extract(ScanResult.details, json_path)
+        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
         if cf.mode == FilterMode.EXCLUDE:
             query = query.filter(~json_val.in_(cf.values))
         else:
@@ -284,16 +278,21 @@ def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
 
 
 def _apply_boolean_filter(query: Query, bf: BooleanFilter) -> Query:
-    """Apply a boolean filter — SQL column or json_extract."""
+    """Apply a boolean filter — SQL column or dialect-aware JSON."""
     col = _COLUMN_MAP.get(bf.field)
     if col is not None:
         query = query.filter(col == bf.value)
     elif bf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[bf.field]
-        json_val = func.json_extract(ScanResult.details, json_path)
+        if is_postgres(query):
+            json_val = func.lower(json_text(ScanResult.details, json_path, bind_or_session=query))
+            expected = "true" if bf.value else "false"
+        else:
+            json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
+            expected = 1 if bf.value else 0
         query = query.filter(and_(
             json_val.isnot(None),
-            json_val == (1 if bf.value else 0),
+            json_val == expected,
         ))
     return query
 
@@ -305,7 +304,7 @@ def _apply_text_search(query: Query, ts: TextSearchFilter) -> Query:
         query = query.filter(col.ilike(f"%{ts.pattern}%"))
     elif ts.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[ts.field]
-        json_val = func.json_extract(ScanResult.details, json_path)
+        json_val = json_text(ScanResult.details, json_path, bind_or_session=query)
         query = query.filter(json_val.ilike(f"%{ts.pattern}%"))
     return query
 

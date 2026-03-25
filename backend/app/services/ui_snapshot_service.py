@@ -852,12 +852,25 @@ def _json_safe(value: Any) -> Any:
 
 def _drop_snapshot_tables(conn) -> None:
     """Drop rebuildable UI snapshot cache tables using normal DDL."""
-    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers"))
-    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots"))
+    from ..infra.db.portability import is_sqlite
+
+    if is_sqlite(conn):
+        conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers"))
+        conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots"))
+        return
+
+    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots CASCADE"))
 
 
 def _force_forget_snapshot_tables(conn) -> None:
     """Remove UI snapshot cache tables from sqlite_master when normal DDL can't read them."""
+    from ..infra.db.portability import is_sqlite
+
+    if not is_sqlite(conn):
+        _drop_snapshot_tables(conn)
+        return
+
     conn.execute(text("PRAGMA foreign_keys=OFF"))
     conn.execute(text("PRAGMA writable_schema=ON"))
     try:

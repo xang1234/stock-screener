@@ -1,22 +1,32 @@
-"""
-Database setup and session management using SQLAlchemy.
-"""
+"""Database setup and session management using SQLAlchemy."""
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from .config import settings
 
-# Create SQLAlchemy engine
-engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-    echo=False,  # Set to True for SQL query logging
-    pool_pre_ping=True,  # Verify connections are alive before use (catches stale conns in Celery workers)
-)
+from .config import settings
+from .infra.db.portability import is_postgres, is_sqlite
+
+
+def _engine_kwargs() -> dict:
+    kwargs = {
+        "echo": False,
+        "pool_pre_ping": True,
+    }
+    if is_sqlite(settings.database_url):
+        kwargs["connect_args"] = {"check_same_thread": False}
+    elif is_postgres(settings.database_url):
+        # Keep the default conservative for the current multi-service Docker shape.
+        kwargs["pool_size"] = 5
+        kwargs["max_overflow"] = 5
+    return kwargs
+
+
+engine = create_engine(settings.database_url, **_engine_kwargs())
 
 
 # Enable SQLite pragmas for WAL mode, concurrency, and foreign keys
-if "sqlite" in settings.database_url:
+if is_sqlite(settings.database_url):
 
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, connection_record):
@@ -66,10 +76,11 @@ def init_db():
 
 
 def is_corruption_error(exc: Exception) -> bool:
-    """Detect SQLite database corruption from exception messages."""
+    """Detect low-level database corruption signatures."""
     msg = str(exc).lower()
     return any(s in msg for s in (
         "malformed", "disk image", "file is not a database", "disk i/o error",
+        "could not read block", "invalid page", "database system is in recovery mode",
     ))
 
 

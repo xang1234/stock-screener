@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,7 @@ from app.infra.db.models.feature_store import (
     FeatureRunUniverseSymbol,
     StockFeatureDaily,
 )
+from app.infra.db.portability import is_postgres, json_text
 from app.infra.serialization import convert_numpy_types
 from app.infra.query.feature_store_query import (
     apply_filters,
@@ -35,6 +37,21 @@ from app.infra.query.feature_store_query import (
 from app.models.stock_universe import StockUniverse
 
 _BATCH_SIZE = 500
+
+
+def _upsert_stmt(session: Session, values: list[dict[str, Any]]):
+    insert_fn = pg_insert if is_postgres(session) else sqlite_insert
+    stmt = insert_fn(StockFeatureDaily).values(values)
+    return stmt.on_conflict_do_update(
+        index_elements=["run_id", "symbol"],
+        set_={
+            "as_of_date": stmt.excluded.as_of_date,
+            "composite_score": stmt.excluded.composite_score,
+            "overall_rating": stmt.excluded.overall_rating,
+            "passes_count": stmt.excluded.passes_count,
+            "details_json": stmt.excluded.details_json,
+        },
+    )
 
 
 class SqlFeatureStoreRepository(FeatureStoreRepository):
@@ -66,17 +83,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
                 }
                 for row in batch
             ]
-            stmt = sqlite_insert(StockFeatureDaily).values(values)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["run_id", "symbol"],
-                set_={
-                    "as_of_date": stmt.excluded.as_of_date,
-                    "composite_score": stmt.excluded.composite_score,
-                    "overall_rating": stmt.excluded.overall_rating,
-                    "passes_count": stmt.excluded.passes_count,
-                    "details_json": stmt.excluded.details_json,
-                },
-            )
+            stmt = _upsert_stmt(self._session, values)
             self._session.execute(stmt)
             count += len(batch)
 
@@ -281,8 +288,10 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         ))
 
         # Industries and sectors from JSON
-        industry_col = func.json_extract(
-            StockFeatureDaily.details_json, "$.ibd_industry_group"
+        industry_col = json_text(
+            StockFeatureDaily.details_json,
+            ("ibd_industry_group",),
+            bind_or_session=self._session,
         )
         industry_rows = (
             self._session.query(industry_col)
@@ -296,8 +305,10 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         )
         industries = tuple(sorted(r[0] for r in industry_rows))
 
-        sector_col = func.json_extract(
-            StockFeatureDaily.details_json, "$.gics_sector"
+        sector_col = json_text(
+            StockFeatureDaily.details_json,
+            ("gics_sector",),
+            bind_or_session=self._session,
         )
         sector_rows = (
             self._session.query(sector_col)
@@ -373,8 +384,10 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        industry_col = func.json_extract(
-            StockFeatureDaily.details_json, "$.ibd_industry_group"
+        industry_col = json_text(
+            StockFeatureDaily.details_json,
+            ("ibd_industry_group",),
+            bind_or_session=self._session,
         )
         rows = (
             self._session.query(StockFeatureDaily, StockUniverse.name)
@@ -408,8 +421,10 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        sector_col = func.json_extract(
-            StockFeatureDaily.details_json, "$.gics_sector"
+        sector_col = json_text(
+            StockFeatureDaily.details_json,
+            ("gics_sector",),
+            bind_or_session=self._session,
         )
         rows = (
             self._session.query(StockFeatureDaily, StockUniverse.name)

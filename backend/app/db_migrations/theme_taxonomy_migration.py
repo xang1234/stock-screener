@@ -6,18 +6,11 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import column_names, index_names, sql_timestamp_type
+
 logger = logging.getLogger(__name__)
 
 TABLE_NAME = "theme_clusters"
-
-TAXONOMY_COLUMNS = {
-    "parent_cluster_id": "ALTER TABLE theme_clusters ADD COLUMN parent_cluster_id INTEGER REFERENCES theme_clusters(id)",
-    "is_l1": "ALTER TABLE theme_clusters ADD COLUMN is_l1 BOOLEAN NOT NULL DEFAULT 0",
-    "taxonomy_level": "ALTER TABLE theme_clusters ADD COLUMN taxonomy_level INTEGER NOT NULL DEFAULT 2",
-    "l1_assignment_method": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_method TEXT",
-    "l1_assignment_confidence": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_confidence REAL",
-    "l1_assigned_at": "ALTER TABLE theme_clusters ADD COLUMN l1_assigned_at DATETIME",
-}
 
 EXPECTED_INDEXES = {
     "idx_tc_parent_cluster_id",
@@ -34,9 +27,17 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
     }
 
     with engine.connect() as conn:
+        taxonomy_columns = {
+            "parent_cluster_id": "ALTER TABLE theme_clusters ADD COLUMN parent_cluster_id INTEGER REFERENCES theme_clusters(id)",
+            "is_l1": "ALTER TABLE theme_clusters ADD COLUMN is_l1 BOOLEAN NOT NULL DEFAULT 0",
+            "taxonomy_level": "ALTER TABLE theme_clusters ADD COLUMN taxonomy_level INTEGER NOT NULL DEFAULT 2",
+            "l1_assignment_method": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_method TEXT",
+            "l1_assignment_confidence": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_confidence REAL",
+            "l1_assigned_at": f"ALTER TABLE theme_clusters ADD COLUMN l1_assigned_at {sql_timestamp_type(conn)}",
+        }
         existing_columns = _get_table_columns(conn)
 
-        for column, ddl in TAXONOMY_COLUMNS.items():
+        for column, ddl in taxonomy_columns.items():
             if column in existing_columns:
                 continue
             conn.execute(text(ddl))
@@ -58,7 +59,14 @@ def verify_theme_taxonomy_schema(engine) -> dict[str, Any]:
     with engine.connect() as conn:
         columns = _get_table_columns(conn)
         indexes = _get_table_indexes(conn)
-        missing_columns = sorted(set(TAXONOMY_COLUMNS.keys()) - columns)
+        missing_columns = sorted({
+            "parent_cluster_id",
+            "is_l1",
+            "taxonomy_level",
+            "l1_assignment_method",
+            "l1_assignment_confidence",
+            "l1_assigned_at",
+        } - columns)
         missing_indexes = sorted(EXPECTED_INDEXES - indexes)
         return {
             "missing_columns": missing_columns,
@@ -68,13 +76,11 @@ def verify_theme_taxonomy_schema(engine) -> dict[str, Any]:
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_table_indexes(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return index_names(conn, TABLE_NAME)
 
 
 def _ensure_indexes(conn) -> list[str]:

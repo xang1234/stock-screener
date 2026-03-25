@@ -8,6 +8,14 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..infra.db.portability import (
+    column_names,
+    column_not_null_map,
+    index_defs,
+    is_sqlite,
+    table_names,
+)
+from ..models.theme import ThemeCluster
 from ..services.theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 
 logger = logging.getLogger(__name__)
@@ -152,33 +160,20 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
 
 
 def _get_existing_tables(conn) -> set[str]:
-    rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
-    return {row[0] for row in rows}
+    return table_names(conn)
 
 
 def _get_table_columns(conn) -> set[str]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    return {row[1] for row in rows}
+    return column_names(conn, TABLE_NAME)
 
 
 def _get_index_defs(conn) -> list[dict[str, Any]]:
-    rows = conn.execute(text(f"PRAGMA index_list({TABLE_NAME})")).fetchall()
-    indexes: list[dict[str, Any]] = []
-    for row in rows:
-        name = row[1]
-        unique = bool(row[2])
-        cols = conn.execute(text(f"PRAGMA index_info({name})")).fetchall()
-        indexes.append(
-            {
-                "name": name,
-                "unique": unique,
-                "columns": [c[2] for c in cols],
-            }
-        )
-    return indexes
+    return index_defs(conn, TABLE_NAME)
 
 
 def _needs_table_rebuild(conn) -> bool:
+    if not is_sqlite(conn):
+        return False
     columns = _get_table_columns(conn)
     if "canonical_key" not in columns or "display_name" not in columns:
         return True
@@ -315,6 +310,11 @@ def _resolve_pipeline_key_duplicates(
 
 
 def _create_theme_clusters_table(conn, table_name: str) -> None:
+    if not is_sqlite(conn):
+        if table_name != TABLE_NAME:
+            raise RuntimeError("temporary theme cluster rebuild tables are SQLite-only")
+        ThemeCluster.__table__.create(bind=conn, checkfirst=True)
+        return
     conn.execute(
         text(
             f"""
@@ -342,6 +342,8 @@ def _create_theme_clusters_table(conn, table_name: str) -> None:
 
 
 def _rebuild_theme_clusters_table(conn, rows: list[dict[str, Any]]) -> None:
+    if not is_sqlite(conn):
+        return
     old_table = TABLE_NAME
     new_table = f"{TABLE_NAME}__new"
 
@@ -375,9 +377,7 @@ def _rebuild_theme_clusters_table(conn, rows: list[dict[str, Any]]) -> None:
 
 
 def _get_table_not_null_map(conn) -> dict[str, bool]:
-    rows = conn.execute(text(f"PRAGMA table_info({TABLE_NAME})")).fetchall()
-    # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
-    return {row[1]: bool(row[3]) for row in rows}
+    return column_not_null_map(conn, TABLE_NAME)
 
 
 def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
@@ -413,7 +413,8 @@ def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
 
 
 def _ensure_unique_index(conn) -> None:
-    conn.execute(text(f"DROP INDEX IF EXISTS {UNIQUE_INDEX_NAME}"))
+    if is_sqlite(conn):
+        conn.execute(text(f"DROP INDEX IF EXISTS {UNIQUE_INDEX_NAME}"))
     conn.execute(
         text(
             f"""

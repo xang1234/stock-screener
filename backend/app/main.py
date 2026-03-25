@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import init_db, engine
+from .infra.db.portability import is_sqlite, table_exists
 from .services.redis_pool import get_redis_client
 
 
@@ -265,7 +266,7 @@ async def lifespan(app: FastAPI):
     print("Database initialized")
 
     # Verify WAL mode is active (critical for concurrent writers in Docker)
-    if "sqlite" in settings.database_url:
+    if is_sqlite(settings.database_url):
         with engine.connect() as conn:
             journal_mode = conn.execute(text("PRAGMA journal_mode")).scalar()
             print(f"SQLite journal mode: {journal_mode}")
@@ -326,7 +327,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Shutting down Stock Scanner API...")
-    if "sqlite" in settings.database_url:
+    if is_sqlite(settings.database_url):
         try:
             with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
                 conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
@@ -400,8 +401,8 @@ async def liveness():
 async def readiness():
     """Readiness probe - checks database and Redis connectivity.
 
-    Uses sqlite_master count (sub-ms) instead of PRAGMA quick_check (1-3s)
-    to avoid blocking the event loop. Redis is a soft dependency — its
+    Uses a cheap schema existence check instead of a deep integrity scan
+    so the endpoint stays non-blocking. Redis is a soft dependency — its
     absence degrades the service but doesn't make it unhealthy.
     """
     checks = {}
@@ -411,8 +412,10 @@ async def readiness():
     try:
         def _check_db():
             with engine.connect() as conn:
-                count = conn.execute(text("SELECT count(*) FROM sqlite_master")).scalar()
-                return count > 0
+                return any(
+                    table_exists(conn, name)
+                    for name in ("scans", "scan_results", "stock_universe")
+                )
 
         if await asyncio.to_thread(_check_db):
             checks["database"] = "ok"
