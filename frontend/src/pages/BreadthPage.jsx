@@ -57,6 +57,29 @@ const getDateRange = (range) => {
   };
 };
 
+// Determine market sentiment for a breadth row (up vs down 4%+ movers)
+const getRowSentiment = (row) => {
+  if (row.stocks_up_4pct == null || row.stocks_down_4pct == null) return 'neutral';
+  if (row.stocks_up_4pct > row.stocks_down_4pct) return 'bullish';
+  if (row.stocks_down_4pct > row.stocks_up_4pct) return 'bearish';
+  return 'neutral';
+};
+
+// Determine sentiment for a ratio value (above/below 1.0)
+const getRatioSentiment = (ratio) => {
+  if (ratio == null) return 'neutral';
+  if (ratio > 1.0) return 'bullish';
+  if (ratio < 1.0) return 'bearish';
+  return 'neutral';
+};
+
+// StockBee-style background colors for row/cell coloring
+const sentimentBg = {
+  bullish: { row: 'rgba(76, 175, 80, 0.12)', cell: 'rgba(76, 175, 80, 0.18)' },
+  bearish: { row: 'rgba(244, 67, 54, 0.12)', cell: 'rgba(244, 67, 54, 0.18)' },
+  neutral: { row: 'transparent', cell: 'transparent' },
+};
+
 function BreadthPage() {
   const { bootstrap, bootstrapIncomplete, runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
@@ -285,13 +308,27 @@ function BreadthPage() {
                           </Box>
                           <Box display="flex" justifyContent="center" gap={2}>
                             <Box textAlign="center">
-                              <Box sx={{ fontSize: '18px', fontWeight: 700, fontFamily: 'monospace' }}>
+                              <Box sx={{
+                                fontSize: '18px',
+                                fontWeight: 700,
+                                fontFamily: 'monospace',
+                                color: getRatioSentiment(currentBreadth.ratio_5day) === 'bullish' ? 'success.main'
+                                  : getRatioSentiment(currentBreadth.ratio_5day) === 'bearish' ? 'error.main'
+                                  : 'text.primary',
+                              }}>
                                 {currentBreadth.ratio_5day?.toFixed(2) || 'N/A'}
                               </Box>
                               <Box sx={{ fontSize: '9px', color: 'text.secondary' }}>5D</Box>
                             </Box>
                             <Box textAlign="center">
-                              <Box sx={{ fontSize: '18px', fontWeight: 700, fontFamily: 'monospace' }}>
+                              <Box sx={{
+                                fontSize: '18px',
+                                fontWeight: 700,
+                                fontFamily: 'monospace',
+                                color: getRatioSentiment(currentBreadth.ratio_10day) === 'bullish' ? 'success.main'
+                                  : getRatioSentiment(currentBreadth.ratio_10day) === 'bearish' ? 'error.main'
+                                  : 'text.primary',
+                              }}>
                                 {currentBreadth.ratio_10day?.toFixed(2) || 'N/A'}
                               </Box>
                               <Box sx={{ fontSize: '9px', color: 'text.secondary' }}>10D</Box>
@@ -436,20 +473,56 @@ function BreadthPage() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {historicalBreadth.slice(0, 30).map((row) => (
-                      <TableRow key={row.date} hover>
-                        <TableCell sx={{ fontFamily: 'monospace' }}>{format(new Date(row.date), 'MM/dd')}</TableCell>
-                        <TableCell align="right" sx={{ color: 'success.main', fontWeight: 600, fontFamily: 'monospace' }}>
-                          {row.stocks_up_4pct}
-                        </TableCell>
-                        <TableCell align="right" sx={{ color: 'error.main', fontWeight: 600, fontFamily: 'monospace' }}>
-                          {row.stocks_down_4pct}
-                        </TableCell>
-                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.ratio_5day?.toFixed(2) || '-'}</TableCell>
-                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.ratio_10day?.toFixed(2) || '-'}</TableCell>
-                        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.total_stocks_scanned}</TableCell>
-                      </TableRow>
-                    ))}
+                    {historicalBreadth.slice(0, 30).map((row) => {
+                      const rowSentiment = getRowSentiment(row);
+                      const ratio5Sentiment = getRatioSentiment(row.ratio_5day);
+                      const ratio10Sentiment = getRatioSentiment(row.ratio_10day);
+
+                      return (
+                        <TableRow
+                          key={row.date}
+                          hover
+                          sx={{
+                            '&&': { backgroundColor: sentimentBg[rowSentiment].row },
+                          }}
+                        >
+                          <TableCell sx={{ fontFamily: 'monospace' }}>{format(new Date(row.date), 'MM/dd')}</TableCell>
+                          <TableCell align="right" sx={{ color: 'success.main', fontWeight: 600, fontFamily: 'monospace' }}>
+                            {row.stocks_up_4pct}
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: 'error.main', fontWeight: 600, fontFamily: 'monospace' }}>
+                            {row.stocks_down_4pct}
+                          </TableCell>
+                          <TableCell
+                            align="right"
+                            sx={{
+                              fontFamily: 'monospace',
+                              fontWeight: ratio5Sentiment !== 'neutral' ? 600 : 400,
+                              backgroundColor: sentimentBg[ratio5Sentiment].cell,
+                              color: ratio5Sentiment === 'bullish' ? 'success.main'
+                                : ratio5Sentiment === 'bearish' ? 'error.main'
+                                : 'text.primary',
+                            }}
+                          >
+                            {row.ratio_5day?.toFixed(2) || '-'}
+                          </TableCell>
+                          <TableCell
+                            align="right"
+                            sx={{
+                              fontFamily: 'monospace',
+                              fontWeight: ratio10Sentiment !== 'neutral' ? 600 : 400,
+                              backgroundColor: sentimentBg[ratio10Sentiment].cell,
+                              color: ratio10Sentiment === 'bullish' ? 'success.main'
+                                : ratio10Sentiment === 'bearish' ? 'error.main'
+                                : 'text.primary',
+                            }}
+                          >
+                            {row.ratio_10day?.toFixed(2) || '-'}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.total_stocks_scanned}</TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </TableContainer>
