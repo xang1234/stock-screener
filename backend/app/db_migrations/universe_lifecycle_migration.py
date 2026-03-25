@@ -9,7 +9,14 @@ from datetime import datetime
 from sqlalchemy import text
 
 from ..database import is_corruption_error
-from ..infra.db.portability import column_names, index_defs, is_sqlite, sql_timestamp_type, table_names
+from ..infra.db.portability import (
+    column_names,
+    index_defs,
+    is_sqlite,
+    sql_bool_literal,
+    sql_timestamp_type,
+    table_names,
+)
 from ..models.stock_universe import StockUniverseStatusEvent
 
 logger = logging.getLogger(__name__)
@@ -44,8 +51,8 @@ def _build_select_expr(columns: set[str], column_name: str) -> str:
     return f"NULL AS {column_name}"
 
 
-def _legacy_is_active_value(value) -> int:
-    return 1 if bool(value) else 0
+def _legacy_is_active_value(value) -> bool:
+    return bool(value)
 
 
 def _nested_savepoint(conn):
@@ -132,9 +139,10 @@ def _derive_lifecycle_status(
 def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     """Backfill lifecycle data row-by-row to avoid brittle full-table text scans."""
     full_metadata_backfill = "status" not in columns
+    active_true = sql_bool_literal(True, conn)
     select_columns = [
         "id",
-        "COALESCE(is_active, 1) AS legacy_is_active",
+        f"COALESCE(is_active, {active_true}) AS legacy_is_active",
         _build_select_expr(columns, "status"),
         _build_select_expr(columns, "status_reason"),
         _build_select_expr(columns, "first_seen_at"),
@@ -182,7 +190,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
         elif status == "active":
             deactivated_at = None
 
-        target_is_active = 1 if status == "active" else 0
+        target_is_active = status == "active"
         core_fields_need_repair = (
             raw_status != status
             or _legacy_is_active_value(row["legacy_is_active"]) != target_is_active

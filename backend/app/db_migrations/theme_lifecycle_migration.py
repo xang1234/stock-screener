@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names, sql_timestamp_type, table_names
+from ..infra.db.portability import column_names, sql_bool_literal, sql_timestamp_type, table_names
 from ..models.theme import ThemeLifecycleTransition
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,8 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
     with engine.connect() as conn:
         columns = _get_table_columns(conn, THEME_TABLE)
         timestamp_type = sql_timestamp_type(conn)
+        active_true = sql_bool_literal(True, conn)
+        active_false = sql_bool_literal(False, conn)
         add_statements = {
             "lifecycle_state": "ALTER TABLE theme_clusters ADD COLUMN lifecycle_state TEXT",
             "lifecycle_state_updated_at": f"ALTER TABLE theme_clusters ADD COLUMN lifecycle_state_updated_at {timestamp_type}",
@@ -46,20 +48,20 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
 
         result = conn.execute(
             text(
-                """
+                f"""
                 UPDATE theme_clusters
                 SET lifecycle_state = CASE
-                    WHEN is_active = 0 THEN 'retired'
+                    WHEN is_active = {active_false} THEN 'retired'
                     ELSE 'active'
                 END,
                     lifecycle_state_updated_at = COALESCE(lifecycle_state_updated_at, updated_at, created_at, CURRENT_TIMESTAMP),
                     candidate_since_at = COALESCE(candidate_since_at, first_seen_at, created_at, CURRENT_TIMESTAMP),
                     activated_at = CASE
-                        WHEN is_active = 1 THEN COALESCE(activated_at, first_seen_at, created_at, CURRENT_TIMESTAMP)
+                        WHEN is_active = {active_true} THEN COALESCE(activated_at, first_seen_at, created_at, CURRENT_TIMESTAMP)
                         ELSE activated_at
                     END,
                     retired_at = CASE
-                        WHEN is_active = 0 THEN COALESCE(retired_at, updated_at, last_seen_at, CURRENT_TIMESTAMP)
+                        WHEN is_active = {active_false} THEN COALESCE(retired_at, updated_at, last_seen_at, CURRENT_TIMESTAMP)
                         ELSE retired_at
                     END
                 WHERE lifecycle_state IS NULL OR lifecycle_state = ''
@@ -70,20 +72,20 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
 
         invalid_result = conn.execute(
             text(
-                """
+                f"""
                 UPDATE theme_clusters
                 SET lifecycle_state = CASE
-                    WHEN is_active = 0 THEN 'retired'
+                    WHEN is_active = {active_false} THEN 'retired'
                     ELSE 'active'
                 END,
                     lifecycle_state_updated_at = COALESCE(lifecycle_state_updated_at, updated_at, created_at, CURRENT_TIMESTAMP),
                     candidate_since_at = COALESCE(candidate_since_at, first_seen_at, created_at, CURRENT_TIMESTAMP),
                     activated_at = CASE
-                        WHEN is_active = 1 THEN COALESCE(activated_at, first_seen_at, created_at, CURRENT_TIMESTAMP)
+                        WHEN is_active = {active_true} THEN COALESCE(activated_at, first_seen_at, created_at, CURRENT_TIMESTAMP)
                         ELSE activated_at
                     END,
                     retired_at = CASE
-                        WHEN is_active = 0 THEN COALESCE(retired_at, updated_at, last_seen_at, CURRENT_TIMESTAMP)
+                        WHEN is_active = {active_false} THEN COALESCE(retired_at, updated_at, last_seen_at, CURRENT_TIMESTAMP)
                         ELSE retired_at
                     END
                 WHERE lifecycle_state NOT IN ('candidate', 'active', 'dormant', 'reactivated', 'retired')
