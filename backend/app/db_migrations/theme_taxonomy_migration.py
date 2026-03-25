@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names, index_names, sql_timestamp_type
+from ..infra.db.portability import column_names, index_names, sql_bool_literal, sql_timestamp_type
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,10 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
     }
 
     with engine.connect() as conn:
+        false_literal = sql_bool_literal(False, conn)
         taxonomy_columns = {
             "parent_cluster_id": "ALTER TABLE theme_clusters ADD COLUMN parent_cluster_id INTEGER REFERENCES theme_clusters(id)",
-            "is_l1": "ALTER TABLE theme_clusters ADD COLUMN is_l1 BOOLEAN NOT NULL DEFAULT 0",
+            "is_l1": f"ALTER TABLE theme_clusters ADD COLUMN is_l1 BOOLEAN NOT NULL DEFAULT {false_literal}",
             "taxonomy_level": "ALTER TABLE theme_clusters ADD COLUMN taxonomy_level INTEGER NOT NULL DEFAULT 2",
             "l1_assignment_method": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_method TEXT",
             "l1_assignment_confidence": "ALTER TABLE theme_clusters ADD COLUMN l1_assignment_confidence REAL",

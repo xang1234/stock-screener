@@ -10,6 +10,7 @@ from ..infra.db.portability import (
     column_names,
     index_names,
     is_sqlite,
+    sql_bool_literal,
     sql_timestamp_type,
     table_names,
     trigger_names,
@@ -155,6 +156,7 @@ def _get_table_triggers(conn) -> set[str]:
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
     timestamp_type = sql_timestamp_type(conn)
+    active_default = sql_bool_literal(True, conn)
     add_statements = {
         "source_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN source_cluster_id INTEGER",
         "target_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN target_cluster_id INTEGER",
@@ -163,7 +165,7 @@ def _add_missing_columns(conn) -> list[str]:
         "confidence": "ALTER TABLE theme_relationships ADD COLUMN confidence FLOAT NOT NULL DEFAULT 0.5",
         "provenance": "ALTER TABLE theme_relationships ADD COLUMN provenance TEXT NOT NULL DEFAULT 'rule_inference'",
         "evidence": "ALTER TABLE theme_relationships ADD COLUMN evidence JSON",
-        "is_active": "ALTER TABLE theme_relationships ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
+        "is_active": f"ALTER TABLE theme_relationships ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT {active_default}",
         "created_at": f"ALTER TABLE theme_relationships ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
         "updated_at": f"ALTER TABLE theme_relationships ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }

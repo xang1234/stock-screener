@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names, index_names, table_names
+from ..infra.db.portability import column_names, index_names, sql_bool_literal, table_names
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +94,11 @@ def _get_table_indexes(conn) -> set[str]:
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
+    stale_default = sql_bool_literal(False, conn)
     column_ddl = {
         "content_hash": "ALTER TABLE theme_embeddings ADD COLUMN content_hash TEXT",
         "model_version": "ALTER TABLE theme_embeddings ADD COLUMN model_version TEXT NOT NULL DEFAULT 'embedding-v1'",
-        "is_stale": "ALTER TABLE theme_embeddings ADD COLUMN is_stale BOOLEAN NOT NULL DEFAULT 0",
+        "is_stale": f"ALTER TABLE theme_embeddings ADD COLUMN is_stale BOOLEAN NOT NULL DEFAULT {stale_default}",
     }
     added: list[str] = []
     for column, ddl in column_ddl.items():
@@ -108,6 +109,8 @@ def _add_missing_columns(conn) -> list[str]:
 
 
 def _backfill_stale_flags(conn) -> int:
+    stale_true = sql_bool_literal(True, conn)
+    stale_false = sql_bool_literal(False, conn)
     conn.execute(
         text(
             """
@@ -119,11 +122,11 @@ def _backfill_stale_flags(conn) -> int:
     )
     result = conn.execute(
         text(
-            """
+            f"""
             UPDATE theme_embeddings
-            SET is_stale = 1
+            SET is_stale = {stale_true}
             WHERE (content_hash IS NULL OR TRIM(content_hash) = '')
-              AND (is_stale IS NULL OR is_stale = 0)
+              AND (is_stale IS NULL OR is_stale = {stale_false})
             """
         )
     )

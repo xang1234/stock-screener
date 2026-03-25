@@ -153,6 +153,12 @@ def sql_json_type(bind_or_session: BindLike | None = None) -> str:
     return "JSON" if is_postgres(bind_or_session) else "JSON"
 
 
+def sql_bool_literal(value: bool, bind_or_session: BindLike | None = None) -> str:
+    if is_postgres(bind_or_session):
+        return "TRUE" if value else "FALSE"
+    return "1" if value else "0"
+
+
 def json_text(
     column: ColumnElement,
     path_segments: tuple[str, ...],

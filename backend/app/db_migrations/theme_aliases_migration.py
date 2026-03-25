@@ -6,7 +6,14 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names, index_names, is_postgres, sql_timestamp_type, table_names
+from ..infra.db.portability import (
+    column_names,
+    index_names,
+    is_postgres,
+    sql_bool_literal,
+    sql_timestamp_type,
+    table_names,
+)
 from ..models.theme import ThemeAlias
 
 logger = logging.getLogger(__name__)
@@ -158,13 +165,14 @@ def _create_theme_aliases_table(conn) -> None:
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
     timestamp_type = sql_timestamp_type(conn)
+    active_default = sql_bool_literal(True, conn)
     column_ddl = {
         "source": "ALTER TABLE theme_aliases ADD COLUMN source TEXT NOT NULL DEFAULT 'llm_extraction'",
         "confidence": "ALTER TABLE theme_aliases ADD COLUMN confidence FLOAT NOT NULL DEFAULT 0.5",
         "evidence_count": "ALTER TABLE theme_aliases ADD COLUMN evidence_count INTEGER NOT NULL DEFAULT 1",
         "first_seen_at": f"ALTER TABLE theme_aliases ADD COLUMN first_seen_at {timestamp_type}",
         "last_seen_at": f"ALTER TABLE theme_aliases ADD COLUMN last_seen_at {timestamp_type}",
-        "is_active": "ALTER TABLE theme_aliases ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
+        "is_active": f"ALTER TABLE theme_aliases ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT {active_default}",
         "created_at": f"ALTER TABLE theme_aliases ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
         "updated_at": f"ALTER TABLE theme_aliases ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }

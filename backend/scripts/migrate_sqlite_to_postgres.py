@@ -6,7 +6,7 @@ import argparse
 import os
 from collections.abc import Iterable
 
-from sqlalchemy import MetaData, create_engine, inspect, select, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 
 
@@ -52,6 +52,25 @@ def _iter_batches(rows: Iterable[dict], batch_size: int):
         yield batch
 
 
+def _qualified_table_name(table: Table) -> str:
+    if table.schema:
+        return f"{table.schema}.{table.name}"
+    return table.name
+
+
+def _quoted_identifier(engine: Engine, identifier: str) -> str:
+    return engine.dialect.identifier_preparer.quote_identifier(identifier)
+
+
+def _quoted_table_sql(engine: Engine, table: Table) -> str:
+    if table.schema:
+        return (
+            f"{_quoted_identifier(engine, table.schema)}."
+            f"{_quoted_identifier(engine, table.name)}"
+        )
+    return _quoted_identifier(engine, table.name)
+
+
 def _reset_sequences(engine: Engine, metadata: MetaData, table_name: str) -> None:
     table = metadata.tables.get(table_name)
     if table is None:
@@ -65,6 +84,9 @@ def _reset_sequences(engine: Engine, metadata: MetaData, table_name: str) -> Non
     if pk.type.python_type is not int:
         return
 
+    qualified_name = _qualified_table_name(table)
+    quoted_table = _quoted_table_sql(engine, table)
+    quoted_column = _quoted_identifier(engine, pk.name)
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -75,9 +97,9 @@ def _reset_sequences(engine: Engine, metadata: MetaData, table_name: str) -> Non
                     (SELECT MAX(%(column)s) IS NOT NULL FROM %(table)s)
                 )
                 """
-                % {"column": pk.name, "table": table_name}
+                % {"column": quoted_column, "table": quoted_table}
             ),
-            {"table_name": table_name, "column_name": pk.name},
+            {"table_name": qualified_name, "column_name": pk.name},
         )
 
 

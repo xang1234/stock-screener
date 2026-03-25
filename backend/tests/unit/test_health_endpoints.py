@@ -36,7 +36,7 @@ class TestReadyz:
         mock_engine.connect.return_value = mock_conn
         with patch("app.main.get_redis_client", return_value=mock_redis), \
              patch("app.main.engine", mock_engine), \
-             patch("app.main.table_exists", side_effect=lambda _conn, table: table == "scans"):
+             patch("app.main.table_exists", return_value=True):
             response = await client.get("/readyz")
             assert response.status_code == 200
             data = response.json()
@@ -86,7 +86,23 @@ class TestReadyz:
             assert response.status_code == 503
             data = response.json()
             assert data["status"] == "unhealthy"
-            assert "no tables" in data["checks"]["database"]
+            assert "required tables missing" in data["checks"]["database"]
+
+    async def test_503_when_db_has_only_partial_schema(self, client):
+        """Readiness requires the full minimum app schema, not just one table."""
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn
+        existing_tables = {"scans", "scan_results"}
+        with patch("app.main.engine", mock_engine), \
+             patch("app.main.table_exists", side_effect=lambda _conn, table: table in existing_tables):
+            response = await client.get("/readyz")
+            assert response.status_code == 503
+            data = response.json()
+            assert data["status"] == "unhealthy"
+            assert "required tables missing" in data["checks"]["database"]
 
 
 @pytest.mark.asyncio

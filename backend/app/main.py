@@ -355,6 +355,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_READINESS_TABLES = ("scans", "scan_results", "stock_universe")
+
 
 def _desktop_index_path() -> Path:
     return settings.frontend_dist_path / "index.html"
@@ -412,15 +414,15 @@ async def readiness():
     try:
         def _check_db():
             with engine.connect() as conn:
-                return any(
+                return all(
                     table_exists(conn, name)
-                    for name in ("scans", "scan_results", "stock_universe")
+                    for name in _READINESS_TABLES
                 )
 
         if await asyncio.to_thread(_check_db):
             checks["database"] = "ok"
         else:
-            checks["database"] = "error: no tables found"
+            checks["database"] = "error: required tables missing"
             healthy = False
     except Exception as e:
         checks["database"] = f"error: {type(e).__name__}"
