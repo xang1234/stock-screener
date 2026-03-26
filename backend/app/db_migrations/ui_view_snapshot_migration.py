@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy import text
 
-from ..infra.db.portability import is_sqlite
+from ..infra.db.portability import inspector, is_postgres, is_sqlite, table_exists
 from ..models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ def migrate_ui_view_snapshot_tables(engine) -> None:
         else:
             UIViewSnapshot.__table__.create(bind=conn, checkfirst=True)
             UIViewSnapshotPointer.__table__.create(bind=conn, checkfirst=True)
+            _ensure_postgres_source_revision_capacity(conn)
         conn.execute(
             text(
                 """
@@ -76,3 +77,26 @@ def migrate_ui_view_snapshot_tables(engine) -> None:
         conn.commit()
 
     logger.info("UI view snapshot migration completed")
+
+
+def _ensure_postgres_source_revision_capacity(conn) -> None:
+    if not is_postgres(conn) or not table_exists(conn, "ui_view_snapshots"):
+        return
+
+    snapshot_columns = {
+        column["name"]: column
+        for column in inspector(conn).get_columns("ui_view_snapshots")
+    }
+    source_revision = snapshot_columns.get("source_revision")
+    current_length = getattr(source_revision.get("type"), "length", None) if source_revision else None
+    if current_length is None or current_length >= 256:
+        return
+
+    conn.execute(
+        text(
+            """
+            ALTER TABLE ui_view_snapshots
+            ALTER COLUMN source_revision TYPE VARCHAR(256)
+            """
+        )
+    )

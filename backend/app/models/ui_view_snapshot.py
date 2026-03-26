@@ -15,7 +15,7 @@ class UIViewSnapshot(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     view_key = Column(String(64), nullable=False, index=True)
     variant_key = Column(String(128), nullable=False, index=True)
-    source_revision = Column(String(128), nullable=False, index=True)
+    source_revision = Column(String(256), nullable=False, index=True)
     payload_json = Column(JSON, nullable=False)
     published_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
