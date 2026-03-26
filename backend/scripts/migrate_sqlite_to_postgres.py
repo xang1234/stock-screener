@@ -281,6 +281,24 @@ def _insert_self_referential_rows(
     return skipped
 
 
+def _finalize_skipped_rows(skipped_by_table: dict[str, int], *, allow_skipped_rows: bool) -> None:
+    total_skipped = sum(skipped_by_table.values())
+    if not total_skipped:
+        return
+
+    summary = ", ".join(
+        f"{table}={count}"
+        for table, count in sorted(skipped_by_table.items())
+        if count
+    )
+    message = f"Migration skipped rows: {summary}"
+    print(message, file=sys.stderr)
+    if not allow_skipped_rows:
+        raise RuntimeError(
+            f"{message}. Fix the source/schema mismatch or rerun with --allow-skipped-rows."
+        )
+
+
 def migrate(
     source_url: str,
     target_url: str,
@@ -289,6 +307,7 @@ def migrate(
     dry_run: bool,
     skip_tables: set[str],
     start_at: str | None,
+    allow_skipped_rows: bool,
 ) -> None:
     source_engine = create_engine(source_url)
     target_engine = create_engine(target_url)
@@ -308,7 +327,7 @@ def migrate(
         if start_at:
             ordered_tables = ordered_tables[ordered_tables.index(start_at):]
 
-        skipped_rows = 0
+        skipped_by_table: dict[str, int] = {}
         for table_name in ordered_tables:
             source_count = _count_sqlite_rows(source_sqlite, table_name)
             target_count = _count_rows(target_engine, table_name)
@@ -343,11 +362,13 @@ def migrate(
 
             _reset_sequences(target_engine, target_metadata, table_name)
             new_target_count = _count_rows(target_engine, table_name)
-            skipped_rows += table_skipped
+            skipped_by_table[table_name] = table_skipped
             print(f"{table_name}: imported target={new_target_count} skipped={table_skipped}")
 
-        if skipped_rows:
-            print(f"Migration completed with skipped_rows={skipped_rows}", file=sys.stderr)
+        _finalize_skipped_rows(
+            skipped_by_table,
+            allow_skipped_rows=allow_skipped_rows,
+        )
     finally:
         source_sqlite.close()
         source_engine.dispose()
@@ -372,6 +393,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-table", action="append", default=[])
     parser.add_argument("--start-at")
+    parser.add_argument(
+        "--allow-skipped-rows",
+        action="store_true",
+        help="Allow the migration to complete successfully even if some rows cannot be inserted",
+    )
     args = parser.parse_args()
 
     migrate(
@@ -381,6 +407,7 @@ def main() -> None:
         dry_run=args.dry_run,
         skip_tables=set(args.skip_table),
         start_at=args.start_at,
+        allow_skipped_rows=args.allow_skipped_rows,
     )
 
 

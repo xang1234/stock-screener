@@ -26,8 +26,31 @@ def _resolve_bind(bind_or_session: BindLike | None = None) -> Engine | Connectio
     return bind_or_session
 
 
+def _unwrap_bind_proxy(bind: Any) -> Any:
+    current = bind
+    seen: set[int] = set()
+    while not isinstance(current, str):
+        current_id = id(current)
+        if current_id in seen:
+            break
+        seen.add(current_id)
+        if hasattr(current, "dialect"):
+            return current
+
+        next_bind = None
+        for attr in ("conn", "connection", "engine"):
+            candidate = getattr(current, attr, None)
+            if candidate is not None and candidate is not current:
+                next_bind = candidate
+                break
+        if next_bind is None:
+            break
+        current = next_bind
+    return current
+
+
 def dialect_name(bind_or_session: BindLike | None = None) -> str:
-    bind = _resolve_bind(bind_or_session)
+    bind = _unwrap_bind_proxy(_resolve_bind(bind_or_session))
     if isinstance(bind, str):
         return make_url(bind).get_backend_name()
     return bind.dialect.name
@@ -42,7 +65,7 @@ def is_postgres(bind_or_session: BindLike | None = None) -> bool:
 
 
 def inspector(bind_or_conn: BindLike | None = None):
-    bind = _resolve_bind(bind_or_conn)
+    bind = _unwrap_bind_proxy(_resolve_bind(bind_or_conn))
     if isinstance(bind, str):
         raise TypeError("inspector() requires a SQLAlchemy engine/connection/session/query")
     return sa_inspect(bind)
