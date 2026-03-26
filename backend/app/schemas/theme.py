@@ -1,7 +1,8 @@
 """Pydantic schemas for Theme Discovery API"""
+import json
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 # Content Source Schemas
@@ -37,6 +38,19 @@ class ContentSourceResponse(BaseModel):
     total_items_fetched: int
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+
+    @field_validator("pipelines", mode="before")
+    @classmethod
+    def _coerce_pipelines(cls, value):
+        if value is None or isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, list) else None
+        return value
 
     class Config:
         from_attributes = True
