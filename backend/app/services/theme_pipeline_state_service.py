@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import and_, func
@@ -216,6 +216,19 @@ def _percentiles(values: list[float]) -> dict[str, float]:
     return {"p50": round(_pct(0.5), 2), "p95": round(_pct(0.95), 2)}
 
 
+def _hours_since(timestamp: datetime, *, now: datetime | None = None) -> float:
+    if timestamp.tzinfo is not None and timestamp.utcoffset() is not None:
+        reference = now or datetime.now(timezone.utc)
+        if reference.tzinfo is None or reference.utcoffset() is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+    else:
+        reference = now or datetime.utcnow()
+        if reference.tzinfo is not None and reference.utcoffset() is not None:
+            reference = reference.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return max((reference - timestamp).total_seconds() / 3600.0, 0.0)
+
+
 def compute_pipeline_state_health(
     db: Session,
     pipeline: Optional[str] = None,
@@ -266,7 +279,7 @@ def compute_pipeline_state_health(
             if row[0] is not None
         ]
         pending_ages_hours = [
-            max((now - created_at).total_seconds() / 3600.0, 0.0)
+            _hours_since(created_at, now=now)
             for created_at in pending_created
         ]
         pending_age = _percentiles(pending_ages_hours)

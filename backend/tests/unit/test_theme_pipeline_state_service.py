@@ -1,6 +1,6 @@
 """Tests for pipeline-state reconcile and observability helpers."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +13,7 @@ from app.models.theme import (
     ThemeMention,
 )
 from app.services.theme_pipeline_state_service import (
+    _hours_since,
     compute_pipeline_state_health,
     reconcile_source_pipeline_change,
     validate_pipeline_selection,
@@ -228,6 +229,15 @@ def test_compute_pipeline_state_health_reports_core_metrics():
         assert health["pending_age_hours"]["p95"] >= health["pending_age_hours"]["p50"]
     finally:
         db.close()
+
+
+def test_hours_since_accepts_offset_aware_datetimes():
+    now = datetime(2026, 3, 26, 4, 0, 0)
+    created_at = datetime(2026, 3, 26, 0, 30, 0, tzinfo=timezone.utc)
+
+    age_hours = _hours_since(created_at, now=now)
+
+    assert age_hours == 3.5
 
 
 def test_validate_pipeline_selection_rejects_invalid_values():
