@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -10,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.theme import ContentItem, ContentItemPipelineState, ContentSource
-from app.services.content_ingestion_service import ContentIngestionService
+from app.services.content_ingestion_service import ContentIngestionService, RSSFetcher
 
 
 @pytest.fixture
@@ -226,3 +227,48 @@ def test_fetch_source_propagates_adapter_error_and_does_not_advance_last_fetched
     db_session.refresh(source)
     assert source.last_fetched_at == previous_fetch
     assert db_session.query(ContentItem).count() == 0
+
+
+def test_rss_fetcher_handles_aware_since_with_naive_feed_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeEntry(dict):
+        def __getattr__(self, name):
+            try:
+                return self[name]
+            except KeyError as exc:
+                raise AttributeError(name) from exc
+
+    older = FakeEntry(
+        published_parsed=(2026, 3, 27, 4, 0, 0, 0, 0, 0),
+        title="Older post",
+        link="https://example.com/older",
+        author="Analyst",
+    )
+    newer = FakeEntry(
+        published_parsed=(2026, 3, 27, 6, 0, 0, 0, 0, 0),
+        title="Newer post",
+        link="https://example.com/newer",
+        author="Analyst",
+    )
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.feedparser.parse",
+        lambda url: SimpleNamespace(entries=[older, newer]),
+    )
+
+    source = ContentSource(
+        name="Macro Feed",
+        source_type="substack",
+        url="https://example.com/feed",
+        is_active=True,
+    )
+
+    items = RSSFetcher().fetch(
+        source,
+        since=datetime(2026, 3, 27, 5, 0, tzinfo=timezone.utc),
+    )
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Newer post"
+    assert items[0]["published_at"].tzinfo is not None

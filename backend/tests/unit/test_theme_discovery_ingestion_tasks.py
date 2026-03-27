@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -77,6 +77,54 @@ def test_poll_due_sources_surfaces_auth_failures(
     assert result["sources_polled"] == 1
     assert result["results"][0]["status"] == "error"
     assert "XUI auth not ready" in result["results"][0]["error"]
+
+
+def test_poll_due_sources_handles_aware_last_fetched_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [
+                ContentSource(
+                    name="@aware",
+                    source_type="twitter",
+                    url="https://x.com/aware",
+                    is_active=True,
+                    fetch_interval_minutes=60,
+                    last_fetched_at=datetime.now(timezone.utc) - timedelta(hours=2),
+                )
+            ]
+
+    class FakeSession:
+        def query(self, *args, **kwargs):
+            return FakeQuery()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.tasks.theme_discovery_tasks.SessionLocal", lambda: FakeSession())
+
+    def fake_fetch_source(self, source, lookback_days=None):
+        return 2
+
+    monkeypatch.setattr(
+        "app.services.content_ingestion_service.ContentIngestionService.fetch_source",
+        fake_fetch_source,
+    )
+
+    result = poll_due_sources()
+    assert result["errors"] == 0
+    assert result["sources_polled"] == 1
+    assert result["results"][0]["status"] == "success"
 
 
 def test_extract_themes_stops_after_provider_quota_abort(

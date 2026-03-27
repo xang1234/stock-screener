@@ -22,7 +22,7 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 from uuid import uuid4
 
@@ -40,6 +40,14 @@ if redis.call('get', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _acquire_theme_stale_embedding_lock(task_id: str) -> tuple[object | None, str | None]:
@@ -1123,7 +1131,7 @@ def poll_due_sources():
     start_time = time.time()
 
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Find sources due for refresh:
         # - last_fetched_at is NULL (never fetched), OR
@@ -1143,7 +1151,8 @@ def poll_due_sources():
             else:
                 # Check if interval has elapsed
                 interval = timedelta(minutes=source.fetch_interval_minutes or 60)
-                if source.last_fetched_at + interval < now:
+                last_fetched_at = _coerce_utc_datetime(source.last_fetched_at)
+                if last_fetched_at is None or last_fetched_at + interval < now:
                     due_sources.append(source)
 
         if not due_sources:
@@ -1155,7 +1164,7 @@ def poll_due_sources():
                 "sources_checked": len(all_active_sources),
                 "sources_polled": 0,
                 "duration_seconds": round(duration, 2),
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
         service = ContentIngestionService(db)
@@ -1200,7 +1209,7 @@ def poll_due_sources():
             "errors": errors,
             "results": results,
             "duration_seconds": round(duration, 2),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     except Exception as e:
@@ -1208,7 +1217,7 @@ def poll_due_sources():
         logger.error(f"Error in poll_due_sources task: {e}", exc_info=True)
         return {
             "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     finally:

@@ -10,7 +10,7 @@ Fetches content from multiple sources:
 import logging
 import hashlib
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from abc import ABC, abstractmethod
 
@@ -23,6 +23,14 @@ from ..config import settings
 from .theme_pipeline_state_service import normalize_pipelines
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class BaseContentFetcher(ABC):
@@ -51,12 +59,13 @@ class RSSFetcher(BaseContentFetcher):
                 # Parse published date
                 published_at = None
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
-                    published_at = datetime(*entry.published_parsed[:6])
+                    published_at = _coerce_utc_datetime(datetime(*entry.published_parsed[:6]))
                 elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
-                    published_at = datetime(*entry.updated_parsed[:6])
+                    published_at = _coerce_utc_datetime(datetime(*entry.updated_parsed[:6]))
 
                 # Skip if older than since date
-                if since and published_at and published_at < since:
+                since_bound = _coerce_utc_datetime(since)
+                if since_bound and published_at and published_at < since_bound:
                     continue
 
                 # Extract content
@@ -149,7 +158,9 @@ class NewsFetcher(BaseContentFetcher):
             news_items = response.json()
 
             for article in news_items:
-                published_at = datetime.fromisoformat(article.get("created", "").replace("Z", "+00:00"))
+                published_at = _coerce_utc_datetime(
+                    datetime.fromisoformat(article.get("created", "").replace("Z", "+00:00"))
+                )
                 external_id = self.generate_external_id("benzinga", str(article.get("id", "")))
 
                 items.append({
@@ -207,9 +218,10 @@ class RedditFetcher(BaseContentFetcher):
 
                 # Convert Unix timestamp
                 created_utc = post_data.get("created_utc", 0)
-                published_at = datetime.utcfromtimestamp(created_utc)
+                published_at = _coerce_utc_datetime(datetime.utcfromtimestamp(created_utc))
 
-                if since and published_at < since:
+                since_bound = _coerce_utc_datetime(since)
+                if since_bound and published_at < since_bound:
                     continue
 
                 external_id = self.generate_external_id("reddit", post_data.get("id", ""))
@@ -291,11 +303,11 @@ class ContentIngestionService:
 
         # Determine since date
         if lookback_days:
-            since = datetime.utcnow() - timedelta(days=lookback_days)
+            since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
         else:
-            since = source.last_fetched_at
+            since = _coerce_utc_datetime(source.last_fetched_at)
             if not since:
-                since = datetime.utcnow() - timedelta(days=30)  # Default 30-day lookback for new sources
+                since = datetime.now(timezone.utc) - timedelta(days=30)  # Default 30-day lookback for new sources
 
         # Fetch items
         items = fetcher.fetch(source, since)
@@ -333,7 +345,7 @@ class ContentIngestionService:
                     content=item_data["content"],
                     url=item_data["url"],
                     author=item_data["author"],
-                    published_at=item_data["published_at"],
+                    published_at=_coerce_utc_datetime(item_data["published_at"]),
                     is_processed=False,
                 )
                 self.db.add(content_item)
@@ -353,7 +365,7 @@ class ContentIngestionService:
         # Backfill leaves last_fetched_at unchanged so the next normal run
         # resumes from the correct point.
         if not lookback_days:
-            source.last_fetched_at = datetime.utcnow()
+            source.last_fetched_at = datetime.now(timezone.utc)
         source.total_items_fetched = (source.total_items_fetched or 0) + new_count
         self.db.commit()
 
