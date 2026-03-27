@@ -288,7 +288,7 @@ If PowerShell blocks virtualenv activation, run `Set-ExecutionPolicy -Scope Proc
 
 ### Docker Deployment
 
-The project uses a layered Docker Compose architecture supporting three deployment scenarios:
+The project uses a layered Docker Compose architecture supporting multiple deployment scenarios:
 
 Docker now uses PostgreSQL as the authoritative application database. Local development and desktop mode still default to SQLite. The shared `./data` mount remains in Docker for non-app-db state such as `xui-reader` config/session data, Celery beat schedule files, and caches.
 
@@ -318,6 +318,44 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # 3. Configure your reverse proxy to forward to port 80
 ```
 
+#### GitHub-Managed Image Releases (Recommended for Production)
+Use this path when you want immutable, tagged application images from GitHub
+Container Registry instead of rebuilding from source on the server.
+
+```bash
+# 1. Configure environment
+cp .env.docker.example .env.docker
+# Edit .env.docker:
+#   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
+#   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
+#   APP_IMAGE_TAG=v1.2.3
+#   CORS_ORIGINS=https://stocks.yourdomain.com
+
+# 2. Pull the tagged release images
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+
+# 3. Deploy without rebuilding locally
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
+```
+
+For HTTPS on a standalone VPS, add the Caddy overlay:
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
+```
+
+Release and rollback model:
+- Push to `main` to publish rolling `main`, `sha-*`, and `latest` image tags to GHCR
+- Push a git tag like `v1.2.3` to publish immutable release tags
+- Deploy by setting `APP_IMAGE_TAG=v1.2.3` in `.env.docker` and running `pull` + `up -d --no-build`
+- Roll back by changing `APP_IMAGE_TAG` to the previous tag and redeploying
+
+If the repository or package is private, log the deployment host into GHCR before
+running `docker-compose pull`:
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
+```
+
 #### VPS with Auto-HTTPS (Hostinger, DigitalOcean, etc.)
 Includes Caddy for automatic Let's Encrypt certificates:
 ```bash
@@ -337,6 +375,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 |------|---------|
 | `docker-compose.yml` | Base configuration for local development |
 | `docker-compose.prod.yml` | Production overlay: resource limits, health checks, logging |
+| `docker-compose.release.yml` | Release overlay: deploy tagged GHCR images instead of local builds |
 | `docker-compose.https.yml` | HTTPS overlay: Caddy with automatic Let's Encrypt |
 | `.env.docker.example` | Template for Docker environment variables |
 | `Caddyfile` | Caddy configuration for TLS termination |

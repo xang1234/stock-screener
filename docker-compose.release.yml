@@ -1,0 +1,54 @@
+# =============================================================================
+# Docker Compose Release Override (GHCR images)
+# =============================================================================
+# Uses immutable images published by GitHub Actions to GitHub Container Registry.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.release.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.release.yml up -d --no-build
+#
+# Optional HTTPS:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.release.yml -f docker-compose.https.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
+#
+# Requires .env.docker to define:
+#   - BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
+#   - FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
+#   - APP_IMAGE_TAG=vX.Y.Z (or a branch / sha tag)
+#
+# =============================================================================
+
+services:
+  backend:
+    build: !reset null
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+
+  celery-worker:
+    build: !reset null
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+
+  celery-datafetch:
+    build: !reset null
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+
+  celery-userscans:
+    build: !reset null
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+
+  celery-beat:
+    build: !reset null
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+
+  frontend:
+    build: !reset null
+    image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
