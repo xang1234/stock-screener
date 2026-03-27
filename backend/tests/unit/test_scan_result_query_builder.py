@@ -93,8 +93,8 @@ class TestSetupEngineFieldCoverage:
     @pytest.mark.parametrize("field", SE_ALL_FIELDS)
     def test_se_field_has_setup_engine_prefix_in_path(self, field):
         path = _JSON_FIELD_MAP[field]
-        assert path.startswith("$.setup_engine."), (
-            f"{field} path should start with $.setup_engine., got {path}"
+        assert path[:1] == ("setup_engine",), (
+            f"{field} path should begin with ('setup_engine',), got {path}"
         )
 
     def test_se_field_count(self):
