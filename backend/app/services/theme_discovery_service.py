@@ -6,7 +6,7 @@ This is the intelligence layer that identifies what's trending.
 """
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from collections import defaultdict
 
@@ -43,6 +43,14 @@ LIFECYCLE_RANK_WEIGHTS = {
     "retired": 0.2,
 }
 LIFECYCLE_RUNBOOK_URL = "/docs/runbooks/theme-lifecycle.md"
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class ThemeDiscoveryService:
@@ -1046,6 +1054,8 @@ class ThemeDiscoveryService:
         now = now or datetime.utcnow()
         cutoff_7d = now - timedelta(days=7)
         cutoff_30d = now - timedelta(days=30)
+        comparison_now = _coerce_utc_datetime(now) or datetime.now(timezone.utc)
+        comparison_cutoff_7d = comparison_now - timedelta(days=7)
         source_quality = {
             "news": 1.00,
             "substack": 0.95,
@@ -1073,7 +1083,7 @@ class ThemeDiscoveryService:
         latest_mention_at: datetime | None = None
 
         for mentioned_at, confidence, source_type, source_name in mentions:
-            seen_at = mentioned_at or now
+            seen_at = _coerce_utc_datetime(mentioned_at) or comparison_now
             confidence_value = max(0.0, min(1.0, float(confidence or 0.5)))
             quality_weight = source_quality.get((source_type or "").strip().lower(), 0.75)
             weighted_conf_sum += confidence_value * quality_weight
@@ -1081,7 +1091,7 @@ class ThemeDiscoveryService:
             if latest_mention_at is None or seen_at > latest_mention_at:
                 latest_mention_at = seen_at
 
-            if seen_at >= cutoff_7d:
+            if seen_at >= comparison_cutoff_7d:
                 mentions_7d += 1
                 source_marker = (source_name or source_type or "unknown").strip().lower()
                 sources_7d.add(source_marker)
@@ -1090,7 +1100,7 @@ class ThemeDiscoveryService:
         avg_quality_confidence_30d = (weighted_conf_sum / mentions_30d) if mentions_30d else 0.0
         days_since_last_mention = 9999
         if latest_mention_at is not None:
-            delta = now - latest_mention_at
+            delta = comparison_now - latest_mention_at
             days_since_last_mention = max(0, int(delta.total_seconds() // 86400))
 
         return {

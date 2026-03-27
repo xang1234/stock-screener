@@ -5,6 +5,19 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
+def _decode_json_field(value, expected_type):
+    if value is None or isinstance(value, expected_type):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return value
+        if isinstance(parsed, expected_type):
+            return parsed
+    return value
+
+
 # Content Source Schemas
 class ContentSourceCreate(BaseModel):
     name: str = Field(..., description="Source name (e.g., 'Doomberg', '@Jesse_Livermore')")
@@ -247,6 +260,16 @@ class ThemeAlertResponse(BaseModel):
     metrics: Optional[dict]
     triggered_at: datetime
     is_read: bool
+
+    @field_validator("related_tickers", mode="before")
+    @classmethod
+    def _coerce_related_tickers(cls, value):
+        return _decode_json_field(value, list)
+
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def _coerce_metrics(cls, value):
+        return _decode_json_field(value, dict)
 
     class Config:
         from_attributes = True
@@ -526,6 +549,11 @@ class ThemeMergeSuggestionResponse(BaseModel):
     llm_reasoning: Optional[str]
     llm_relationship: Optional[str]
     suggested_canonical_name: Optional[str]
+
+    @field_validator("source_aliases", "target_aliases", mode="before")
+    @classmethod
+    def _coerce_aliases(cls, value):
+        return _decode_json_field(value, list)
 
 
 class ThemeMergeSuggestionsResponse(BaseModel):

@@ -4,7 +4,7 @@ Service for managing and tracking scheduled Celery tasks.
 Provides task metadata, execution history, and manual triggering capabilities.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from celery.result import AsyncResult
@@ -15,6 +15,14 @@ from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 # Task definitions with metadata
@@ -211,7 +219,7 @@ class TaskRegistryService:
             task_function=task_info['task_function'],
             task_id=celery_task.id,
             status='queued',
-            started_at=datetime.now(),
+            started_at=datetime.now(timezone.utc),
             triggered_by='manual',
         )
         db.add(execution)
@@ -294,11 +302,12 @@ class TaskRegistryService:
 
         if execution:
             execution.status = status
-            execution.completed_at = datetime.now()
+            execution.completed_at = datetime.now(timezone.utc)
             if execution.started_at:
-                execution.duration_seconds = (
-                    execution.completed_at - execution.started_at
-                ).total_seconds()
+                started_at = _coerce_utc_datetime(execution.started_at)
+                completed_at = _coerce_utc_datetime(execution.completed_at)
+                if started_at and completed_at:
+                    execution.duration_seconds = (completed_at - started_at).total_seconds()
             if result:
                 execution.result_summary = result
             if error:
