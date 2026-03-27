@@ -36,6 +36,7 @@ frontend/dist
 data/.cache/*
 data/db_repair_backup_*/
 data/*.recovered_*
+docker-data/postgres/
 
 # Logs
 *.log

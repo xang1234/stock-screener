@@ -20,7 +20,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./docker-data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockscanner} -d ${POSTGRES_DB:-stockscanner}"]
       interval: 10s
@@ -370,4 +370,3 @@ services:
 
 volumes:
   redis_data:
-  postgres_data:

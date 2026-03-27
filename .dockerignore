@@ -1,0 +1,13 @@
+.git
+.github
+.beads
+.plans
+backend/venv
+backend/data
+data
+docker-data
+frontend/node_modules
+frontend/dist
+skills
+__pycache__
+*.pyc
