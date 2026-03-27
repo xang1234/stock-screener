@@ -165,8 +165,10 @@ def test_extract_themes_stops_after_provider_quota_abort(
 
     result = extract_themes(limit=10)
 
-    assert calls == ["technical"]
-    assert result["processed"] == 0
+    assert calls == ["fundamental", "technical"]
+    assert result["processed"] == 1
     assert result["errors"] == 1
     assert result["aborted"] is True
     assert result["abort_reason"] == "tokens per day limit reached"
+    assert result["pipeline_results"]["fundamental"]["processed"] == 1
+    assert result["pipeline_results"]["technical"]["aborted"] is True

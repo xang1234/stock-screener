@@ -50,6 +50,10 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _default_pipeline_order(pipeline: str | None) -> list[str]:
+    return [pipeline] if pipeline else ["fundamental", "technical"]
+
+
 def _acquire_theme_stale_embedding_lock(task_id: str) -> tuple[object | None, str | None]:
     client = get_redis_client()
     if client is None:
@@ -152,7 +156,7 @@ def extract_themes(limit: int = 50, pipeline: str = None):
     Returns:
         Dict with extraction statistics
     """
-    pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+    pipelines = _default_pipeline_order(pipeline)
 
     logger.info("=" * 60)
     logger.info("TASK: Theme Extraction via LLM")
@@ -172,6 +176,7 @@ def extract_themes(limit: int = 50, pipeline: str = None):
         'pipelines': pipelines,
         'aborted': False,
         'abort_reason': None,
+        'pipeline_results': {},
     }
 
     try:
@@ -179,6 +184,7 @@ def extract_themes(limit: int = 50, pipeline: str = None):
             logger.info(f"Processing pipeline: {p}")
             service = ThemeExtractionService(db, pipeline=p)
             result = service.process_batch(limit=limit)
+            combined_result['pipeline_results'][p] = result
 
             # Aggregate results
             combined_result['processed'] += result.get('processed', 0)
@@ -186,13 +192,13 @@ def extract_themes(limit: int = 50, pipeline: str = None):
             combined_result['errors'] += result.get('errors', 0)
             combined_result['new_themes'].extend(result.get('new_themes', []))
             if result.get('aborted'):
+                if not combined_result['aborted']:
+                    combined_result['abort_reason'] = result.get('abort_reason')
                 combined_result['aborted'] = True
-                combined_result['abort_reason'] = result.get('abort_reason')
                 logger.error(
-                    "Aborting theme extraction task after pipeline %s reported provider quota exhaustion.",
+                    "Pipeline %s reported provider quota exhaustion; continuing remaining pipelines.",
                     p,
                 )
-                break
 
         result = combined_result
 
@@ -223,6 +229,7 @@ def extract_themes(limit: int = 50, pipeline: str = None):
             'new_themes': result['new_themes'],
             'aborted': result.get('aborted', False),
             'abort_reason': result.get('abort_reason'),
+            'pipeline_results': result.get('pipeline_results', {}),
             'duration_seconds': round(duration, 2),
             'timestamp': datetime.now().isoformat()
         }
@@ -255,7 +262,7 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
     Returns:
         Dict with reprocessing statistics
     """
-    pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
+    pipelines = _default_pipeline_order(pipeline)
 
     logger.info("=" * 60)
     logger.info("TASK: Reprocess Failed Theme Extractions")
@@ -273,6 +280,10 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
         'total_mentions': 0,
         'errors': 0,
         'pipelines': pipelines,
+        'silent_failures_reset': 0,
+        'aborted': False,
+        'abort_reason': None,
+        'pipeline_results': {},
     }
 
     try:
@@ -280,11 +291,17 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
             logger.info(f"Reprocessing failed items for pipeline: {p}")
             service = ThemeExtractionService(db, pipeline=p)
             result = service.reprocess_failed_items(limit=limit)
+            combined_result['pipeline_results'][p] = result
 
             combined_result['reprocessed_count'] += result.get('reprocessed_count', 0)
             combined_result['processed'] += result.get('processed', 0)
             combined_result['total_mentions'] += result.get('total_mentions', 0)
             combined_result['errors'] += result.get('errors', 0)
+            combined_result['silent_failures_reset'] += result.get('silent_failures_reset', 0)
+            if result.get('aborted'):
+                if not combined_result['aborted']:
+                    combined_result['abort_reason'] = result.get('abort_reason')
+                combined_result['aborted'] = True
 
         duration = time.time() - start_time
 
@@ -293,6 +310,7 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
         logger.info(f"  Successfully processed: {combined_result['processed']}")
         logger.info(f"  Theme mentions recovered: {combined_result['total_mentions']}")
         logger.info(f"  Errors: {combined_result['errors']}")
+        logger.info(f"  Silent failures reset: {combined_result['silent_failures_reset']}")
         logger.info("=" * 60)
 
         try:
@@ -308,6 +326,10 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
             'processed': combined_result['processed'],
             'total_mentions': combined_result['total_mentions'],
             'errors': combined_result['errors'],
+            'silent_failures_reset': combined_result['silent_failures_reset'],
+            'aborted': combined_result['aborted'],
+            'abort_reason': combined_result['abort_reason'],
+            'pipeline_results': combined_result['pipeline_results'],
             'duration_seconds': round(duration, 2),
             'timestamp': datetime.now().isoformat()
         }

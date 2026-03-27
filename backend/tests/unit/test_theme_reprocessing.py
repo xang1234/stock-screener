@@ -16,6 +16,7 @@ from app.models.theme import (
     ThemeMention,
     ThemeCluster,
 )
+from app.models.stock_universe import StockUniverse
 
 
 @pytest.fixture
@@ -147,6 +148,90 @@ class TestExtractFromContentBugFix:
         with patch.object(service, '_try_generate_litellm', return_value="This is not JSON at all"):
             with pytest.raises(ThemeExtractionParseError, match="Failed to parse LLM response"):
                 service.extract_from_content(item)
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_missing_provider_raises_retryable_unavailable_error(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import (
+            ThemeExtractionProviderUnavailableError,
+            ThemeExtractionService,
+        )
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = None
+        service.llm = None
+        service.gemini_client = None
+        service.configured_model = None
+        service.pipeline_config = None
+        service._valid_tickers = set()
+        service._last_request_time = 0
+        service._min_request_interval = 0
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+        service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
+
+        item = _make_content_item(db_session, pipeline_source)
+
+        with pytest.raises(ThemeExtractionProviderUnavailableError, match="No LLM provider available"):
+            service.extract_from_content(item)
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_extract_from_content_enriches_tickers_from_company_names(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        db_session.add(
+            StockUniverse(
+                symbol="NVDA",
+                name="NVIDIA Corporation",
+                exchange="NASDAQ",
+                is_active=True,
+                status="active",
+            )
+        )
+        db_session.commit()
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "fundamental"
+        service.provider = "litellm"
+        service.llm = MagicMock()
+        service.gemini_client = None
+        service.configured_model = None
+        service.pipeline_config = None
+        service._valid_tickers = None
+        service._company_name_ticker_map = None
+        service._last_request_time = 0
+        service._min_request_interval = 0
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+        service.ticker_pattern = __import__("re").compile(r'^[A-Z]{1,5}$')
+
+        item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="Nvidia earnings preview",
+            content="Analysts expect Nvidia to benefit from AI capex.",
+        )
+
+        with patch.object(
+            service,
+            "_try_generate_litellm",
+            return_value='[{"theme":"AI Capex Beneficiaries","tickers":[],"sentiment":"bullish","confidence":0.8,"excerpt":"Nvidia should benefit from AI capex."}]',
+        ):
+            mentions = service.extract_from_content(item)
+
+        assert mentions[0]["tickers"] == ["NVDA"]
 
 
 class TestParseFailurePipelineSemantics:
@@ -363,6 +448,46 @@ class TestReprocessFailedItems:
         assert result["reprocessed_count"] == 1
         mock_batch.assert_called_once_with(limit=100, item_ids=[technical_item.id])
 
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_reprocess_includes_silent_failures_once(self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source):
+        """Silent processed-without-mentions items should be retried once through reprocess_failed_items()."""
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        silent_item = _make_content_item(
+            db_session,
+            pipeline_source,
+            title="Silent item",
+            is_processed=True,
+            processed_at=datetime.utcnow() - timedelta(hours=2),
+            extraction_error=None,
+            external_id="silent-item-1",
+        )
+        _set_pipeline_state(
+            db_session,
+            silent_item.id,
+            pipeline="technical",
+            status="processed",
+            attempt_count=1,
+            processed_at=datetime.utcnow() - timedelta(hours=2),
+        )
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+
+        with patch.object(service, "process_batch", return_value={"processed": 1, "total_mentions": 1, "errors": 0, "pipeline": "technical"}) as mock_batch:
+            result = service.reprocess_failed_items(limit=100)
+
+        assert result["silent_failures_reset"] == 1
+        assert result["reprocessed_count"] == 1
+        mock_batch.assert_called_once_with(limit=100, item_ids=[silent_item.id])
+
 
 class TestIdentifySilentFailures:
     """Verify identify_silent_failures() finds items with 0 mentions."""
@@ -458,6 +583,48 @@ class TestIdentifySilentFailures:
         # Verify legit_item was NOT reset
         db_session.refresh(legit_item)
         assert legit_item.is_processed is True
+
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
+    @patch("app.services.theme_extraction_service.ThemeExtractionService._load_reprocessing_config")
+    def test_does_not_reset_items_after_second_silent_attempt(
+        self, mock_reproc, mock_pipeline, mock_model, mock_client, db_session, pipeline_source
+    ):
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        silent_fail = _make_content_item(
+            db_session, pipeline_source,
+            title="Repeated silent failure",
+            is_processed=True,
+            processed_at=datetime.utcnow() - timedelta(hours=5),
+            extraction_error=None,
+            external_id="silent-attempt-cap",
+        )
+        _set_pipeline_state(
+            db_session,
+            silent_fail.id,
+            pipeline="technical",
+            status="processed",
+            attempt_count=2,
+            processed_at=datetime.utcnow() - timedelta(hours=5),
+        )
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        service.db = db_session
+        service.pipeline = "technical"
+        service.provider = "litellm"
+        service.max_age_days = 30
+        service.theme_policy_overrides = {}
+
+        result = service.identify_silent_failures(max_age_days=30)
+
+        assert result["reset_count"] == 0
+        state = db_session.query(ContentItemPipelineState).filter(
+            ContentItemPipelineState.content_item_id == silent_fail.id,
+            ContentItemPipelineState.pipeline == "technical",
+        ).first()
+        assert state.status == "processed"
 
 
 class TestPipelineStateDrivenBatching:

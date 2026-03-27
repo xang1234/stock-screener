@@ -59,6 +59,10 @@ class ThemeExtractionParseError(Exception):
     """Raised when model output cannot be parsed into the extraction schema."""
 
 
+class ThemeExtractionProviderUnavailableError(Exception):
+    """Raised when no extraction provider is configured for the current run."""
+
+
 _LEGACY_THEME_CANONICAL_NAME_MAP = {
     # AI themes
     "ai_infrastructure": "AI Infrastructure",
@@ -345,9 +349,84 @@ class ThemeExtractionService:
         """Get set of valid tickers from stock universe"""
         if self._valid_tickers is None:
             from ..models.stock_universe import StockUniverse
-            tickers = self.db.query(StockUniverse.symbol).all()
+            tickers = self.db.query(StockUniverse.symbol).filter(
+                StockUniverse.active_filter()
+            ).all()
             self._valid_tickers = {t[0] for t in tickers}
         return self._valid_tickers
+
+    def _get_company_name_ticker_map(self) -> list[tuple[str, str]]:
+        """Build a deterministic alias -> ticker map from the active stock universe."""
+        mapping = getattr(self, "_company_name_ticker_map", None)
+        if mapping is not None:
+            return mapping
+
+        from ..models.stock_universe import StockUniverse
+
+        suffixes = {
+            "inc", "incorporated", "corp", "corporation", "co", "company", "ltd", "limited",
+            "plc", "nv", "sa", "ag", "holdings", "holding", "group", "therapeutics",
+            "pharmaceuticals", "pharma", "biosciences", "biotech", "technologies", "technology",
+        }
+        alias_to_symbol: dict[str, str] = {}
+        ambiguous_aliases: set[str] = set()
+
+        rows = self.db.query(StockUniverse.symbol, StockUniverse.name).filter(
+            StockUniverse.active_filter(),
+            StockUniverse.name.isnot(None),
+        ).all()
+
+        for symbol, raw_name in rows:
+            normalized = self._normalize_company_text(raw_name)
+            if not normalized:
+                continue
+
+            aliases = {normalized}
+            tokens = normalized.split()
+            while tokens and tokens[-1] in suffixes:
+                tokens = tokens[:-1]
+                if tokens:
+                    aliases.add(" ".join(tokens))
+
+            for alias in aliases:
+                if len(alias) < 4:
+                    continue
+                existing = alias_to_symbol.get(alias)
+                if existing is not None and existing != symbol:
+                    ambiguous_aliases.add(alias)
+                    continue
+                alias_to_symbol[alias] = symbol
+
+        for alias in ambiguous_aliases:
+            alias_to_symbol.pop(alias, None)
+
+        mapping = sorted(alias_to_symbol.items(), key=lambda item: (-len(item[0]), item[0]))
+        self._company_name_ticker_map = mapping
+        return mapping
+
+    def _normalize_company_text(self, text: str | None) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+    def _resolve_company_name_tickers(self, *texts: str, limit: int = 5) -> list[str]:
+        normalized_texts = [
+            f" {self._normalize_company_text(text)} "
+            for text in texts
+            if self._normalize_company_text(text)
+        ]
+        if not normalized_texts:
+            return []
+
+        matches: list[str] = []
+        seen: set[str] = set()
+        for alias, symbol in self._get_company_name_ticker_map():
+            needle = f" {alias} "
+            if any(needle in haystack for haystack in normalized_texts):
+                if symbol not in seen:
+                    matches.append(symbol)
+                    seen.add(symbol)
+                    if len(matches) >= limit:
+                        break
+        return matches
 
     def _validate_ticker(self, ticker: str) -> bool:
         """Check if ticker is valid"""
@@ -462,8 +541,7 @@ Example themes for this pipeline: {examples_str}
         Returns list of extracted theme mentions
         """
         if not self.provider:
-            logger.error("No LLM client initialized")
-            return []
+            raise ThemeExtractionProviderUnavailableError("No LLM provider available for theme extraction")
 
         # Truncate content if too long
         content = content_item.content or ""
@@ -548,6 +626,12 @@ Example themes for this pipeline: {examples_str}
 
                 # Clean tickers
                 tickers = self._clean_tickers(mention.get("tickers", []))
+                for resolved in self._resolve_company_name_tickers(
+                    mention.get("excerpt", ""),
+                    content_item.title or "",
+                ):
+                    if resolved not in tickers:
+                        tickers.append(resolved)
 
                 cleaned_mentions.append({
                     "theme": raw_theme,
@@ -924,6 +1008,8 @@ Example themes for this pipeline: {examples_str}
         """Classify failures into retryable or terminal pipeline-state buckets."""
         if isinstance(error, ThemeExtractionParseError):
             return "failed_retryable"
+        if isinstance(error, ThemeExtractionProviderUnavailableError):
+            return "failed_retryable"
 
         error_text = str(error).lower()
         terminal_markers = (
@@ -947,6 +1033,8 @@ Example themes for this pipeline: {examples_str}
         name = error.__class__.__name__.lower()
         if isinstance(error, ThemeExtractionParseError):
             return "llm_response_parse_error"
+        if isinstance(error, ThemeExtractionProviderUnavailableError):
+            return "llm_provider_unavailable"
         if isinstance(error, LLMQuotaExceededError):
             return "llm_provider_quota_exhausted"
         if isinstance(error, LLMError):
@@ -1507,6 +1595,8 @@ Example themes for this pipeline: {examples_str}
         from datetime import timedelta
         cutoff_date = datetime.utcnow() - timedelta(days=self.max_age_days)
         pipeline_source_ids = self._get_pipeline_source_ids()
+        silent_result = self.identify_silent_failures(max_age_days=self.max_age_days)
+        silent_item_ids = silent_result.get("items", [])
 
         # Find pipeline-scoped retryable failures eligible for retry
         query = self.db.query(ContentItem).join(
@@ -1526,14 +1616,15 @@ Example themes for this pipeline: {examples_str}
             ContentItem.published_at.desc()
         ).limit(limit).all()
 
-        if not failed_items:
-            logger.info(f"[{self.pipeline}] No failed items to reprocess")
+        if not failed_items and not silent_item_ids:
+            logger.info(f"[{self.pipeline}] No failed or silent items to reprocess")
             return {
                 "reprocessed_count": 0,
                 "processed": 0,
                 "total_mentions": 0,
                 "errors": 0,
                 "pipeline": self.pipeline,
+                "silent_failures_reset": 0,
             }
 
         # Reset failed items so process_batch() picks them up
@@ -1549,12 +1640,14 @@ Example themes for this pipeline: {examples_str}
             state.processed_at = None
         self.db.commit()
 
-        # Delegate to process_batch() with specific IDs — only retries these items
-        result = self.process_batch(limit=limit, item_ids=item_ids)
-        result["reprocessed_count"] = len(item_ids)
+        # Delegate to process_batch() with specific IDs — retries only failed/silent items.
+        retry_ids = list(dict.fromkeys(item_ids + silent_item_ids))
+        result = self.process_batch(limit=limit, item_ids=retry_ids)
+        result["reprocessed_count"] = len(retry_ids)
+        result["silent_failures_reset"] = silent_result.get("reset_count", 0)
         return result
 
-    def identify_silent_failures(self, max_age_days: int = None) -> dict:
+    def identify_silent_failures(self, max_age_days: int = None, max_attempt_count: int = 1) -> dict:
         """
         Identify content items that silently failed extraction in this pipeline.
 
@@ -1583,6 +1676,7 @@ Example themes for this pipeline: {examples_str}
             ),
         ).filter(
             ContentItemPipelineState.status == "processed",
+            func.coalesce(ContentItemPipelineState.attempt_count, 0) <= max_attempt_count,
             ContentItem.published_at >= cutoff_date,
             ~ContentItem.id.in_(self.db.query(mentioned_ids.c.content_item_id)),
         )
