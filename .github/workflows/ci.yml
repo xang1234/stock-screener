@@ -216,6 +216,7 @@ jobs:
           images: ghcr.io/${{ steps.registry.outputs.owner }}/stockscreenclaude-backend
           tags: |
             type=ref,event=branch
+            type=ref,event=tag
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -239,6 +240,7 @@ jobs:
           images: ghcr.io/${{ steps.registry.outputs.owner }}/stockscreenclaude-frontend
           tags: |
             type=ref,event=branch
+            type=ref,event=tag
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -248,7 +250,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
-          file: Dockerfile
+          file: ./frontend/Dockerfile
           push: true
           build-args: |
             VITE_API_URL=/api
