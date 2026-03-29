@@ -168,6 +168,8 @@ class ThemeExtractionService:
         "models/gemini-2.0-flash-lite",
         "models/gemini-2.5-flash",
     ]
+    DEFAULT_EXTRACTION_MAX_TOKENS = 2000
+    ZAI_EXTRACTION_MAX_TOKENS = 4000
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
     MATCH_THRESHOLD_CONFIG = MatchThresholdConfig(
         version="match-v1",
@@ -469,6 +471,11 @@ class ThemeExtractionService:
         model_override = self.configured_model if self.configured_model else None
         active_model = model_override or self.llm.preset.primary.model_id
         allow_fallbacks = not LLMService._is_zai_model(active_model)
+        max_tokens = (
+            self.ZAI_EXTRACTION_MAX_TOKENS
+            if LLMService._is_zai_model(active_model)
+            else self.DEFAULT_EXTRACTION_MAX_TOKENS
+        )
 
         async def _call():
             response = await self.llm.completion(
@@ -479,7 +486,7 @@ class ThemeExtractionService:
                 model=model_override,  # Use configured model or preset default
                 allow_fallbacks=allow_fallbacks,
                 temperature=0.2,
-                max_tokens=2000,
+                max_tokens=max_tokens,
             )
             return LLMService.extract_content(response)
 

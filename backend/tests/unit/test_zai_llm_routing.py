@@ -67,6 +67,7 @@ def test_try_generate_litellm_disables_fallbacks_for_configured_zai_model() -> N
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] == "openai/glm-4.7-flash"
     assert kwargs["allow_fallbacks"] is False
+    assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
 
 
 def test_try_generate_litellm_disables_fallbacks_for_default_zai_model() -> None:
@@ -84,6 +85,24 @@ def test_try_generate_litellm_disables_fallbacks_for_default_zai_model() -> None
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] is None
     assert kwargs["allow_fallbacks"] is False
+    assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
+
+
+def test_try_generate_litellm_keeps_default_token_budget_for_non_zai_model() -> None:
+    service = ThemeExtractionService.__new__(ThemeExtractionService)
+    service.llm = SimpleNamespace(
+        preset=SimpleNamespace(primary=SimpleNamespace(model_id="groq/qwen/qwen3-32b")),
+        completion=AsyncMock(return_value=_llm_json_response("[]")),
+    )
+    service.pipeline_config = None
+    service.configured_model = "groq/qwen/qwen3-32b"
+
+    result = service._try_generate_litellm("prompt")
+
+    assert result == "[]"
+    kwargs = service.llm.completion.await_args.kwargs
+    assert kwargs["allow_fallbacks"] is True
+    assert kwargs["max_tokens"] == ThemeExtractionService.DEFAULT_EXTRACTION_MAX_TOKENS
 
 
 def test_resolve_fallback_models_uses_qwen_for_non_zai_override() -> None:
