@@ -159,7 +159,9 @@ RESEARCH_PRESET = ModelPreset(
 # Theme extraction - needs structured output (JSON)
 EXTRACTION_PRESET = ModelPreset(
     primary=ZAI_GLM_47_FLASH,
-    fallbacks=[]
+    fallbacks=[
+        GROQ_QWEN3_32B,
+    ]
 )
 
 # Report writing - needs long context and good prose

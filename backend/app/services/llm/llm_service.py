@@ -196,7 +196,10 @@ class LLMService:
             params["response_format"] = response_format
 
         # Build fallback list
-        fallback_models = get_fallback_chain(self.preset)[1:] if allow_fallbacks else []
+        fallback_models = self._resolve_fallback_models(
+            primary_model=str(params["model"]),
+            allow_fallbacks=allow_fallbacks,
+        )
 
         return await self._call_with_fallbacks(
             params=params,
@@ -215,9 +218,10 @@ class LLMService:
         last_error = None
 
         for index, model in enumerate(all_models):
-            params["model"] = model
+            model_params = dict(params)
+            model_params["model"] = model
             try:
-                return await self._call_with_retry(params, num_retries)
+                return await self._call_with_retry(model_params, num_retries)
             except LLMQuotaExceededError as e:
                 # Fail fast when quota is exhausted and all remaining fallbacks
                 # are on the same provider (e.g., Groq-only extraction presets).
@@ -241,11 +245,18 @@ class LLMService:
         """Return True when a model should route through the Z.AI OpenAI-compatible endpoint."""
         return model.startswith("openai/glm-")
 
+    def _resolve_fallback_models(self, *, primary_model: str, allow_fallbacks: bool) -> List[str]:
+        """Resolve fallback models for a request, excluding duplicates of the active model."""
+        if not allow_fallbacks:
+            return []
+        return [
+            candidate
+            for candidate in get_fallback_chain(self.preset)[1:]
+            if candidate != primary_model
+        ]
+
     def _apply_provider_overrides(self, params: Dict[str, Any]) -> None:
         """Apply per-provider request overrides for the selected model."""
-        params.pop("api_key", None)
-        params.pop("api_base", None)
-
         model = str(params.get("model", "") or "")
         if not self._is_zai_model(model):
             return
@@ -466,22 +477,26 @@ class LLMService:
         if response_format:
             params["response_format"] = response_format
 
-        all_models = [params["model"]] + (get_fallback_chain(self.preset)[1:] if allow_fallbacks else [])
+        all_models = [params["model"]] + self._resolve_fallback_models(
+            primary_model=str(params["model"]),
+            allow_fallbacks=allow_fallbacks,
+        )
         last_error = None
 
         for current_model in all_models:
-            params["model"] = current_model
+            current_params = dict(params)
+            current_params["model"] = current_model
 
-            self._apply_provider_overrides(params)
+            self._apply_provider_overrides(current_params)
             # For Groq models, get a key from the manager for this model attempt
             groq_key = None
             if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:
                 groq_key = self._groq_key_manager.get_key()
                 if groq_key:
-                    params["api_key"] = groq_key
+                    current_params["api_key"] = groq_key
 
             try:
-                response = await acompletion(**params)
+                response = await acompletion(**current_params)
                 async for chunk in response:
                     yield chunk
                 return
@@ -538,23 +553,27 @@ class LLMService:
         if response_format:
             params["response_format"] = response_format
 
-        all_models = [params["model"]] + (get_fallback_chain(self.preset)[1:] if allow_fallbacks else [])
+        all_models = [params["model"]] + self._resolve_fallback_models(
+            primary_model=str(params["model"]),
+            allow_fallbacks=allow_fallbacks,
+        )
         last_error = None
 
         for current_model in all_models:
-            params["model"] = current_model
+            current_params = dict(params)
+            current_params["model"] = current_model
 
-            self._apply_provider_overrides(params)
+            self._apply_provider_overrides(current_params)
             # For Groq models, get a key from the manager ONCE for this model attempt
             groq_key = None
             if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:
                 groq_key = self._groq_key_manager.get_key()
                 if groq_key:
-                    params["api_key"] = groq_key
+                    current_params["api_key"] = groq_key
 
             for attempt in range(num_retries + 1):
                 try:
-                    return completion(**params)
+                    return completion(**current_params)
                 except RateLimitError as e:
                     # Report rate limit (for rotation on NEXT request)
                     if groq_key:
