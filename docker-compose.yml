@@ -48,6 +48,8 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80,http://frontend}
       # API Keys (from .env or .env.docker)
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -111,6 +113,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -166,6 +170,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -221,6 +227,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}

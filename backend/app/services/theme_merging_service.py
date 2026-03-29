@@ -90,7 +90,7 @@ class ThemeMergingService:
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
     EMBEDDING_MODEL_VERSION = "embedding-v1"
     EMBEDDING_DIM = 384
-    DEFAULT_MERGE_MODEL = "groq/llama-3.3-70b-versatile"
+    DEFAULT_MERGE_MODEL = "openai/glm-4.7-flash"
     CANDIDATE_TOP_K = 16
     CANDIDATE_BLOCK_MAX = 96
 

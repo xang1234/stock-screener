@@ -467,6 +467,7 @@ class ThemeExtractionService:
 
         # Use configured model if set
         model_override = self.configured_model if self.configured_model else None
+        allow_fallbacks = not bool(model_override and LLMService._is_zai_model(model_override))
 
         async def _call():
             response = await self.llm.completion(
@@ -475,6 +476,7 @@ class ThemeExtractionService:
                     {"role": "user", "content": prompt}
                 ],
                 model=model_override,  # Use configured model or preset default
+                allow_fallbacks=allow_fallbacks,
                 temperature=0.2,
                 max_tokens=2000,
             )

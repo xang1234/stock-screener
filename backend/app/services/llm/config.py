@@ -100,6 +100,13 @@ DEEPSEEK_REASONER = ModelConfig(
     max_tokens=8000,
 )
 
+# Z.AI Models (OpenAI-compatible endpoint)
+ZAI_GLM_47_FLASH = ModelConfig(
+    model_id="openai/glm-4.7-flash",
+    temperature=0.2,
+    max_tokens=4000,
+)
+
 # Together AI Models
 TOGETHER_LLAMA_70B = ModelConfig(
     model_id="together_ai/meta-llama/Llama-3-70b-chat-hf",
@@ -151,11 +158,8 @@ RESEARCH_PRESET = ModelPreset(
 
 # Theme extraction - needs structured output (JSON)
 EXTRACTION_PRESET = ModelPreset(
-    primary=GROQ_QWEN3_32B,
-    fallbacks=[
-        GROQ_LLAMA_70B,
-        GROQ_MIXTRAL,
-    ]
+    primary=ZAI_GLM_47_FLASH,
+    fallbacks=[]
 )
 
 # Report writing - needs long context and good prose
@@ -192,6 +196,7 @@ LOCAL_EXTRACTION_PRESET = ModelPreset(
 
 PROVIDER_ENV_VARS = {
     "groq": "GROQ_API_KEY",
+    "zai": "ZAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "together_ai": "TOGETHER_API_KEY",  # Also: TOGETHERAI_API_KEY
     "openrouter": "OPENROUTER_API_KEY",
@@ -206,6 +211,9 @@ PROVIDER_ENV_VARS = {
 # =============================================================================
 
 AVAILABLE_MODELS = [
+    # Cloud models (Z.AI)
+    {"id": "openai/glm-4.7-flash", "name": "GLM-4.7-Flash (Z.AI)", "provider": "zai", "category": "cloud"},
+
     # Cloud models (Groq)
     {"id": "groq/llama-3.3-70b-versatile", "name": "Llama 3.3 70B (Groq)", "provider": "groq", "category": "cloud"},
     {"id": "groq/qwen/qwen3-32b", "name": "Qwen 3 32B (Groq)", "provider": "groq", "category": "cloud"},

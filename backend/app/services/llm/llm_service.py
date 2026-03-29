@@ -6,7 +6,7 @@ Provides:
 - Automatic fallback handling between models
 - Streaming support
 - Retry logic with exponential backoff
-- Support for Groq, DeepSeek, Together AI, OpenRouter, and more
+- Support for Groq, Z.AI, DeepSeek, Together AI, OpenRouter, and more
 """
 import asyncio
 import logging
@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # Configure LiteLLM
 litellm.drop_params = True  # Drop unsupported params instead of erroring
 litellm.set_verbose = False  # Set to True for debugging
+
+_ZAI_API_BASE_DEFAULT = "https://api.z.ai/api/paas/v4"
 
 
 class LLMError(Exception):
@@ -100,6 +102,14 @@ class LLMService:
         groq_key = getattr(settings, "groq_api_key", None) or os.environ.get("GROQ_API_KEY")
         if groq_key:
             os.environ["GROQ_API_KEY"] = groq_key
+
+        # Z.AI
+        zai_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
+        if zai_key:
+            os.environ["ZAI_API_KEY"] = zai_key
+        zai_base = getattr(settings, "zai_api_base", None) or os.environ.get("ZAI_API_BASE")
+        if zai_base:
+            os.environ["ZAI_API_BASE"] = zai_base
 
         # DeepSeek
         deepseek_key = getattr(settings, "deepseek_api_key", None) or os.environ.get("DEEPSEEK_API_KEY")
@@ -226,6 +236,30 @@ class LLMService:
 
         raise LLMError(f"All models failed. Last error: {last_error}")
 
+    @staticmethod
+    def _is_zai_model(model: str) -> bool:
+        """Return True when a model should route through the Z.AI OpenAI-compatible endpoint."""
+        return model.startswith("openai/glm-")
+
+    def _apply_provider_overrides(self, params: Dict[str, Any]) -> None:
+        """Apply per-provider request overrides for the selected model."""
+        params.pop("api_key", None)
+        params.pop("api_base", None)
+
+        model = str(params.get("model", "") or "")
+        if not self._is_zai_model(model):
+            return
+
+        zai_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
+        zai_base = (
+            getattr(settings, "zai_api_base", None)
+            or os.environ.get("ZAI_API_BASE")
+            or _ZAI_API_BASE_DEFAULT
+        )
+        if zai_key:
+            params["api_key"] = zai_key
+        params["api_base"] = zai_base
+
     async def _call_with_retry(
         self,
         params: Dict,
@@ -239,6 +273,7 @@ class LLMService:
 
         # For Groq models, get a key from the manager ONCE for this entire request
         # The key stays the same for all retries (rotation happens on NEXT request)
+        self._apply_provider_overrides(params)
         groq_key = None
         if model.startswith("groq/") and len(self._groq_key_manager) > 0:
             groq_key = self._groq_key_manager.get_key()
@@ -437,6 +472,7 @@ class LLMService:
         for current_model in all_models:
             params["model"] = current_model
 
+            self._apply_provider_overrides(params)
             # For Groq models, get a key from the manager for this model attempt
             groq_key = None
             if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:
@@ -508,6 +544,7 @@ class LLMService:
         for current_model in all_models:
             params["model"] = current_model
 
+            self._apply_provider_overrides(params)
             # For Groq models, get a key from the manager ONCE for this model attempt
             groq_key = None
             if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:

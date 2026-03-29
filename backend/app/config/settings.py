@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     alpha_vantage_api_key: str = ""
     gemini_api_key: str = ""  # For theme extraction via Google Gemini
     google_api_key: str = ""  # Alternative name for Gemini API key
+    zai_api_key: str = ""  # For Z.AI GLM models via OpenAI-compatible endpoint
+    zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
     deepseek_api_key: str = ""  # For LLM via DeepSeek (cost-effective fallback)
@@ -68,7 +70,7 @@ class Settings(BaseSettings):
     serper_api_key: str = ""  # For web search in chatbot (fallback)
 
     # LLM Routing Configuration
-    llm_default_provider: str = "groq"  # Primary provider: groq, deepseek, together_ai, openrouter
+    llm_default_provider: str = "groq"  # Primary provider: groq, zai, deepseek, together_ai, openrouter
     llm_chatbot_model: str = "groq/qwen-qwen3-32b"  # Model for chatbot (LiteLLM format)
     llm_research_model: str = "groq/qwen-qwen3-32b"  # Model for research agents
     llm_fallback_enabled: bool = True  # Enable automatic fallback to other providers

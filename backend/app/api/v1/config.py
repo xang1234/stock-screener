@@ -240,8 +240,8 @@ async def get_llm_config(
         - Available models list
     """
     # Get current settings
-    extraction_model_id = get_setting(db, "llm_extraction_model", "groq/llama-3.3-70b-versatile")
-    merge_model_id = get_setting(db, "llm_merge_model", "groq/llama-3.3-70b-versatile")
+    extraction_model_id = get_setting(db, "llm_extraction_model", "openai/glm-4.7-flash")
+    merge_model_id = get_setting(db, "llm_merge_model", "openai/glm-4.7-flash")
     ollama_api_base = get_setting(db, "ollama_api_base", "http://localhost:11434")
 
     # Also check environment variable override
