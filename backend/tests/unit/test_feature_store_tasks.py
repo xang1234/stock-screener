@@ -74,6 +74,9 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
     ):
         mock_date.today.return_value = date(2026, 3, 16)
 
@@ -104,6 +107,9 @@ def test_build_daily_snapshot_never_passes_legacy_dict_shape():
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
     ):
         _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
@@ -131,6 +137,9 @@ def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
     ):
         _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
@@ -186,13 +195,16 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
-    ):
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+    ) as mock_auto_scan:
         result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
     assert result["status"] == "skipped"
     assert result["reason"] == "already_published"
     assert result["existing_run_id"] == 41
     assert fake_use_case.received_cmd is None
+    mock_auto_scan.assert_not_called()
     assert lookup_calls == [{
         "input_hash": "same-input",
         "universe_hash": "same-universe",
@@ -222,8 +234,46 @@ def test_build_daily_snapshot_reraises_soft_time_limit():
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
     ):
         with pytest.raises(SoftTimeLimitExceeded):
             _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
     assert build_daily_snapshot.soft_time_limit == 3600
+
+
+def test_build_daily_snapshot_creates_auto_scan_after_publish():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ) as mock_auto_scan:
+        _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    mock_auto_scan.assert_called_once_with(
+        feature_run_id=11,
+        universe_name=get_default_scan_profile()["universe"],
+        screeners=get_default_scan_profile()["screeners"],
+        criteria=get_default_scan_profile()["criteria"],
+        composite_method=get_default_scan_profile()["composite_method"],
+    )

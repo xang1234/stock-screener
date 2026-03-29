@@ -324,6 +324,7 @@ class ScanListItem(BaseModel):
 
     scan_id: str
     status: str
+    trigger_source: str = "manual"
     universe: str  # Legacy label (backward compat)
     universe_type: Optional[str] = None
     universe_exchange: Optional[str] = None

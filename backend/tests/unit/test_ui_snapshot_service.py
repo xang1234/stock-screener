@@ -14,7 +14,7 @@ from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapsho
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
 from app.models.industry import IBDGroupRank
-from app.models.scan_result import Scan
+from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
 from app.models.ui_view_snapshot import UIViewSnapshot
@@ -126,6 +126,7 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
         tables=[
             FeatureRun.__table__,
             Scan.__table__,
+            ScanResult.__table__,
             StockUniverse.__table__,
         ],
     )
@@ -156,6 +157,45 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
         "recent_deactivations": [],
     }
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
+
+
+def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            Scan.__table__,
+            ScanResult.__table__,
+            StockUniverse.__table__,
+        ],
+    )
+    migrate_ui_view_snapshot_tables(engine)
+    migrate_universe_lifecycle(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        db.add(
+            Scan(
+                scan_id="scan-auto",
+                status="completed",
+                trigger_source="auto",
+                universe="all",
+                universe_type="all",
+                universe_key="all",
+                total_stocks=100,
+                passed_stocks=42,
+                started_at=datetime(2026, 3, 29, 21, 45, 0),
+                completed_at=datetime(2026, 3, 29, 21, 45, 0),
+            )
+        )
+        db.commit()
+
+    snapshot = service.publish_scan_bootstrap()
+
+    assert snapshot.payload["recent_scans"]["scans"][0]["trigger_source"] == "auto"
+    assert snapshot.payload["selected_scan"]["trigger_source"] == "auto"
 
 
 def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():

@@ -7,7 +7,8 @@ Thin shim — all business logic lives in
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
+from uuid import uuid4
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -20,6 +21,80 @@ from app.domain.scanning.signature import (
 from app.tasks.data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+
+def _create_auto_scan_for_published_run(
+    *,
+    feature_run_id: int,
+    universe_name: str,
+    screeners: list[str],
+    criteria: dict | None,
+    composite_method: str,
+) -> str:
+    """Create a completed scan row bound to a published feature run."""
+    from app.database import SessionLocal
+    from app.infra.db.uow import SqlUnitOfWork
+    from app.models.scan_result import SCAN_TRIGGER_SOURCE_AUTO
+    from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
+    from app.services.scan_execution import cleanup_old_scans
+    from app.services.universe_resolver import normalize_universe_definition
+
+    auto_idempotency_key = f"auto-feature-run:{feature_run_id}"
+    universe_key: str | None = None
+
+    with SqlUnitOfWork(SessionLocal) as uow:
+        existing = uow.scans.get_by_idempotency_key(auto_idempotency_key)
+        if existing is not None:
+            scan_id = existing.scan_id
+        else:
+            universe_def = normalize_universe_definition(universe_name)
+            feature_run = uow.feature_runs.get_run(feature_run_id)
+            symbols = uow.universe.resolve_symbols(universe_def)
+            ran_at = feature_run.published_at or datetime.now(timezone.utc)
+            passed_stocks = (
+                feature_run.stats.passed_symbols
+                if feature_run.stats and feature_run.stats.passed_symbols is not None
+                else 0
+            )
+            scan = uow.scans.create(
+                scan_id=str(uuid4()),
+                criteria=criteria or {},
+                universe=universe_def.label(),
+                universe_key=universe_def.key(),
+                universe_type=universe_def.type.value,
+                universe_exchange=(
+                    universe_def.exchange.value if universe_def.exchange else None
+                ),
+                universe_index=(
+                    universe_def.index.value if universe_def.index else None
+                ),
+                universe_symbols=universe_def.symbols,
+                screener_types=screeners,
+                composite_method=composite_method,
+                total_stocks=len(symbols),
+                passed_stocks=passed_stocks,
+                status="completed",
+                task_id=None,
+                idempotency_key=auto_idempotency_key,
+                feature_run_id=feature_run_id,
+                trigger_source=SCAN_TRIGGER_SOURCE_AUTO,
+                started_at=ran_at,
+                completed_at=ran_at,
+            )
+            scan_id = scan.scan_id
+            universe_key = scan.universe_key
+            uow.commit()
+
+    if universe_key:
+        db = SessionLocal()
+        try:
+            cleanup_old_scans(db, universe_key)
+        finally:
+            db.close()
+
+    safe_publish_scan_bootstrap(scan_id)
+    safe_publish_scan_bootstrap()
+    return scan_id
 
 
 @celery_app.task(
@@ -159,6 +234,20 @@ def build_daily_snapshot(
         result.total_symbols, result.processed_symbols,
         result.failed_symbols, result.dq_passed,
     )
+
+    if result.status == "published":
+        auto_scan_id = _create_auto_scan_for_published_run(
+            feature_run_id=result.run_id,
+            universe_name=universe_name,
+            screeners=screeners,
+            criteria=criteria,
+            composite_method=composite_method,
+        )
+        logger.info(
+            "Created auto scan %s for published feature run %d",
+            auto_scan_id,
+            result.run_id,
+        )
 
     return {
         "run_id": result.run_id,

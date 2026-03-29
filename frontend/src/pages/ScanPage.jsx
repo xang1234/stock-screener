@@ -42,6 +42,7 @@ import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '.
 import { useFilterPresets } from '../hooks/useFilterPresets';
 import { useRuntime } from '../contexts/RuntimeContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
+import { formatScanDropdownLabel } from '../utils/scanLabel';
 
 // Test list of 20 popular stocks for quick testing
 const TEST_SYMBOLS = [
@@ -699,50 +700,6 @@ function ScanPage() {
     }
   }, [bootstrappedScanId, currentScanId, page, perPage, queryClient, resultsData?.results, sortBy, sortOrder, stableFilterKey]);
 
-  // Format scan label for dropdown
-  const formatScanLabel = (scan) => {
-    let universeLabel;
-
-    // Prefer structured universe_type if available (post-migration scans)
-    if (scan.universe_type) {
-      switch (scan.universe_type) {
-        case 'all':
-          universeLabel = 'All';
-          break;
-        case 'exchange':
-          universeLabel = scan.universe_exchange || 'Exchange';
-          break;
-        case 'index':
-          universeLabel = scan.universe_index === 'SP500' ? 'S&P500' : (scan.universe_index || 'Index');
-          break;
-        case 'custom':
-          universeLabel = `Custom (${scan.universe_symbols_count || '?'})`;
-          break;
-        case 'test':
-          universeLabel = `Test (${scan.universe_symbols_count || '?'})`;
-          break;
-        default:
-          universeLabel = scan.universe_type;
-      }
-    } else {
-      // Fallback for pre-migration scans using legacy universe string
-      const u = (scan.universe || '').toLowerCase();
-      universeLabel = u === 'custom' ? 'Test' :
-                      u === 'sp500' ? 'S&P500' :
-                      u === 'all' ? 'All' :
-                      u === 'all stocks' ? 'All' :
-                      scan.universe ? scan.universe.toUpperCase() : 'Unknown';
-    }
-
-    const dateStr = new Date(scan.started_at).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-    return `${universeLabel} (${scan.passed_stocks}/${scan.total_stocks}) - ${dateStr}`;
-  };
-
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
@@ -772,7 +729,7 @@ function ScanPage() {
               </MenuItem>
               {scanHistory?.scans?.map((scan) => (
                 <MenuItem key={scan.scan_id} value={scan.scan_id}>
-                  {formatScanLabel(scan)}
+                  {formatScanDropdownLabel(scan)}
                 </MenuItem>
               ))}
             </Select>

@@ -454,6 +454,7 @@ class UISnapshotService:
                 ScanListItem(
                     scan_id=scan.scan_id,
                     status=scan.status,
+                    trigger_source=getattr(scan, "trigger_source", "manual") or "manual",
                     universe=scan.universe or "unknown",
                     universe_type=scan.universe_type,
                     universe_exchange=scan.universe_exchange,
@@ -501,6 +502,7 @@ class UISnapshotService:
                 ScanListItem(
                     scan_id=selected_scan.scan_id,
                     status=selected_scan.status,
+                    trigger_source=getattr(selected_scan, "trigger_source", "manual") or "manual",
                     universe=selected_scan.universe or "unknown",
                     universe_type=selected_scan.universe_type,
                     universe_exchange=selected_scan.universe_exchange,

@@ -69,6 +69,7 @@ class TestCreateScanUseCase:
         assert len(uow.scans.rows) == 1
         scan = uow.scans.rows[0]
         assert scan.status == "queued"
+        assert scan.trigger_source == "manual"
         assert scan.total_stocks == 1
         assert scan.task_id == "fake-task-123"
 

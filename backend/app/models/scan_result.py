@@ -7,6 +7,9 @@ from ..database import Base
 
 logger = logging.getLogger(__name__)
 
+SCAN_TRIGGER_SOURCE_MANUAL = "manual"
+SCAN_TRIGGER_SOURCE_AUTO = "auto"
+
 
 class Scan(Base):
     """Scan metadata and configuration"""
@@ -41,6 +44,13 @@ class Scan(Base):
 
     # Idempotency
     idempotency_key = Column(String(64), nullable=True, unique=True, index=True)
+    trigger_source = Column(
+        String(20),
+        nullable=False,
+        default=SCAN_TRIGGER_SOURCE_MANUAL,
+        server_default=SCAN_TRIGGER_SOURCE_MANUAL,
+        index=True,
+    )
 
     # Feature Store binding (nullable — legacy scans predate feature store)
     feature_run_id = Column(

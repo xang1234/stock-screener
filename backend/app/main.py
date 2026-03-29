@@ -59,6 +59,16 @@ def run_scan_feature_run_migration():
         print(f"Warning: Scan feature_run_id migration failed (non-fatal): {e}")
 
 
+def run_scan_trigger_source_migration():
+    """Add trigger_source column to scans table and backfill legacy rows."""
+    from .db_migrations.scan_trigger_source_migration import migrate_scan_trigger_source
+
+    try:
+        migrate_scan_trigger_source(engine)
+    except Exception as e:
+        print(f"Warning: Scan trigger_source migration failed (non-fatal): {e}")
+
+
 def run_theme_pipeline_state_migration():
     """
     Run idempotent Theme pipeline-state schema migration on startup.
@@ -304,6 +314,7 @@ async def lifespan(app: FastAPI):
     run_universe_migration()
     run_feature_store_migration()
     run_scan_feature_run_migration()
+    run_scan_trigger_source_migration()
     run_theme_pipeline_state_migration()
     run_theme_pipeline_run_migration()
     run_theme_cluster_identity_migration()

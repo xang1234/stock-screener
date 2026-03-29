@@ -73,6 +73,7 @@ async def list_scans(
                 scan_items.append(ScanListItem(
                     scan_id=scan.scan_id,
                     status=scan.status,
+                    trigger_source=getattr(scan, "trigger_source", "manual") or "manual",
                     universe=scan.universe or "unknown",
                     universe_type=scan.universe_type,
                     universe_exchange=scan.universe_exchange,

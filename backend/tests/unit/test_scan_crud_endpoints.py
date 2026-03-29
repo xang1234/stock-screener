@@ -133,6 +133,24 @@ class TestListScans:
         finally:
             app.dependency_overrides.pop(get_uow, None)
 
+    async def test_includes_trigger_source_field(self, client):
+        scan_repo = FakeScanRepository()
+        s_manual = _make_scan("scan-manual", started_at=datetime(2024, 1, 2))
+        s_auto = _make_scan("scan-auto", started_at=datetime(2024, 1, 3), trigger_source="auto")
+        scan_repo.scans = {"scan-manual": s_manual, "scan-auto": s_auto}
+        scan_repo.rows = [s_manual, s_auto]
+
+        uow = _FakeUoW(scans=scan_repo)
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.get("/api/v1/scans")
+            assert resp.status_code == 200
+            scans = {s["scan_id"]: s for s in resp.json()["scans"]}
+            assert scans["scan-manual"]["trigger_source"] == "manual"
+            assert scans["scan-auto"]["trigger_source"] == "auto"
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
     async def test_empty_list(self, client):
         uow = _FakeUoW()
         app.dependency_overrides[get_uow] = lambda: uow

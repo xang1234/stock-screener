@@ -154,6 +154,7 @@ class CreateScanUseCase:
                 total_stocks=len(symbols),
                 passed_stocks=0,
                 status="queued",
+                trigger_source="manual",
                 task_id=None,
                 idempotency_key=cmd.idempotency_key,
                 feature_run_id=feature_run_id,
