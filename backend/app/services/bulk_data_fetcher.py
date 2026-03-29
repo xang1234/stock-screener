@@ -32,6 +32,7 @@ class BulkDataFetcher:
     MIN_PRICE_BATCH_SIZE = 25
     PRICE_BATCH_GROWTH_STEP = 25
     PRICE_BATCH_SUCCESS_STREAK_TO_GROW = 5
+    PRICE_BATCH_GROWTH_COOLDOWN_BATCHES = 3
     PRICE_BATCH_RETRY_BACKOFF_SECONDS = (30, 60, 120)
 
     @staticmethod
@@ -477,6 +478,7 @@ class BulkDataFetcher:
             min(start_batch_size or self.DEFAULT_PRICE_BATCH_SIZE, self.MAX_PRICE_BATCH_SIZE),
         )
         success_streak = 0
+        growth_cooldown_remaining = 0
         combined_results: Dict[str, Dict] = {}
         batch_start = 0
         while batch_start < len(symbols):
@@ -492,9 +494,12 @@ class BulkDataFetcher:
             if failure_rate > 0.20:
                 success_streak = 0
                 batch_size = max(self.MIN_PRICE_BATCH_SIZE, batch_size // 2)
+                growth_cooldown_remaining = self.PRICE_BATCH_GROWTH_COOLDOWN_BATCHES
             elif failure_rate < 0.02:
                 success_streak += 1
-                if success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
+                if growth_cooldown_remaining > 0:
+                    growth_cooldown_remaining -= 1
+                if growth_cooldown_remaining == 0 and success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
                     batch_size = min(
                         self.MAX_PRICE_BATCH_SIZE,
                         batch_size + self.PRICE_BATCH_GROWTH_STEP,

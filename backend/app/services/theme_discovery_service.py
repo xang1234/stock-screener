@@ -12,7 +12,7 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import func, and_, or_
+from sqlalchemy import case, func, and_, or_
 from sqlalchemy.orm import Session
 
 from ..models.theme import (
@@ -116,6 +116,112 @@ class ThemeDiscoveryService:
         ).scalar() or 0
         return count
 
+    def _empty_mention_metrics(self) -> dict:
+        return {
+            "mentions_1d": 0,
+            "mentions_7d": 0,
+            "mentions_30d": 0,
+            "mention_velocity": 0,
+            "sentiment_score": 0.0,
+        }
+
+    def _calculate_mention_velocity(
+        self,
+        *,
+        mentions_7d: int,
+        mentions_30d: int,
+        as_of_date: datetime,
+    ) -> float:
+        date_7d = as_of_date - timedelta(days=7)
+        date_30d = as_of_date - timedelta(days=30)
+
+        if mentions_30d > 0:
+            if mentions_7d == mentions_30d:
+                return 1.0
+
+            active_days_7d = getattr(self, "_cached_active_days_7d", None)
+            if active_days_7d is None:
+                active_days_7d = self._count_active_ingestion_days(date_7d, as_of_date)
+
+            active_days_30d = getattr(self, "_cached_active_days_30d", None)
+            if active_days_30d is None:
+                active_days_30d = self._count_active_ingestion_days(date_30d, as_of_date)
+
+            if active_days_7d == 0 or active_days_30d == 0:
+                return 1.0
+
+            rate_7d = mentions_7d / active_days_7d
+            rate_30d = mentions_30d / active_days_30d
+            raw_velocity = rate_7d / rate_30d if rate_30d > 0 else 0
+            return max(0.1, min(3.0, raw_velocity))
+
+        return 1.0 if mentions_7d > 0 else 0
+
+    def _calculate_mention_metrics_batch(
+        self,
+        theme_cluster_ids: list[int],
+        *,
+        as_of_date: datetime,
+    ) -> dict[int, dict]:
+        cluster_ids = sorted({int(cluster_id) for cluster_id in theme_cluster_ids if int(cluster_id) > 0})
+        if not cluster_ids:
+            return {}
+
+        date_1d = as_of_date - timedelta(days=1)
+        date_7d = as_of_date - timedelta(days=7)
+        date_30d = as_of_date - timedelta(days=30)
+
+        rows = self.db.query(
+            ThemeMention.theme_cluster_id,
+            func.sum(case((ThemeMention.mentioned_at >= date_1d, 1), else_=0)).label("mentions_1d"),
+            func.sum(case((ThemeMention.mentioned_at >= date_7d, 1), else_=0)).label("mentions_7d"),
+            func.count(ThemeMention.id).label("mentions_30d"),
+            func.sum(
+                case(
+                    (ThemeMention.sentiment == "bullish", ThemeMention.confidence),
+                    (ThemeMention.sentiment == "bearish", -ThemeMention.confidence),
+                    else_=0.0,
+                )
+            ).label("sentiment_weighted_sum"),
+        ).join(
+            ContentItem, ThemeMention.content_item_id == ContentItem.id
+        ).join(
+            ContentSource, ContentItem.source_id == ContentSource.id
+        ).filter(
+            ThemeMention.theme_cluster_id.in_(cluster_ids),
+            ThemeMention.mentioned_at >= date_30d,
+            ThemeMention.mentioned_at <= as_of_date,
+            ContentSource.is_active == True,
+        ).group_by(
+            ThemeMention.theme_cluster_id
+        ).all()
+
+        metrics_by_cluster = {
+            cluster_id: self._empty_mention_metrics()
+            for cluster_id in cluster_ids
+        }
+
+        for row in rows:
+            mentions_1d = int(row.mentions_1d or 0)
+            mentions_7d = int(row.mentions_7d or 0)
+            mentions_30d = int(row.mentions_30d or 0)
+            sentiment_weighted_sum = float(row.sentiment_weighted_sum or 0.0)
+            mention_velocity = self._calculate_mention_velocity(
+                mentions_7d=mentions_7d,
+                mentions_30d=mentions_30d,
+                as_of_date=as_of_date,
+            )
+            sentiment_score = (sentiment_weighted_sum / mentions_30d) if mentions_30d else 0.0
+            metrics_by_cluster[row.theme_cluster_id] = {
+                "mentions_1d": mentions_1d,
+                "mentions_7d": mentions_7d,
+                "mentions_30d": mentions_30d,
+                "mention_velocity": round(mention_velocity, 2),
+                "sentiment_score": round(sentiment_score, 3),
+            }
+
+        return metrics_by_cluster
+
     def calculate_mention_metrics(self, theme_cluster_id: int, as_of_date: Optional[datetime] = None) -> dict:
         """
         Calculate mention velocity and sentiment for a theme
@@ -130,97 +236,10 @@ class ThemeDiscoveryService:
         if as_of_date is None:
             as_of_date = datetime.utcnow()
 
-        date_1d = as_of_date - timedelta(days=1)
-        date_7d = as_of_date - timedelta(days=7)
-        date_30d = as_of_date - timedelta(days=30)
-
-        # Count mentions by time period (only from active sources)
-        mentions_1d = self.db.query(func.count(ThemeMention.id)).join(
-            ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
-        ).filter(
-            ThemeMention.theme_cluster_id == theme_cluster_id,
-            ThemeMention.mentioned_at >= date_1d,
-            ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
-        ).scalar() or 0
-
-        mentions_7d = self.db.query(func.count(ThemeMention.id)).join(
-            ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
-        ).filter(
-            ThemeMention.theme_cluster_id == theme_cluster_id,
-            ThemeMention.mentioned_at >= date_7d,
-            ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
-        ).scalar() or 0
-
-        mentions_30d = self.db.query(func.count(ThemeMention.id)).join(
-            ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
-        ).filter(
-            ThemeMention.theme_cluster_id == theme_cluster_id,
-            ThemeMention.mentioned_at >= date_30d,
-            ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
-        ).scalar() or 0
-
-        # Calculate velocity (7d vs 30d per-active-day rate)
-        # Normalizes by actual ingestion days to prevent pipeline downtime
-        # from creating false momentum declines across all themes.
-        if mentions_30d > 0:
-            # If 7d mentions == 30d mentions, all activity is recent (new theme)
-            # In this case, velocity = 1.0 (neutral) since we can't determine trend
-            if mentions_7d == mentions_30d:
-                mention_velocity = 1.0
-            else:
-                active_days_7d = getattr(self, '_cached_active_days_7d', None) or self._count_active_ingestion_days(date_7d, as_of_date)
-                active_days_30d = getattr(self, '_cached_active_days_30d', None) or self._count_active_ingestion_days(date_30d, as_of_date)
-
-                if active_days_7d == 0 or active_days_30d == 0:
-                    mention_velocity = 1.0  # No ingestion data => neutral
-                else:
-                    rate_7d = mentions_7d / active_days_7d
-                    rate_30d = mentions_30d / active_days_30d
-                    raw_velocity = rate_7d / rate_30d if rate_30d > 0 else 0
-                    # Cap velocity between 0.1 and 3.0 for display purposes
-                    mention_velocity = max(0.1, min(3.0, raw_velocity))
-        else:
-            mention_velocity = 1.0 if mentions_7d > 0 else 0
-
-        # Calculate sentiment score (only from active sources)
-        mentions = self.db.query(ThemeMention).join(
-            ContentItem, ThemeMention.content_item_id == ContentItem.id
-        ).join(
-            ContentSource, ContentItem.source_id == ContentSource.id
-        ).filter(
-            ThemeMention.theme_cluster_id == theme_cluster_id,
-            ThemeMention.mentioned_at >= date_30d,
-            ThemeMention.mentioned_at <= as_of_date,
-            ContentSource.is_active == True,
-        ).all()
-
-        sentiment_scores = []
-        for m in mentions:
-            if m.sentiment == "bullish":
-                sentiment_scores.append(1.0 * m.confidence)
-            elif m.sentiment == "bearish":
-                sentiment_scores.append(-1.0 * m.confidence)
-            else:
-                sentiment_scores.append(0.0)
-
-        sentiment_score = np.mean(sentiment_scores) if sentiment_scores else 0.0
-
-        return {
-            "mentions_1d": mentions_1d,
-            "mentions_7d": mentions_7d,
-            "mentions_30d": mentions_30d,
-            "mention_velocity": round(mention_velocity, 2),
-            "sentiment_score": round(sentiment_score, 3),
-        }
+        return self._calculate_mention_metrics_batch(
+            [theme_cluster_id],
+            as_of_date=as_of_date,
+        ).get(theme_cluster_id, self._empty_mention_metrics())
 
     def calculate_price_metrics(self, theme_cluster_id: int, as_of_date: Optional[datetime] = None) -> dict:
         """
@@ -548,8 +567,28 @@ class ThemeDiscoveryService:
 
         # Calculate all metrics
         mention_metrics = self.calculate_mention_metrics(theme_cluster_id, as_of_date)
-        price_metrics = self.calculate_price_metrics(theme_cluster_id, as_of_date)
-        screener_metrics = self.calculate_screener_metrics(theme_cluster_id)
+        metrics = self._upsert_theme_metrics(
+            cluster=cluster,
+            as_of_date=as_of_date,
+            mention_metrics=mention_metrics,
+            auto_commit=True,
+        )
+        logger.info(
+            f"Updated metrics for theme '{cluster.name}': "
+            f"score={metrics.momentum_score}, status={metrics.status}"
+        )
+        return metrics
+
+    def _upsert_theme_metrics(
+        self,
+        *,
+        cluster: ThemeCluster,
+        as_of_date: datetime,
+        mention_metrics: dict,
+        auto_commit: bool,
+    ) -> ThemeMetrics:
+        price_metrics = self.calculate_price_metrics(cluster.id, as_of_date)
+        screener_metrics = self.calculate_screener_metrics(cluster.id)
 
         # Calculate composite
         momentum_score = self.calculate_composite_score(mention_metrics, price_metrics, screener_metrics)
@@ -563,7 +602,7 @@ class ThemeDiscoveryService:
 
         # Check for existing metrics for this date
         existing = self.db.query(ThemeMetrics).filter(
-            ThemeMetrics.theme_cluster_id == theme_cluster_id,
+            ThemeMetrics.theme_cluster_id == cluster.id,
             ThemeMetrics.date == as_of_date.date(),
         ).first()
 
@@ -571,7 +610,7 @@ class ThemeDiscoveryService:
             metrics = existing
         else:
             metrics = ThemeMetrics(
-                theme_cluster_id=theme_cluster_id,
+                theme_cluster_id=cluster.id,
                 date=as_of_date.date(),
                 pipeline=self.pipeline,  # Set pipeline from service instance
             )
@@ -607,9 +646,10 @@ class ThemeDiscoveryService:
         metrics.momentum_score = momentum_score
         metrics.status = status
 
-        self.db.commit()
-
-        logger.info(f"Updated metrics for theme '{cluster.name}': score={momentum_score}, status={status}")
+        if auto_commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return metrics
 
     def update_all_theme_metrics(self, as_of_date: Optional[datetime] = None) -> dict:
@@ -643,16 +683,35 @@ class ThemeDiscoveryService:
         date_30d = as_of_date - timedelta(days=30)
         self._cached_active_days_7d = self._count_active_ingestion_days(date_7d, as_of_date)
         self._cached_active_days_30d = self._count_active_ingestion_days(date_30d, as_of_date)
+        mention_metrics_by_cluster = self._calculate_mention_metrics_batch(
+            [cluster.id for cluster in clusters if cluster.id is not None],
+            as_of_date=as_of_date,
+        )
 
         metrics_list = []
         for cluster in clusters:
             try:
-                metrics = self.update_theme_metrics(cluster.id, as_of_date)
+                mention_metrics = mention_metrics_by_cluster.get(cluster.id, self._empty_mention_metrics())
+                with self.db.begin_nested():
+                    metrics = self._upsert_theme_metrics(
+                        cluster=cluster,
+                        as_of_date=as_of_date,
+                        mention_metrics=mention_metrics,
+                        auto_commit=False,
+                    )
                 metrics_list.append((cluster, metrics))
                 results["themes_updated"] += 1
             except Exception as e:
                 logger.error(f"Error updating metrics for {cluster.name}: {e}")
                 results["errors"] += 1
+
+        lifecycle_promotion_result = self.promote_candidate_themes(now=as_of_date)
+        lifecycle_state_result = self.apply_dormancy_and_reactivation_policies(now=as_of_date)
+        results["lifecycle"] = {
+            "candidate_promotion": lifecycle_promotion_result,
+            "state_policies": lifecycle_state_result,
+        }
+        self.db.expire_all()
 
         # Calculate rankings using lifecycle-aware weighting to suppress candidate floods.
         metrics_list.sort(

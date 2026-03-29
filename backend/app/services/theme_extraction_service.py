@@ -122,6 +122,20 @@ IMPORTANT RULES:
 - If no clear themes are present, return an empty list
 - Be conservative - only extract high-confidence mentions
 - Prefer specific themes over vague ones ("AI chip demand" > "technology")
+- Normalize recurring names consistently ("AI Infrastructure", not "AI infra buildout")
+- Deduplicate overlapping mentions from the same content and keep the most specific investable phrasing
+
+DO NOT EXTRACT:
+- Generic sectors or style buckets without a concrete catalyst or thesis: "technology stocks", "growth stocks", "small caps"
+- Calendar or market-wide events by themselves: "earnings season", "Fed meeting", "today's rally"
+- Single-company events unless they clearly signal a broader investable basket
+- Non-investment narratives: politics, celebrity news, sports, or macro chatter with no tradeable angle
+- ETF names, indexes, or vague risk-on / risk-off language as themes
+
+NEGATIVE EXAMPLES:
+- "Apple beat earnings" -> do not create a theme unless the text clearly ties it to a broader basket
+- "Technology stocks were mixed today" -> do not extract "technology stocks"
+- "The market is waiting for CPI" -> do not extract "inflation" unless the text discusses a specific investable trade
 """
 
 EXTRACTION_USER_PROMPT = """Extract market themes and stock tickers from this content.
@@ -171,6 +185,13 @@ class ThemeExtractionService:
     DEFAULT_EXTRACTION_MAX_TOKENS = 2000
     ZAI_EXTRACTION_MAX_TOKENS = 4000
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
+    TICKER_FALSE_POSITIVES = {
+        "A", "I", "AI", "CEO", "CFO", "IPO", "ETF", "NYSE", "SEC", "FDA",
+        "GDP", "CPI", "PPI", "PE", "EPS", "YOY", "QOQ", "YTD", "USD",
+        "US", "UK", "EU", "OTC", "ADR", "EV", "DOJ", "OPEC", "ECB",
+    }
+    FUZZY_CANDIDATE_TOKEN_MIN_LENGTH = 3
+    FUZZY_CANDIDATE_MAX_TOKEN_FILTERS = 4
     MATCH_THRESHOLD_CONFIG = MatchThresholdConfig(
         version="match-v1",
         default_threshold=1.0,
@@ -362,6 +383,9 @@ class ThemeExtractionService:
         mapping = getattr(self, "_company_name_ticker_map", None)
         if mapping is not None:
             return mapping
+        if not hasattr(self, "db") or self.db is None:
+            self._company_name_ticker_map = []
+            return self._company_name_ticker_map
 
         from ..models.stock_universe import StockUniverse
 
@@ -436,7 +460,9 @@ class ThemeExtractionService:
             return False
 
         valid_tickers = self._get_valid_tickers()
-        if valid_tickers and ticker not in valid_tickers:
+        if not valid_tickers:
+            return False
+        if ticker not in valid_tickers:
             return False
 
         return True
@@ -447,7 +473,7 @@ class ThemeExtractionService:
         for t in tickers:
             t = t.upper().strip()
             # Remove common false positives
-            if t in {"A", "I", "AI", "CEO", "CFO", "IPO", "ETF", "NYSE", "SEC", "FDA", "GDP", "CPI"}:
+            if t in self.TICKER_FALSE_POSITIVES:
                 continue
             if self._validate_ticker(t):
                 cleaned.append(t)
@@ -574,7 +600,9 @@ Example themes for this pipeline: {examples_str}
             response_text = None
             last_error = None
 
-            if self.provider == "litellm":
+            current_provider = self.provider
+
+            if current_provider == "litellm":
                 try:
                     response_text = self._try_generate_litellm(prompt)
                 except Exception as e:
@@ -582,9 +610,9 @@ Example themes for this pipeline: {examples_str}
                     last_error = e
                     # Fallback to Gemini if available
                     if self.gemini_client:
-                        self.provider = "gemini"
+                        current_provider = "gemini"
 
-            if self.provider == "gemini" and response_text is None:
+            if current_provider == "gemini" and response_text is None:
                 for model in self.GEMINI_MODELS:
                     try:
                         response_text = self._try_generate_gemini(prompt, model)
@@ -941,6 +969,45 @@ Example themes for this pipeline: {examples_str}
                     break
         return ranked
 
+    def _candidate_token_filters(self, canonical_key: str, canonical_theme: str, raw_alias: str) -> list[str]:
+        tokens: list[str] = []
+        for source in (
+            canonical_key.replace("_", " "),
+            canonical_theme,
+            raw_alias,
+        ):
+            for token in self._normalize_lexical_text(source).split():
+                if len(token) < self.FUZZY_CANDIDATE_TOKEN_MIN_LENGTH:
+                    continue
+                if token not in tokens:
+                    tokens.append(token)
+                if len(tokens) >= self.FUZZY_CANDIDATE_MAX_TOKEN_FILTERS:
+                    return tokens
+        return tokens
+
+    def _get_fuzzy_candidate_clusters(
+        self,
+        *,
+        canonical_key: str,
+        canonical_theme: str,
+        raw_alias: str,
+    ) -> list[ThemeCluster]:
+        base_query = self.db.query(ThemeCluster).filter(
+            ThemeCluster.pipeline == self.pipeline,
+            ThemeCluster.is_active == True,
+            ThemeCluster.is_l1 == False,
+        )
+        tokens = self._candidate_token_filters(canonical_key, canonical_theme, raw_alias)
+        if not tokens:
+            return base_query.all()
+
+        narrowed = base_query.filter(
+            or_(*[ThemeCluster.canonical_key.like(f"%{token}%") for token in tokens])
+        ).all()
+        if narrowed:
+            return narrowed
+        return base_query.all()
+
     def process_content_item(self, content_item: ContentItem) -> int:
         """
         Backward-compatible single-item processing API.
@@ -1247,11 +1314,11 @@ Example themes for this pipeline: {examples_str}
                 method = "exact_display_name"
                 score = 1.0
         if cluster is None and canonical_key != UNKNOWN_THEME_KEY:
-            candidate_clusters = self.db.query(ThemeCluster).filter(
-                ThemeCluster.pipeline == self.pipeline,
-                ThemeCluster.is_active == True,
-                ThemeCluster.is_l1 == False,
-            ).all()
+            candidate_clusters = self._get_fuzzy_candidate_clusters(
+                canonical_key=canonical_key,
+                canonical_theme=canonical_theme,
+                raw_alias=raw_alias,
+            )
             for candidate in candidate_clusters:
                 candidate_score = self._cluster_fuzzy_score(
                     raw_alias=raw_alias,
@@ -1456,12 +1523,21 @@ Example themes for this pipeline: {examples_str}
 
     def _update_theme_constituents(self, mention_data: dict, cluster: ThemeCluster):
         """Update theme-to-ticker mapping based on mention"""
-        # Update constituents
-        for ticker in mention_data["tickers"]:
-            constituent = self.db.query(ThemeConstituent).filter(
+        tickers = sorted({ticker for ticker in mention_data["tickers"] if ticker})
+        if not tickers:
+            return
+
+        existing = {
+            constituent.symbol: constituent
+            for constituent in self.db.query(ThemeConstituent).filter(
                 ThemeConstituent.theme_cluster_id == cluster.id,
-                ThemeConstituent.symbol == ticker
-            ).first()
+                ThemeConstituent.symbol.in_(tickers),
+            ).all()
+        }
+
+        # Update constituents
+        for ticker in tickers:
+            constituent = existing.get(ticker)
 
             if not constituent:
                 constituent = ThemeConstituent(

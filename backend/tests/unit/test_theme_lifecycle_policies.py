@@ -201,6 +201,28 @@ def test_dormancy_and_reactivation_policies_increment_counters(db_session):
     assert "lifecycle_reactivated" in alert_types
 
 
+def test_calculate_mention_metrics_batch_matches_single_theme_metrics(db_session):
+    now = datetime(2026, 2, 24, 16, 30, 0)
+    source = _make_source(db_session, name="Metric Wire", source_type="news")
+    theme = _make_theme(
+        db_session,
+        name="Grid Demand",
+        canonical_key="grid_demand",
+        state="active",
+        now=now,
+    )
+    _add_mention(db_session, theme=theme, source=source, now=now, days_ago=1, confidence=0.9, external_suffix="1")
+    _add_mention(db_session, theme=theme, source=source, now=now, days_ago=3, confidence=0.8, external_suffix="2")
+    _add_mention(db_session, theme=theme, source=source, now=now, days_ago=20, confidence=0.7, external_suffix="3")
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    batch_metrics = service._calculate_mention_metrics_batch([theme.id], as_of_date=now)
+    single_metrics = service.calculate_mention_metrics(theme.id, as_of_date=now)
+
+    assert batch_metrics[theme.id] == single_metrics
+
+
 def test_relationship_inference_writes_merge_and_overlap_edges(db_session):
     now = datetime.utcnow()
     theme_a = _make_theme(
@@ -355,25 +377,29 @@ def test_update_all_theme_metrics_applies_lifecycle_rank_weighting(db_session):
 
     service = ThemeDiscoveryService(db_session, pipeline="technical")
 
-    def _stub_update_theme_metrics(theme_cluster_id: int, as_of_date: datetime | None = None) -> ThemeMetrics:
+    def _stub_upsert_theme_metrics(*, cluster: ThemeCluster, as_of_date: datetime, mention_metrics: dict, auto_commit: bool) -> ThemeMetrics:
+        _ = mention_metrics
+        _ = auto_commit
         date_value = (as_of_date or now).date()
         metrics = db_session.query(ThemeMetrics).filter(
-            ThemeMetrics.theme_cluster_id == theme_cluster_id,
+            ThemeMetrics.theme_cluster_id == cluster.id,
             ThemeMetrics.date == date_value,
         ).first()
         if metrics is None:
             metrics = ThemeMetrics(
-                theme_cluster_id=theme_cluster_id,
+                theme_cluster_id=cluster.id,
                 date=date_value,
                 pipeline="technical",
             )
             db_session.add(metrics)
-        metrics.momentum_score = scores[theme_cluster_id]
+        metrics.momentum_score = scores[cluster.id]
         metrics.status = "trending"
-        db_session.commit()
+        db_session.flush()
         return metrics
 
-    service.update_theme_metrics = _stub_update_theme_metrics  # type: ignore[method-assign]
+    service._upsert_theme_metrics = _stub_upsert_theme_metrics  # type: ignore[method-assign]
+    service.promote_candidate_themes = lambda now=None, limit=None: {"promoted": 0, "pipeline": "technical"}  # type: ignore[method-assign]
+    service.apply_dormancy_and_reactivation_policies = lambda now=None, limit=None: {"to_dormant": 0, "to_reactivated": 0, "pipeline": "technical"}  # type: ignore[method-assign]
     result = service.update_all_theme_metrics(as_of_date=now)
 
     assert result["themes_updated"] == 2
@@ -381,6 +407,60 @@ def test_update_all_theme_metrics_applies_lifecycle_rank_weighting(db_session):
     assert result["rankings"][0]["lifecycle_state"] == "active"
     assert result["rankings"][1]["theme"] == "Candidate Surge"
     assert result["rankings"][1]["lifecycle_state"] == "candidate"
+
+
+def test_update_all_theme_metrics_invokes_existing_lifecycle_policies_once(db_session):
+    now = datetime(2026, 2, 24, 18, 30, 0)
+    candidate = _make_theme(
+        db_session,
+        name="Candidate Promotion",
+        canonical_key="candidate_promotion",
+        state="candidate",
+        now=now,
+    )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+    calls = {"promote": 0, "state": 0}
+
+    def _stub_upsert_theme_metrics(*, cluster: ThemeCluster, as_of_date: datetime, mention_metrics: dict, auto_commit: bool) -> ThemeMetrics:
+        _ = mention_metrics
+        _ = auto_commit
+        metrics = ThemeMetrics(
+            theme_cluster_id=cluster.id,
+            date=as_of_date.date(),
+            pipeline="technical",
+            momentum_score=70.0,
+            status="trending",
+        )
+        db_session.merge(metrics)
+        db_session.flush()
+        return db_session.query(ThemeMetrics).filter(
+            ThemeMetrics.theme_cluster_id == cluster.id,
+            ThemeMetrics.date == as_of_date.date(),
+        ).one()
+
+    def _stub_promote(now=None, limit=None):
+        _ = limit
+        calls["promote"] += 1
+        candidate.lifecycle_state = "active"
+        db_session.flush()
+        return {"promoted": 1, "pipeline": "technical", "now": now.isoformat() if now else None}
+
+    def _stub_state(now=None, limit=None):
+        _ = limit
+        calls["state"] += 1
+        return {"to_dormant": 0, "to_reactivated": 0, "pipeline": "technical", "now": now.isoformat() if now else None}
+
+    service._upsert_theme_metrics = _stub_upsert_theme_metrics  # type: ignore[method-assign]
+    service.promote_candidate_themes = _stub_promote  # type: ignore[method-assign]
+    service.apply_dormancy_and_reactivation_policies = _stub_state  # type: ignore[method-assign]
+
+    result = service.update_all_theme_metrics(as_of_date=now)
+
+    assert calls == {"promote": 1, "state": 1}
+    assert result["lifecycle"]["candidate_promotion"]["promoted"] == 1
+    assert result["rankings"][0]["lifecycle_state"] == "active"
 
 
 def test_get_theme_rankings_filters_by_lifecycle_state(db_session):
