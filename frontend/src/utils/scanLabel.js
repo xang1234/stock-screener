@@ -1,4 +1,5 @@
 const NYSE_TIMEZONE = 'America/New_York';
+const ISO_WITHOUT_TZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
 const formatUniverseLabel = (scan) => {
   if (scan.universe_type) {
@@ -26,7 +27,11 @@ const formatUniverseLabel = (scan) => {
 };
 
 const formatScanTimestamp = (startedAt, triggerSource) => {
-  const date = new Date(startedAt);
+  const normalizedStartedAt =
+    typeof startedAt === 'string' && ISO_WITHOUT_TZ.test(startedAt)
+      ? `${startedAt}Z`
+      : startedAt;
+  const date = new Date(normalizedStartedAt);
   if (Number.isNaN(date.getTime())) {
     return '-';
   }

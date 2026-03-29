@@ -204,7 +204,13 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     assert result["reason"] == "already_published"
     assert result["existing_run_id"] == 41
     assert fake_use_case.received_cmd is None
-    mock_auto_scan.assert_not_called()
+    mock_auto_scan.assert_called_once_with(
+        feature_run_id=41,
+        universe_name=get_default_scan_profile()["universe"],
+        screeners=get_default_scan_profile()["screeners"],
+        criteria=get_default_scan_profile()["criteria"],
+        composite_method=get_default_scan_profile()["composite_method"],
+    )
     assert lookup_calls == [{
         "input_hash": "same-input",
         "universe_hash": "same-universe",

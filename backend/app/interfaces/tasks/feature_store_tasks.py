@@ -188,9 +188,17 @@ def build_daily_snapshot(
                 as_of_date=as_of,
             )
             if matching_run is not None:
+                auto_scan_id = _create_auto_scan_for_published_run(
+                    feature_run_id=matching_run.id,
+                    universe_name=universe_name,
+                    screeners=screeners,
+                    criteria=criteria,
+                    composite_method=composite_method,
+                )
                 logger.info(
-                    "Skipping build_daily_snapshot: run %d already published for %s",
-                    matching_run.id, as_of,
+                    "Skipping build_daily_snapshot: run %d already published for %s "
+                    "(auto scan %s ensured)",
+                    matching_run.id, as_of, auto_scan_id,
                 )
                 return {
                     "status": "skipped",
