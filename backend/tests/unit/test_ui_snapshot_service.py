@@ -13,6 +13,7 @@ from app.db_migrations.universe_lifecycle_migration import migrate_universe_life
 from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
+from app.models.industry import IBDGroupRank
 from app.models.scan_result import Scan
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
@@ -155,6 +156,84 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
         "recent_deactivations": [],
     }
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
+
+
+def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    migrate_ui_view_snapshot_tables(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    snapshot = service.publish_groups_bootstrap()
+
+    assert snapshot is None
+    assert service.get_groups_bootstrap() is None
+
+
+def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    migrate_ui_view_snapshot_tables(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    fixed_time = datetime(2026, 3, 29, 9, 30, 0)
+    fake_snapshot = {
+        "snapshot_revision": "1",
+        "source_revision": "rev-1",
+        "published_at": fixed_time,
+        "is_stale": False,
+        "payload": {"ok": True},
+    }
+
+    class _FakeSnapshot:
+        def to_dict(self):
+            return fake_snapshot
+
+    monkeypatch.setattr(service, "publish_scan_bootstrap", lambda scan_id=None: _FakeSnapshot())
+    monkeypatch.setattr(service, "publish_breadth_bootstrap", lambda: _FakeSnapshot())
+    monkeypatch.setattr(service, "publish_groups_bootstrap", lambda: None)
+    monkeypatch.setattr(service, "publish_themes_bootstrap", lambda pipeline, theme_view: _FakeSnapshot())
+    monkeypatch.setattr("app.services.ui_snapshot_service.settings.feature_themes", False)
+
+    published = service.publish_all()
+
+    assert published["scan_latest"] == fake_snapshot
+    assert published["breadth"] == fake_snapshot
+    assert published["groups"] is None
+
+
+def test_publish_groups_bootstrap_serializes_rankings_when_available():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    migrate_ui_view_snapshot_tables(engine)
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        db.add(
+            IBDGroupRank(
+                industry_group="Software",
+                date=date(2026, 3, 28),
+                rank=1,
+                avg_rs_rating=95.5,
+                median_rs_rating=95.0,
+                weighted_avg_rs_rating=95.2,
+                rs_std_dev=1.0,
+                num_stocks=12,
+                num_stocks_rs_above_80=10,
+                top_symbol="MSFT",
+                top_rs_rating=99.0,
+            )
+        )
+        db.commit()
+
+    snapshot = service.publish_groups_bootstrap()
+
+    assert snapshot is not None
+    assert snapshot.payload["rankings"]["date"] == "2026-03-28"
+    assert snapshot.payload["rankings"]["total_groups"] == 1
+    assert snapshot.payload["rankings"]["rankings"][0]["industry_group"] == "Software"
 
 
 def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():

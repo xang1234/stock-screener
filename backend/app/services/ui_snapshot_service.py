@@ -99,6 +99,10 @@ class SnapshotResult:
         }
 
 
+class GroupsBootstrapUnavailableError(RuntimeError):
+    """Raised when group rankings have not been calculated yet."""
+
+
 class UISnapshotService:
     """Build, publish, and retrieve UI bootstrap snapshots."""
 
@@ -175,17 +179,12 @@ class UISnapshotService:
             )
         )
 
-    def publish_groups_bootstrap(self) -> SnapshotResult:
+    def publish_groups_bootstrap(self) -> SnapshotResult | None:
         self._ensure_schema()
-        return self._run_with_storage_recovery(
-            lambda db: self._publish(
-                db=db,
-                view_key=GROUPS_VIEW_KEY,
-                variant_key="default",
-                source_revision=self._resolve_groups_source_revision(db),
-                payload=self._build_groups_payload(),
-            )
-        )
+        try:
+            return self._run_with_storage_recovery(self._publish_groups_bootstrap_with_db)
+        except GroupsBootstrapUnavailableError:
+            return None
 
     def get_themes_bootstrap(self, pipeline: str = "technical", theme_view: str = "grouped") -> SnapshotResult | None:
         self._ensure_schema()
@@ -212,13 +211,14 @@ class UISnapshotService:
             )
         )
 
-    def publish_all(self) -> dict[str, dict[str, Any]]:
+    def publish_all(self) -> dict[str, dict[str, Any] | None]:
         """Rebuild all bootstrap variants."""
         published = {
             "scan_latest": self.publish_scan_bootstrap().to_dict(),
             "breadth": self.publish_breadth_bootstrap().to_dict(),
-            "groups": self.publish_groups_bootstrap().to_dict(),
         }
+        groups_snapshot = self.publish_groups_bootstrap()
+        published["groups"] = groups_snapshot.to_dict() if groups_snapshot is not None else None
         if settings.feature_themes:
             published.update({
                 "themes_technical_grouped": self.publish_themes_bootstrap("technical", "grouped").to_dict(),
@@ -610,26 +610,37 @@ class UISnapshotService:
                 "spy_overlay": self._get_cached_price_history("SPY", "1mo"),
             }
 
-    def _build_groups_payload(self) -> dict[str, Any]:
-        with self._session_factory() as db:
-            service = IBDGroupRankService.get_instance()
-            rankings = service.get_current_rankings(db, limit=197)
-            movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
-            ranking_date = rankings[0]["date"] if rankings else None
-            return {
-                "rankings": GroupRankingsResponse(
-                    date=ranking_date,
-                    total_groups=len(rankings),
-                    rankings=[GroupRankResponse(**row) for row in rankings],
-                ).model_dump(mode="json"),
-                "movers_period": DEFAULT_GROUP_PERIOD,
-                "movers": MoversResponse(
-                    period=movers["period"],
-                    gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
-                    losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
-                ).model_dump(mode="json"),
-                "task_controls_enabled": settings.feature_tasks,
-            }
+    def _publish_groups_bootstrap_with_db(self, db: Session) -> SnapshotResult:
+        return self._publish(
+            db=db,
+            view_key=GROUPS_VIEW_KEY,
+            variant_key="default",
+            source_revision=self._resolve_groups_source_revision(db),
+            payload=self._build_groups_payload(db),
+        )
+
+    def _build_groups_payload(self, db: Session) -> dict[str, Any]:
+        service = IBDGroupRankService.get_instance()
+        rankings = service.get_current_rankings(db, limit=197)
+        if not rankings:
+            raise GroupsBootstrapUnavailableError("No group rankings are available for bootstrap publication")
+
+        movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
+        ranking_date = rankings[0]["date"]
+        return {
+            "rankings": GroupRankingsResponse(
+                date=ranking_date,
+                total_groups=len(rankings),
+                rankings=[GroupRankResponse(**row) for row in rankings],
+            ).model_dump(mode="json"),
+            "movers_period": DEFAULT_GROUP_PERIOD,
+            "movers": MoversResponse(
+                period=movers["period"],
+                gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
+                losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+            ).model_dump(mode="json"),
+            "task_controls_enabled": settings.feature_tasks,
+        }
 
     def _build_themes_payload(self, *, pipeline: str, theme_view: str) -> dict[str, Any]:
         with self._session_factory() as db:
@@ -963,7 +974,7 @@ def safe_publish_themes_bootstrap_variants(pipeline: str | None = None) -> dict[
     return published
 
 
-def safe_publish_all_bootstraps() -> dict[str, dict[str, Any]] | None:
+def safe_publish_all_bootstraps() -> dict[str, dict[str, Any] | None] | None:
     from app.wiring.bootstrap import get_ui_snapshot_service
 
     try:
