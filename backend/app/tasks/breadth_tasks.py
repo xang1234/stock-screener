@@ -14,6 +14,8 @@ from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.breadth_calculator_service import BreadthCalculatorService
@@ -22,6 +24,20 @@ from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+
+
+def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
+    retries = getattr(getattr(task, "request", None), "retries", 0) or 0
+    countdown = min(60 * (2 ** retries), 600)
+    logger.warning(
+        "Transient error in %s: %s. Retrying in %ss (attempt %s/2).",
+        task_name,
+        exc,
+        countdown,
+        retries + 1,
+    )
+    raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
 def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optional[str]:
@@ -372,7 +388,12 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
     }
 
 
-@celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
+    soft_time_limit=3600,
+    max_retries=2,
+)
 @serialized_data_fetch('calculate_daily_breadth_with_gapfill')
 def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
     """
@@ -479,6 +500,13 @@ def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
 
         return result
 
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        logger.error("Soft time limit exceeded in calculate_daily_breadth_with_gapfill", exc_info=True)
+        raise
+    except TRANSIENT_TASK_EXCEPTIONS as e:
+        db.rollback()
+        _retry_transient_failure(self, "calculate_daily_breadth_with_gapfill", e)
     except Exception as e:
         logger.error(f"✗ Error in calculate_daily_breadth_with_gapfill: {e}", exc_info=True)
         logger.info("=" * 60)

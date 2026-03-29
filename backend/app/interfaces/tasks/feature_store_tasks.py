@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from app.celery_app import celery_app
 from app.domain.scanning.signature import (
     build_scan_signature_payload,
@@ -27,6 +29,7 @@ logger = logging.getLogger(__name__)
     retry_backoff=60,
     retry_backoff_max=600,
     max_retries=3,
+    soft_time_limit=3600,
 )
 @serialized_data_fetch("build_daily_snapshot")
 def build_daily_snapshot(
@@ -133,12 +136,21 @@ def build_daily_snapshot(
         correlation_id=correlation_id,
     )
 
-    result = use_case.execute(
-        uow=uow,
-        cmd=cmd,
-        progress=CeleryProgressSink(self),
-        cancel=NeverCancelledToken(),
-    )
+    try:
+        result = use_case.execute(
+            uow=uow,
+            cmd=cmd,
+            progress=CeleryProgressSink(self),
+            cancel=NeverCancelledToken(),
+        )
+    except SoftTimeLimitExceeded:
+        logger.error(
+            "Soft time limit exceeded in build_daily_snapshot for %s (correlation_id=%s)",
+            as_of,
+            correlation_id,
+            exc_info=True,
+        )
+        raise
 
     logger.info(
         "build_daily_snapshot completed: run_id=%d status=%s "

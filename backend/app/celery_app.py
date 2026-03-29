@@ -142,14 +142,12 @@ def _graceful_db_shutdown(sender=None, **kwargs):
 # Task routing: route background tasks to dedicated queues
 # Run workers with: celery -A app.celery_app worker -Q celery,data_fetch,user_scans -c 1
 celery_app.conf.task_routes = {
-    # Cache tasks (yfinance)
-    'app.tasks.cache_tasks.daily_cache_warmup': {'queue': 'data_fetch'},
+    # Actively scheduled cache tasks (yfinance)
     'app.tasks.cache_tasks.prewarm_all_active_symbols': {'queue': 'data_fetch'},
     'app.tasks.cache_tasks.weekly_full_refresh': {'queue': 'data_fetch'},
     'app.tasks.cache_tasks.warm_spy_cache': {'queue': 'data_fetch'},
     'app.tasks.cache_tasks.warm_top_symbols': {'queue': 'data_fetch'},
     'app.tasks.cache_tasks.force_refresh_stale_intraday': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.auto_refresh_after_close': {'queue': 'data_fetch'},
     'app.tasks.cache_tasks.smart_refresh_cache': {'queue': 'data_fetch'},
     # Breadth tasks (yfinance on cache miss)
     'app.tasks.breadth_tasks.calculate_daily_breadth': {'queue': 'data_fetch'},
@@ -173,6 +171,9 @@ celery_app.conf.task_routes = {
     'app.tasks.universe_tasks.refresh_sp500_membership': {'queue': 'data_fetch'},
     # Feature store tasks (multi-screener scan)
     'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot': {'queue': 'data_fetch'},
+    # Legacy/manual-only routes retained for API/manual invocation.
+    'app.tasks.cache_tasks.daily_cache_warmup': {'queue': 'data_fetch'},
+    'app.tasks.cache_tasks.auto_refresh_after_close': {'queue': 'data_fetch'},
 }
 
 # Optional: Configure result expiration
@@ -208,8 +209,14 @@ if settings.cache_warmup_enabled:
             'options': {'queue': 'data_fetch'}
         },
 
-        # Daily breadth calculation with automatic gap-fill
-        # (queued after cache warmup via serialized queue)
+        # Post-market data_fetch pipeline note:
+        # smart_refresh_cache, breadth, group rankings, and feature snapshot all
+        # share the serialized data_fetch queue. The +5/+10/+15 minute offsets
+        # below are minimum eligible times only, not guaranteed execution
+        # times. In practice these tasks execute FIFO behind the cache warmup
+        # and usually do not start until that queue backlog clears.
+        #
+        # Daily breadth calculation with automatic gap-fill.
         'daily-breadth-calculation': {
             'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
             'schedule': crontab(
@@ -276,13 +283,15 @@ if settings.cache_warmup_enabled:
         # a full refresh that supersedes the stale-intraday refresh. The task
         # function remains available for manual invocation via the API.
 
-        # Weekly cleanup of orphaned scans (cancelled, stale running/queued)
-        # Runs Sunday at 2 AM ET, before weekly-full-refresh
+        # Weekly cleanup of orphaned scans (cancelled, stale running/queued).
+        # Runs 15 minutes before weekly-full-refresh to reduce one overlapping
+        # SQLite writer window. This does not eliminate all 2:00 AM SQLite
+        # activity because daily-integrity-check still runs at 2:00 AM ET.
         'weekly-orphaned-scan-cleanup': {
             'task': 'app.tasks.cache_tasks.cleanup_orphaned_scans',
             'schedule': crontab(
-                hour=2,  # 2 AM ET
-                minute=0,
+                hour=1,  # 1:45 AM ET
+                minute=45,
                 day_of_week=0  # Sunday
             ),
         },

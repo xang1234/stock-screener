@@ -13,6 +13,8 @@ from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.ibd_group_rank_service import (
@@ -23,6 +25,20 @@ from ..utils.market_hours import is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+
+
+def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
+    retries = getattr(getattr(task, "request", None), "retries", 0) or 0
+    countdown = min(60 * (2 ** retries), 600)
+    logger.warning(
+        "Transient error in %s: %s. Retrying in %ss (attempt %s/2).",
+        task_name,
+        exc,
+        countdown,
+        retries + 1,
+    )
+    raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
 def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
@@ -49,7 +65,12 @@ def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
     return None
 
 
-@celery_app.task(bind=True, name='app.tasks.group_rank_tasks.calculate_daily_group_rankings')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+    soft_time_limit=3600,
+    max_retries=2,
+)
 @serialized_data_fetch('calculate_daily_group_rankings')
 def calculate_daily_group_rankings(self, calculation_date: str = None):
     """
@@ -161,6 +182,10 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
             'timestamp': datetime.now().isoformat()
         }
 
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        logger.error("Soft time limit exceeded in calculate_daily_group_rankings", exc_info=True)
+        raise
     except IncompleteGroupRankingCacheError as e:
         db.rollback()
         logger.error("✗ Refusing to publish daily group rankings: %s", e)
@@ -172,6 +197,9 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
             'cache_only': True,
             'prefetch_stats': e.stats,
         }
+    except TRANSIENT_TASK_EXCEPTIONS as e:
+        db.rollback()
+        _retry_transient_failure(self, "calculate_daily_group_rankings", e)
     except Exception as e:
         db.rollback()
         logger.error(f"Error in calculate_daily_group_rankings task: {e}", exc_info=True)

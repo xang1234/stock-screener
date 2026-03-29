@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+from celery.exceptions import Retry, SoftTimeLimitExceeded
+
 from app.services.ibd_group_rank_service import IncompleteGroupRankingCacheError
 
 
@@ -124,7 +127,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
     fake_service = MagicMock()
     fake_service.price_cache = fake_price_cache
     fake_service.calculate_group_rankings.return_value = [
-        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1}
+        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
     ]
 
     monkeypatch.setattr(
@@ -147,3 +150,95 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
         cache_only=False,
         require_complete_cache=False,
     )
+
+
+def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+    fake_service.calculate_group_rankings.side_effect = ConnectionError("network down")
+
+    monkeypatch.setattr(
+        module,
+        "IBDGroupRankService",
+        type(
+            "FakeGroupRankServiceFacade",
+            (),
+            {"get_instance": staticmethod(lambda: fake_service)},
+        ),
+    )
+
+    retry_calls = []
+
+    def fake_retry(*args, **kwargs):
+        retry_calls.append(kwargs)
+        raise Retry("retry")
+
+    monkeypatch.setattr(module.calculate_daily_group_rankings, "retry", fake_retry)
+    module.calculate_daily_group_rankings.request.id = "task-123"
+    module.calculate_daily_group_rankings.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.calculate_daily_group_rankings.run()
+
+    fake_db.rollback.assert_called_once()
+    assert retry_calls[0]["max_retries"] == 2
+    assert retry_calls[0]["countdown"] == 60
+
+
+def test_daily_group_rankings_reraises_soft_time_limit(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+    fake_service.calculate_group_rankings.side_effect = SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(
+        module,
+        "IBDGroupRankService",
+        type(
+            "FakeGroupRankServiceFacade",
+            (),
+            {"get_instance": staticmethod(lambda: fake_service)},
+        ),
+    )
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.calculate_daily_group_rankings.run()
+
+    fake_db.rollback.assert_called_once()

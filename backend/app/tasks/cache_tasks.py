@@ -13,6 +13,8 @@ import logging
 from typing import List, Optional
 from datetime import datetime
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.cache_manager import CacheManager
@@ -156,7 +158,11 @@ def daily_cache_warmup(self):
     return smart_refresh_cache(self, mode="full")
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.weekly_full_refresh')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.cache_tasks.weekly_full_refresh',
+    soft_time_limit=14400,
+)
 @serialized_data_fetch('weekly_full_refresh')
 def weekly_full_refresh(self):
     """
@@ -177,6 +183,7 @@ def weekly_full_refresh(self):
     from ..services.price_cache_service import PriceCacheService
     from ..services.bulk_data_fetcher import BulkDataFetcher
 
+    price_cache = PriceCacheService.get_instance()
     logger.info("=" * 80)
     logger.info("TASK: Weekly Full Cache Refresh")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -190,7 +197,6 @@ def weekly_full_refresh(self):
     try:
         from ..models.stock_universe import StockUniverse
         cache_manager = CacheManager(db)
-        price_cache = PriceCacheService.get_instance()
         bulk_fetcher = BulkDataFetcher()
 
         # 1. Clean up orphaned cache keys (symbols no longer in active universe)
@@ -330,9 +336,19 @@ def weekly_full_refresh(self):
             'completed_at': datetime.now().isoformat()
         }
 
+    except SoftTimeLimitExceeded:
+        logger.error("Soft time limit exceeded in weekly_full_refresh", exc_info=True)
+        safe_rollback(db)
+        price_cache.save_warmup_metadata(
+            "failed",
+            refreshed,
+            locals().get("total", 0),
+            "Soft time limit exceeded",
+        )
+        price_cache.complete_warmup_heartbeat("failed")
+        raise
     except Exception as e:
         logger.error(f"Error in weekly_full_refresh task: {e}", exc_info=True)
-        price_cache = PriceCacheService.get_instance()
         price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e))
         price_cache.complete_warmup_heartbeat("failed")
         return {
@@ -687,7 +703,7 @@ def _track_symbol_failures(
     """
     Track per-symbol fetch failures and auto-deactivate persistently failing symbols.
 
-    Symbols that fail 3+ consecutive refreshes with no-data/delisted indicators
+    Symbols that fail 5+ consecutive refreshes with no-data/delisted indicators
     transition to inactive_no_data to stop wasting provider traffic.
 
     Args:
@@ -1019,7 +1035,11 @@ def auto_refresh_after_close(self):
     return result
 
 
-@celery_app.task(bind=True, name='app.tasks.cache_tasks.smart_refresh_cache')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.cache_tasks.smart_refresh_cache',
+    soft_time_limit=14400,
+)
 @serialized_data_fetch('smart_refresh_cache')
 def smart_refresh_cache(self, mode: str = "auto"):
     """
@@ -1268,6 +1288,17 @@ def smart_refresh_cache(self, mode: str = "auto"):
             "completed_at": datetime.now().isoformat()
         }
 
+    except SoftTimeLimitExceeded:
+        logger.error("Soft time limit exceeded in smart_refresh_cache", exc_info=True)
+        safe_rollback(db)
+        price_cache.save_warmup_metadata(
+            "failed",
+            refreshed,
+            locals().get("total", 0),
+            "Soft time limit exceeded",
+        )
+        price_cache.complete_warmup_heartbeat("failed")
+        raise
     except Exception as e:
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
         # Save partial progress

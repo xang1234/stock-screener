@@ -8,6 +8,7 @@ import httpx
 import pandas as pd
 import pytest
 import pytest_asyncio
+from celery.exceptions import SoftTimeLimitExceeded
 
 from app.main import app
 
@@ -65,6 +66,93 @@ def test_daily_cache_warmup_delegates_to_smart_refresh(monkeypatch):
     delegated.assert_called_once()
     assert delegated.call_args.args[0].name == module.daily_cache_warmup.name
     assert delegated.call_args.kwargs == {"mode": "full"}
+
+
+def test_celery_schedule_moves_orphan_cleanup_and_keeps_legacy_manual_routes():
+    from app.celery_app import celery_app
+
+    orphan_cleanup = celery_app.conf.beat_schedule["weekly-orphaned-scan-cleanup"]["schedule"]
+    assert orphan_cleanup._orig_hour == 1
+    assert orphan_cleanup._orig_minute == 45
+    assert orphan_cleanup._orig_day_of_week == 0
+
+    assert "app.tasks.cache_tasks.daily_cache_warmup" in celery_app.conf.task_routes
+    assert "app.tasks.cache_tasks.auto_refresh_after_close" in celery_app.conf.task_routes
+
+
+def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    mock_lock = MagicMock()
+    mock_lock.acquire.return_value = (True, False)
+    mock_lock.release.return_value = True
+    monkeypatch.setattr(
+        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        lambda: mock_lock,
+    )
+
+    fake_db = MagicMock()
+    fake_price_cache = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_eastern_now", lambda: SimpleNamespace(weekday=lambda: 6, hour=2, date=lambda: date(2026, 3, 22)))
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(
+        "app.services.price_cache_service.PriceCacheService.get_instance",
+        lambda: fake_price_cache,
+    )
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.smart_refresh_cache.run("full")
+
+    module.safe_rollback.assert_called_once_with(fake_db)
+    fake_price_cache.save_warmup_metadata.assert_called_once()
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_db.close.assert_called_once()
+
+
+def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    mock_lock = MagicMock()
+    mock_lock.acquire.return_value = (True, False)
+    mock_lock.release.return_value = True
+    monkeypatch.setattr(
+        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        lambda: mock_lock,
+    )
+
+    fake_db = MagicMock()
+    first_query = MagicMock()
+    first_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    second_query = MagicMock()
+    second_query.filter.return_value.order_by.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_db.query.side_effect = [first_query, second_query]
+
+    fake_price_cache = MagicMock()
+    fake_cache_manager = MagicMock()
+    fake_cache_manager.cleanup_orphaned_cache_keys.return_value = 0
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "CacheManager", lambda db: fake_cache_manager)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(
+        "app.services.price_cache_service.PriceCacheService.get_instance",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.weekly_full_refresh.run()
+
+    module.safe_rollback.assert_called_once_with(fake_db)
+    fake_price_cache.save_warmup_metadata.assert_called_once()
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_db.close.assert_called_once()
 
 
 def test_warm_price_cache_uses_batch_store(monkeypatch):

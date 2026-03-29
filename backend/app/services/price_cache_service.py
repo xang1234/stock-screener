@@ -2005,7 +2005,7 @@ class PriceCacheService:
     # --- Symbol failure tracking for auto-deactivation of delisted symbols ---
 
     SYMBOL_FAILURE_KEY = "cache:symbol_failures:{symbol}"
-    SYMBOL_FAILURE_THRESHOLD = 3
+    SYMBOL_FAILURE_THRESHOLD = 5
     SYMBOL_FAILURE_TTL = 86400 * 30  # 30 days
 
     def record_symbol_failure(self, symbol: str) -> int:

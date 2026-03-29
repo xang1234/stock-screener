@@ -4,6 +4,7 @@ import json
 import pickle
 from datetime import date, datetime, timedelta
 import sqlite3
+from unittest.mock import MagicMock
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -366,7 +367,7 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
     db.close()
 
     class _StubPriceCache:
-        SYMBOL_FAILURE_THRESHOLD = 3
+        SYMBOL_FAILURE_THRESHOLD = 5
 
         @staticmethod
         def clear_symbol_failure(symbol):
@@ -433,7 +434,7 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     )
 
     class _StubPriceCache:
-        SYMBOL_FAILURE_THRESHOLD = 3
+        SYMBOL_FAILURE_THRESHOLD = 5
 
         @staticmethod
         def clear_symbol_failure(symbol):
@@ -453,6 +454,46 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     assert msft.consecutive_fetch_failures == 2
     assert msft.last_fetch_success_at is None
     db.close()
+
+
+def test_track_symbol_failures_passes_updated_deactivation_threshold(monkeypatch):
+    import app.tasks.cache_tasks as module
+    import app.services.stock_universe_service as universe_module
+
+    captured = {}
+
+    def record_fetch_failure(db, symbol, **kwargs):
+        captured["symbol"] = symbol
+        captured["deactivate_threshold"] = kwargs["deactivate_threshold"]
+        return {"deactivated": kwargs["deactivate_threshold"] <= 5}
+
+    monkeypatch.setattr(
+        universe_module.stock_universe_service,
+        "record_fetch_failure",
+        record_fetch_failure,
+    )
+
+    class _StubPriceCache:
+        SYMBOL_FAILURE_THRESHOLD = 5
+
+        @staticmethod
+        def clear_symbol_failure(symbol):
+            return None
+
+        @staticmethod
+        def record_symbol_failure(symbol):
+            return 5
+
+    fake_db = MagicMock()
+    _track_symbol_failures(
+        _StubPriceCache(),
+        successes=[],
+        failures=["AAPL"],
+        db=fake_db,
+        failure_details={"AAPL": "Possibly delisted; no data found"},
+    )
+
+    assert captured == {"symbol": "AAPL", "deactivate_threshold": 5}
 
 
 def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):

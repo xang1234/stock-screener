@@ -7,6 +7,9 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from celery.exceptions import SoftTimeLimitExceeded
+
 from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.schemas.universe import UniverseType
@@ -195,3 +198,32 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
         "universe_hash": "same-universe",
         "as_of_date": date(2026, 3, 16),
     }]
+
+
+def test_build_daily_snapshot_reraises_soft_time_limit():
+    class _TimeoutUseCase:
+        def execute(self, **kwargs):
+            raise SoftTimeLimitExceeded()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=_TimeoutUseCase(),
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ):
+        with pytest.raises(SoftTimeLimitExceeded):
+            _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    assert build_daily_snapshot.soft_time_limit == 3600

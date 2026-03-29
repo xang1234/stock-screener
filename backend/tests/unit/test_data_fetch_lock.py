@@ -6,6 +6,7 @@ All tests mock Redis (no live Redis needed) and mock CacheManager/PriceCacheServ
 """
 import pytest
 from unittest.mock import MagicMock, patch
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 
 from app.tasks.data_fetch_lock import DataFetchLock, serialized_data_fetch, LOCK_KEY
 
@@ -216,6 +217,42 @@ class TestSerializedDataFetchDecorator:
             raise ValueError("boom")
 
         with pytest.raises(ValueError, match="boom"):
+            my_func()
+
+        mock_lock.release.assert_called_once()
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_releases_on_retry(self, mock_settings, mock_get_instance):
+        """Lock is released when the task raises Celery Retry."""
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_lock.lock_timeout = 7200
+        mock_get_instance.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func():
+            raise Retry("retry")
+
+        with pytest.raises(Retry):
+            my_func()
+
+        mock_lock.release.assert_called_once()
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_releases_on_soft_time_limit(self, mock_settings, mock_get_instance):
+        """Lock is released when the task exceeds its soft time limit."""
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_lock.lock_timeout = 7200
+        mock_get_instance.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func():
+            raise SoftTimeLimitExceeded()
+
+        with pytest.raises(SoftTimeLimitExceeded):
             my_func()
 
         mock_lock.release.assert_called_once()

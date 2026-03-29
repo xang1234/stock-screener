@@ -14,6 +14,8 @@ from typing import Dict, Optional, List
 from datetime import datetime
 import time
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..models.stock_universe import StockUniverse
@@ -26,6 +28,20 @@ from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+
+
+def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
+    retries = getattr(getattr(task, "request", None), "retries", 0) or 0
+    countdown = min(60 * (2 ** retries), 600)
+    logger.warning(
+        "Transient error in %s: %s. Retrying in %ss (attempt %s/2).",
+        task_name,
+        exc,
+        countdown,
+        retries + 1,
+    )
+    raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
 def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
@@ -57,7 +73,12 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     }
 
 
-@celery_app.task(bind=True, name='app.tasks.fundamentals_tasks.refresh_all_fundamentals')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.fundamentals_tasks.refresh_all_fundamentals',
+    soft_time_limit=7200,
+    max_retries=2,
+)
 @serialized_data_fetch('refresh_all_fundamentals')
 def refresh_all_fundamentals(self):
     """
@@ -211,7 +232,15 @@ def refresh_all_fundamentals(self):
             'eps_rating_task_id': eps_task.id
         }
 
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        logger.error("Soft time limit exceeded in refresh_all_fundamentals", exc_info=True)
+        raise
+    except TRANSIENT_TASK_EXCEPTIONS as e:
+        db.rollback()
+        _retry_transient_failure(self, "refresh_all_fundamentals", e)
     except Exception as e:
+        db.rollback()
         logger.error(f"Fatal error in fundamental refresh: {e}", exc_info=True)
         return {
             'error': str(e),
