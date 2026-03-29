@@ -7,7 +7,6 @@ import logging
 import time
 from typing import List, Dict, Optional
 from datetime import datetime
-import redis
 from sqlalchemy.orm import Session
 
 from .benchmark_cache_service import BenchmarkCacheService

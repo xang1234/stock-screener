@@ -1,16 +1,30 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getAppCapabilities,
-  getDesktopBootstrapStatus,
-  startDesktopBootstrap,
+  getDesktopSetupStatus,
+  getDesktopUpdateStatus,
+  runDesktopUpdateNow,
+  startDesktopSetup,
 } from '../api/appRuntime';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 
-export const DEFAULT_BOOTSTRAP = {
+export const DEFAULT_DATA_STATUS = {
+  local_data_present: false,
+  starter_baseline_active: false,
+  setup_completed_at: null,
+  prices: { ready: false, last_success_at: null, message: null },
+  breadth: { ready: false, last_success_at: null, message: null },
+  groups: { ready: false, last_success_at: null, message: null },
+  fundamentals: { ready: false, last_success_at: null, message: null },
+  universe: { ready: false, last_success_at: null, message: null },
+};
+
+export const DEFAULT_SETUP = {
   status: 'completed',
+  mode: null,
   job_id: null,
   message: null,
   current_step: null,
@@ -22,6 +36,28 @@ export const DEFAULT_BOOTSTRAP = {
   steps: [],
   warnings: [],
   error: null,
+  starter_baseline_active: false,
+  app_ready: true,
+  data_status: DEFAULT_DATA_STATUS,
+};
+
+export const DEFAULT_UPDATE = {
+  status: 'idle',
+  scope: null,
+  triggered_by: null,
+  job_id: null,
+  message: null,
+  current_step: null,
+  started_at: null,
+  completed_at: null,
+  last_success_at: null,
+  current: 0,
+  total: 0,
+  percent: 0,
+  steps: [],
+  warnings: [],
+  error: null,
+  data_status: DEFAULT_DATA_STATUS,
 };
 
 export const DEFAULT_CAPABILITIES = {
@@ -41,14 +77,22 @@ export const DEFAULT_CAPABILITIES = {
   scan_defaults: DEFAULT_SCAN_DEFAULTS,
   api_base_path: '/api',
   bootstrap_required: false,
-  bootstrap: DEFAULT_BOOTSTRAP,
+  bootstrap: DEFAULT_SETUP,
+  setup_required: false,
+  setup: DEFAULT_SETUP,
+  setup_options: [],
+  update: DEFAULT_UPDATE,
+  data_status: DEFAULT_DATA_STATUS,
 };
 
 const RuntimeContext = createContext(null);
 
+function getPollingInterval(status) {
+  return status === 'queued' || status === 'running' ? 2000 : false;
+}
+
 export function RuntimeProvider({ children }) {
   const queryClient = useQueryClient();
-  const autoBootstrapRequested = useRef(false);
 
   const capabilitiesQuery = useQuery({
     queryKey: ['appCapabilities'],
@@ -60,65 +104,105 @@ export function RuntimeProvider({ children }) {
 
   const desktopMode = Boolean(capabilitiesQuery.data?.desktop_mode);
 
-  const bootstrapQuery = useQuery({
-    queryKey: ['desktopBootstrapStatus'],
-    queryFn: getDesktopBootstrapStatus,
+  const setupQuery = useQuery({
+    queryKey: ['desktopSetupStatus'],
+    queryFn: getDesktopSetupStatus,
     enabled: desktopMode,
-    initialData: capabilitiesQuery.data?.bootstrap ?? DEFAULT_BOOTSTRAP,
+    initialData: capabilitiesQuery.data?.setup ?? DEFAULT_SETUP,
     retry: 1,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === 'queued' || status === 'running' ? 2000 : false;
-    },
+    refetchInterval: (query) => getPollingInterval(query.state.data?.status),
   });
 
-  const startBootstrapMutation = useMutation({
-    mutationFn: startDesktopBootstrap,
+  const updateQuery = useQuery({
+    queryKey: ['desktopUpdateStatus'],
+    queryFn: getDesktopUpdateStatus,
+    enabled: desktopMode,
+    initialData: capabilitiesQuery.data?.update ?? DEFAULT_UPDATE,
+    retry: 1,
+    refetchInterval: (query) => getPollingInterval(query.state.data?.status),
+  });
+
+  const startSetupMutation = useMutation({
+    mutationFn: startDesktopSetup,
     onSuccess: (data) => {
-      queryClient.setQueryData(['desktopBootstrapStatus'], data);
+      queryClient.setQueryData(['desktopSetupStatus'], data);
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['desktopBootstrapStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['desktopSetupStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['desktopUpdateStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
     },
   });
 
-  useEffect(() => {
-    const bootstrap = bootstrapQuery.data ?? capabilitiesQuery.data?.bootstrap ?? DEFAULT_BOOTSTRAP;
-    if (!desktopMode || autoBootstrapRequested.current) {
-      return;
-    }
-    if (bootstrap.status === 'idle') {
-      autoBootstrapRequested.current = true;
-      startBootstrapMutation.mutate(false);
-    }
-  }, [desktopMode, bootstrapQuery.data, capabilitiesQuery.data, startBootstrapMutation]);
+  const refreshNowMutation = useMutation({
+    mutationFn: runDesktopUpdateNow,
+    onSuccess: (data) => {
+      queryClient.setQueryData(['desktopUpdateStatus'], data);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['desktopUpdateStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['desktopSetupStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    },
+  });
 
   const capabilities = capabilitiesQuery.data ?? DEFAULT_CAPABILITIES;
-  const bootstrap = desktopMode
-    ? (bootstrapQuery.data ?? capabilities.bootstrap ?? DEFAULT_BOOTSTRAP)
-    : DEFAULT_BOOTSTRAP;
+  const setup = desktopMode
+    ? (setupQuery.data ?? capabilities.setup ?? DEFAULT_SETUP)
+    : DEFAULT_SETUP;
+  const update = desktopMode
+    ? (updateQuery.data ?? capabilities.update ?? DEFAULT_UPDATE)
+    : DEFAULT_UPDATE;
+  const dataStatus = setup.data_status ?? update.data_status ?? capabilities.data_status ?? DEFAULT_DATA_STATUS;
 
   const value = useMemo(() => {
     const features = capabilities.features ?? DEFAULT_CAPABILITIES.features;
-    const bootstrapIncomplete = desktopMode && bootstrap.status !== 'completed';
+    const setupRequired = desktopMode && !setup.app_ready;
+    const setupRunning = setup.status === 'queued' || setup.status === 'running';
+    const setupFailed = setup.status === 'failed';
+    const updateRunning = update.status === 'queued' || update.status === 'running';
+    const updateFailed = update.status === 'failed';
 
     return {
       capabilities,
-      bootstrap,
+      bootstrap: setup,
+      bootstrapIncomplete: setupRequired,
+      bootstrapRunning: setupRunning,
+      bootstrapFailed: setupFailed,
+      bootstrapWarnings: setup.warnings ?? [],
       desktopMode,
       features,
       runtimeReady: !capabilitiesQuery.isPlaceholderData,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
-      bootstrapIncomplete,
-      bootstrapRunning: bootstrap.status === 'queued' || bootstrap.status === 'running',
-      bootstrapFailed: bootstrap.status === 'failed',
-      bootstrapWarnings: bootstrap.warnings ?? [],
-      startBootstrap: (force = false) => startBootstrapMutation.mutate(force),
-      isStartingBootstrap: startBootstrapMutation.isPending,
+      setup,
+      setupOptions: capabilities.setup_options ?? [],
+      setupRequired,
+      setupRunning,
+      setupFailed,
+      setupWarnings: setup.warnings ?? [],
+      update,
+      updateRunning,
+      updateFailed,
+      dataStatus,
+      startSetup: (mode = 'quick_start', force = false) => startSetupMutation.mutate({ mode, force }),
+      refreshNow: (scope = 'manual', force = false) => refreshNowMutation.mutate({ scope, force }),
+      isStartingSetup: startSetupMutation.isPending,
+      isRefreshingNow: refreshNowMutation.isPending,
+      startBootstrap: (force = false) => startSetupMutation.mutate({ mode: 'quick_start', force }),
+      isStartingBootstrap: startSetupMutation.isPending,
     };
-  }, [bootstrap, capabilities, capabilitiesQuery.isPlaceholderData, desktopMode, startBootstrapMutation]);
+  }, [
+    capabilities,
+    capabilitiesQuery.isPlaceholderData,
+    dataStatus,
+    desktopMode,
+    refreshNowMutation,
+    setup,
+    startSetupMutation,
+    update,
+  ]);
 
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
 }

@@ -24,6 +24,8 @@ def _get_resource_root() -> Path:
 
 
 def _get_default_desktop_data_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "StockScanner"
     for env_var in ("LOCALAPPDATA", "XDG_DATA_HOME"):
         raw = os.getenv(env_var)
         if raw:
@@ -85,8 +87,16 @@ class Settings(BaseSettings):
     frontend_dist_dir: str = str(_RESOURCE_ROOT / "frontend" / "dist")
     desktop_bootstrap_seed_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "universe_seed.csv")
     desktop_bootstrap_industry_seed_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "ibd_industry_seed.csv")
+    desktop_starter_manifest_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "starter_manifest.json")
+    desktop_starter_db_path: str = str(_RESOURCE_ROOT / "backend" / "desktop" / "starter_snapshot.sqlite3")
     desktop_bootstrap_refresh_universe: bool = True
     desktop_bootstrap_fundamentals_limit: int = 25
+    desktop_price_refresh_batch_size: int = 100
+    desktop_background_fundamentals_limit: int = 100
+    desktop_launch_agent_enabled: bool = True
+    desktop_launch_agent_label: str = "com.stockscanner.desktop.refresh"
+    desktop_launch_agent_interval_minutes: int = 30
+    desktop_native_window: bool = sys.platform == "darwin"
     desktop_open_browser: bool = True
 
     # Database - use absolute path to avoid working directory issues
@@ -283,6 +293,8 @@ class Settings(BaseSettings):
                 self.api_host = "127.0.0.1"
             if os.getenv("CORS_ORIGINS") is None:
                 self.cors_origins = "http://127.0.0.1,http://localhost"
+            if os.getenv("DESKTOP_OPEN_BROWSER") is None and self.desktop_native_window:
+                self.desktop_open_browser = False
 
             desktop_defaults = (
                 ("FEATURE_THEMES", "feature_themes", False),

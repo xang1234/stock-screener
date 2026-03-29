@@ -9,7 +9,10 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Optional, Tuple
 
-import redis
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
+    redis = None
 
 from ..config import settings
 
@@ -87,6 +90,8 @@ class DataFetchLock:
     _instance = None
 
     def __init__(self):
+        if redis is None:
+            raise RuntimeError("Redis package is not installed; DataFetchLock is unavailable")
         self.redis = redis.Redis(
             host=settings.redis_host,
             port=settings.redis_port,

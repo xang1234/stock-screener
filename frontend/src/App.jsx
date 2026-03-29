@@ -8,6 +8,7 @@ import ScanPage from './pages/ScanPage';
 import MarketScanPage from './pages/MarketScanPage';
 import StockDetails from './components/Stock/StockDetails';
 import Layout from './components/Layout/Layout';
+import DesktopSetupScreen from './components/App/DesktopSetupScreen';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
@@ -226,7 +227,11 @@ function App() {
 }
 
 function AppShell() {
-  const { features } = useRuntime();
+  const { desktopMode, features, setupRequired } = useRuntime();
+
+  if (desktopMode && setupRequired) {
+    return <DesktopSetupScreen />;
+  }
 
   const appRoutes = (
     <Router>

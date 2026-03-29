@@ -7,11 +7,15 @@ during bulk scans. Uses Redis for hot cache with database persistence.
 import logging
 import pickle
 import time
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime, timedelta
 import pandas as pd
-import redis
 from sqlalchemy.orm import Session
+
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
+    redis = Any  # type: ignore
 
 from ..database import SessionLocal
 from ..models.stock import StockPrice

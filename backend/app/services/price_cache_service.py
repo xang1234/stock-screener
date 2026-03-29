@@ -13,11 +13,15 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 import json
 import logging
 import pickle
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 from datetime import datetime, timedelta, date, time
 import pandas as pd
-import redis
 from sqlalchemy.orm import Session
+
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
+    redis = Any  # type: ignore
 
 from ..database import SessionLocal
 from ..models.stock import StockPrice

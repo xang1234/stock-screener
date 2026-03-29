@@ -7,10 +7,14 @@ Uses Redis for hot cache and database for persistence.
 """
 import logging
 import pickle
-from typing import Optional, Dict
+from typing import Any, Optional, Dict
 from datetime import datetime, timedelta, date
-import redis
 from sqlalchemy.orm import Session
+
+try:
+    import redis  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
+    redis = Any  # type: ignore
 
 from ..database import SessionLocal
 from ..models.stock import StockFundamental

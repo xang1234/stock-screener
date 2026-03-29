@@ -1,0 +1,172 @@
+{
+  "prices": [
+    {
+      "symbol": "SPY",
+      "bars": [
+        { "date": "2025-01-08", "open": 585.2, "high": 588.6, "low": 584.4, "close": 587.9, "adj_close": 587.9, "volume": 70300123 },
+        { "date": "2025-01-09", "open": 588.0, "high": 590.1, "low": 586.7, "close": 589.6, "adj_close": 589.6, "volume": 68122011 },
+        { "date": "2025-01-10", "open": 589.8, "high": 592.4, "low": 588.5, "close": 591.8, "adj_close": 591.8, "volume": 72245019 }
+      ]
+    },
+    {
+      "symbol": "AAPL",
+      "bars": [
+        { "date": "2025-01-08", "open": 241.8, "high": 244.1, "low": 240.6, "close": 243.7, "adj_close": 243.7, "volume": 54200111 },
+        { "date": "2025-01-09", "open": 244.0, "high": 245.6, "low": 242.8, "close": 245.1, "adj_close": 245.1, "volume": 49832000 },
+        { "date": "2025-01-10", "open": 245.4, "high": 247.2, "low": 244.7, "close": 246.8, "adj_close": 246.8, "volume": 51499012 }
+      ]
+    },
+    {
+      "symbol": "MSFT",
+      "bars": [
+        { "date": "2025-01-08", "open": 432.4, "high": 436.8, "low": 430.9, "close": 435.6, "adj_close": 435.6, "volume": 28144009 },
+        { "date": "2025-01-09", "open": 436.2, "high": 438.0, "low": 434.3, "close": 437.5, "adj_close": 437.5, "volume": 26711944 },
+        { "date": "2025-01-10", "open": 437.8, "high": 440.2, "low": 436.5, "close": 439.9, "adj_close": 439.9, "volume": 27455001 }
+      ]
+    },
+    {
+      "symbol": "NVDA",
+      "bars": [
+        { "date": "2025-01-08", "open": 148.4, "high": 151.8, "low": 147.6, "close": 150.9, "adj_close": 150.9, "volume": 101114500 },
+        { "date": "2025-01-09", "open": 151.2, "high": 153.1, "low": 149.9, "close": 152.4, "adj_close": 152.4, "volume": 96550220 },
+        { "date": "2025-01-10", "open": 152.8, "high": 155.6, "low": 151.7, "close": 154.8, "adj_close": 154.8, "volume": 98810210 }
+      ]
+    },
+    {
+      "symbol": "META",
+      "bars": [
+        { "date": "2025-01-08", "open": 612.6, "high": 618.9, "low": 609.4, "close": 617.3, "adj_close": 617.3, "volume": 16544090 },
+        { "date": "2025-01-09", "open": 617.8, "high": 621.4, "low": 614.1, "close": 619.7, "adj_close": 619.7, "volume": 15422101 },
+        { "date": "2025-01-10", "open": 620.0, "high": 625.5, "low": 618.0, "close": 624.8, "adj_close": 624.8, "volume": 16111332 }
+      ]
+    },
+    {
+      "symbol": "AMZN",
+      "bars": [
+        { "date": "2025-01-08", "open": 219.8, "high": 222.7, "low": 218.4, "close": 221.9, "adj_close": 221.9, "volume": 39220103 },
+        { "date": "2025-01-09", "open": 222.1, "high": 223.8, "low": 220.6, "close": 223.0, "adj_close": 223.0, "volume": 35891022 },
+        { "date": "2025-01-10", "open": 223.4, "high": 225.9, "low": 222.0, "close": 225.1, "adj_close": 225.1, "volume": 36655088 }
+      ]
+    }
+  ],
+  "fundamentals": [
+    {
+      "symbol": "AAPL",
+      "market_cap": 2900000000000,
+      "avg_volume": 53400000,
+      "pe_ratio": 31.4,
+      "price_to_sales": 7.6,
+      "profit_margin": 0.255,
+      "roe": 1.52,
+      "sector": "Technology",
+      "industry": "Consumer Electronics",
+      "country": "United States"
+    },
+    {
+      "symbol": "MSFT",
+      "market_cap": 3100000000000,
+      "avg_volume": 28100000,
+      "pe_ratio": 35.1,
+      "price_to_sales": 12.8,
+      "profit_margin": 0.359,
+      "roe": 0.384,
+      "sector": "Technology",
+      "industry": "Software - Infrastructure",
+      "country": "United States"
+    },
+    {
+      "symbol": "NVDA",
+      "market_cap": 2200000000000,
+      "avg_volume": 98700000,
+      "pe_ratio": 53.8,
+      "price_to_sales": 27.2,
+      "profit_margin": 0.551,
+      "roe": 0.987,
+      "sector": "Technology",
+      "industry": "Semiconductors",
+      "country": "United States"
+    },
+    {
+      "symbol": "META",
+      "market_cap": 1300000000000,
+      "avg_volume": 16200000,
+      "pe_ratio": 29.6,
+      "price_to_sales": 9.1,
+      "profit_margin": 0.344,
+      "roe": 0.332,
+      "sector": "Communication Services",
+      "industry": "Internet Content & Information",
+      "country": "United States"
+    },
+    {
+      "symbol": "AMZN",
+      "market_cap": 1800000000000,
+      "avg_volume": 36600000,
+      "pe_ratio": 44.2,
+      "price_to_sales": 3.4,
+      "profit_margin": 0.084,
+      "roe": 0.248,
+      "sector": "Consumer Cyclical",
+      "industry": "Internet Retail",
+      "country": "United States"
+    }
+  ],
+  "breadth": {
+    "date": "2025-01-10",
+    "stocks_up_4pct": 148,
+    "stocks_down_4pct": 34,
+    "ratio_5day": 2.48,
+    "ratio_10day": 2.12,
+    "stocks_up_25pct_quarter": 262,
+    "stocks_down_25pct_quarter": 79,
+    "stocks_up_25pct_month": 181,
+    "stocks_down_25pct_month": 44,
+    "stocks_up_50pct_month": 37,
+    "stocks_down_50pct_month": 6,
+    "stocks_up_13pct_34days": 204,
+    "stocks_down_13pct_34days": 27,
+    "total_stocks_scanned": 6432
+  },
+  "groups": [
+    {
+      "industry_group": "Enterprise Software",
+      "date": "2025-01-10",
+      "rank": 1,
+      "avg_rs_rating": 93.4,
+      "num_stocks": 4,
+      "num_stocks_rs_above_80": 4,
+      "top_symbol": "MSFT",
+      "top_rs_rating": 98.0
+    },
+    {
+      "industry_group": "Semiconductor Fabless",
+      "date": "2025-01-10",
+      "rank": 2,
+      "avg_rs_rating": 91.2,
+      "num_stocks": 4,
+      "num_stocks_rs_above_80": 4,
+      "top_symbol": "NVDA",
+      "top_rs_rating": 99.0
+    },
+    {
+      "industry_group": "Internet Content",
+      "date": "2025-01-10",
+      "rank": 3,
+      "avg_rs_rating": 88.3,
+      "num_stocks": 4,
+      "num_stocks_rs_above_80": 3,
+      "top_symbol": "META",
+      "top_rs_rating": 97.0
+    },
+    {
+      "industry_group": "Auto Manufacturers",
+      "date": "2025-01-10",
+      "rank": 4,
+      "avg_rs_rating": 71.8,
+      "num_stocks": 4,
+      "num_stocks_rs_above_80": 1,
+      "top_symbol": "TSLA",
+      "top_rs_rating": 85.0
+    }
+  ]
+}

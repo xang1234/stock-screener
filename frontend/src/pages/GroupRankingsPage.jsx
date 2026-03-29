@@ -599,7 +599,7 @@ function GroupRankingsPage() {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="info">
-          {bootstrap?.message || 'Group rankings are still initializing for this desktop install.'}
+          {bootstrap?.message || 'Group rankings are still being prepared for this desktop install.'}
         </Alert>
       </Container>
     );

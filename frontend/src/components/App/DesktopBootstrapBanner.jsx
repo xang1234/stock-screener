@@ -1,81 +1,110 @@
-import { Alert, Box, Button, LinearProgress, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Chip, Divider, Stack, Typography } from '@mui/material';
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
+import CloudDoneRoundedIcon from '@mui/icons-material/CloudDoneRounded';
+import UpdateRoundedIcon from '@mui/icons-material/UpdateRounded';
 import { useRuntime } from '../../contexts/RuntimeContext';
+
+function formatFreshnessLabel(timestamp) {
+  if (!timestamp) {
+    return 'Not ready';
+  }
+  const value = new Date(timestamp);
+  if (Number.isNaN(value.getTime())) {
+    return timestamp;
+  }
+  return value.toLocaleString();
+}
+
+function DataChip({ label, ready, value }) {
+  return (
+    <Chip
+      size="small"
+      color={ready ? 'success' : 'default'}
+      variant={ready ? 'filled' : 'outlined'}
+      label={`${label}: ${value}`}
+    />
+  );
+}
 
 function DesktopBootstrapBanner() {
   const {
-    bootstrap,
-    bootstrapFailed,
-    bootstrapIncomplete,
-    bootstrapRunning,
-    bootstrapWarnings,
+    dataStatus,
     desktopMode,
-    startBootstrap,
-    isStartingBootstrap,
+    isRefreshingNow,
+    refreshNow,
+    setupRequired,
+    update,
+    updateFailed,
+    updateRunning,
   } = useRuntime();
 
-  if (!desktopMode) {
+  if (!desktopMode || setupRequired) {
     return null;
   }
-
-  if (!bootstrapIncomplete && bootstrapWarnings.length === 0) {
-    return null;
-  }
-
-  const severity = bootstrapFailed ? 'error' : bootstrapWarnings.length > 0 && !bootstrapIncomplete ? 'warning' : 'info';
-  const title = bootstrapFailed
-    ? 'Desktop setup failed'
-    : bootstrapRunning
-      ? 'Preparing local market data'
-      : bootstrapIncomplete
-        ? 'Desktop setup required'
-        : 'Desktop setup completed with warnings';
-
-  const message = bootstrap?.message
-    || (bootstrapRunning
-      ? 'Scans, breadth, and group rankings will populate as the local setup completes.'
-      : 'Run the local bootstrap to seed the starter universe and cache baseline data.');
 
   return (
-    <Alert
-      severity={severity}
-      action={bootstrapFailed || (!bootstrapRunning && bootstrapIncomplete) ? (
-        <Button
-          color="inherit"
-          size="small"
-          onClick={() => startBootstrap(bootstrapFailed)}
-          disabled={isStartingBootstrap}
-        >
-          {bootstrapFailed ? 'Retry setup' : 'Start setup'}
-        </Button>
-      ) : null}
-      sx={{ mb: 1.5 }}
-    >
-      <Stack spacing={1}>
-        <Box>
-          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-            {title}
-          </Typography>
-          <Typography variant="body2">{message}</Typography>
-        </Box>
-        {bootstrapRunning && (
-          <Box>
-            <LinearProgress
-              variant="determinate"
-              value={bootstrap?.percent ?? 0}
-              sx={{ mb: 0.5 }}
-            />
-            <Typography variant="caption" color="text.secondary">
-              {(bootstrap?.percent ?? 0).toFixed(0)}% complete
-            </Typography>
+    <Card sx={{ mb: 1.5 }}>
+      <CardContent>
+        <Stack spacing={1.5}>
+          <Box display="flex" justifyContent="space-between" gap={2} alignItems="flex-start">
+            <Box>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                <CloudDoneRoundedIcon fontSize="small" color="primary" />
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                  Local desktop data
+                </Typography>
+                {dataStatus.starter_baseline_active && (
+                  <Chip size="small" color="warning" label="Starter baseline active" />
+                )}
+              </Stack>
+              <Typography variant="body2" color="text.secondary">
+                {update.message || 'Starter data is local. Regular updates keep prices, breadth, groups, and fundamentals fresh.'}
+              </Typography>
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<RefreshRoundedIcon />}
+              onClick={() => refreshNow('manual')}
+              disabled={isRefreshingNow || updateRunning}
+            >
+              Refresh now
+            </Button>
           </Box>
-        )}
-        {bootstrapWarnings.length > 0 && (
-          <Typography variant="caption" color="text.secondary">
-            {bootstrapWarnings[0]}
-          </Typography>
-        )}
-      </Stack>
-    </Alert>
+
+          {(updateRunning || updateFailed) && (
+            <Alert severity={updateFailed ? 'error' : 'info'} icon={<UpdateRoundedIcon fontSize="inherit" />}>
+              {update.error || update.message || (updateRunning ? 'Automatic update in progress.' : 'Automatic update failed.')}
+            </Alert>
+          )}
+
+          <Divider />
+
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <DataChip
+              label="Prices"
+              ready={dataStatus.prices.ready}
+              value={formatFreshnessLabel(dataStatus.prices.last_success_at)}
+            />
+            <DataChip
+              label="Breadth"
+              ready={dataStatus.breadth.ready}
+              value={formatFreshnessLabel(dataStatus.breadth.last_success_at)}
+            />
+            <DataChip
+              label="Groups"
+              ready={dataStatus.groups.ready}
+              value={formatFreshnessLabel(dataStatus.groups.last_success_at)}
+            />
+            <DataChip
+              label="Fundamentals"
+              ready={dataStatus.fundamentals.ready}
+              value={formatFreshnessLabel(dataStatus.fundamentals.last_success_at)}
+            />
+          </Stack>
+        </Stack>
+      </CardContent>
+    </Card>
   );
 }
 

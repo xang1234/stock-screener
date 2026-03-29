@@ -261,12 +261,8 @@ async def trigger_ui_snapshot_rebuild_on_startup():
         print(f"Warning: Failed to rebuild UI snapshots on startup: {e}")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for startup and shutdown events.
-    """
-    # Startup
+def initialize_runtime() -> None:
+    """Run the synchronous runtime initialization shared by API and desktop helper paths."""
     print("Starting Stock Scanner API...")
     print(f"Database: {settings.database_url}")
     print(f"CORS origins: {settings.cors_origins_list}")
@@ -292,7 +288,7 @@ async def lifespan(app: FastAPI):
                           and not r[0].startswith("Fragmentation")
                           and not r[0].startswith("***")]
                 if errors:
-                    print(f"CRITICAL: Database integrity check failed:")
+                    print("CRITICAL: Database integrity check failed:")
                     for err in errors[:5]:
                         print(f"  {err}")
                     print("The database may be corrupted. Check data/backups/ for recent copies.")
@@ -328,6 +324,15 @@ async def lifespan(app: FastAPI):
     run_ui_view_snapshot_migration()
     run_universe_lifecycle_migration()
     run_provider_snapshot_migration()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+    """
+    # Startup
+    initialize_runtime()
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if not settings.desktop_mode and getattr(settings, 'group_rank_gapfill_enabled', True):

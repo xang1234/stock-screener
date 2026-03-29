@@ -11,9 +11,17 @@ Benefits:
 - Thread-safe singleton pattern
 """
 import logging
-from typing import Optional
-import redis
-from redis import ConnectionPool, Redis
+from typing import Any, Optional
+
+try:
+    import redis  # type: ignore
+    from redis import ConnectionPool, Redis
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in desktop packaging
+    redis = None
+    ConnectionPool = Redis = Any  # type: ignore
+    _REDIS_IMPORT_ERROR = exc
+else:
+    _REDIS_IMPORT_ERROR = None
 
 from ..config import settings
 
@@ -40,6 +48,10 @@ def get_redis_pool() -> Optional[ConnectionPool]:
 
     if _pool is not None:
         return _pool
+
+    if _REDIS_IMPORT_ERROR is not None:
+        logger.info("Redis package unavailable; shared Redis pool disabled: %s", _REDIS_IMPORT_ERROR)
+        return None
 
     try:
         _pool = ConnectionPool(
@@ -83,6 +95,10 @@ def get_bulk_redis_pool() -> Optional[ConnectionPool]:
 
     if _bulk_pool is not None:
         return _bulk_pool
+
+    if _REDIS_IMPORT_ERROR is not None:
+        logger.info("Redis package unavailable; bulk Redis pool disabled: %s", _REDIS_IMPORT_ERROR)
+        return None
 
     try:
         bulk_timeout = getattr(settings, 'redis_bulk_socket_timeout', 30)

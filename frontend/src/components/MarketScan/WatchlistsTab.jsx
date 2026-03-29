@@ -194,7 +194,7 @@ function WatchlistsTab() {
           <Box textAlign="center" py={4}>
             <Typography color="text.secondary" gutterBottom>
               {bootstrapIncomplete
-                ? (bootstrap?.message || 'Desktop setup is still warming market data. You can create watchlists now and the data will fill in as setup completes.')
+                ? (bootstrap?.message || 'Desktop setup is still preparing local market data. You can create watchlists now and the data will fill in as setup completes.')
                 : 'No watchlists yet. Create your first watchlist to get started.'}
             </Typography>
             <Tooltip title="Manage watchlists">

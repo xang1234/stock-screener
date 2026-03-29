@@ -220,7 +220,7 @@ function BreadthPage() {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="info">
-          {bootstrap?.message || 'Market breadth is still initializing for this desktop install.'}
+          {bootstrap?.message || 'Market breadth is still being prepared for this desktop install.'}
         </Alert>
       </Container>
     );

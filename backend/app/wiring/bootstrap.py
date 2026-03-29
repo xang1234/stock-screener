@@ -48,6 +48,9 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 _task_dispatcher: TaskDispatcher | None = None
 _job_backend: JobBackend | None = None
 _desktop_bootstrap_service: DesktopBootstrapService | None = None
+_desktop_update_service: DesktopUpdateService | None = None
+_desktop_setup_service: DesktopSetupService | None = None
+_desktop_launch_agent_service: DesktopLaunchAgentService | None = None
 _ui_snapshot_service: UISnapshotService | None = None
 
 
@@ -91,6 +94,43 @@ def get_desktop_bootstrap_service() -> DesktopBootstrapService:
             job_backend=get_local_job_backend(),
         )
     return _desktop_bootstrap_service
+
+
+def get_desktop_update_service() -> DesktopUpdateService:
+    """Return the desktop update orchestrator."""
+    global _desktop_update_service
+    if _desktop_update_service is None:
+        from app.services.desktop_update_service import DesktopUpdateService
+
+        _desktop_update_service = DesktopUpdateService(
+            session_factory=SessionLocal,
+            job_backend=get_local_job_backend(),
+        )
+    return _desktop_update_service
+
+
+def get_desktop_setup_service() -> DesktopSetupService:
+    """Return the desktop setup orchestrator."""
+    global _desktop_setup_service
+    if _desktop_setup_service is None:
+        from app.services.desktop_setup_service import DesktopSetupService
+
+        _desktop_setup_service = DesktopSetupService(
+            session_factory=SessionLocal,
+            job_backend=get_local_job_backend(),
+            update_service=get_desktop_update_service(),
+        )
+    return _desktop_setup_service
+
+
+def get_desktop_launch_agent_service() -> DesktopLaunchAgentService:
+    """Return the launch agent installer used by the macOS desktop bundle."""
+    global _desktop_launch_agent_service
+    if _desktop_launch_agent_service is None:
+        from app.services.desktop_launch_agent_service import DesktopLaunchAgentService
+
+        _desktop_launch_agent_service = DesktopLaunchAgentService()
+    return _desktop_launch_agent_service
 
 
 def get_ui_snapshot_service() -> UISnapshotService:
