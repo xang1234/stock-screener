@@ -6,10 +6,10 @@ in the universe, including daily movers, multi-period ratios, and
 monthly/quarterly performance indicators.
 """
 import logging
+from collections import deque
 from typing import Dict, Optional, List
 from datetime import date, datetime, timedelta
 import pandas as pd
-import numpy as np
 from sqlalchemy.orm import Session
 
 from ..models.stock_universe import StockUniverse
@@ -40,6 +40,29 @@ class BreadthCalculatorService:
         """
         self.db = db
         self.price_cache = PriceCacheService.get_instance()
+
+    @staticmethod
+    def _empty_metrics() -> Dict:
+        """Return a zeroed breadth metrics container."""
+        return {
+            'stocks_up_4pct': 0,
+            'stocks_down_4pct': 0,
+            'stocks_up_25pct_quarter': 0,
+            'stocks_down_25pct_quarter': 0,
+            'stocks_up_25pct_month': 0,
+            'stocks_down_25pct_month': 0,
+            'stocks_up_50pct_month': 0,
+            'stocks_down_50pct_month': 0,
+            'stocks_up_13pct_34days': 0,
+            'stocks_down_13pct_34days': 0,
+            'ratio_5day': None,
+            'ratio_10day': None,
+            'total_stocks_scanned': 0,
+            'skipped_stocks': 0,
+            'cache_miss_stocks': 0,
+            'insufficient_data_stocks': 0,
+            'error_stocks': 0,
+        }
 
     def calculate_daily_breadth(self, calculation_date: date = None, cache_only: bool = False) -> Dict:
         """
@@ -80,23 +103,7 @@ class BreadthCalculatorService:
         logger.info(f"Found {len(active_stocks)} active stocks in universe")
 
         # Initialize counters
-        metrics = {
-            'stocks_up_4pct': 0,
-            'stocks_down_4pct': 0,
-            'stocks_up_25pct_quarter': 0,
-            'stocks_down_25pct_quarter': 0,
-            'stocks_up_25pct_month': 0,
-            'stocks_down_25pct_month': 0,
-            'stocks_up_50pct_month': 0,
-            'stocks_down_50pct_month': 0,
-            'stocks_up_13pct_34days': 0,
-            'stocks_down_13pct_34days': 0,
-            'total_stocks_scanned': 0,
-            'skipped_stocks': 0,
-            'cache_miss_stocks': 0,
-            'insufficient_data_stocks': 0,
-            'error_stocks': 0,
-        }
+        metrics = self._empty_metrics()
 
         # Process stocks in batches for memory management
         batch_size = 500
@@ -109,65 +116,30 @@ class BreadthCalculatorService:
 
             logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} stocks)")
             batch_symbols = [stock.symbol for stock in batch]
-            cached_price_data = self.price_cache.get_many_cached_only(
-                batch_symbols,
-                period="2y",
+            price_data_by_symbol, cache_miss_symbols = self._load_price_data_for_batch(
+                batch_symbols=batch_symbols,
+                cache_only=cache_only,
             )
+            metrics['cache_miss_stocks'] += len(cache_miss_symbols)
 
             for stock in batch:
                 try:
-                    cached_prices = cached_price_data.get(stock.symbol)
-                    if cached_prices is None or cached_prices.empty:
-                        metrics['cache_miss_stocks'] += 1
-                        if cache_only:
-                            metrics['skipped_stocks'] += 1
-                            continue
-                        stock_metrics = self._calculate_stock_metrics(
-                            symbol=stock.symbol,
-                            end_date=calculation_date
-                        )
-                    else:
-                        stock_metrics = self._calculate_stock_metrics_from_prices(
-                            prices_df=cached_prices,
-                            end_date=calculation_date
-                        )
+                    price_history = price_data_by_symbol.get(stock.symbol)
+                    if price_history is None or price_history.empty:
+                        metrics['skipped_stocks'] += 1
+                        continue
+
+                    stock_metrics = self._calculate_stock_metrics_from_prices(
+                        prices_df=price_history,
+                        end_date=calculation_date,
+                    )
 
                     if stock_metrics is None:
                         metrics['insufficient_data_stocks'] += 1
                         metrics['skipped_stocks'] += 1
                         continue
 
-                    # Count stocks meeting thresholds
-                    # Daily 4%+ movers
-                    if stock_metrics.get('pct_change_1d', 0) >= 4.0:
-                        metrics['stocks_up_4pct'] += 1
-                    elif stock_metrics.get('pct_change_1d', 0) <= -4.0:
-                        metrics['stocks_down_4pct'] += 1
-
-                    # 21-day (monthly) 25% movers
-                    if stock_metrics.get('pct_change_21d', 0) >= 25.0:
-                        metrics['stocks_up_25pct_month'] += 1
-                    elif stock_metrics.get('pct_change_21d', 0) <= -25.0:
-                        metrics['stocks_down_25pct_month'] += 1
-
-                    # 21-day (monthly) 50% movers
-                    if stock_metrics.get('pct_change_21d', 0) >= 50.0:
-                        metrics['stocks_up_50pct_month'] += 1
-                    elif stock_metrics.get('pct_change_21d', 0) <= -50.0:
-                        metrics['stocks_down_50pct_month'] += 1
-
-                    # 34-day 13% movers (IBD-style)
-                    if stock_metrics.get('pct_change_34d', 0) >= 13.0:
-                        metrics['stocks_up_13pct_34days'] += 1
-                    elif stock_metrics.get('pct_change_34d', 0) <= -13.0:
-                        metrics['stocks_down_13pct_34days'] += 1
-
-                    # 63-day (quarterly) 25% movers
-                    if stock_metrics.get('pct_change_63d', 0) >= 25.0:
-                        metrics['stocks_up_25pct_quarter'] += 1
-                    elif stock_metrics.get('pct_change_63d', 0) <= -25.0:
-                        metrics['stocks_down_25pct_quarter'] += 1
-
+                    self._apply_stock_metrics(metrics, stock_metrics)
                     metrics['total_stocks_scanned'] += 1
 
                 except Exception as e:
@@ -192,6 +164,125 @@ class BreadthCalculatorService:
 
         return metrics
 
+    def backfill_range(self, start_date: date, end_date: date, trading_dates: Optional[List[date]] = None) -> Dict:
+        """
+        Calculate and persist breadth for an entire historical range.
+
+        Price history is loaded once per symbol batch, then reused for every
+        requested trading date in chronological order.
+        """
+        if trading_dates is None:
+            from ..utils.market_hours import is_trading_day
+
+            trading_dates = [
+                current_date
+                for current_date in pd.date_range(start=start_date, end=end_date, freq="D").date
+                if is_trading_day(current_date)
+            ]
+
+        ordered_dates = sorted(trading_dates)
+        if not ordered_dates:
+            return {
+                'total_dates': 0,
+                'processed': 0,
+                'errors': 0,
+                'error_dates': [],
+            }
+
+        start_time = datetime.now()
+        active_stocks = self.db.query(StockUniverse).filter(
+            StockUniverse.is_active == True
+        ).all()
+        logger.info(
+            "Backfilling breadth for %s trading days across %s active stocks",
+            len(ordered_dates),
+            len(active_stocks),
+        )
+
+        metrics_by_date = {calc_date: self._empty_metrics() for calc_date in ordered_dates}
+        batch_size = 500
+        total_stocks = len(active_stocks)
+
+        for i in range(0, total_stocks, batch_size):
+            batch = active_stocks[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (total_stocks + batch_size - 1) // batch_size
+            logger.info(
+                "Backfill batch %s/%s (%s stocks)",
+                batch_num,
+                total_batches,
+                len(batch),
+            )
+
+            batch_symbols = [stock.symbol for stock in batch]
+            price_data_by_symbol, _ = self._load_price_data_for_batch(
+                batch_symbols=batch_symbols,
+                cache_only=False,
+            )
+
+            for stock in batch:
+                try:
+                    price_history = price_data_by_symbol.get(stock.symbol)
+                    if price_history is None or price_history.empty:
+                        continue
+
+                    for calc_date in ordered_dates:
+                        stock_metrics = self._calculate_stock_metrics_from_prices(
+                            prices_df=price_history,
+                            end_date=calc_date,
+                        )
+                        if stock_metrics is None:
+                            continue
+
+                        daily_metrics = metrics_by_date[calc_date]
+                        self._apply_stock_metrics(daily_metrics, stock_metrics)
+                        daily_metrics['total_stocks_scanned'] += 1
+                except Exception as e:
+                    logger.warning("Error processing %s in breadth backfill: %s", stock.symbol, e)
+                    for calc_date in ordered_dates:
+                        metrics_by_date[calc_date]['error_stocks'] += 1
+
+        prior_counts = self._get_prior_breadth_counts(ordered_dates[0], limit=10)
+        rolling_counts = deque(prior_counts, maxlen=10)
+
+        processed_dates: list[date] = []
+        error_dates: list[str] = []
+
+        for calc_date in ordered_dates:
+            metrics = metrics_by_date[calc_date]
+            ratios = self._calculate_ratios_from_counts(list(rolling_counts))
+            metrics['ratio_5day'] = ratios['ratio_5day']
+            metrics['ratio_10day'] = ratios['ratio_10day']
+
+            if metrics['total_stocks_scanned'] > 0:
+                processed_dates.append(calc_date)
+                rolling_counts.append({
+                    'stocks_up_4pct': metrics['stocks_up_4pct'],
+                    'stocks_down_4pct': metrics['stocks_down_4pct'],
+                })
+            else:
+                error_dates.append(calc_date.strftime('%Y-%m-%d'))
+
+        if processed_dates:
+            total_duration_seconds = (datetime.now() - start_time).total_seconds()
+            duration_per_day = round(total_duration_seconds / len(processed_dates), 2)
+            for calc_date in processed_dates:
+                metrics_by_date[calc_date]['calculation_duration_seconds'] = duration_per_day
+
+            self._store_breadth_records(
+                {
+                    calc_date: metrics_by_date[calc_date]
+                    for calc_date in processed_dates
+                }
+            )
+
+        return {
+            'total_dates': len(ordered_dates),
+            'processed': len(processed_dates),
+            'errors': len(error_dates),
+            'error_dates': error_dates,
+        }
+
     def _calculate_stock_metrics_from_prices(
         self,
         prices_df: Optional[pd.DataFrame],
@@ -201,17 +292,20 @@ class BreadthCalculatorService:
         if prices_df is None or prices_df.empty:
             return None
 
-        prices_df = prices_df[prices_df.index <= pd.Timestamp(end_date)]
+        end_ts = pd.Timestamp(end_date)
+        if isinstance(prices_df.index, pd.DatetimeIndex) and prices_df.index.tz is not None and end_ts.tz is None:
+            end_ts = end_ts.tz_localize(prices_df.index.tz)
 
-        if len(prices_df) < 70:  # Need at least 70 days for quarterly calculations
-            logger.debug(f"Insufficient cached data: {len(prices_df)} days")
+        latest_idx = prices_df.index.searchsorted(end_ts, side='right') - 1
+        if latest_idx < 69:  # Need at least 70 days for quarterly calculations
+            logger.debug(f"Insufficient cached data through {end_date}: {latest_idx + 1} days")
             return None
 
         metrics = {
-            'pct_change_1d': self._get_price_change(prices_df, 1),
-            'pct_change_21d': self._get_price_change(prices_df, 21),
-            'pct_change_34d': self._get_price_change(prices_df, 34),
-            'pct_change_63d': self._get_price_change(prices_df, 63),
+            'pct_change_1d': self._get_price_change(prices_df, 1, latest_idx),
+            'pct_change_21d': self._get_price_change(prices_df, 21, latest_idx),
+            'pct_change_34d': self._get_price_change(prices_df, 34, latest_idx),
+            'pct_change_63d': self._get_price_change(prices_df, 63, latest_idx),
         }
         return metrics
 
@@ -251,7 +345,12 @@ class BreadthCalculatorService:
             logger.debug(f"Error calculating metrics for {symbol}: {e}")
             return None
 
-    def _get_price_change(self, prices_df: pd.DataFrame, days: int) -> float:
+    def _get_price_change(
+        self,
+        prices_df: pd.DataFrame,
+        days: int,
+        latest_idx: Optional[int] = None,
+    ) -> float:
         """
         Calculate N-day percentage change from a price DataFrame.
 
@@ -265,13 +364,16 @@ class BreadthCalculatorService:
         Formula:
             ((latest_close - close_N_days_ago) / close_N_days_ago) * 100
         """
-        if len(prices_df) < days + 1:
+        if latest_idx is None:
+            latest_idx = len(prices_df) - 1
+
+        if latest_idx < days:
             return 0.0
 
         try:
             # Get most recent close and close from N days ago
-            latest_close = prices_df['Close'].iloc[-1]
-            past_close = prices_df['Close'].iloc[-(days + 1)]
+            latest_close = prices_df['Close'].iloc[latest_idx]
+            past_close = prices_df['Close'].iloc[latest_idx - days]
 
             if past_close == 0 or pd.isna(past_close) or pd.isna(latest_close):
                 return 0.0
@@ -282,6 +384,98 @@ class BreadthCalculatorService:
         except (IndexError, KeyError, ZeroDivisionError) as e:
             logger.debug(f"Error calculating {days}-day change: {e}")
             return 0.0
+
+    def _apply_stock_metrics(self, metrics: Dict, stock_metrics: Dict) -> None:
+        """Increment aggregate breadth counters for a single stock."""
+        if stock_metrics.get('pct_change_1d', 0) >= 4.0:
+            metrics['stocks_up_4pct'] += 1
+        elif stock_metrics.get('pct_change_1d', 0) <= -4.0:
+            metrics['stocks_down_4pct'] += 1
+
+        if stock_metrics.get('pct_change_21d', 0) >= 25.0:
+            metrics['stocks_up_25pct_month'] += 1
+        elif stock_metrics.get('pct_change_21d', 0) <= -25.0:
+            metrics['stocks_down_25pct_month'] += 1
+
+        if stock_metrics.get('pct_change_21d', 0) >= 50.0:
+            metrics['stocks_up_50pct_month'] += 1
+        elif stock_metrics.get('pct_change_21d', 0) <= -50.0:
+            metrics['stocks_down_50pct_month'] += 1
+
+        if stock_metrics.get('pct_change_34d', 0) >= 13.0:
+            metrics['stocks_up_13pct_34days'] += 1
+        elif stock_metrics.get('pct_change_34d', 0) <= -13.0:
+            metrics['stocks_down_13pct_34days'] += 1
+
+        if stock_metrics.get('pct_change_63d', 0) >= 25.0:
+            metrics['stocks_up_25pct_quarter'] += 1
+        elif stock_metrics.get('pct_change_63d', 0) <= -25.0:
+            metrics['stocks_down_25pct_quarter'] += 1
+
+    def _load_price_data_for_batch(
+        self,
+        batch_symbols: List[str],
+        cache_only: bool,
+    ) -> tuple[Dict[str, Optional[pd.DataFrame]], List[str]]:
+        """Load batch price histories once, with optional cache misses fetched a single time."""
+        price_data_by_symbol = self.price_cache.get_many_cached_only(
+            batch_symbols,
+            period="2y",
+        )
+        cache_miss_symbols: List[str] = []
+
+        if cache_only:
+            return price_data_by_symbol, cache_miss_symbols
+
+        for symbol in batch_symbols:
+            price_history = price_data_by_symbol.get(symbol)
+            if price_history is None or price_history.empty:
+                cache_miss_symbols.append(symbol)
+                price_data_by_symbol[symbol] = self._calculate_stock_history(symbol)
+
+        return price_data_by_symbol, cache_miss_symbols
+
+    def _calculate_stock_history(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Fetch a symbol's full historical data once for reuse."""
+        return self.price_cache.get_historical_data(
+            symbol=symbol,
+            period="2y",
+        )
+
+    def _get_prior_breadth_counts(self, start_date: date, limit: int = 10) -> List[Dict[str, int]]:
+        """Fetch up to the prior 10 breadth count rows before a backfill window."""
+        prior_records = self.db.query(MarketBreadth).filter(
+            MarketBreadth.date < start_date
+        ).order_by(MarketBreadth.date.desc()).limit(limit).all()
+
+        ordered_records = list(reversed(prior_records))
+        return [
+            {
+                'stocks_up_4pct': record.stocks_up_4pct,
+                'stocks_down_4pct': record.stocks_down_4pct,
+            }
+            for record in ordered_records
+        ]
+
+    def _calculate_ratios_from_counts(self, prior_counts: List[Dict[str, int]]) -> Dict:
+        """Calculate 5-day and 10-day ratios from prior daily counts."""
+        if len(prior_counts) < 5:
+            return {'ratio_5day': None, 'ratio_10day': None}
+
+        last_5_days = prior_counts[-5:]
+        up_5day = sum(day['stocks_up_4pct'] for day in last_5_days)
+        down_5day = sum(day['stocks_down_4pct'] for day in last_5_days)
+        ratio_5day = round(up_5day / down_5day, 2) if down_5day > 0 else None
+
+        ratio_10day = None
+        if len(prior_counts) >= 10:
+            last_10_days = prior_counts[-10:]
+            up_10day = sum(day['stocks_up_4pct'] for day in last_10_days)
+            down_10day = sum(day['stocks_down_4pct'] for day in last_10_days)
+            if down_10day > 0:
+                ratio_10day = round(up_10day / down_10day, 2)
+
+        return {'ratio_5day': ratio_5day, 'ratio_10day': ratio_10day}
 
     def _calculate_ratios(self, calculation_date: date) -> Dict:
         """
@@ -500,5 +694,56 @@ class BreadthCalculatorService:
             )
             self.db.add(breadth_record)
             logger.debug(f"Created new breadth record for {calc_date}")
+
+        self.db.commit()
+
+    def _store_breadth_records(self, metrics_by_date: Dict[date, Dict]) -> None:
+        """Store or update a group of breadth records in one transaction."""
+        if not metrics_by_date:
+            return
+
+        dates = sorted(metrics_by_date.keys())
+        existing_records = self.db.query(MarketBreadth).filter(
+            MarketBreadth.date >= dates[0],
+            MarketBreadth.date <= dates[-1],
+        ).all()
+        existing_by_date = {record.date: record for record in existing_records}
+
+        for calc_date in dates:
+            metrics = metrics_by_date[calc_date]
+            existing_record = existing_by_date.get(calc_date)
+            if existing_record:
+                existing_record.stocks_up_4pct = metrics['stocks_up_4pct']
+                existing_record.stocks_down_4pct = metrics['stocks_down_4pct']
+                existing_record.ratio_5day = metrics.get('ratio_5day')
+                existing_record.ratio_10day = metrics.get('ratio_10day')
+                existing_record.stocks_up_25pct_quarter = metrics['stocks_up_25pct_quarter']
+                existing_record.stocks_down_25pct_quarter = metrics['stocks_down_25pct_quarter']
+                existing_record.stocks_up_25pct_month = metrics['stocks_up_25pct_month']
+                existing_record.stocks_down_25pct_month = metrics['stocks_down_25pct_month']
+                existing_record.stocks_up_50pct_month = metrics['stocks_up_50pct_month']
+                existing_record.stocks_down_50pct_month = metrics['stocks_down_50pct_month']
+                existing_record.stocks_up_13pct_34days = metrics['stocks_up_13pct_34days']
+                existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
+                existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
+                existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
+            else:
+                self.db.add(MarketBreadth(
+                    date=calc_date,
+                    stocks_up_4pct=metrics['stocks_up_4pct'],
+                    stocks_down_4pct=metrics['stocks_down_4pct'],
+                    ratio_5day=metrics.get('ratio_5day'),
+                    ratio_10day=metrics.get('ratio_10day'),
+                    stocks_up_25pct_quarter=metrics['stocks_up_25pct_quarter'],
+                    stocks_down_25pct_quarter=metrics['stocks_down_25pct_quarter'],
+                    stocks_up_25pct_month=metrics['stocks_up_25pct_month'],
+                    stocks_down_25pct_month=metrics['stocks_down_25pct_month'],
+                    stocks_up_50pct_month=metrics['stocks_up_50pct_month'],
+                    stocks_down_50pct_month=metrics['stocks_down_50pct_month'],
+                    stocks_up_13pct_34days=metrics['stocks_up_13pct_34days'],
+                    stocks_down_13pct_34days=metrics['stocks_down_13pct_34days'],
+                    total_stocks_scanned=metrics['total_stocks_scanned'],
+                    calculation_duration_seconds=metrics.get('calculation_duration_seconds'),
+                ))
 
         self.db.commit()

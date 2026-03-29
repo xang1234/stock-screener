@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 
@@ -56,3 +56,64 @@ def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkey
     assert "warmup not complete" in result["error"].lower()
     fake_db.add.assert_not_called()
     fake_db.commit.assert_not_called()
+
+
+def test_generate_trading_dates_skips_holidays_and_weekends(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    closed_days = {
+        date(2026, 1, 1),  # holiday
+        date(2026, 1, 3),  # weekend
+        date(2026, 1, 4),  # weekend
+    }
+    monkeypatch.setattr(
+        "app.utils.market_hours.is_trading_day",
+        lambda d: d not in closed_days,
+    )
+
+    trading_dates, skipped = module._generate_trading_dates(date(2026, 1, 1), date(2026, 1, 5))
+
+    assert trading_dates == [date(2026, 1, 2), date(2026, 1, 5)]
+    assert skipped == 3
+
+
+def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+
+    fake_lock = MagicMock()
+    fake_lock.acquire.return_value = (True, False)
+    fake_lock.release.return_value = True
+    monkeypatch.setattr(
+        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        lambda: fake_lock,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_generate_trading_dates",
+        lambda start, end: ([date(2026, 1, 2), date(2026, 1, 5)], 3),
+    )
+
+    fake_service = MagicMock()
+    fake_service.backfill_range.return_value = {
+        "total_dates": 2,
+        "processed": 2,
+        "errors": 0,
+        "error_dates": [],
+    }
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: fake_service)
+
+    result = module.backfill_breadth_data.run("2026-01-01", "2026-01-05")
+
+    fake_service.backfill_range.assert_called_once_with(
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+        trading_dates=[date(2026, 1, 2), date(2026, 1, 5)],
+    )
+    assert result["successful"] == 2
+    assert result["failed"] == 0
+    assert result["skipped_weekends"] == 3
+    assert result["skipped_non_trading_days"] == 3

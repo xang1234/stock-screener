@@ -56,6 +56,24 @@ def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optiona
     return None
 
 
+def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
+    """Return trading dates in chronological order and the skipped non-trading-day count."""
+    from ..utils.market_hours import is_trading_day
+
+    current_date = start
+    trading_dates: list[date] = []
+    skipped_non_trading_days = 0
+
+    while current_date <= end:
+        if is_trading_day(current_date):
+            trading_dates.append(current_date)
+        else:
+            skipped_non_trading_days += 1
+        current_date += timedelta(days=1)
+
+    return trading_dates, skipped_non_trading_days
+
+
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth')
 @serialized_data_fetch('calculate_daily_breadth')
 def calculate_daily_breadth(self, calculation_date: str = None):
@@ -247,8 +265,9 @@ def calculate_daily_breadth(self, calculation_date: str = None):
         db.close()
 
 
-@celery_app.task(name='app.tasks.breadth_tasks.backfill_breadth_data')
-def backfill_breadth_data(start_date: str, end_date: str):
+@celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
+@serialized_data_fetch('backfill_breadth_data')
+def backfill_breadth_data(self, start_date: str, end_date: str):
     """
     Backfill market breadth data for historical date range.
 
@@ -296,75 +315,39 @@ def backfill_breadth_data(start_date: str, end_date: str):
             'timestamp': datetime.now().isoformat()
         }
 
-    # Statistics
-    stats = {
-        'total_days_processed': 0,
-        'successful': 0,
-        'failed': 0,
-        'skipped_weekends': 0,
-        'failed_dates': []
-    }
+    trading_dates, skipped_non_trading_days = _generate_trading_dates(start, end)
 
+    logger.info(f"Generated {len(trading_dates)} trading days to process")
+    logger.info(f"Skipped {skipped_non_trading_days} non-trading days")
+
+    db = SessionLocal()
     start_time = time.time()
 
-    # Generate list of dates (in reverse chronological order for backfill)
-    current_date = end
-    dates_to_process = []
+    try:
+        calculator = BreadthCalculatorService(db)
+        result = calculator.backfill_range(start, end, trading_dates=trading_dates)
+        total_duration = time.time() - start_time
 
-    while current_date >= start:
-        # Skip weekends (Saturday=5, Sunday=6)
-        if current_date.weekday() < 5:  # Monday=0 to Friday=4
-            dates_to_process.append(current_date)
-        else:
-            stats['skipped_weekends'] += 1
-
-        current_date -= timedelta(days=1)
-
-    logger.info(f"Generated {len(dates_to_process)} trading days to process")
-    logger.info(f"Skipped {stats['skipped_weekends']} weekend days")
-
-    # Process each date
-    for i, calc_date in enumerate(dates_to_process):
-        try:
-            # Log progress every 10 days
-            if (i + 1) % 10 == 0:
-                logger.info(f"Progress: {i + 1}/{len(dates_to_process)} days processed")
-
-            # Calculate breadth for this date
-            result = calculate_daily_breadth(calculation_date=calc_date.strftime('%Y-%m-%d'))
-
-            stats['total_days_processed'] += 1
-
-            if 'error' in result:
-                stats['failed'] += 1
-                stats['failed_dates'].append({
-                    'date': calc_date.strftime('%Y-%m-%d'),
-                    'error': result['error']
-                })
-                logger.warning(f"Failed to calculate breadth for {calc_date}: {result['error']}")
-            else:
-                stats['successful'] += 1
-
-        except Exception as e:
-            stats['failed'] += 1
-            stats['failed_dates'].append({
-                'date': calc_date.strftime('%Y-%m-%d'),
-                'error': str(e)
-            })
-            logger.error(f"Error processing {calc_date}: {e}", exc_info=True)
-            continue
-
-    # Calculate total duration
-    total_duration = time.time() - start_time
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error during breadth backfill: {e}", exc_info=True)
+        return {
+            'error': str(e),
+            'start_date': start_date,
+            'end_date': end_date,
+            'timestamp': datetime.now().isoformat(),
+        }
+    finally:
+        db.close()
 
     logger.info("=" * 60)
     logger.info("Backfill Complete!")
-    logger.info(f"Total days processed: {stats['total_days_processed']}")
-    logger.info(f"Successful: {stats['successful']}")
-    logger.info(f"Failed: {stats['failed']}")
-    logger.info(f"Skipped weekends: {stats['skipped_weekends']}")
+    logger.info(f"Total days processed: {result['total_dates']}")
+    logger.info(f"Successful: {result['processed']}")
+    logger.info(f"Failed: {result['errors']}")
+    logger.info(f"Skipped non-trading days: {skipped_non_trading_days}")
     logger.info(f"Total duration: {total_duration:.2f}s")
-    logger.info(f"Average per day: {total_duration / max(stats['total_days_processed'], 1):.2f}s")
+    logger.info(f"Average per day: {total_duration / max(result['total_dates'], 1):.2f}s")
     logger.info("=" * 60)
 
     try:
@@ -377,13 +360,14 @@ def backfill_breadth_data(start_date: str, end_date: str):
     return {
         'start_date': start_date,
         'end_date': end_date,
-        'total_days_processed': stats['total_days_processed'],
-        'successful': stats['successful'],
-        'failed': stats['failed'],
-        'skipped_weekends': stats['skipped_weekends'],
-        'failed_dates': stats['failed_dates'][:10],  # Only return first 10 failures
+        'total_days_processed': result['total_dates'],
+        'successful': result['processed'],
+        'failed': result['errors'],
+        'skipped_weekends': skipped_non_trading_days,
+        'skipped_non_trading_days': skipped_non_trading_days,
+        'failed_dates': result['error_dates'][:10],  # Only return first 10 failures
         'total_duration_seconds': round(total_duration, 2),
-        'avg_duration_per_day': round(total_duration / max(stats['total_days_processed'], 1), 2),
+        'avg_duration_per_day': round(total_duration / max(result['total_dates'], 1), 2),
         'timestamp': datetime.now().isoformat()
     }
 
