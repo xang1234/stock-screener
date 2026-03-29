@@ -114,13 +114,13 @@ function ThemeTable({ themeData, onRefresh }) {
                 <TableRow
                   sx={{
                     bgcolor: (theme) => theme.palette.mode === 'dark'
-                      ? 'rgba(144, 202, 249, 0.15)'
-                      : 'rgba(25, 118, 210, 0.12)',
+                      ? 'rgba(31, 151, 244, 0.22)'
+                      : 'rgba(31, 151, 244, 0.18)',
                     cursor: 'pointer',
                     '&:hover': {
                       bgcolor: (theme) => theme.palette.mode === 'dark'
-                        ? 'rgba(144, 202, 249, 0.25)'
-                        : 'rgba(25, 118, 210, 0.2)',
+                        ? 'rgba(31, 151, 244, 0.32)'
+                        : 'rgba(31, 151, 244, 0.28)',
                     },
                   }}
                   onClick={() => toggleGroup(subgroup.id, isCollapsed)}
