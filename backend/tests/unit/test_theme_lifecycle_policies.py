@@ -398,8 +398,8 @@ def test_update_all_theme_metrics_applies_lifecycle_rank_weighting(db_session):
         return metrics
 
     service._upsert_theme_metrics = _stub_upsert_theme_metrics  # type: ignore[method-assign]
-    service.promote_candidate_themes = lambda now=None, limit=None: {"promoted": 0, "pipeline": "technical"}  # type: ignore[method-assign]
-    service.apply_dormancy_and_reactivation_policies = lambda now=None, limit=None: {"to_dormant": 0, "to_reactivated": 0, "pipeline": "technical"}  # type: ignore[method-assign]
+    service.promote_candidate_themes = lambda now=None, limit=None, auto_commit=True: {"promoted": 0, "pipeline": "technical", "auto_commit": auto_commit}  # type: ignore[method-assign]
+    service.apply_dormancy_and_reactivation_policies = lambda now=None, limit=None, auto_commit=True: {"to_dormant": 0, "to_reactivated": 0, "pipeline": "technical", "auto_commit": auto_commit}  # type: ignore[method-assign]
     result = service.update_all_theme_metrics(as_of_date=now)
 
     assert result["themes_updated"] == 2
@@ -440,16 +440,18 @@ def test_update_all_theme_metrics_invokes_existing_lifecycle_policies_once(db_se
             ThemeMetrics.date == as_of_date.date(),
         ).one()
 
-    def _stub_promote(now=None, limit=None):
+    def _stub_promote(now=None, limit=None, auto_commit=True):
         _ = limit
         calls["promote"] += 1
+        assert auto_commit is False
         candidate.lifecycle_state = "active"
         db_session.flush()
         return {"promoted": 1, "pipeline": "technical", "now": now.isoformat() if now else None}
 
-    def _stub_state(now=None, limit=None):
+    def _stub_state(now=None, limit=None, auto_commit=True):
         _ = limit
         calls["state"] += 1
+        assert auto_commit is False
         return {"to_dormant": 0, "to_reactivated": 0, "pipeline": "technical", "now": now.isoformat() if now else None}
 
     service._upsert_theme_metrics = _stub_upsert_theme_metrics  # type: ignore[method-assign]
@@ -461,6 +463,63 @@ def test_update_all_theme_metrics_invokes_existing_lifecycle_policies_once(db_se
     assert calls == {"promote": 1, "state": 1}
     assert result["lifecycle"]["candidate_promotion"]["promoted"] == 1
     assert result["rankings"][0]["lifecycle_state"] == "active"
+
+
+def test_update_all_theme_metrics_uses_single_commit_for_lifecycle_refresh(db_session, monkeypatch):
+    now = datetime(2026, 2, 24, 18, 45, 0)
+    source_a = _make_source(db_session, name="Alpha Desk", source_type="news")
+    source_b = _make_source(db_session, name="Bravo Research", source_type="substack")
+    candidate = _make_theme(
+        db_session,
+        name="Atomic Promotion",
+        canonical_key="atomic_promotion",
+        state="candidate",
+        now=now,
+    )
+    _add_mention(db_session, theme=candidate, source=source_a, now=now, days_ago=1, confidence=0.92, external_suffix="1")
+    _add_mention(db_session, theme=candidate, source=source_b, now=now, days_ago=2, confidence=0.88, external_suffix="2")
+    _add_mention(db_session, theme=candidate, source=source_a, now=now, days_ago=3, confidence=0.89, external_suffix="3")
+    _add_mention(db_session, theme=candidate, source=source_b, now=now, days_ago=5, confidence=0.91, external_suffix="4")
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+
+    def _stub_upsert_theme_metrics(*, cluster: ThemeCluster, as_of_date: datetime, mention_metrics: dict, auto_commit: bool) -> ThemeMetrics:
+        _ = mention_metrics
+        _ = auto_commit
+        metrics = db_session.query(ThemeMetrics).filter(
+            ThemeMetrics.theme_cluster_id == cluster.id,
+            ThemeMetrics.date == as_of_date.date(),
+        ).first()
+        if metrics is None:
+            metrics = ThemeMetrics(
+                theme_cluster_id=cluster.id,
+                date=as_of_date.date(),
+                pipeline="technical",
+            )
+            db_session.add(metrics)
+        metrics.momentum_score = 70.0
+        metrics.status = "trending"
+        db_session.flush()
+        return metrics
+
+    original_commit = db_session.commit
+    commit_calls = {"count": 0}
+
+    def _counting_commit():
+        commit_calls["count"] += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", _counting_commit)
+    service._upsert_theme_metrics = _stub_upsert_theme_metrics  # type: ignore[method-assign]
+
+    result = service.update_all_theme_metrics(as_of_date=now)
+
+    db_session.refresh(candidate)
+    assert commit_calls["count"] == 1
+    assert result["lifecycle"]["candidate_promotion"]["promoted"] == 1
+    assert candidate.lifecycle_state == "active"
+    assert result["rankings"][0]["rank"] == 1
 
 
 def test_get_theme_rankings_filters_by_lifecycle_state(db_session):

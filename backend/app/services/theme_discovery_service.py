@@ -705,13 +705,12 @@ class ThemeDiscoveryService:
                 logger.error(f"Error updating metrics for {cluster.name}: {e}")
                 results["errors"] += 1
 
-        lifecycle_promotion_result = self.promote_candidate_themes(now=as_of_date)
-        lifecycle_state_result = self.apply_dormancy_and_reactivation_policies(now=as_of_date)
+        lifecycle_promotion_result = self.promote_candidate_themes(now=as_of_date, auto_commit=False)
+        lifecycle_state_result = self.apply_dormancy_and_reactivation_policies(now=as_of_date, auto_commit=False)
         results["lifecycle"] = {
             "candidate_promotion": lifecycle_promotion_result,
             "state_policies": lifecycle_state_result,
         }
-        self.db.expire_all()
 
         # Calculate rankings using lifecycle-aware weighting to suppress candidate floods.
         metrics_list.sort(
@@ -1196,7 +1195,13 @@ class ThemeDiscoveryService:
             merged["last_evaluated_at"] = now.isoformat()
         return merged
 
-    def promote_candidate_themes(self, *, now: datetime | None = None, limit: int | None = None) -> dict:
+    def promote_candidate_themes(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int | None = None,
+        auto_commit: bool = True,
+    ) -> dict:
         """
         Promote candidate themes to active when evidence exceeds policy thresholds.
         """
@@ -1221,56 +1226,65 @@ class ThemeDiscoveryService:
             "errors": 0,
         }
 
+        def _apply_candidate_policy(cluster: ThemeCluster) -> None:
+            observation = self._lifecycle_snapshot(cluster.id, now=now)
+            should_promote = (
+                observation["mentions_7d"] >= thresholds["promotion_min_mentions_7d"]
+                and observation["source_diversity_7d"] >= thresholds["promotion_min_source_diversity_7d"]
+                and observation["avg_quality_confidence_30d"] >= thresholds["promotion_min_avg_confidence_30d"]
+                and observation["persistence_days_7d"] >= thresholds["promotion_min_persistence_days"]
+            )
+
+            if should_promote:
+                transition_reason = "candidate_promotion_thresholds_met"
+                transition_rule_version = "lifecycle-v2"
+                metadata = self._merge_lifecycle_metadata(
+                    cluster,
+                    observation=observation,
+                    counter_field="promotion_count",
+                    reason=transition_reason,
+                    now=now,
+                )
+                transition = apply_lifecycle_transition(
+                    db=self.db,
+                    theme=cluster,
+                    to_state="active",
+                    actor="system",
+                    job_name="promote_candidate_themes",
+                    rule_version=transition_rule_version,
+                    reason=transition_reason,
+                    metadata=metadata,
+                    transitioned_at=now,
+                )
+                self._emit_lifecycle_transition_alert(
+                    cluster=cluster,
+                    transition=transition,
+                    reason=transition_reason,
+                    rule_version=transition_rule_version,
+                    observation=observation,
+                )
+                result["promoted"] += 1
+            else:
+                cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
+                    cluster,
+                    observation=observation,
+                    reason="candidate_promotion_thresholds_not_met",
+                    now=now,
+                )
+                result["unchanged"] += 1
+
         for cluster in candidates:
             try:
-                observation = self._lifecycle_snapshot(cluster.id, now=now)
-                should_promote = (
-                    observation["mentions_7d"] >= thresholds["promotion_min_mentions_7d"]
-                    and observation["source_diversity_7d"] >= thresholds["promotion_min_source_diversity_7d"]
-                    and observation["avg_quality_confidence_30d"] >= thresholds["promotion_min_avg_confidence_30d"]
-                    and observation["persistence_days_7d"] >= thresholds["promotion_min_persistence_days"]
-                )
-
-                if should_promote:
-                    transition_reason = "candidate_promotion_thresholds_met"
-                    transition_rule_version = "lifecycle-v2"
-                    metadata = self._merge_lifecycle_metadata(
-                        cluster,
-                        observation=observation,
-                        counter_field="promotion_count",
-                        reason=transition_reason,
-                        now=now,
-                    )
-                    transition = apply_lifecycle_transition(
-                        db=self.db,
-                        theme=cluster,
-                        to_state="active",
-                        actor="system",
-                        job_name="promote_candidate_themes",
-                        rule_version=transition_rule_version,
-                        reason=transition_reason,
-                        metadata=metadata,
-                        transitioned_at=now,
-                    )
-                    self._emit_lifecycle_transition_alert(
-                        cluster=cluster,
-                        transition=transition,
-                        reason=transition_reason,
-                        rule_version=transition_rule_version,
-                        observation=observation,
-                    )
-                    result["promoted"] += 1
+                if auto_commit:
+                    _apply_candidate_policy(cluster)
+                    self.db.commit()
                 else:
-                    cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
-                        cluster,
-                        observation=observation,
-                        reason="candidate_promotion_thresholds_not_met",
-                        now=now,
-                    )
-                    result["unchanged"] += 1
-                self.db.commit()
+                    with self.db.begin_nested():
+                        _apply_candidate_policy(cluster)
+                        self.db.flush()
             except Exception as exc:
-                self.db.rollback()
+                if auto_commit:
+                    self.db.rollback()
                 result["errors"] += 1
                 logger.error("Candidate promotion policy failed for theme %s: %s", cluster.id, exc)
 
@@ -1281,6 +1295,7 @@ class ThemeDiscoveryService:
         *,
         now: datetime | None = None,
         limit: int | None = None,
+        auto_commit: bool = True,
     ) -> dict:
         """
         Apply automatic dormancy and reactivation transitions with telemetry counters.
@@ -1306,80 +1321,88 @@ class ThemeDiscoveryService:
             "errors": 0,
         }
 
-        for cluster in clusters:
-            try:
-                observation = self._lifecycle_snapshot(cluster.id, now=now)
-                state = (cluster.lifecycle_state or "candidate").strip()
+        def _apply_state_policy(cluster: ThemeCluster) -> None:
+            observation = self._lifecycle_snapshot(cluster.id, now=now)
+            state = (cluster.lifecycle_state or "candidate").strip()
 
-                to_state: str | None = None
-                reason: str | None = None
-                counter_field: str | None = None
-                if state in {"active", "reactivated"}:
-                    stale_inactive = observation["days_since_last_mention"] >= thresholds["dormancy_inactivity_days"]
-                    low_volume_stale = (
-                        observation["mentions_30d"] <= thresholds["dormancy_min_mentions_30d"]
-                        and observation["days_since_last_mention"] >= thresholds["dormancy_min_silence_days"]
-                    )
-                    if stale_inactive or low_volume_stale:
-                        to_state = "dormant"
-                        reason = "dormancy_inactivity_threshold_met"
-                        counter_field = "dormancy_count"
+            to_state: str | None = None
+            reason: str | None = None
+            counter_field: str | None = None
+            if state in {"active", "reactivated"}:
+                stale_inactive = observation["days_since_last_mention"] >= thresholds["dormancy_inactivity_days"]
+                low_volume_stale = (
+                    observation["mentions_30d"] <= thresholds["dormancy_min_mentions_30d"]
+                    and observation["days_since_last_mention"] >= thresholds["dormancy_min_silence_days"]
+                )
+                if stale_inactive or low_volume_stale:
+                    to_state = "dormant"
+                    reason = "dormancy_inactivity_threshold_met"
+                    counter_field = "dormancy_count"
 
-                elif state == "dormant":
-                    should_reactivate = (
-                        observation["mentions_7d"] >= thresholds["reactivation_min_mentions_7d"]
-                        and observation["source_diversity_7d"] >= thresholds["reactivation_min_source_diversity_7d"]
-                        and observation["avg_quality_confidence_30d"] >= thresholds["reactivation_min_avg_confidence_30d"]
-                    )
-                    if should_reactivate:
-                        to_state = "reactivated"
-                        reason = "reactivation_evidence_threshold_met"
-                        counter_field = "reactivation_count"
+            elif state == "dormant":
+                should_reactivate = (
+                    observation["mentions_7d"] >= thresholds["reactivation_min_mentions_7d"]
+                    and observation["source_diversity_7d"] >= thresholds["reactivation_min_source_diversity_7d"]
+                    and observation["avg_quality_confidence_30d"] >= thresholds["reactivation_min_avg_confidence_30d"]
+                )
+                if should_reactivate:
+                    to_state = "reactivated"
+                    reason = "reactivation_evidence_threshold_met"
+                    counter_field = "reactivation_count"
 
-                if to_state is None:
-                    cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
-                        cluster,
-                        observation=observation,
-                        reason="lifecycle_policy_no_transition",
-                        now=now,
-                    )
-                    result["unchanged"] += 1
-                    self.db.commit()
-                    continue
-
-                metadata = self._merge_lifecycle_metadata(
+            if to_state is None:
+                cluster.lifecycle_state_metadata = self._merge_lifecycle_metadata(
                     cluster,
                     observation=observation,
-                    counter_field=counter_field,
-                    reason=reason,
+                    reason="lifecycle_policy_no_transition",
                     now=now,
                 )
-                transition_rule_version = "lifecycle-v2"
-                transition = apply_lifecycle_transition(
-                    db=self.db,
-                    theme=cluster,
-                    to_state=to_state,
-                    actor="system",
-                    job_name="apply_lifecycle_policies",
-                    rule_version=transition_rule_version,
-                    reason=reason,
-                    metadata=metadata,
-                    transitioned_at=now,
-                )
-                self._emit_lifecycle_transition_alert(
-                    cluster=cluster,
-                    transition=transition,
-                    reason=reason,
-                    rule_version=transition_rule_version,
-                    observation=observation,
-                )
-                if to_state == "dormant":
-                    result["to_dormant"] += 1
-                elif to_state == "reactivated":
-                    result["to_reactivated"] += 1
-                self.db.commit()
+                result["unchanged"] += 1
+                return
+
+            metadata = self._merge_lifecycle_metadata(
+                cluster,
+                observation=observation,
+                counter_field=counter_field,
+                reason=reason,
+                now=now,
+            )
+            transition_rule_version = "lifecycle-v2"
+            transition = apply_lifecycle_transition(
+                db=self.db,
+                theme=cluster,
+                to_state=to_state,
+                actor="system",
+                job_name="apply_lifecycle_policies",
+                rule_version=transition_rule_version,
+                reason=reason,
+                metadata=metadata,
+                transitioned_at=now,
+            )
+            self._emit_lifecycle_transition_alert(
+                cluster=cluster,
+                transition=transition,
+                reason=reason,
+                rule_version=transition_rule_version,
+                observation=observation,
+            )
+            if to_state == "dormant":
+                result["to_dormant"] += 1
+            elif to_state == "reactivated":
+                result["to_reactivated"] += 1
+
+        for cluster in clusters:
+            try:
+                if auto_commit:
+                    _apply_state_policy(cluster)
+                    self.db.commit()
+                else:
+                    with self.db.begin_nested():
+                        _apply_state_policy(cluster)
+                        self.db.flush()
             except Exception as exc:
-                self.db.rollback()
+                if auto_commit:
+                    self.db.rollback()
                 result["errors"] += 1
                 logger.error("Dormancy/reactivation policy failed for theme %s: %s", cluster.id, exc)
 

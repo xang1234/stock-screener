@@ -495,18 +495,19 @@ class BulkDataFetcher:
                 success_streak = 0
                 batch_size = max(self.MIN_PRICE_BATCH_SIZE, batch_size // 2)
                 growth_cooldown_remaining = self.PRICE_BATCH_GROWTH_COOLDOWN_BATCHES
-            elif failure_rate < 0.02:
-                success_streak += 1
+            else:
                 if growth_cooldown_remaining > 0:
                     growth_cooldown_remaining -= 1
-                if growth_cooldown_remaining == 0 and success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
-                    batch_size = min(
-                        self.MAX_PRICE_BATCH_SIZE,
-                        batch_size + self.PRICE_BATCH_GROWTH_STEP,
-                    )
+                if failure_rate < 0.02:
+                    success_streak += 1
+                    if growth_cooldown_remaining == 0 and success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
+                        batch_size = min(
+                            self.MAX_PRICE_BATCH_SIZE,
+                            batch_size + self.PRICE_BATCH_GROWTH_STEP,
+                        )
+                        success_streak = 0
+                else:
                     success_streak = 0
-            else:
-                success_streak = 0
 
             if batch_start + len(batch_symbols) < len(symbols):
                 rate_limiter.wait(

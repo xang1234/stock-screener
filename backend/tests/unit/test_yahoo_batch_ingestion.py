@@ -147,6 +147,18 @@ def test_fetch_prices_in_batches_delays_growth_until_cooldown_expires(monkeypatc
                 }
                 for symbol in batch_symbols
             }
+        if len(observed_batch_sizes) == 2:
+            results = {symbol: _success_result(symbol) for symbol in batch_symbols}
+            for symbol in batch_symbols[:2]:
+                results[symbol] = {
+                    "symbol": symbol,
+                    "price_data": None,
+                    "info": None,
+                    "fundamentals": None,
+                    "has_error": True,
+                    "error": "429 rate limited",
+                }
+            return results
         return {symbol: _success_result(symbol) for symbol in batch_symbols}
 
     class _StubRateLimiter:
@@ -158,11 +170,10 @@ def test_fetch_prices_in_batches_delays_growth_until_cooldown_expires(monkeypatc
     monkeypatch.setattr("app.services.rate_limiter.rate_limiter", _StubRateLimiter())
     monkeypatch.setattr("app.services.bulk_data_fetcher.settings.yfinance_batch_rate_limit_interval", 0)
 
-    symbols = [f"SYM{i}" for i in range(450)]
+    symbols = [f"SYM{i}" for i in range(550)]
     fetcher.fetch_prices_in_batches(symbols, period="2y", start_batch_size=100)
 
-    assert observed_batch_sizes[:6] == [100, 50, 50, 50, 50, 50]
-    assert observed_batch_sizes[6] == 75
+    assert observed_batch_sizes[:8] == [100, 50, 50, 50, 50, 50, 50, 75]
 
 
 def test_store_in_database_replaces_latest_day_row(monkeypatch):
