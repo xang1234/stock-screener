@@ -23,8 +23,10 @@ from app.services.stock_universe_service import stock_universe_service
 from app.utils.market_hours import get_eastern_now, get_last_trading_day, is_trading_day
 
 from .desktop_runtime_state import (
+    SETUP_STATE_KEY,
     UPDATE_STATE_KEY,
     build_data_status,
+    default_setup_state,
     default_update_state,
     load_json_setting,
     save_json_setting,
@@ -37,6 +39,9 @@ class DesktopUpdateService:
 
     SETTING_KEY = UPDATE_STATE_KEY
     SETTING_DESCRIPTION = "Desktop runtime update state"
+    INTERRUPTED_ERROR = "Previous desktop update was interrupted before it finished."
+    INTERRUPTED_MESSAGE = "Previous desktop update was interrupted. Run refresh again to continue."
+    INTERRUPTED_STEP_MESSAGE = "Interrupted before the update finished"
     LOCK_FILE = "desktop_update.lock"
 
     def __init__(
@@ -305,6 +310,7 @@ class DesktopUpdateService:
             state["error"] = error
             if status == "completed":
                 state["last_success_at"] = state["completed_at"]
+                self._clear_starter_baseline(db)
             state["data_status"] = build_data_status(db)
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
             completed = state
@@ -328,6 +334,21 @@ class DesktopUpdateService:
             return state
         snapshot = self._job_backend.get_status(job_id)
         if snapshot is None:
+            if state.get("status") in {"queued", "running"}:
+                state["status"] = "failed"
+                state["message"] = self.INTERRUPTED_MESSAGE
+                state["error"] = self.INTERRUPTED_ERROR
+                state["current_step"] = None
+                state["completed_at"] = state.get("completed_at") or utc_now_iso()
+                completed_steps = sum(1 for step in state.get("steps", []) if step.get("status") == "completed")
+                state["current"] = completed_steps
+                total = max(state.get("total") or 0, len(state.get("steps") or []))
+                state["total"] = total
+                state["percent"] = round((completed_steps / total) * 100, 2) if total else 0.0
+                for step in state.get("steps", []):
+                    if step.get("status") in {"pending", "running"}:
+                        step["status"] = "failed"
+                        step["message"] = self.INTERRUPTED_STEP_MESSAGE
             return state
         state["current"] = snapshot.current
         state["total"] = snapshot.total
@@ -342,6 +363,18 @@ class DesktopUpdateService:
         if snapshot.error:
             state["error"] = snapshot.error
         return state
+
+    def _clear_starter_baseline(self, db: Session) -> None:
+        setup_state = load_json_setting(db, key=SETUP_STATE_KEY, default=default_setup_state())
+        if not setup_state.get("starter_baseline_active"):
+            return
+        setup_state["starter_baseline_active"] = False
+        save_json_setting(
+            db,
+            key=SETUP_STATE_KEY,
+            payload=setup_state,
+            description="Desktop runtime setup state",
+        )
 
     @contextmanager
     def _acquire_lock(self):

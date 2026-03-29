@@ -254,13 +254,12 @@ def main() -> None:
         handle.start()
         try:
             if not _launch_native_window(base_url, on_closed=handle.stop):
-                if settings.desktop_open_browser:
-                    thread = threading.Thread(
-                        target=_open_browser_when_ready,
-                        args=(base_url,),
-                        daemon=True,
-                    )
-                    thread.start()
+                thread = threading.Thread(
+                    target=_open_browser_when_ready,
+                    args=(base_url,),
+                    daemon=True,
+                )
+                thread.start()
                 handle._thread.join()
         finally:
             handle.stop()

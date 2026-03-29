@@ -12,6 +12,15 @@ from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.market_breadth import MarketBreadth
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
+from app.services.desktop_runtime_state import (
+    SETUP_STATE_KEY,
+    UPDATE_STATE_KEY,
+    default_setup_state,
+    default_update_state,
+    load_json_setting,
+    local_data_present,
+    save_json_setting,
+)
 from app.services.desktop_setup_service import DesktopSetupService
 from app.services.desktop_update_service import DesktopUpdateService
 
@@ -152,7 +161,7 @@ def test_desktop_setup_service_quick_start_installs_starter_data(tmp_path, monke
 
     assert completed["status"] == "completed"
     assert completed["app_ready"] is True
-    assert update_service.calls == [("daily", "setup", False)]
+    assert update_service.calls == [("core", "setup", False)]
 
     with session_factory() as db:
         assert db.query(StockUniverse).count() == 3
@@ -242,6 +251,18 @@ def test_desktop_update_service_runs_daily_refresh_without_celery_or_redis(tmp_p
     monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda: None)
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
+    with session_factory() as db:
+        setup_state = default_setup_state()
+        setup_state.update(
+            {
+                "status": "completed",
+                "completed_at": "2025-01-10T10:00:00+00:00",
+                "starter_baseline_active": True,
+                "app_ready": True,
+            }
+        )
+        save_json_setting(db, key=SETUP_STATE_KEY, payload=setup_state, description="Desktop runtime setup state")
+
     service = DesktopUpdateService(
         session_factory=session_factory,
         job_backend=_NoopJobBackend(),
@@ -259,3 +280,80 @@ def test_desktop_update_service_runs_daily_refresh_without_celery_or_redis(tmp_p
     with session_factory() as db:
         assert db.query(MarketBreadth).count() == 1
         assert db.query(IBDGroupRank).count() == 1
+        persisted_setup = load_json_setting(db, key=SETUP_STATE_KEY, default=default_setup_state())
+        assert persisted_setup["starter_baseline_active"] is False
+
+
+def test_desktop_setup_requires_completed_setup_state_before_marking_data_ready(tmp_path, monkeypatch):
+    from app.services import desktop_setup_service as module
+
+    session_factory = _make_session_factory(tmp_path)
+
+    monkeypatch.setattr(module.settings, "desktop_mode", True)
+
+    with session_factory() as db:
+        db.add(
+            StockUniverse(
+                symbol="MSFT",
+                name="Microsoft",
+                exchange="NASDAQ",
+                sector="Technology",
+                industry="Software",
+                market_cap=1,
+                is_active=True,
+                source="seed",
+            )
+        )
+        db.commit()
+        assert local_data_present(db) is False
+
+    service = DesktopSetupService(
+        session_factory=session_factory,
+        job_backend=_NoopJobBackend(),
+        update_service=_FakeUpdateService(),
+    )
+
+    status = service.get_status()
+
+    assert status["app_ready"] is False
+    assert status["data_status"]["local_data_present"] is False
+
+
+def test_desktop_update_service_marks_missing_running_job_as_interrupted(tmp_path):
+    session_factory = _make_session_factory(tmp_path)
+
+    with session_factory() as db:
+        state = default_update_state()
+        state.update(
+            {
+                "status": "running",
+                "scope": "daily",
+                "triggered_by": "scheduler",
+                "job_id": "missing-job",
+                "current_step": "calculate_breadth",
+                "total": 3,
+                "steps": [
+                    {"name": "refresh_prices", "label": "Refresh price data", "status": "completed", "message": "done", "details": None},
+                    {"name": "calculate_breadth", "label": "Update market breadth", "status": "running", "message": "working", "details": None},
+                    {"name": "calculate_groups", "label": "Update group rankings", "status": "pending", "message": None, "details": None},
+                ],
+            }
+        )
+        save_json_setting(db, key=UPDATE_STATE_KEY, payload=state, description="Desktop runtime update state")
+
+    service = DesktopUpdateService(
+        session_factory=session_factory,
+        job_backend=_NoopJobBackend(),
+    )
+
+    status = service.get_status()
+
+    assert status["status"] == "failed"
+    assert status["error"] == service.INTERRUPTED_ERROR
+    assert status["current_step"] is None
+    assert status["completed_at"] is not None
+    assert [step["status"] for step in status["steps"]] == ["completed", "failed", "failed"]
+
+    with session_factory() as db:
+        persisted = load_json_setting(db, key=UPDATE_STATE_KEY, default=default_update_state())
+        assert persisted["status"] == "failed"

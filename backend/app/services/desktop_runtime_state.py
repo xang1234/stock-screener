@@ -19,6 +19,7 @@ from app.models.stock_universe import StockUniverse
 DESKTOP_CATEGORY = "desktop"
 SETUP_STATE_KEY = "desktop_setup_state"
 UPDATE_STATE_KEY = "desktop_update_state"
+LEGACY_BOOTSTRAP_STATE_KEY = "desktop_bootstrap_state"
 
 
 def utc_now_iso() -> str:
@@ -68,26 +69,56 @@ def save_json_setting(
     db.commit()
 
 
-def local_data_present(db: Session) -> bool:
-    return any(
-        (
-            db.query(func.count(StockUniverse.id)).scalar() or 0,
-            db.query(func.count(StockPrice.id)).scalar() or 0,
-            db.query(func.count(StockFundamental.id)).scalar() or 0,
-            db.query(func.count(MarketBreadth.id)).scalar() or 0,
-            db.query(func.count(IBDGroupRank.id)).scalar() or 0,
-        )
+def _data_counts(db: Session) -> dict[str, int]:
+    return {
+        "universe": db.query(func.count(StockUniverse.id)).scalar() or 0,
+        "prices": db.query(func.count(StockPrice.id)).scalar() or 0,
+        "fundamentals": db.query(func.count(StockFundamental.id)).scalar() or 0,
+        "breadth": db.query(func.count(MarketBreadth.id)).scalar() or 0,
+        "groups": db.query(func.count(IBDGroupRank.id)).scalar() or 0,
+    }
+
+
+def _setup_completed(
+    db: Session,
+    *,
+    setup_state: dict[str, Any] | None = None,
+) -> bool:
+    current = setup_state or load_json_setting(db, key=SETUP_STATE_KEY, default=default_setup_state())
+    if current.get("status") == "completed":
+        return True
+
+    legacy_bootstrap = load_json_setting(
+        db,
+        key=LEGACY_BOOTSTRAP_STATE_KEY,
+        default={"status": "idle"},
+    )
+    return legacy_bootstrap.get("status") == "completed"
+
+
+def local_data_present(
+    db: Session,
+    *,
+    setup_state: dict[str, Any] | None = None,
+) -> bool:
+    return _setup_completed(db, setup_state=setup_state) and any(
+        _data_counts(db).values()
     )
 
 
-def build_data_status(db: Session) -> dict[str, Any]:
+def build_data_status(
+    db: Session,
+    *,
+    setup_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    counts = _data_counts(db)
     latest_price_date = db.query(func.max(StockPrice.date)).scalar()
     latest_breadth_date = db.query(func.max(MarketBreadth.date)).scalar()
     latest_groups_date = db.query(func.max(IBDGroupRank.date)).scalar()
     latest_fundamentals_at = db.query(func.max(StockFundamental.updated_at)).scalar()
     latest_universe_at = db.query(func.max(StockUniverse.updated_at)).scalar()
 
-    setup_state = load_json_setting(db, key=SETUP_STATE_KEY, default=default_setup_state())
+    setup_state = setup_state or load_json_setting(db, key=SETUP_STATE_KEY, default=default_setup_state())
 
     def _iso_date(value: date | None) -> str | None:
         return value.isoformat() if value else None
@@ -96,31 +127,31 @@ def build_data_status(db: Session) -> dict[str, Any]:
         return value.isoformat() if value else None
 
     return {
-        "local_data_present": local_data_present(db),
+        "local_data_present": local_data_present(db, setup_state=setup_state),
         "starter_baseline_active": bool(setup_state.get("starter_baseline_active")),
         "setup_completed_at": setup_state.get("completed_at"),
         "prices": {
-            "ready": latest_price_date is not None,
+            "ready": counts["prices"] > 0 and latest_price_date is not None,
             "last_success_at": _iso_date(latest_price_date),
             "message": None if latest_price_date else "No local price data loaded yet.",
         },
         "breadth": {
-            "ready": latest_breadth_date is not None,
+            "ready": counts["breadth"] > 0 and latest_breadth_date is not None,
             "last_success_at": _iso_date(latest_breadth_date),
             "message": None if latest_breadth_date else "No market breadth baseline loaded yet.",
         },
         "groups": {
-            "ready": latest_groups_date is not None,
+            "ready": counts["groups"] > 0 and latest_groups_date is not None,
             "last_success_at": _iso_date(latest_groups_date),
             "message": None if latest_groups_date else "No group ranking baseline loaded yet.",
         },
         "fundamentals": {
-            "ready": latest_fundamentals_at is not None,
+            "ready": counts["fundamentals"] > 0 and latest_fundamentals_at is not None,
             "last_success_at": _iso_datetime(latest_fundamentals_at),
             "message": None if latest_fundamentals_at else "No local fundamentals cache has been populated yet.",
         },
         "universe": {
-            "ready": latest_universe_at is not None,
+            "ready": counts["universe"] > 0 and latest_universe_at is not None,
             "last_success_at": _iso_datetime(latest_universe_at),
             "message": None if latest_universe_at else "No local stock universe has been loaded yet.",
         },
@@ -165,4 +196,3 @@ def default_update_state() -> dict[str, Any]:
         "warnings": [],
         "error": None,
     }
-

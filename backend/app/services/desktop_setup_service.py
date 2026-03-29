@@ -71,8 +71,8 @@ class DesktopSetupService:
         with self._session_factory() as db:
             state = load_json_setting(db, key=self.SETTING_KEY, default=default_setup_state())
             state = self._merge_snapshot(state)
-            state["app_ready"] = local_data_present(db)
-            state["data_status"] = build_data_status(db)
+            state["app_ready"] = local_data_present(db, setup_state=state)
+            state["data_status"] = build_data_status(db, setup_state=state)
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
             return state
 
@@ -83,7 +83,12 @@ class DesktopSetupService:
         with self._session_factory() as db:
             current = self._merge_snapshot(load_json_setting(db, key=self.SETTING_KEY, default=default_setup_state()))
             if not force and current["status"] in {"queued", "running"}:
-                current["data_status"] = build_data_status(db)
+                current["app_ready"] = local_data_present(db, setup_state=current)
+                current["data_status"] = build_data_status(db, setup_state=current)
+                return current
+            if not force and current["status"] == "completed" and local_data_present(db, setup_state=current):
+                current["app_ready"] = True
+                current["data_status"] = build_data_status(db, setup_state=current)
                 return current
 
         if mode == "quick_start":
@@ -135,7 +140,7 @@ class DesktopSetupService:
             state["message"] = starter_details["message"]
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
 
-        update_state = self._update_service.start_update(scope="daily", triggered_by="setup")
+        update_state = self._update_service.start_update(scope="core", triggered_by="setup")
 
         with self._session_factory() as db:
             state = load_json_setting(db, key=self.SETTING_KEY, default=default_setup_state())
@@ -153,7 +158,7 @@ class DesktopSetupService:
                 message=update_state.get("message") or "Background updates queued",
                 details={"update_job_id": update_state.get("job_id"), "update_status": update_state.get("status")},
             )
-            state["data_status"] = build_data_status(db)
+            state["data_status"] = build_data_status(db, setup_state=state)
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
             return state
 
@@ -179,7 +184,7 @@ class DesktopSetupService:
                     ],
                 }
             )
-            state["data_status"] = build_data_status(db)
+            state["data_status"] = build_data_status(db, setup_state=state)
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
             return state
 
@@ -223,8 +228,8 @@ class DesktopSetupService:
             state["total"] = 2
             state["percent"] = 100.0
             state["completed_at"] = utc_now_iso()
-            state["app_ready"] = local_data_present(db)
-            state["data_status"] = build_data_status(db)
+            state["app_ready"] = local_data_present(db, setup_state=state)
+            state["data_status"] = build_data_status(db, setup_state=state)
             save_json_setting(db, key=self.SETTING_KEY, payload=state, description=self.SETTING_DESCRIPTION)
             return state
 
