@@ -103,7 +103,7 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     )
 
     with pytest.raises(SoftTimeLimitExceeded):
-        module.smart_refresh_cache.run("full")
+        module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full")
 
     module.safe_rollback.assert_called_once_with(fake_db)
     fake_price_cache.save_warmup_metadata.assert_called_once()
@@ -112,6 +112,47 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
 
 
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    mock_lock = MagicMock()
+    mock_lock.acquire.return_value = (True, False)
+    mock_lock.release.return_value = True
+    monkeypatch.setattr(
+        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        lambda: mock_lock,
+    )
+
+    fake_db = MagicMock()
+    first_query = MagicMock()
+    first_query.filter.return_value.order_by.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_db.query.return_value = first_query
+
+    fake_price_cache = MagicMock()
+    fake_cache_manager = MagicMock()
+    fake_cache_manager.cleanup_orphaned_cache_keys.return_value = 0
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "CacheManager", lambda db: fake_cache_manager)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(
+        "app.services.price_cache_service.PriceCacheService.get_instance",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.weekly_full_refresh.run()
+
+    module.safe_rollback.assert_called_once_with(fake_db)
+    fake_price_cache.save_warmup_metadata.assert_called_once()
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_db.close.assert_called_once()
+
+def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 
     mock_lock = MagicMock()
@@ -135,8 +176,9 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(module, "CacheManager", lambda db: fake_cache_manager)
-    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(module, "_fetch_with_backoff", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(
         "app.services.price_cache_service.PriceCacheService.get_instance",
         lambda: fake_price_cache,

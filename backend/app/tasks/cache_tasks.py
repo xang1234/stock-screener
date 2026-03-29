@@ -278,6 +278,8 @@ def weekly_full_refresh(self):
                 # Batch store in Redis (pipeline) + DB (single transaction)
                 if batch_to_store:
                     price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as e:
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)
@@ -1217,6 +1219,8 @@ def smart_refresh_cache(self, mode: str = "auto"):
                 if batch_to_store:
                     price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
 
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as e:
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)

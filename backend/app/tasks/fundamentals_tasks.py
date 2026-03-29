@@ -184,6 +184,8 @@ def refresh_all_fundamentals(self):
                 # → DataSourceService → finviz_service / yfinance_service
                 # (each uses Redis-backed distributed rate limiter)
 
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as e:
                 stats['failed'] += 1
                 stats['failed_symbols'].append(symbol)

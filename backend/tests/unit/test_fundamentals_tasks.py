@@ -64,3 +64,24 @@ def test_refresh_all_fundamentals_reraises_soft_time_limit(monkeypatch):
         module.refresh_all_fundamentals.run()
 
     fake_db.rollback.assert_called_once()
+
+
+def test_refresh_all_fundamentals_reraises_nested_soft_time_limit(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+
+    fake_cache = MagicMock()
+    fake_cache.get_fundamentals.side_effect = SoftTimeLimitExceeded()
+    monkeypatch.setattr(module.FundamentalsCacheService, "get_instance", lambda: fake_cache)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.refresh_all_fundamentals.run()
+
+    fake_db.rollback.assert_called_once()
