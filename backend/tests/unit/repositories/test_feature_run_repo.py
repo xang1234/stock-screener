@@ -114,6 +114,26 @@ class TestMarkCompleted:
             repo.mark_completed(run.id, _make_stats())
 
 
+class TestMarkFailed:
+    def test_transitions_and_stores_stats(self, repo: SqlFeatureRunRepository):
+        run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+        stats = _make_stats()
+
+        result = repo.mark_failed(run.id, stats, warnings=("timeout",))
+
+        assert result.status == RunStatus.FAILED
+        assert result.completed_at is not None
+        assert result.stats == stats
+        assert result.warnings == ("timeout",)
+
+    def test_wrong_status_raises_invalid_transition(self, repo: SqlFeatureRunRepository):
+        run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+        repo.mark_completed(run.id, _make_stats())
+
+        with pytest.raises(InvalidTransitionError):
+            repo.mark_failed(run.id, _make_stats())
+
+
 class TestMarkQuarantined:
     def test_stores_dq_results(self, repo: SqlFeatureRunRepository):
         run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)

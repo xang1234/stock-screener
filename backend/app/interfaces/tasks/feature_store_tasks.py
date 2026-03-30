@@ -7,12 +7,13 @@ Thin shim — all business logic lives in
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from celery.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
+from app.config import settings
 from app.domain.scanning.signature import (
     build_scan_signature_payload,
     hash_scan_signature,
@@ -21,6 +22,93 @@ from app.domain.scanning.signature import (
 from app.tasks.data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+
+def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> int:
+    """Fail abandoned RUNNING feature runs and emit a warning log."""
+    from sqlalchemy import func
+
+    from app.domain.feature_store.models import RunStats, RunStatus
+    from app.infra.db.models.feature_store import (
+        FeatureRun,
+        FeatureRunUniverseSymbol,
+        StockFeatureDaily,
+    )
+    from app.infra.db.uow import SqlUnitOfWork
+
+    if stale_after_minutes <= 0:
+        return 0
+
+    cutoff = datetime.utcnow() - timedelta(minutes=stale_after_minutes)
+    now_utc = datetime.utcnow()
+    try:
+        with SqlUnitOfWork(session_factory) as uow:
+            session = getattr(uow, "session", None)
+            if session is None:
+                logger.debug("Skipping stale feature-run cleanup: no SQLAlchemy session")
+                return 0
+
+            stale_runs = (
+                session.query(FeatureRun.id, FeatureRun.created_at)
+                .filter(
+                    FeatureRun.status == RunStatus.RUNNING.value,
+                    FeatureRun.created_at < cutoff,
+                )
+                .order_by(FeatureRun.created_at.asc())
+                .all()
+            )
+            if not stale_runs:
+                return 0
+
+            cleaned = 0
+            for run_id, created_at in stale_runs:
+                created_at_utc = (
+                    created_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    if getattr(created_at, "tzinfo", None) is not None
+                    else created_at
+                )
+                total_symbols = (
+                    session.query(func.count(FeatureRunUniverseSymbol.symbol))
+                    .filter(FeatureRunUniverseSymbol.run_id == run_id)
+                    .scalar()
+                    or 0
+                )
+                row_count = (
+                    session.query(func.count(StockFeatureDaily.symbol))
+                    .filter(StockFeatureDaily.run_id == run_id)
+                    .scalar()
+                    or 0
+                )
+                duration_seconds = max(
+                    (now_utc - created_at_utc).total_seconds(),
+                    0.0,
+                )
+                uow.feature_runs.mark_failed(
+                    run_id,
+                    RunStats(
+                        total_symbols=total_symbols,
+                        processed_symbols=min(row_count, total_symbols),
+                        failed_symbols=0,
+                        duration_seconds=round(duration_seconds, 2),
+                        passed_symbols=None,
+                    ),
+                    warnings=(
+                        "Marked failed by stale-run cleanup after exceeding "
+                        f"{stale_after_minutes} minutes in RUNNING state",
+                    ),
+                )
+                cleaned += 1
+
+            uow.commit()
+    except Exception:
+        logger.exception("Stale feature-run cleanup failed; continuing without cleanup")
+        return 0
+
+    logger.warning(
+        "Marked %d stale feature run(s) failed before starting a new snapshot",
+        cleaned,
+    )
+    return cleaned
 
 
 def _create_auto_scan_for_published_run(
@@ -104,7 +192,7 @@ def _create_auto_scan_for_published_run(
     retry_backoff=60,
     retry_backoff_max=600,
     max_retries=3,
-    soft_time_limit=3600,
+    soft_time_limit=settings.feature_snapshot_soft_time_limit_seconds,
 )
 @serialized_data_fetch("build_daily_snapshot")
 def build_daily_snapshot(
@@ -159,14 +247,30 @@ def build_daily_snapshot(
         "┌─── build_daily_snapshot ───────────────────┐\n"
         "│  date=%s  correlation_id=%s\n"
         "│  screeners=%s  universe=%s  composite=%s\n"
+        "│  soft_time_limit=%ss\n"
         "└────────────────────────────────────────────┘",
-        as_of, correlation_id, screeners, universe_name, composite_method,
+        as_of,
+        correlation_id,
+        screeners,
+        universe_name,
+        composite_method,
+        settings.feature_snapshot_soft_time_limit_seconds,
+    )
+
+    cleaned_stale_runs = _fail_stale_feature_runs(
+        session_factory=SessionLocal,
+        stale_after_minutes=settings.feature_snapshot_stale_after_minutes,
     )
 
     # ── Trading-day guard (fast exit — lock released immediately) ─
     if not _is_us_trading_day(as_of):
         logger.info("Skipping build_daily_snapshot: %s is not a US trading day", as_of)
-        return {"status": "skipped", "reason": "not_trading_day", "as_of_date": str(as_of)}
+        return {
+            "status": "skipped",
+            "reason": "not_trading_day",
+            "as_of_date": str(as_of),
+            "cleaned_stale_runs": cleaned_stale_runs,
+        }
 
     # ── Skip-if-published guard (cheap DB check) ─────────────
     if skip_if_published:
@@ -205,6 +309,7 @@ def build_daily_snapshot(
                     "reason": "already_published",
                     "existing_run_id": matching_run.id,
                     "as_of_date": str(as_of),
+                    "cleaned_stale_runs": cleaned_stale_runs,
                 }
 
     # ── Execute use case ─────────────────────────────────────
@@ -235,12 +340,14 @@ def build_daily_snapshot(
         )
         raise
 
+    auto_scan_id = None
     logger.info(
         "build_daily_snapshot completed: run_id=%d status=%s "
-        "total=%d processed=%d failed=%d dq_passed=%s",
+        "total=%d processed=%d failed=%d row_count=%d duration=%.2fs dq_passed=%s",
         result.run_id, result.status,
         result.total_symbols, result.processed_symbols,
-        result.failed_symbols, result.dq_passed,
+        result.failed_symbols, result.row_count,
+        result.duration_seconds, result.dq_passed,
     )
 
     if result.status == "published":
@@ -264,5 +371,9 @@ def build_daily_snapshot(
         "total_symbols": result.total_symbols,
         "processed_symbols": result.processed_symbols,
         "failed_symbols": result.failed_symbols,
+        "row_count": result.row_count,
+        "duration_seconds": result.duration_seconds,
         "dq_passed": result.dq_passed,
+        "auto_scan_id": auto_scan_id,
+        "cleaned_stale_runs": cleaned_stale_runs,
     }

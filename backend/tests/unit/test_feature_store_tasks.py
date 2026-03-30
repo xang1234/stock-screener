@@ -31,6 +31,8 @@ class _FakeUseCase:
             total_symbols=2,
             processed_symbols=2,
             failed_symbols=0,
+            row_count=2,
+            duration_seconds=12.5,
             dq_passed=True,
         )
 
@@ -83,6 +85,8 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
         result = _TASK_BODY(_FakeTask())
 
     assert result["status"] == "published"
+    assert result["row_count"] == 2
+    assert result["duration_seconds"] == 12.5
     assert fake_use_case.received_cmd is not None
     assert fake_use_case.received_cmd.universe_def.type == UniverseType.ALL
 
@@ -247,7 +251,7 @@ def test_build_daily_snapshot_reraises_soft_time_limit():
         with pytest.raises(SoftTimeLimitExceeded):
             _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
-    assert build_daily_snapshot.soft_time_limit == 3600
+    assert build_daily_snapshot.soft_time_limit == 10800
 
 
 def test_build_daily_snapshot_creates_auto_scan_after_publish():
@@ -283,3 +287,35 @@ def test_build_daily_snapshot_creates_auto_scan_after_publish():
         criteria=get_default_scan_profile()["criteria"],
         composite_method=get_default_scan_profile()["composite_method"],
     )
+
+
+def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._fail_stale_feature_runs",
+        return_value=3,
+    ):
+        result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    assert result["cleaned_stale_runs"] == 3

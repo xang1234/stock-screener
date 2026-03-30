@@ -138,6 +138,8 @@ class BuildDailySnapshotResult:
     failed_symbols: int
     dq_passed: bool
     warnings: tuple[str, ...]
+    row_count: int
+    duration_seconds: float
 
 
 # ── Use Case ─────────────────────────────────────────────────────────────
@@ -201,15 +203,40 @@ class BuildDailyFeatureSnapshotUseCase:
             logger.info(
                 "Started feature run %d for %s", run_id, cmd.as_of_date
             )
+            run_started_at = time.monotonic()
 
             try:
                 return self._run(uow, run_id, cmd, progress, cancel, symbols)
-            except Exception:
-                # Best-effort: don't attempt status transition here.
-                # The run may be in RUNNING or COMPLETED depending on
-                # where the error occurred.  A stale-run cleanup task
-                # can reap stuck runs that haven't progressed.
+            except Exception as exc:
                 logger.exception("Feature run %d failed", run_id)
+                try:
+                    uow.rollback()
+                    current_run = uow.feature_runs.get_run(run_id)
+                    if current_run.status == RunStatus.RUNNING:
+                        row_count = self._safe_feature_row_count(uow, run_id)
+                        stats = RunStats(
+                            total_symbols=total,
+                            processed_symbols=min(row_count, total),
+                            failed_symbols=0,
+                            duration_seconds=round(
+                                time.monotonic() - run_started_at,
+                                2,
+                            ),
+                            passed_symbols=None,
+                        )
+                        uow.feature_runs.mark_failed(
+                            run_id,
+                            stats,
+                            warnings=(
+                                f"Snapshot build failed: {exc.__class__.__name__}: {exc}",
+                            ),
+                        )
+                        uow.commit()
+                except Exception:
+                    logger.exception(
+                        "Best-effort failure transition failed for feature run %d",
+                        run_id,
+                    )
                 raise
 
     # ------------------------------------------------------------------
@@ -292,6 +319,8 @@ class BuildDailyFeatureSnapshotUseCase:
                     failed_symbols=failed,
                     dq_passed=False,
                     warnings=("Cancelled by user",),
+                    row_count=uow.feature_store.count_by_run_id(run_id),
+                    duration_seconds=round(duration, 2),
                 )
 
             # 3b — Scan each symbol in the chunk
@@ -439,7 +468,21 @@ class BuildDailyFeatureSnapshotUseCase:
             failed_symbols=failed,
             dq_passed=pub_result.dq_passed,
             warnings=pub_result.warnings,
+            row_count=actual_count,
+            duration_seconds=round(duration, 2),
         )
+
+    @staticmethod
+    def _safe_feature_row_count(uow: UnitOfWork, run_id: int) -> int:
+        """Best-effort row count for failed runs without masking the cause."""
+        try:
+            return uow.feature_store.count_by_run_id(run_id)
+        except Exception:
+            logger.exception(
+                "Unable to count persisted feature rows for failed run %d",
+                run_id,
+            )
+            return 0
 
 
 # ---------------------------------------------------------------------------
