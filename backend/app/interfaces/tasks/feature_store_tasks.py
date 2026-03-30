@@ -39,8 +39,8 @@ def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> in
     if stale_after_minutes <= 0:
         return 0
 
-    cutoff = datetime.utcnow() - timedelta(minutes=stale_after_minutes)
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(minutes=stale_after_minutes)
     try:
         with SqlUnitOfWork(session_factory) as uow:
             session = getattr(uow, "session", None)
@@ -63,9 +63,9 @@ def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> in
             cleaned = 0
             for run_id, created_at in stale_runs:
                 created_at_utc = (
-                    created_at.astimezone(timezone.utc).replace(tzinfo=None)
+                    created_at.astimezone(timezone.utc)
                     if getattr(created_at, "tzinfo", None) is not None
-                    else created_at
+                    else created_at.replace(tzinfo=timezone.utc)
                 )
                 total_symbols = (
                     session.query(func.count(FeatureRunUniverseSymbol.symbol))

@@ -601,7 +601,23 @@ class TestFailureLifecycle:
             feature_runs=feature_runs,
             feature_store=feature_store,
         )
-        use_case = BuildDailyFeatureSnapshotUseCase(scanner=FakeScanner())
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=FakeScanner(
+                results={
+                    "AAPL": {
+                        "composite_score": 91.0,
+                        "rating": "Buy",
+                        "passes_template": True,
+                    },
+                    "MSFT": {"error": "missing fundamentals"},
+                    "GOOGL": {
+                        "composite_score": 88.0,
+                        "rating": "Buy",
+                        "passes_template": True,
+                    },
+                }
+            )
+        )
 
         with pytest.raises(RuntimeError, match="disk full"):
             use_case.execute(
@@ -615,6 +631,7 @@ class TestFailureLifecycle:
         assert run.status == RunStatus.FAILED
         assert run.stats is not None
         assert run.stats.processed_symbols == 2
+        assert run.stats.failed_symbols == 1
         assert run.stats.total_symbols == 3
         assert run.warnings
         assert "disk full" in run.warnings[0]

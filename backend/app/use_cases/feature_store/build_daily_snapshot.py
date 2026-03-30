@@ -142,6 +142,15 @@ class BuildDailySnapshotResult:
     duration_seconds: float
 
 
+@dataclass
+class _SnapshotRunProgress:
+    """Mutable counters shared with best-effort failure handling."""
+
+    attempted_symbols: int = 0
+    failed_symbols: int = 0
+    passed_symbols: int = 0
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
@@ -204,20 +213,39 @@ class BuildDailyFeatureSnapshotUseCase:
                 "Started feature run %d for %s", run_id, cmd.as_of_date
             )
             run_started_at = time.monotonic()
+            progress_state = _SnapshotRunProgress()
 
             try:
-                return self._run(uow, run_id, cmd, progress, cancel, symbols)
+                return self._run(
+                    uow,
+                    run_id,
+                    cmd,
+                    progress,
+                    cancel,
+                    symbols,
+                    progress_state,
+                )
             except Exception as exc:
                 logger.exception("Feature run %d failed", run_id)
                 try:
                     uow.rollback()
                     current_run = uow.feature_runs.get_run(run_id)
                     if current_run.status == RunStatus.RUNNING:
-                        row_count = self._safe_feature_row_count(uow, run_id)
+                        attempted_symbols = min(
+                            progress_state.attempted_symbols,
+                            total,
+                        )
+                        failed_symbols = min(
+                            progress_state.failed_symbols,
+                            attempted_symbols,
+                        )
                         stats = RunStats(
                             total_symbols=total,
-                            processed_symbols=min(row_count, total),
-                            failed_symbols=0,
+                            processed_symbols=max(
+                                attempted_symbols - failed_symbols,
+                                0,
+                            ),
+                            failed_symbols=failed_symbols,
                             duration_seconds=round(
                                 time.monotonic() - run_started_at,
                                 2,
@@ -251,6 +279,7 @@ class BuildDailyFeatureSnapshotUseCase:
         progress: ProgressSink,
         cancel: CancellationToken,
         symbols: list[str],
+        progress_state: _SnapshotRunProgress,
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
 
@@ -263,9 +292,6 @@ class BuildDailyFeatureSnapshotUseCase:
         uow.commit()
 
         # ── 3. Scan symbols in chunks ───────────────────────────
-        processed = 0
-        failed = 0
-        passed = 0
         all_rows: list[FeatureRowWrite] = []
         merged_requirements = None
         bulk_prefetch_enabled = self._data_provider is not None
@@ -299,24 +325,30 @@ class BuildDailyFeatureSnapshotUseCase:
                 duration = time.monotonic() - start_time
                 stats = RunStats(
                     total_symbols=total,
-                    processed_symbols=processed - failed,
-                    failed_symbols=failed,
+                    processed_symbols=(
+                        progress_state.attempted_symbols
+                        - progress_state.failed_symbols
+                    ),
+                    failed_symbols=progress_state.failed_symbols,
                     duration_seconds=round(duration, 2),
-                    passed_symbols=passed,
+                    passed_symbols=progress_state.passed_symbols,
                 )
                 uow.feature_runs.mark_completed(
                     run_id, stats, warnings=("Cancelled by user",)
                 )
                 uow.commit()
                 logger.info(
-                    "Run %d cancelled at %d/%d", run_id, processed, total
+                    "Run %d cancelled at %d/%d",
+                    run_id,
+                    progress_state.attempted_symbols,
+                    total,
                 )
                 return BuildDailySnapshotResult(
                     run_id=run_id,
                     status=RunStatus.COMPLETED.value,
                     total_symbols=total,
-                    processed_symbols=processed,
-                    failed_symbols=failed,
+                    processed_symbols=progress_state.attempted_symbols,
+                    failed_symbols=progress_state.failed_symbols,
                     dq_passed=False,
                     warnings=("Cancelled by user",),
                     row_count=uow.feature_store.count_by_run_id(run_id),
@@ -364,9 +396,9 @@ class BuildDailyFeatureSnapshotUseCase:
                         )
                         chunk_rows.append(row)
                         if result.get("passes_template"):
-                            passed += 1
+                            progress_state.passed_symbols += 1
                     else:
-                        failed += 1
+                        progress_state.failed_symbols += 1
                 except Exception:
                     logger.debug(
                         "Error scanning %s in run %d",
@@ -374,8 +406,8 @@ class BuildDailyFeatureSnapshotUseCase:
                         run_id,
                         exc_info=True,
                     )
-                    failed += 1
-                processed += 1
+                    progress_state.failed_symbols += 1
+                progress_state.attempted_symbols += 1
 
             # 3c — Persist chunk (checkpoint)
             if chunk_rows:
@@ -385,16 +417,18 @@ class BuildDailyFeatureSnapshotUseCase:
 
             # 3d — Progress reporting
             elapsed = time.monotonic() - start_time
-            throughput = processed / elapsed if elapsed > 0 else 0.0
-            remaining = total - processed
+            throughput = (
+                progress_state.attempted_symbols / elapsed if elapsed > 0 else 0.0
+            )
+            remaining = total - progress_state.attempted_symbols
             eta = remaining / throughput if throughput > 0 else None
 
             progress.emit(
                 ProgressEvent(
-                    current=processed,
+                    current=progress_state.attempted_symbols,
                     total=total,
-                    passed=passed,
-                    failed=failed,
+                    passed=progress_state.passed_symbols,
+                    failed=progress_state.failed_symbols,
                     throughput=(
                         round(throughput, 2) if throughput > 0 else None
                     ),
@@ -406,18 +440,20 @@ class BuildDailyFeatureSnapshotUseCase:
         duration = time.monotonic() - start_time
         stats = RunStats(
             total_symbols=total,
-            processed_symbols=processed - failed,
-            failed_symbols=failed,
+            processed_symbols=(
+                progress_state.attempted_symbols - progress_state.failed_symbols
+            ),
+            failed_symbols=progress_state.failed_symbols,
             duration_seconds=round(duration, 2),
-            passed_symbols=passed,
+            passed_symbols=progress_state.passed_symbols,
         )
         uow.feature_runs.mark_completed(run_id, stats)
         uow.commit()
         logger.info(
             "Run %d completed: %d processed, %d failed, %.1fs",
             run_id,
-            processed,
-            failed,
+            progress_state.attempted_symbols,
+            progress_state.failed_symbols,
             duration,
         )
 
@@ -455,8 +491,8 @@ class BuildDailyFeatureSnapshotUseCase:
             ProgressEvent(
                 current=total,
                 total=total,
-                passed=passed,
-                failed=failed,
+                passed=progress_state.passed_symbols,
+                failed=progress_state.failed_symbols,
             )
         )
 
@@ -464,25 +500,13 @@ class BuildDailyFeatureSnapshotUseCase:
             run_id=run_id,
             status=pub_result.status,
             total_symbols=total,
-            processed_symbols=processed,
-            failed_symbols=failed,
+            processed_symbols=progress_state.attempted_symbols,
+            failed_symbols=progress_state.failed_symbols,
             dq_passed=pub_result.dq_passed,
             warnings=pub_result.warnings,
             row_count=actual_count,
             duration_seconds=round(duration, 2),
         )
-
-    @staticmethod
-    def _safe_feature_row_count(uow: UnitOfWork, run_id: int) -> int:
-        """Best-effort row count for failed runs without masking the cause."""
-        try:
-            return uow.feature_store.count_by_run_id(run_id)
-        except Exception:
-            logger.exception(
-                "Unable to count persisted feature rows for failed run %d",
-                run_id,
-            )
-            return 0
 
 
 # ---------------------------------------------------------------------------

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import inspect
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 
-from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
+from app.interfaces.tasks.feature_store_tasks import (
+    _fail_stale_feature_runs,
+    build_daily_snapshot,
+)
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.schemas.universe import UniverseType
 
@@ -319,3 +322,94 @@ def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():
         result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
     assert result["cleaned_stale_runs"] == 3
+
+
+def test_fail_stale_feature_runs_uses_utc_aware_cutoff():
+    created_at = datetime(2026, 3, 30, 0, 0, tzinfo=timezone.utc)
+    captured = {
+        "cutoff": None,
+        "stats": None,
+        "warnings": None,
+    }
+
+    class _FakeStaleRunQuery:
+        def __init__(self) -> None:
+            self._criteria = ()
+
+        def filter(self, *criteria):
+            self._criteria = criteria
+            captured["cutoff"] = criteria[1].right.value
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return [(17, created_at)]
+
+    class _FakeCountQuery:
+        def __init__(self, value: int) -> None:
+            self._value = value
+
+        def filter(self, *_args):
+            return self
+
+        def scalar(self):
+            return self._value
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self._queries = iter(
+                [
+                    _FakeStaleRunQuery(),
+                    _FakeCountQuery(3),
+                    _FakeCountQuery(1),
+                ]
+            )
+
+        def query(self, *_entities):
+            return next(self._queries)
+
+    class _FakeFeatureRuns:
+        def mark_failed(self, run_id, stats, warnings=()):
+            captured["stats"] = (run_id, stats)
+            captured["warnings"] = warnings
+
+    class _FakeUoW:
+        def __init__(self) -> None:
+            self.session = _FakeSession()
+            self.feature_runs = _FakeFeatureRuns()
+            self.committed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def commit(self):
+            self.committed = True
+
+    fake_uow = _FakeUoW()
+
+    with patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        return_value=fake_uow,
+    ):
+        cleaned = _fail_stale_feature_runs(
+            session_factory=object(),
+            stale_after_minutes=60,
+        )
+
+    assert cleaned == 1
+    assert fake_uow.committed is True
+    assert captured["cutoff"] is not None
+    assert captured["cutoff"].tzinfo == timezone.utc
+    assert captured["stats"] is not None
+    run_id, stats = captured["stats"]
+    assert run_id == 17
+    assert stats.total_symbols == 3
+    assert stats.processed_symbols == 1
+    assert stats.failed_symbols == 0
+    assert stats.duration_seconds > 0
+    assert captured["warnings"] is not None
