@@ -635,6 +635,11 @@ class LLMService:
                             key_manager,
                             retry_after,
                         )
+                        if self._is_provider_quota_exhausted(e):
+                            raise LLMQuotaExceededError(
+                                f"Provider quota exhausted: {e}",
+                                retry_after=retry_after,
+                            )
                         if attempt >= num_retries:
                             last_error = e
                             break

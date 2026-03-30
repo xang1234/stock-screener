@@ -6,7 +6,7 @@ import pytest
 
 from app.services.llm.config import get_preset_for_use_case
 from app.services.llm.groq_key_manager import GroqKeyManager
-from app.services.llm.llm_service import LLMError, LLMService
+from app.services.llm.llm_service import LLMError, LLMQuotaExceededError, LLMService
 from app.services.llm.zai_key_manager import ZAIKeyManager
 from app.services.llm import llm_service as llm_service_module
 from app.services.llm import zai_key_manager as zai_key_manager_module
@@ -128,3 +128,29 @@ def test_completion_sync_reports_zai_api_error_rate_limit(monkeypatch) -> None:
         )
 
     assert reports == [("zai-key-1", 4.0)]
+
+
+def test_completion_sync_raises_quota_exhausted_for_zai_api_error(monkeypatch) -> None:
+    service = _build_service()
+    reports: list[tuple[str, float | None]] = []
+
+    monkeypatch.setattr(llm_service_module, "APIError", FakeAPIError)
+
+    def fake_completion(**_params):
+        raise FakeAPIError("429 quota exceeded retry after 5 s")
+
+    def track_report(key: str, retry_after: float | None) -> None:
+        reports.append((key, retry_after))
+
+    monkeypatch.setattr(llm_service_module, "completion", fake_completion)
+    monkeypatch.setattr(service._zai_key_manager, "report_rate_limit", track_report)
+
+    with pytest.raises(LLMQuotaExceededError, match="quota exhausted"):
+        service.completion_sync(
+            messages=[{"role": "user", "content": "hello"}],
+            model="openai/glm-4.7-flash",
+            allow_fallbacks=False,
+            num_retries=0,
+        )
+
+    assert reports == [("zai-key-1", 5.0)]
