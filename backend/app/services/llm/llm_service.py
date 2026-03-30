@@ -32,6 +32,7 @@ from .config import (
     get_fallback_chain,
 )
 from .groq_key_manager import GroqKeyManager, get_groq_key_manager
+from .zai_key_manager import ZAIKeyManager, get_zai_key_manager
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class LLMService:
         self.preset = preset or get_preset_for_use_case(use_case)
         self._setup_api_keys()
         self._groq_key_manager = get_groq_key_manager()
+        self._zai_key_manager = get_zai_key_manager()
 
     def _setup_api_keys(self):
         """Set up API keys from settings or environment."""
@@ -104,9 +106,15 @@ class LLMService:
             os.environ["GROQ_API_KEY"] = groq_key
 
         # Z.AI
-        zai_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
-        if zai_key:
-            os.environ["ZAI_API_KEY"] = zai_key
+        zai_keys = list(getattr(settings, "zai_api_keys_list", []) or [])
+        if zai_keys:
+            os.environ["ZAI_API_KEYS"] = ",".join(zai_keys)
+            if len(zai_keys) == 1:
+                os.environ["ZAI_API_KEY"] = zai_keys[0]
+        else:
+            zai_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
+            if zai_key:
+                os.environ["ZAI_API_KEY"] = zai_key
         zai_base = getattr(settings, "zai_api_base", None) or os.environ.get("ZAI_API_BASE")
         if zai_base:
             os.environ["ZAI_API_BASE"] = zai_base
@@ -255,21 +263,61 @@ class LLMService:
             if candidate != primary_model
         ]
 
-    def _apply_provider_overrides(self, params: Dict[str, Any]) -> None:
+    def _get_provider_key_manager(
+        self,
+        model: str,
+    ) -> tuple[Optional[str], Optional[GroqKeyManager | ZAIKeyManager]]:
+        """Return the managed provider label and key manager for a model."""
+        if model.startswith("groq/"):
+            manager = getattr(self, "_groq_key_manager", None)
+            if manager is None:
+                manager = get_groq_key_manager()
+            return "groq", manager
+        if self._is_zai_model(model):
+            manager = getattr(self, "_zai_key_manager", None)
+            if manager is None:
+                manager = get_zai_key_manager()
+            return "zai", manager
+        return None, None
+
+    def _apply_provider_overrides(
+        self,
+        params: Dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str], Optional[GroqKeyManager | ZAIKeyManager]]:
         """Apply per-provider request overrides for the selected model."""
         model = str(params.get("model", "") or "")
-        if not self._is_zai_model(model):
-            return
+        provider_name, key_manager = self._get_provider_key_manager(model)
+        provider_key = None
 
-        zai_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
-        zai_base = (
-            getattr(settings, "zai_api_base", None)
-            or os.environ.get("ZAI_API_BASE")
-            or _ZAI_API_BASE_DEFAULT
-        )
-        if zai_key:
-            params["api_key"] = zai_key
-        params["api_base"] = zai_base
+        if key_manager and len(key_manager) > 0:
+            provider_key = key_manager.get_key()
+        elif self._is_zai_model(model):
+            provider_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
+
+        if provider_key:
+            params["api_key"] = provider_key
+
+        if self._is_zai_model(model):
+            zai_base = (
+                getattr(settings, "zai_api_base", None)
+                or os.environ.get("ZAI_API_BASE")
+                or _ZAI_API_BASE_DEFAULT
+            )
+            params["api_base"] = zai_base
+
+        return provider_name, provider_key, key_manager
+
+    def _report_provider_rate_limit(
+        self,
+        provider_name: Optional[str],
+        provider_key: Optional[str],
+        key_manager: Optional[GroqKeyManager | ZAIKeyManager],
+        retry_after: Optional[float],
+    ) -> None:
+        """Report a provider rate limit when the request used a managed key."""
+        if not provider_name or not provider_key or key_manager is None:
+            return
+        key_manager.report_rate_limit(provider_key, retry_after)
 
     async def _call_with_retry(
         self,
@@ -282,14 +330,9 @@ class LLMService:
         last_error = None
         model = params.get("model", "")
 
-        # For Groq models, get a key from the manager ONCE for this entire request
-        # The key stays the same for all retries (rotation happens on NEXT request)
-        self._apply_provider_overrides(params)
-        groq_key = None
-        if model.startswith("groq/") and len(self._groq_key_manager) > 0:
-            groq_key = self._groq_key_manager.get_key()
-            if groq_key:
-                params["api_key"] = groq_key
+        # For managed providers, get a key ONCE for this entire request.
+        # The key stays the same for all retries (rotation happens on NEXT request).
+        provider_name, provider_key, key_manager = self._apply_provider_overrides(params)
 
         for attempt in range(num_retries + 1):
             try:
@@ -302,12 +345,13 @@ class LLMService:
             except RateLimitError as e:
                 last_error = e
 
-                # Report rate limit to manager (for rotation on NEXT request)
-                if groq_key:
-                    retry_after = self._extract_retry_after(e)
-                    self._groq_key_manager.report_rate_limit(groq_key, retry_after)
-                else:
-                    retry_after = self._extract_retry_after(e)
+                retry_after = self._extract_retry_after(e)
+                self._report_provider_rate_limit(
+                    provider_name,
+                    provider_key,
+                    key_manager,
+                    retry_after,
+                )
 
                 if self._is_provider_quota_exhausted(e):
                     raise LLMQuotaExceededError(
@@ -342,12 +386,13 @@ class LLMService:
                 if "rate" in error_msg or "429" in str(e):
                     last_error = e
 
-                    # Report rate limit to manager (for rotation on NEXT request)
-                    if groq_key:
-                        retry_after = self._extract_retry_after(e)
-                        self._groq_key_manager.report_rate_limit(groq_key, retry_after)
-                    else:
-                        retry_after = self._extract_retry_after(e)
+                    retry_after = self._extract_retry_after(e)
+                    self._report_provider_rate_limit(
+                        provider_name,
+                        provider_key,
+                        key_manager,
+                        retry_after,
+                    )
 
                     if self._is_provider_quota_exhausted(e):
                         raise LLMQuotaExceededError(
@@ -487,13 +532,7 @@ class LLMService:
             current_params = dict(params)
             current_params["model"] = current_model
 
-            self._apply_provider_overrides(current_params)
-            # For Groq models, get a key from the manager for this model attempt
-            groq_key = None
-            if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:
-                groq_key = self._groq_key_manager.get_key()
-                if groq_key:
-                    current_params["api_key"] = groq_key
+            provider_name, provider_key, key_manager = self._apply_provider_overrides(current_params)
 
             try:
                 response = await acompletion(**current_params)
@@ -502,10 +541,14 @@ class LLMService:
                 return
 
             except Exception as e:
-                # Report rate limit if applicable
-                if groq_key and ("rate" in str(e).lower() or "429" in str(e)):
+                if provider_key and ("rate" in str(e).lower() or "429" in str(e)):
                     retry_after = self._extract_retry_after(e)
-                    self._groq_key_manager.report_rate_limit(groq_key, retry_after)
+                    self._report_provider_rate_limit(
+                        provider_name,
+                        provider_key,
+                        key_manager,
+                        retry_after,
+                    )
 
                 logger.warning(f"Streaming model {current_model} failed: {e}")
                 last_error = e
@@ -563,22 +606,19 @@ class LLMService:
             current_params = dict(params)
             current_params["model"] = current_model
 
-            self._apply_provider_overrides(current_params)
-            # For Groq models, get a key from the manager ONCE for this model attempt
-            groq_key = None
-            if current_model.startswith("groq/") and len(self._groq_key_manager) > 0:
-                groq_key = self._groq_key_manager.get_key()
-                if groq_key:
-                    current_params["api_key"] = groq_key
+            provider_name, provider_key, key_manager = self._apply_provider_overrides(current_params)
 
             for attempt in range(num_retries + 1):
                 try:
                     return completion(**current_params)
                 except RateLimitError as e:
-                    # Report rate limit (for rotation on NEXT request)
-                    if groq_key:
-                        retry_after = self._extract_retry_after(e)
-                        self._groq_key_manager.report_rate_limit(groq_key, retry_after)
+                    retry_after = self._extract_retry_after(e)
+                    self._report_provider_rate_limit(
+                        provider_name,
+                        provider_key,
+                        key_manager,
+                        retry_after,
+                    )
 
                     if attempt >= num_retries:
                         last_error = e
@@ -586,6 +626,24 @@ class LLMService:
                     delay = self._calculate_delay(attempt, 1.0, 60.0, e)
                     logger.warning(f"Rate limit hit. Retrying in {delay:.1f}s...")
                     time_module.sleep(delay)
+                except APIError as e:
+                    if "rate" in str(e).lower() or "429" in str(e):
+                        retry_after = self._extract_retry_after(e)
+                        self._report_provider_rate_limit(
+                            provider_name,
+                            provider_key,
+                            key_manager,
+                            retry_after,
+                        )
+                        if attempt >= num_retries:
+                            last_error = e
+                            break
+                        delay = self._calculate_delay(attempt, 1.0, 60.0, e)
+                        logger.warning(f"Rate limit hit. Retrying in {delay:.1f}s...")
+                        time_module.sleep(delay)
+                        continue
+                    last_error = e
+                    break
                 except Exception as e:
                     last_error = e
                     break

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""  # For theme extraction via Google Gemini
     google_api_key: str = ""  # Alternative name for Gemini API key
     zai_api_key: str = ""  # For Z.AI GLM models via OpenAI-compatible endpoint
+    zai_api_keys: str = ""  # For Z.AI GLM models (multiple keys, comma-separated)
     zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
@@ -324,6 +325,15 @@ class Settings(BaseSettings):
         # Fall back to single key if set
         if self.groq_api_key:
             return [self.groq_api_key]
+        return []
+
+    @property
+    def zai_api_keys_list(self) -> List[str]:
+        """Parse comma-separated Z.AI API keys to list."""
+        if self.zai_api_keys:
+            return [k.strip() for k in self.zai_api_keys.split(",") if k.strip()]
+        if self.zai_api_key:
+            return [self.zai_api_key]
         return []
 
     @property

@@ -42,6 +42,10 @@ from .groq_key_manager import (
     GroqKeyManager,
     get_groq_key_manager,
 )
+from .zai_key_manager import (
+    ZAIKeyManager,
+    get_zai_key_manager,
+)
 from .config import (
     ModelConfig,
     ModelPreset,
@@ -74,6 +78,8 @@ __all__ = [
     # Key manager
     "GroqKeyManager",
     "get_groq_key_manager",
+    "ZAIKeyManager",
+    "get_zai_key_manager",
     # Exceptions
     "LLMError",
     "LLMRateLimitError",

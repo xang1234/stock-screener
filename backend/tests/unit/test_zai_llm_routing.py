@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 from app.config import settings
 from app.services.llm.config import get_preset_for_use_case
+from app.services.llm.groq_key_manager import GroqKeyManager
+from app.services.llm.zai_key_manager import ZAIKeyManager
 from app.services.llm.llm_service import LLMService
 from app.services.theme_extraction_service import ThemeExtractionService
 
@@ -33,6 +35,7 @@ def test_apply_provider_overrides_injects_zai_api_key_and_base(monkeypatch) -> N
     monkeypatch.setattr(settings, "zai_api_base", "https://api.z.ai/api/paas/v4")
 
     service = LLMService.__new__(LLMService)
+    service._zai_key_manager = ZAIKeyManager(keys=["test-zai-key"])
     params = {"model": "openai/glm-4.7-flash"}
 
     service._apply_provider_overrides(params)
@@ -41,8 +44,23 @@ def test_apply_provider_overrides_injects_zai_api_key_and_base(monkeypatch) -> N
     assert params["api_base"] == "https://api.z.ai/api/paas/v4"
 
 
+def test_apply_provider_overrides_uses_rotated_zai_key(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "zai_api_base", "https://api.z.ai/api/paas/v4")
+
+    service = LLMService.__new__(LLMService)
+    service._zai_key_manager = ZAIKeyManager(keys=["zai-key-1", "zai-key-2"])
+    service._zai_key_manager._current_index = 1
+    params = {"model": "openai/glm-4.7-flash"}
+
+    service._apply_provider_overrides(params)
+
+    assert params["api_key"] == "zai-key-2"
+    assert params["api_base"] == "https://api.z.ai/api/paas/v4"
+
+
 def test_apply_provider_overrides_clears_zai_overrides_for_non_zai_models() -> None:
     service = LLMService.__new__(LLMService)
+    service._groq_key_manager = GroqKeyManager(keys=[])
     params = {
         "model": "groq/qwen/qwen3-32b",
         "api_key": "caller-key",

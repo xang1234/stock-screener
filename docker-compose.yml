@@ -49,6 +49,7 @@ services:
       # API Keys (from .env or .env.docker)
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -114,6 +115,7 @@ services:
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -171,6 +173,7 @@ services:
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -228,6 +231,7 @@ services:
       # API Keys
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
       - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
