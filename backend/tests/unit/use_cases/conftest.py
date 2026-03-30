@@ -492,6 +492,21 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         self._runs[run_id] = updated
         return updated
 
+    def mark_failed(self, run_id, stats, warnings=()) -> FeatureRunDomain:
+        run = self._get_or_raise(run_id)
+        validate_transition(run.status, RunStatus.FAILED)
+        updated = FeatureRunDomain(
+            id=run.id, as_of_date=run.as_of_date, run_type=run.run_type,
+            status=RunStatus.FAILED, created_at=run.created_at,
+            completed_at=datetime.now(), published_at=None,
+            correlation_id=run.correlation_id,
+            code_version=run.code_version, universe_hash=run.universe_hash,
+            input_hash=run.input_hash, config=run.config,
+            stats=stats, warnings=tuple(warnings),
+        )
+        self._runs[run_id] = updated
+        return updated
+
     def mark_quarantined(self, run_id, dq_results) -> FeatureRunDomain:
         run = self._get_or_raise(run_id)
         validate_transition(run.status, RunStatus.QUARANTINED)

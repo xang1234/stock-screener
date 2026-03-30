@@ -74,6 +74,28 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         self._session.flush()
         return self._to_domain(row)
 
+    def mark_failed(
+        self,
+        run_id,
+        stats,
+        warnings=(),
+    ) -> FeatureRunDomain:
+        row = self._get_or_raise(run_id)
+        validate_transition(RunStatus(row.status), RunStatus.FAILED)
+
+        row.status = RunStatus.FAILED.value
+        row.completed_at = datetime.now(timezone.utc)
+        row.stats_json = {
+            "total_symbols": stats.total_symbols,
+            "processed_symbols": stats.processed_symbols,
+            "failed_symbols": stats.failed_symbols,
+            "duration_seconds": stats.duration_seconds,
+            "passed_symbols": stats.passed_symbols,
+        }
+        row.warnings_json = list(warnings)
+        self._session.flush()
+        return self._to_domain(row)
+
     def mark_quarantined(
         self,
         run_id,

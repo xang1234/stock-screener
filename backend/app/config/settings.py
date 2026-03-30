@@ -138,6 +138,8 @@ class Settings(BaseSettings):
 
     # Scan use-case configuration
     scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
+    feature_snapshot_soft_time_limit_seconds: int = 10800  # 3h budget for full ALL-universe daily snapshot in Docker/Postgres
+    feature_snapshot_stale_after_minutes: int = 240  # Running feature runs older than this are treated as stale and failed
 
     # Cache Configuration
     cache_redis_db: int = 2  # Separate DB for cache data

@@ -64,6 +64,21 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def mark_failed(
+        self,
+        run_id: int,
+        stats: RunStats,
+        warnings: Sequence[str] = (),
+    ) -> FeatureRunDomain:
+        """Transition RUNNING → FAILED, storing best-effort stats and warnings.
+
+        Raises:
+            EntityNotFoundError: If *run_id* does not exist.
+            InvalidTransitionError: If current status is not RUNNING.
+        """
+        ...
+
+    @abc.abstractmethod
     def mark_quarantined(
         self,
         run_id: int,
