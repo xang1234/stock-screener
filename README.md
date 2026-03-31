@@ -15,7 +15,7 @@ Run Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, and Custom scans
 
 ### AI Research Chatbot
 
-5 LLM providers (Groq, DeepSeek, Together AI, OpenRouter, Gemini) with web search research mode, persistent conversation history, and tool-augmented investigation.
+6 LLM providers (Groq, DeepSeek, Together AI, OpenRouter, Gemini, Z.AI) with web search research mode, persistent conversation history, and tool-augmented investigation.
 
 ![Chatbot](docs/screenshots/chatbot.png)
 *AI chatbot with conversation sidebar and research tools*
@@ -88,6 +88,7 @@ The AI chatbot requires at least one LLM provider API key. Scanning and all othe
 | DeepSeek | `DEEPSEEK_API_KEY` | No | Cost-effective fallback |
 | Together AI | `TOGETHER_API_KEY` | No | Wide model selection |
 | OpenRouter | `OPENROUTER_API_KEY` | No | 100+ models |
+| Z.AI | `ZAI_API_KEY` | No | GLM models |
 
 Optional web search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) enable the chatbot's research mode.
 
@@ -109,7 +110,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 - **6 screening methodologies** with composite scoring (Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, Custom)
 - **80+ configurable filters** with saved presets across fundamental, technical, and rating categories
-- **AI chatbot** with 5 LLM providers, web search research mode, and persistent conversations
+- **AI chatbot** with 6 LLM providers, web search research mode, and persistent conversations
 - **Theme discovery** from RSS, Twitter/X, and news sources with AI clustering and lifecycle tracking
 - **Market breadth** dashboard with StockBee-style indicators and historical trends
 - **197 IBD industry groups** ranked by relative strength with movers and constituent analysis
