@@ -23,6 +23,7 @@ frontend/dist
 
 # Data files
 *.csv
+!backend/resources/IBD_industry_group.csv
 *.xlsx
 *.xls
 *.parquet

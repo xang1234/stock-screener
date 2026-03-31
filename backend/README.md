@@ -69,6 +69,12 @@ xui auth login --profile default --path ../data/xui-reader/config.toml
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+On non-desktop startup, the backend automatically seeds `ibd_industry_groups` from the bundled canonical CSV in `backend/resources/IBD_industry_group.csv` when that table is empty. To repair an already-created database that missed this seed, run:
+
+```bash
+python scripts/seed_ibd_industry_groups.py
+```
+
 ## API Reference
 
 Interactive docs available at:

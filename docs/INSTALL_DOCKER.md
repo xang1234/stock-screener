@@ -174,7 +174,7 @@ docker-compose up -d backend
 docker-compose up -d celery-worker celery-datafetch celery-userscans celery-beat frontend db-backup
 ```
 
-Fresh installs now auto-seed `ibd_industry_groups` from the bundled canonical CSV on backend startup when the table is empty.
+Fresh installs now auto-seed `ibd_industry_groups` from the bundled canonical CSV on backend startup when the table is empty. That seed lives outside the `/app/data` bind mount so it remains visible in Docker.
 If you already have an existing database with an empty `ibd_industry_groups` table, repair it with:
 ```bash
 docker-compose run --rm backend python scripts/seed_ibd_industry_groups.py

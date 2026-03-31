@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text
 
 from .config import settings
-from .database import init_db, engine
+from .database import SessionLocal, engine, init_db
 from .infra.db.portability import is_sqlite, table_exists
 from .services.redis_pool import get_redis_client
 
@@ -270,6 +270,17 @@ def initialize_runtime() -> None:
     # Initialize database
     init_db()
     print("Database initialized")
+
+    if not settings.desktop_mode:
+        try:
+            from .services.ibd_industry_service import IBDIndustryService
+
+            with SessionLocal() as db:
+                seed_count = IBDIndustryService.seed_if_empty(db)
+            if seed_count > 0:
+                print(f"Seeded IBD industry mappings: {seed_count}")
+        except Exception as e:
+            print(f"Warning: Failed to seed IBD industry mappings (non-fatal): {e}")
 
     # Verify WAL mode is active (critical for concurrent writers in Docker)
     if is_sqlite(settings.database_url):
