@@ -98,6 +98,25 @@ class TestCompareFeatureRunsUseCase:
         assert result.movers[2].symbol == "MSFT"  # |5|
         assert result.movers[2].score_delta == 5.0
 
+    def test_equal_abs_score_deltas_are_sorted_by_symbol(self):
+        uow, runs_repo, store = _make_uow()
+        uc = CompareFeatureRunsUseCase()
+
+        r_a = _seed_run(runs_repo, store, date(2026, 2, 15), [
+            ("SNOW", 60.0, 3),
+            ("PANW", 79.0, 4),
+            ("NVDA", 88.0, 4),
+        ])
+        r_b = _seed_run(runs_repo, store, date(2026, 2, 16), [
+            ("SNOW", 55.0, 3),
+            ("PANW", 84.0, 5),
+            ("NVDA", 92.0, 5),
+        ])
+
+        result = uc.execute(uow, CompareRunsQuery(run_a=r_a.id, run_b=r_b.id))
+
+        assert [delta.symbol for delta in result.movers] == ["PANW", "SNOW", "NVDA"]
+
     def test_rating_upgrades_downgrades(self):
         uow, runs_repo, store = _make_uow()
         uc = CompareFeatureRunsUseCase()

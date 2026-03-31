@@ -1,0 +1,99 @@
+{
+  "citations": [
+    {
+      "as_of": null,
+      "label": "Leaders",
+      "reference": "user_watchlists:1",
+      "source": "watchlist"
+    },
+    {
+      "as_of": "2026-03-29",
+      "label": "Feature run 2",
+      "reference": "feature_runs:2",
+      "source": "feature_run"
+    }
+  ],
+  "facts": [
+    {
+      "as_of": null,
+      "key": "watchlist_id",
+      "source": "user_watchlists",
+      "value": 1
+    },
+    {
+      "as_of": null,
+      "key": "watchlist_size",
+      "source": "user_watchlists",
+      "value": 2
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "present_in_latest_run",
+      "source": "feature_runs",
+      "value": 1
+    }
+  ],
+  "freshness": {
+    "as_of_date": "2026-03-29",
+    "generated_at": "<generated_at>",
+    "sources": {
+      "feature_run": "2026-03-29T21:30:00"
+    }
+  },
+  "items": [
+    {
+      "company_name": "NVIDIA Corporation",
+      "composite_score": 92.0,
+      "current_price": 145.0,
+      "eps_growth_qq": 36.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Semiconductors",
+      "market_cap": 3000000000000,
+      "rating": "Strong Buy",
+      "rs_rating": 95,
+      "sales_growth_qq": 30.0,
+      "se_setup_ready": true,
+      "se_setup_score": 87.0,
+      "stage": 2,
+      "symbol": "NVDA",
+      "volume": 26000000
+    }
+  ],
+  "missing_symbols": [
+    "AAPL"
+  ],
+  "next_actions": [
+    "Review symbols missing from the latest published feature run."
+  ],
+  "run": {
+    "as_of_date": "2026-03-29",
+    "completed_at": "2026-03-29T21:00:00",
+    "id": 2,
+    "published_at": "2026-03-29T21:30:00",
+    "status": "published"
+  },
+  "strongest": [
+    {
+      "company_name": "NVIDIA Corporation",
+      "composite_score": 92.0,
+      "current_price": 145.0,
+      "eps_growth_qq": 36.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Semiconductors",
+      "market_cap": 3000000000000,
+      "rating": "Strong Buy",
+      "rs_rating": 95,
+      "sales_growth_qq": 30.0,
+      "se_setup_ready": true,
+      "se_setup_score": 87.0,
+      "stage": 2,
+      "symbol": "NVDA",
+      "volume": 26000000
+    }
+  ],
+  "summary": "Watchlist Leaders has 2 symbols; 1 are present in published run 2 and 1 are missing.",
+  "watchlist": {
+    "id": 1,
+    "name": "Leaders"
+  }
+}
