@@ -52,7 +52,7 @@ The scan orchestrator (`scanners/scan_orchestrator.py`) coordinates all screener
 
 ## Celery Task Queues
 
-Two-queue architecture to prevent rate limit violations:
+Three-queue architecture to separate concerns and prevent rate limit violations:
 
 | Queue | Workers | Purpose |
 |-------|---------|---------|
