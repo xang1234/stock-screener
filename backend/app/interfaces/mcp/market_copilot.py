@@ -301,7 +301,7 @@ class MarketCopilotService:
                         "scheduled_task",
                         task["display_name"],
                         f"scheduled_tasks:{task['name']}",
-                        task.get("last_run", {}).get("started_at", "")[:10] or None,
+                        (self._last_run(task).get("started_at") or "")[:10] or None,
                     )
                     for task in failed_tasks[:3]
                 ]
@@ -317,7 +317,7 @@ class MarketCopilotService:
                 feature_run=selected_run.published_at.isoformat() if selected_run and selected_run.published_at else None,
                 market_breadth=breadth.date.isoformat() if breadth is not None else None,
                 theme_alerts=alerts[0]["triggered_at"] if alerts else None,
-                task_execution_history=failed_tasks[0].get("last_run", {}).get("started_at") if failed_tasks else None,
+                task_execution_history=self._last_run(failed_tasks[0]).get("started_at") if failed_tasks else None,
             ),
             runs={
                 "selected": self._run_record(selected_run),
@@ -692,8 +692,8 @@ class MarketCopilotService:
                     tasks=[],
                 )
 
-        failed = [task for task in task_rows if task.get("last_run", {}).get("status") == "failed"]
-        running = [task for task in task_rows if task.get("last_run", {}).get("status") == "running"]
+        failed = [task for task in task_rows if self._last_run(task).get("status") == "failed"]
+        running = [task for task in task_rows if self._last_run(task).get("status") == "running"]
         return self._envelope(
             f"{len(task_rows)} scheduled tasks tracked; {len(failed)} recently failed and {len(running)} are currently running.",
             facts=[
@@ -707,7 +707,7 @@ class MarketCopilotService:
             ],
             next_actions=(["Inspect the failed task records before relying on stale outputs."] if failed else []),
             freshness=self._freshness(
-                task_execution_history=task_rows[0].get("last_run", {}).get("started_at") if task_rows else None,
+                task_execution_history=self._last_run(task_rows[0]).get("started_at") if task_rows else None,
             ),
             tasks=task_rows,
         )
@@ -812,6 +812,7 @@ class MarketCopilotService:
             return [self._candidate_record(item) for item in page.items]
 
     def _find_candidates_for_watchlist(self, run_id: int, watchlist_id: int, args: FindCandidatesArgs) -> list[dict[str, Any]]:
+        sort_spec = self._build_sort_spec(args.filters)
         with self._session_scope() as db:
             symbols = [
                 row.symbol
@@ -834,8 +835,8 @@ class MarketCopilotService:
                     items.append(item)
 
         items.sort(
-            key=lambda row: self._candidate_sort_value(self._candidate_record(row), args.filters.sort_field),
-            reverse=args.filters.sort_order == "desc",
+            key=lambda row: self._candidate_sort_value(self._candidate_record(row), sort_spec.field),
+            reverse=sort_spec.order == SortOrder.DESC,
         )
         return [self._candidate_record(item) for item in items[: args.limit]]
 
@@ -1070,6 +1071,9 @@ class MarketCopilotService:
         rows = TaskRegistryService.get_instance().get_all_scheduled_tasks(db)
         rows.sort(key=lambda row: row["name"])
         return rows
+
+    def _last_run(self, task: dict[str, Any]) -> dict[str, Any]:
+        return task.get("last_run") or {}
 
     def _candidate_record(self, item: Any) -> dict[str, Any]:
         extended = getattr(item, "extended_fields", {}) or {}

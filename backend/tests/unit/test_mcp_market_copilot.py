@@ -119,6 +119,14 @@ def test_task_status_unknown_task_returns_guidance(read_only_service):
     assert payload["next_actions"]
 
 
+def test_task_status_handles_tasks_without_history(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("task_status", {}))
+
+    assert payload["tasks"]
+    assert any(task["last_run"] is None for task in payload["tasks"])
+    assert "scheduled tasks tracked" in payload["summary"]
+
+
 def test_watchlist_add_respects_write_gate(read_only_service):
     result = read_only_service.call_tool(
         "watchlist_add",
@@ -159,6 +167,16 @@ def test_invalid_sort_field_returns_tool_error(read_only_service):
     result = read_only_service.call_tool(
         "find_candidates",
         {"filters": {"sort_field": "not_supported"}},
+    )
+
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"]["code"] == "invalid_arguments"
+
+
+def test_invalid_sort_field_returns_tool_error_for_watchlist_scope(read_only_service):
+    result = read_only_service.call_tool(
+        "find_candidates",
+        {"universe": "Leaders", "filters": {"sort_field": "not_supported"}},
     )
 
     assert result["isError"] is True
