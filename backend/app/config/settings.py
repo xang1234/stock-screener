@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     read_url_timeout: int = 30  # Timeout for URL fetching
     read_url_max_chars: int = 100000  # Max characters to extract from URLs
 
+    # Hermes / MCP integration
+    mcp_server_name: str = "stockscreen-market-copilot"
+    mcp_watchlist_writes_enabled: bool = False
+
     @field_validator('cache_warm_hour')
     @classmethod
     def validate_cache_warm_hour(cls, v: int) -> int:

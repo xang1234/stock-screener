@@ -1,0 +1,301 @@
+{
+  "alerts": [
+    {
+      "alert_type": "velocity_spike",
+      "description": "Mentions and RS accelerated together.",
+      "id": 1,
+      "is_read": false,
+      "metrics": {
+        "momentum_score": 94.0
+      },
+      "related_tickers": [
+        "NVDA",
+        "AVGO"
+      ],
+      "severity": "warning",
+      "theme_cluster_id": 1,
+      "title": "AI Infrastructure velocity spike",
+      "triggered_at": "2026-03-29T22:15:00"
+    }
+  ],
+  "breadth": {
+    "date": "2026-03-29",
+    "ratio_10day": 1.54,
+    "ratio_5day": 1.82,
+    "stocks_down_4pct": 34,
+    "stocks_up_4pct": 128,
+    "total_stocks_scanned": 4081
+  },
+  "citations": [
+    {
+      "as_of": "2026-03-29",
+      "label": "Feature run 2",
+      "reference": "feature_runs:2",
+      "source": "feature_run"
+    },
+    {
+      "as_of": "2026-03-29",
+      "label": "Breadth snapshot 2026-03-29",
+      "reference": "market_breadth:2026-03-29",
+      "source": "market_breadth"
+    },
+    {
+      "as_of": null,
+      "label": "AI Infrastructure velocity spike",
+      "reference": "theme_alerts:1",
+      "source": "theme_alert"
+    },
+    {
+      "as_of": null,
+      "label": "Daily Group Rankings",
+      "reference": "scheduled_tasks:daily-group-ranking-calculation",
+      "source": "scheduled_task"
+    }
+  ],
+  "facts": [
+    {
+      "as_of": "2026-03-29",
+      "key": "latest_run_id",
+      "source": "feature_runs",
+      "value": 2
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "latest_run_status",
+      "source": "feature_runs",
+      "value": "published"
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "avg_score_change",
+      "source": "feature_run_compare",
+      "value": 1.5
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "breadth_up_4pct",
+      "source": "market_breadth",
+      "value": 128
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "breadth_down_4pct",
+      "source": "market_breadth",
+      "value": 34
+    },
+    {
+      "as_of": null,
+      "key": "unread_theme_alerts",
+      "source": "theme_alerts",
+      "value": 1
+    },
+    {
+      "as_of": null,
+      "key": "failed_scheduled_tasks",
+      "source": "task_execution_history",
+      "value": 1
+    }
+  ],
+  "freshness": {
+    "as_of_date": "2026-03-29",
+    "generated_at": "<generated_at>",
+    "sources": {
+      "feature_run": "2026-03-29T21:30:00",
+      "market_breadth": "2026-03-29",
+      "task_execution_history": "2026-03-29T21:40:00",
+      "theme_alerts": "2026-03-29T22:15:00"
+    }
+  },
+  "next_actions": [
+    "Review unread theme alerts for new or accelerating themes.",
+    "Investigate failed scheduled tasks before trusting stale market state."
+  ],
+  "runs": {
+    "comparison": {
+      "added": [
+        {
+          "rating": "Buy",
+          "score": 82.0,
+          "symbol": "MSFT"
+        }
+      ],
+      "movers": [
+        {
+          "rating_a": "Buy",
+          "rating_b": "Strong Buy",
+          "score_a": 79.0,
+          "score_b": 84.0,
+          "score_delta": 5.0,
+          "symbol": "PANW"
+        },
+        {
+          "rating_a": "Watch",
+          "rating_b": "Watch",
+          "score_a": 60.0,
+          "score_b": 55.0,
+          "score_delta": -5.0,
+          "symbol": "SNOW"
+        },
+        {
+          "rating_a": "Strong Buy",
+          "rating_b": "Strong Buy",
+          "score_a": 88.0,
+          "score_b": 92.0,
+          "score_delta": 4.0,
+          "symbol": "NVDA"
+        },
+        {
+          "rating_a": "Buy",
+          "rating_b": "Buy",
+          "score_a": 81.0,
+          "score_b": 83.0,
+          "score_delta": 2.0,
+          "symbol": "AVGO"
+        }
+      ],
+      "removed": [
+        {
+          "rating": "Buy",
+          "score": 76.0,
+          "symbol": "AAPL"
+        }
+      ],
+      "run_a": {
+        "as_of_date": "2026-03-28",
+        "id": 1
+      },
+      "run_b": {
+        "as_of_date": "2026-03-29",
+        "id": 2
+      },
+      "summary": {
+        "avg_score_change": 1.5,
+        "downgraded_count": 0,
+        "total_common": 4,
+        "upgraded_count": 1
+      }
+    },
+    "previous": {
+      "as_of_date": "2026-03-28",
+      "completed_at": "2026-03-28T21:00:00",
+      "id": 1,
+      "published_at": "2026-03-28T21:30:00",
+      "status": "published"
+    },
+    "selected": {
+      "as_of_date": "2026-03-29",
+      "completed_at": "2026-03-29T21:00:00",
+      "id": 2,
+      "published_at": "2026-03-29T21:30:00",
+      "status": "published"
+    }
+  },
+  "summary": "Published feature run 2 is available for 2026-03-29. Versus run 1, the latest run added 1 symbols, removed 1, and recorded 4 movers. Breadth data is available for 2026-03-29. 1 recent unread theme alerts are in scope. 1 scheduled tasks most recently failed.",
+  "tasks": [
+    {
+      "description": "Calculates IBD industry group rankings",
+      "display_name": "Daily Group Rankings",
+      "is_enabled": true,
+      "last_run": {
+        "completed_at": "2026-03-29T21:42:00",
+        "duration_seconds": 120.0,
+        "error_message": "Fixture failure for MCP tests",
+        "id": 2,
+        "started_at": "2026-03-29T21:40:00",
+        "status": "failed",
+        "task_id": "task-fail",
+        "triggered_by": "schedule"
+      },
+      "name": "daily-group-ranking-calculation",
+      "schedule_description": "17:40 ET, Mon-Fri",
+      "task_function": "app.tasks.group_rank_tasks.calculate_daily_group_rankings"
+    }
+  ],
+  "top_candidates": [
+    {
+      "company_name": "NVIDIA Corporation",
+      "composite_score": 92.0,
+      "current_price": 145.0,
+      "eps_growth_qq": 36.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Semiconductors",
+      "market_cap": 3000000000000,
+      "rating": "Strong Buy",
+      "rs_rating": 95,
+      "sales_growth_qq": 30.0,
+      "se_setup_ready": true,
+      "se_setup_score": 87.0,
+      "stage": 2,
+      "symbol": "NVDA",
+      "volume": 26000000
+    },
+    {
+      "company_name": "Palo Alto Networks",
+      "composite_score": 84.0,
+      "current_price": 332.0,
+      "eps_growth_qq": 23.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Cybersecurity",
+      "market_cap": 120000000000,
+      "rating": "Strong Buy",
+      "rs_rating": 91,
+      "sales_growth_qq": 20.0,
+      "se_setup_ready": true,
+      "se_setup_score": 79.0,
+      "stage": 2,
+      "symbol": "PANW",
+      "volume": 8500000
+    },
+    {
+      "company_name": "Broadcom Inc.",
+      "composite_score": 83.0,
+      "current_price": 1135.0,
+      "eps_growth_qq": 24.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Semiconductors",
+      "market_cap": 900000000000,
+      "rating": "Buy",
+      "rs_rating": 90,
+      "sales_growth_qq": 18.0,
+      "se_setup_ready": true,
+      "se_setup_score": 78.0,
+      "stage": 2,
+      "symbol": "AVGO",
+      "volume": 13000000
+    },
+    {
+      "company_name": "Microsoft Corporation",
+      "composite_score": 82.0,
+      "current_price": 430.0,
+      "eps_growth_qq": 19.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Software",
+      "market_cap": 3200000000000,
+      "rating": "Buy",
+      "rs_rating": 90,
+      "sales_growth_qq": 16.0,
+      "se_setup_ready": true,
+      "se_setup_score": 77.0,
+      "stage": 2,
+      "symbol": "MSFT",
+      "volume": 14000000
+    },
+    {
+      "company_name": "Snowflake Inc.",
+      "composite_score": 55.0,
+      "current_price": 176.0,
+      "eps_growth_qq": 7.0,
+      "gics_sector": "Information Technology",
+      "ibd_industry_group": "Cloud Software",
+      "market_cap": 60000000000,
+      "rating": "Watch",
+      "rs_rating": 67,
+      "sales_growth_qq": 9.0,
+      "se_setup_ready": false,
+      "se_setup_score": 50.0,
+      "stage": 1,
+      "symbol": "SNOW",
+      "volume": 5500000
+    }
+  ]
+}

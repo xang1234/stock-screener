@@ -99,20 +99,24 @@ class CompareFeatureRunsUseCase:
         syms_a, syms_b = set(scores_a), set(scores_b)
 
         # Added/removed with their scores
-        added = tuple(sorted(
-            (
-                SymbolEntry(s, scores_b[s][0], INT_TO_RATING.get(scores_b[s][1]))
-                for s in syms_b - syms_a
-            ),
-            key=lambda e: -(e.score or 0),
-        ))
-        removed = tuple(sorted(
-            (
-                SymbolEntry(s, scores_a[s][0], INT_TO_RATING.get(scores_a[s][1]))
-                for s in syms_a - syms_b
-            ),
-            key=lambda e: -(e.score or 0),
-        ))
+        added = tuple(
+            sorted(
+                (
+                    SymbolEntry(s, scores_b[s][0], INT_TO_RATING.get(scores_b[s][1]))
+                    for s in syms_b - syms_a
+                ),
+                key=lambda e: (-(e.score or 0), e.symbol),
+            )
+        )
+        removed = tuple(
+            sorted(
+                (
+                    SymbolEntry(s, scores_a[s][0], INT_TO_RATING.get(scores_a[s][1]))
+                    for s in syms_a - syms_b
+                ),
+                key=lambda e: (-(e.score or 0), e.symbol),
+            )
+        )
 
         # Movers + summary stats
         common = syms_a & syms_b
@@ -137,7 +141,7 @@ class CompareFeatureRunsUseCase:
                     rating_b=INT_TO_RATING.get(rb),
                 ))
 
-        all_deltas.sort(key=lambda d: abs(d.score_delta), reverse=True)
+        all_deltas.sort(key=lambda d: (-abs(d.score_delta), d.symbol))
         avg_change = (
             sum(d.score_delta for d in all_deltas) / len(all_deltas)
             if all_deltas

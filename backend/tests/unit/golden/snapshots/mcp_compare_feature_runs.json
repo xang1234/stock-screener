@@ -1,0 +1,115 @@
+{
+  "added": [
+    {
+      "rating": "Buy",
+      "score": 82.0,
+      "symbol": "MSFT"
+    }
+  ],
+  "citations": [
+    {
+      "as_of": "2026-03-28",
+      "label": "Feature run 1",
+      "reference": "feature_runs:1",
+      "source": "feature_run"
+    },
+    {
+      "as_of": "2026-03-29",
+      "label": "Feature run 2",
+      "reference": "feature_runs:2",
+      "source": "feature_run"
+    }
+  ],
+  "facts": [
+    {
+      "as_of": "2026-03-28",
+      "key": "run_a_id",
+      "source": "feature_runs",
+      "value": 1
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "run_b_id",
+      "source": "feature_runs",
+      "value": 2
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "upgraded_count",
+      "source": "feature_run_compare",
+      "value": 1
+    },
+    {
+      "as_of": "2026-03-29",
+      "key": "downgraded_count",
+      "source": "feature_run_compare",
+      "value": 0
+    }
+  ],
+  "freshness": {
+    "as_of_date": "2026-03-29",
+    "generated_at": "<generated_at>",
+    "sources": {
+      "feature_run_compare": "2026-03-29"
+    }
+  },
+  "movers": [
+    {
+      "rating_a": "Buy",
+      "rating_b": "Strong Buy",
+      "score_a": 79.0,
+      "score_b": 84.0,
+      "score_delta": 5.0,
+      "symbol": "PANW"
+    },
+    {
+      "rating_a": "Watch",
+      "rating_b": "Watch",
+      "score_a": 60.0,
+      "score_b": 55.0,
+      "score_delta": -5.0,
+      "symbol": "SNOW"
+    },
+    {
+      "rating_a": "Strong Buy",
+      "rating_b": "Strong Buy",
+      "score_a": 88.0,
+      "score_b": 92.0,
+      "score_delta": 4.0,
+      "symbol": "NVDA"
+    },
+    {
+      "rating_a": "Buy",
+      "rating_b": "Buy",
+      "score_a": 81.0,
+      "score_b": 83.0,
+      "score_delta": 2.0,
+      "symbol": "AVGO"
+    }
+  ],
+  "next_actions": [],
+  "removed": [
+    {
+      "rating": "Buy",
+      "score": 76.0,
+      "symbol": "AAPL"
+    }
+  ],
+  "runs": {
+    "run_a": {
+      "as_of_date": "2026-03-28",
+      "id": 1
+    },
+    "run_b": {
+      "as_of_date": "2026-03-29",
+      "id": 2
+    }
+  },
+  "summary": "Compared published runs 1 (2026-03-28) and 2 (2026-03-29): 1 added, 1 removed, 4 movers.",
+  "summary_stats": {
+    "avg_score_change": 1.5,
+    "downgraded_count": 0,
+    "total_common": 4,
+    "upgraded_count": 1
+  }
+}
