@@ -73,7 +73,7 @@ def test_apply_provider_overrides_clears_zai_overrides_for_non_zai_models() -> N
     assert params["api_base"] == "https://caller.invalid"
 
 
-def test_try_generate_litellm_disables_fallbacks_for_configured_zai_model() -> None:
+def test_try_generate_litellm_enables_fallbacks_for_configured_zai_model() -> None:
     service = ThemeExtractionService.__new__(ThemeExtractionService)
     service.llm = SimpleNamespace(completion=AsyncMock(return_value=_llm_json_response("[]")))
     service.pipeline_config = None
@@ -84,11 +84,11 @@ def test_try_generate_litellm_disables_fallbacks_for_configured_zai_model() -> N
     assert result == "[]"
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] == "openai/glm-4.7-flash"
-    assert kwargs["allow_fallbacks"] is False
+    assert kwargs["allow_fallbacks"] is True
     assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
 
 
-def test_try_generate_litellm_disables_fallbacks_for_default_zai_model() -> None:
+def test_try_generate_litellm_enables_fallbacks_for_default_zai_model() -> None:
     service = ThemeExtractionService.__new__(ThemeExtractionService)
     service.llm = SimpleNamespace(
         preset=SimpleNamespace(primary=SimpleNamespace(model_id="openai/glm-4.7-flash")),
@@ -102,7 +102,7 @@ def test_try_generate_litellm_disables_fallbacks_for_default_zai_model() -> None
     assert result == "[]"
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] is None
-    assert kwargs["allow_fallbacks"] is False
+    assert kwargs["allow_fallbacks"] is True
     assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
 
 

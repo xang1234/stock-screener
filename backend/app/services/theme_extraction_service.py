@@ -496,7 +496,11 @@ class ThemeExtractionService:
         # Use configured model if set
         model_override = self.configured_model if self.configured_model else None
         active_model = model_override or self.llm.preset.primary.model_id
-        allow_fallbacks = not LLMService._is_zai_model(active_model)
+        # Keep Z.AI as the primary model for every extraction request, but allow the
+        # shared LLM service to fall through to Groq if a single request exhausts its
+        # Z.AI retries. The next request still starts from Z.AI because the active
+        # model selection here is unchanged.
+        allow_fallbacks = True
         max_tokens = (
             self.ZAI_EXTRACTION_MAX_TOKENS
             if LLMService._is_zai_model(active_model)
