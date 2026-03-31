@@ -1,6 +1,8 @@
 # Desktop Bundle
 
-This folder now contains both the legacy desktop packaging entrypoints and the new macOS-native bundle flow.
+This folder contains desktop packaging entrypoints for both macOS and Windows.
+
+> End-user install guides: [macOS Installation](../../docs/INSTALL_MACOS.md) | [Windows Installation](../../docs/INSTALL_WINDOWS.md)
 
 ## macOS build flow
 

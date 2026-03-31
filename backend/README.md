@@ -5,6 +5,8 @@ and Custom stock screening with a Feature Store, AI chatbot, and market analysis
 
 > Full project overview and screenshots: [Root README](../README.md)
 > Frontend docs: [Frontend README](../frontend/README.md)
+> Deployment guides: [Docker](../docs/INSTALL_DOCKER.md) | [macOS](../docs/INSTALL_MACOS.md) | [Windows](../docs/INSTALL_WINDOWS.md)
+> Reference: [Architecture](../docs/ARCHITECTURE.md) | [Environment Variables](../docs/ENVIRONMENT.md)
 
 ## Setup
 

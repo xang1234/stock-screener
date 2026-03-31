@@ -1,426 +1,97 @@
-# Stock Scanner 
+# StockScreenClaude
 
-A comprehensive stock screening platform implementing CANSLIM (William O'Neil) and Minervini methodologies, featuring AI-powered theme discovery, multi-provider chatbot, market breadth analysis, and IBD-style group rankings.
+A professional stock screening platform with 6 screening methodologies, AI-powered research, theme discovery from social and news feeds, and real-time market breadth analysis. Runs as a Docker stack, native macOS app, or Windows desktop application.
 
-<!-- Hero GIF showcasing the scan workflow -->
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
 
-## Features
+## Highlights
 
-### Multi-Screener Stock Scanner
+### Multi-Strategy Screening
 
-Run multiple screening methodologies simultaneously with composite scoring:
-- **Minervini Template** - RS Rating > 70-80, Stage 2 uptrend, MA alignment, price 30%+ above 52-week low
-- **CANSLIM** - Current quarterly EPS > 25%, Annual EPS growth > 25% 3yr, volume patterns, RS > 70
-- **IPO Scanner** - Recent IPOs with momentum characteristics
-- **Volume Breakthrough** - Unusual volume with price action
-- **Custom Scanner** - 80+ configurable filters with saved presets
+Run Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, and Custom scans simultaneously with composite scoring across 80+ configurable filters. Save filter presets and export results to CSV.
 
 ![Scan Results](docs/screenshots/scan-results.png)
 *Results table with composite scores, RS sparklines, and multi-screener ratings*
 
-![Scan Filters](docs/screenshots/scan-filters.png)
-*80+ filters organized by Fundamental, Technical, and Rating categories*
-
-### Watchlists
-
-Track your stocks with visual performance indicators:
-- RS and price sparklines (30-day trends)
-- Price change bars across 7 time periods (1D to 12M)
-- Drag-and-drop organization with folders
-- Full-screen chart modal with keyboard navigation
-
-![Watchlist Table](docs/screenshots/watchlist-table.png)
-*Watchlist with sparklines and price change visualization*
-
-### Market Breadth Analysis
-
-StockBee-style breadth indicators for market health assessment:
-- Advance/decline metrics with SPY overlay
-- Daily movers (stocks up/down 4%+)
-- Multi-period analysis: Quarterly, Monthly, Explosive, 34-Day
-- Historical breadth data table
-
-![Market Breadth](docs/screenshots/breadth-chart.png)
-*Breadth chart with SPY price overlay and daily movers*
-
-### IBD Group Rankings
-
-Industry group analysis inspired by IBD methodology:
-- Rankings for 197 industry groups by relative strength
-- Top movers identification (1W/1M/3M/6M)
-- Group detail modal with historical rank charts
-- Constituent stocks with growth metrics
-
-![Group Rankings](docs/screenshots/group-rankings.png)
-*Industry group rankings with movers panel*
-
-![Group Detail](docs/screenshots/group-detail.png)
-*Group detail modal with rank history chart and constituents*
-
 ### AI Research Chatbot
 
-Multi-provider LLM integration for stock research:
-- Providers: Groq, DeepSeek, Together AI, OpenRouter, Gemini
-- Web search integration (Tavily, Serper, DuckDuckGo)
-- Persistent chat history with session management
-- Research mode with tool execution
+5 LLM providers (Groq, DeepSeek, Together AI, OpenRouter, Gemini) with web search research mode, persistent conversation history, and tool-augmented investigation.
 
 ![Chatbot](docs/screenshots/chatbot.png)
-*AI chatbot with conversation sidebar and research mode*
+*AI chatbot with conversation sidebar and research tools*
 
-### Theme Discovery
+### Theme Discovery Pipeline
 
-AI-powered identification of market themes and trends:
-- Automatic theme clustering from stock movements
-- Trending vs emerging theme detection
-- Theme constituent tracking and analysis
-- Source filtering (Substack, Twitter, News, Reddit)
+AI-powered market theme identification from RSS, Twitter/X, and news feeds. Tracks trending vs. emerging themes, monitors constituent stocks, and alerts on momentum shifts.
 
 ![Themes](docs/screenshots/themes.png)
 *Theme discovery with rankings and emerging themes panel*
 
-## Tech Stack
+### Market Breadth Dashboard
 
-### Backend
-- **Framework**: FastAPI
-- **ORM**: SQLAlchemy with SQLite for local/desktop and PostgreSQL for Docker
-- **Task Queue**: Celery with Redis broker
-- **Caching**: Redis (3 databases: broker, results, application cache)
+StockBee-style advance/decline analysis with SPY overlay, daily movers (stocks up/down 4%+), and multi-period trend visualization across quarterly, monthly, and 34-day windows.
 
-### Frontend
-- **Framework**: React 18 with Vite
-- **UI**: Material-UI (MUI)
-- **Data Fetching**: TanStack Query (React Query)
-- **Tables**: TanStack Table with TanStack Virtual
-- **Charts**: Recharts, lightweight-charts (TradingView-style candlestick charts)
-- **Drag & Drop**: @hello-pangea/dnd
+![Market Breadth](docs/screenshots/breadth-chart.png)
+*Breadth chart with SPY price overlay and daily movers*
 
-### Data Sources
-- **yfinance** - Price/volume data (1 req/sec)
-- **Finviz** - Screener data (rate-limited)
-- **Alpha Vantage** - Fundamental data (25 req/day free tier)
-- **SEC EDGAR** - Filings data (10 req/sec)
-- **xui-reader (Playwright UI)** - Twitter/X source ingestion for theme discovery
+### IBD Industry Group Rankings
 
-### LLM Providers
-Groq, DeepSeek, Together AI, OpenRouter, Gemini
+197 industry groups ranked by relative strength with top movers identification (1W/1M/3M/6M), historical rank charts, and constituent stock analysis.
 
-## Quick Start
+![Group Rankings](docs/screenshots/group-rankings.png)
+*Industry group rankings with movers panel*
 
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- Redis server
+### Watchlists with Sparklines
 
-### Backend Setup
+Visual performance tracking with RS and price sparklines (30-day trends), price change bars across 7 time periods, drag-and-drop organization with folders, and full-screen chart navigation.
+
+![Watchlist Table](docs/screenshots/watchlist-table.png)
+*Watchlist with sparklines and price change visualization*
+
+## Get Started
+
+### Docker (Recommended for Servers)
 
 ```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-pip install -e ../xui-reader
-python -m playwright install chromium
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys and database path
-
-# Bootstrap shared xui profile/session state for twitter ingestion (one-time)
-xui config init --path ../data/xui-reader/config.toml
-xui profiles create default --path ../data/xui-reader/config.toml
-xui auth login --profile default --path ../data/xui-reader/config.toml
-
-# Optional (preferred for Google-linked X accounts):
-# Use Themes -> Manage Sources -> "Connect From Current Browser"
-# after loading unpacked extension from browser-extension/xui-session-bridge
-
-# Start the API server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Start Celery Workers (Required for Scans)
-
-```bash
-cd backend
-./start_celery.sh
-
-# Or manually:
-./venv/bin/celery -A app.celery_app worker --pool=solo -Q celery -n general@%h
-./venv/bin/celery -A app.celery_app worker --pool=solo -Q data_fetch -n datafetch@%h
-./venv/bin/celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@%h
-./venv/bin/celery -A app.celery_app beat --loglevel=info  # Scheduler
-```
-
-On macOS and other local non-Docker workflows, keep `--pool=solo`. The Docker deployment now uses PostgreSQL plus Linux `prefork` workers; that change does not apply to local desktop/dev runs.
-
-### Frontend Setup
-
-```bash
-cd frontend
-npm install
-npm run dev      # Development server on :5173
-npm run build    # Production build
-```
-
-### Windows Deployment
-
-If you are deploying on Windows, there are two practical paths:
-
-- **Desktop bundle** - recommended for a single-user local install on a Windows machine. No Redis or Celery services are required.
-- **Source deployment** - use this when you want the full backend + frontend + worker stack on a Windows host.
-
-#### Option 1: Windows Desktop Bundle (Recommended)
-
-Use this path when you want a self-contained local Windows app that launches the FastAPI backend and serves the built frontend from the same bundle.
-
-Prerequisites:
-- Python 3.11
-- Node.js 18+
-- PowerShell
-- Inno Setup 6 if you want a `.exe` installer instead of the raw one-folder bundle
-
-Build the bundle from the repo root:
-
-```powershell
-cd .\frontend
-npm ci
-$env:VITE_API_URL = "/api"
-npm run build
-Remove-Item Env:VITE_API_URL
-
-cd ..
-py -3.11 -m venv .\backend\venv
-.\backend\venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements-desktop.txt
-pyinstaller .\backend\desktop\StockScanner.spec --noconfirm --clean
-```
-
-Artifacts:
-- One-folder bundle: `dist\StockScanner\StockScanner.exe`
-- Optional installer output: `dist\installer\StockScanner-Setup.exe`
-
-Launch and verify the bundle:
-
-```powershell
-Start-Process -FilePath .\dist\StockScanner\StockScanner.exe -ArgumentList "--no-browser","--port","8765"
-python .\backend\desktop\smoke_test.py --base-url http://127.0.0.1:8765
-.\dist\StockScanner\StockScanner.exe --stop
-```
-
-To create a Windows installer, compile the Inno Setup script after the bundle build:
-
-```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\backend\desktop\windows_installer.iss
-```
-
-Desktop runtime notes:
-- App files install under `%LOCALAPPDATA%\StockScanner`
-- The desktop database defaults to `%LOCALAPPDATA%\StockScanner\stockscanner.db`
-- First launch seeds the local universe from the bundled CSV files
-- Desktop mode now skips the heavy full-universe refresh and fundamentals warmup by default so first-run startup completes quickly
-
-If you want the desktop bundle to run the heavier bootstrap steps on first launch, set overrides before starting it:
-
-```powershell
-$env:DESKTOP_BOOTSTRAP_REFRESH_UNIVERSE = "true"
-$env:DESKTOP_BOOTSTRAP_FUNDAMENTALS_LIMIT = "25"
-.\dist\StockScanner\StockScanner.exe
-```
-
-Useful files:
-- Launcher: `backend/desktop/launcher.py`
-- Stop helper: `backend/desktop/launcher.py --stop`
-- Smoke test: `backend/desktop/smoke_test.py`
-- Inno Setup script: `backend/desktop/windows_installer.iss`
-
-#### Option 2: Source Deployment on a Windows Host
-
-Use this path if you want the browser-based app on a Windows machine rather than the packaged desktop bundle.
-
-Prerequisites:
-- Python 3.11
-- Node.js 18+
-- Redis reachable from Windows (for example via a local service, Docker Desktop, or WSL2)
-
-Backend setup in PowerShell:
-
-```powershell
-py -3.11 -m venv .\backend\venv
-.\backend\venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements.txt
-pip install -e .\xui-reader
-python -m playwright install chromium
-Copy-Item .\backend\.env.example .\backend\.env
-```
-
-Then edit `backend\.env` with your Windows-specific paths and API keys. At minimum, set an absolute `DATABASE_URL` and any LLM or data-provider keys you need.
-
-Start the backend:
-
-```powershell
-cd .\backend
-.\venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Start Celery in separate PowerShell windows if you need scans and scheduled jobs:
-
-```powershell
-cd .\backend
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q celery -n general@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q data_fetch -n datafetch@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app worker --pool=solo -Q user_scans -n userscans@$env:COMPUTERNAME
-.\venv\Scripts\celery -A app.celery_app beat --loglevel=info
-```
-
-Build the frontend:
-
-```powershell
-cd .\frontend
-npm ci
-npm run build
-```
-
-For a Windows-hosted browser deployment, serve `frontend\dist` with IIS, Caddy, or another static file server and reverse proxy `/api` to `http://127.0.0.1:8000`.
-
-If PowerShell blocks virtualenv activation, run `Set-ExecutionPolicy -Scope Process Bypass` in that shell and retry `.\venv\Scripts\Activate.ps1`.
-
-### Docker Deployment
-
-The project uses a layered Docker Compose architecture supporting multiple deployment scenarios:
-
-Docker now uses PostgreSQL as the authoritative application database. Local development and desktop mode still default to SQLite. The shared `./data` mount remains in Docker for non-app-db state such as `xui-reader` config/session data, Celery beat schedule files, and caches.
-
-#### Local Development (Zero Config)
-```bash
-# 1. Set up environment (required for chatbot/LLM features)
 cp .env.docker.example .env
-# Edit .env: Add your API keys (GROQ_API_KEY, GEMINI_API_KEY, etc.)
-
-# 2. Start all services
+# Edit .env: add at least one LLM API key (e.g., GROQ_API_KEY)
 docker-compose up
-```
-Starts PostgreSQL, Redis, Backend API, Celery workers, backup service, and Frontend. Access at http://localhost
-
-> **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). Without this file, LLM API keys will be empty and the chatbot won't work. Scanning and other features work without API keys.
-
-#### Homelab (Behind Reverse Proxy)
-For deployment behind Traefik, nginx proxy manager, or similar:
-```bash
-# 1. Configure environment
-cp .env.docker.example .env.docker
-# Edit .env.docker: Set CORS_ORIGINS=https://stocks.home.lan
-
-# 2. Start with production settings
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# 3. Configure your reverse proxy to forward to port 80
+# Open http://localhost
 ```
 
-#### GitHub-Managed Image Releases (Recommended for Production)
-Use this path when you want immutable, tagged application images from GitHub
-Container Registry instead of rebuilding from source on the server.
+Full guide with homelab, VPS, and GHCR deployment options: **[Docker Deployment](docs/INSTALL_DOCKER.md)**
 
-```bash
-# 1. Configure environment
-cp .env.docker.example .env.docker
-# Edit .env.docker:
-#   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
-#   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.2.3
-#   CORS_ORIGINS=https://stocks.yourdomain.com
+### macOS Desktop
 
-# 2. Pull the tagged release images
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+Download `StockScanner.dmg` from [GitHub Releases](../../releases), drag to Applications, and launch.
 
-# 3. Deploy without rebuilding locally
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
-```
+Full guide: **[macOS Installation](docs/INSTALL_MACOS.md)**
 
-For HTTPS on a standalone VPS, add the Caddy overlay:
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml pull
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml -f docker-compose.https.yml up -d --no-build
-```
+### Windows Desktop
 
-Release and rollback model:
-- Push to `main` to publish rolling `main`, `sha-*`, and `latest` image tags to GHCR
-- Push a git tag like `v1.2.3` to publish immutable release tags
-- Deploy by setting `APP_IMAGE_TAG=v1.2.3` in `.env.docker` and running `pull` + `up -d --no-build`
-- Roll back by changing `APP_IMAGE_TAG` to the previous tag and redeploying
+Download `StockScanner-Setup.exe` from [GitHub Releases](../../releases) and run the installer.
 
-If the repository or package is private, log the deployment host into GHCR before
-running `docker-compose pull`:
-```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
-```
+Full guide: **[Windows Installation](docs/INSTALL_WINDOWS.md)**
 
-#### VPS with Auto-HTTPS (Hostinger, DigitalOcean, etc.)
-Includes Caddy for automatic Let's Encrypt certificates:
-```bash
-# 1. Configure environment
-cp .env.docker.example .env.docker
-# Edit .env.docker: Set DOMAIN=stocks.yourdomain.com
-# Edit .env.docker: Set CORS_ORIGINS=https://stocks.yourdomain.com
+### From Source (Contributors)
 
-# 2. Ensure DNS A record points to your server IP
+See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend + Celery setup.
 
-# 3. Start with HTTPS
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d
-```
+## Configuration
 
-#### Docker Files
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | Base configuration for local development |
-| `docker-compose.prod.yml` | Production overlay: resource limits, health checks, logging |
-| `docker-compose.release.yml` | Release overlay: deploy tagged GHCR images instead of local builds |
-| `docker-compose.https.yml` | HTTPS overlay: Caddy with automatic Let's Encrypt |
-| `.env.docker.example` | Template for Docker environment variables |
-| `Caddyfile` | Caddy configuration for TLS termination |
+The AI chatbot requires at least one LLM provider API key. Scanning and all other features work without any keys.
 
-#### Upgrade Note
-The backend runs as non-root user (uid 1000). If upgrading from an older version:
-```bash
-sudo chown -R 1000:1000 ./data
-```
+| Provider | Env Var | Free Tier | Notes |
+|----------|---------|-----------|-------|
+| Groq | `GROQ_API_KEY` | Yes | Fast inference, recommended to start |
+| Gemini | `GEMINI_API_KEY` | Yes | Also used for theme extraction |
+| DeepSeek | `DEEPSEEK_API_KEY` | No | Cost-effective fallback |
+| Together AI | `TOGETHER_API_KEY` | No | Wide model selection |
+| OpenRouter | `OPENROUTER_API_KEY` | No | 100+ models |
 
-#### Docker Cutover from SQLite
-Use this one-time sequence when migrating an existing Docker deployment from SQLite to PostgreSQL:
+Optional web search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) enable the chatbot's research mode.
 
-```bash
-# 1. Stop backend, workers, and beat so SQLite is quiescent
-docker-compose stop backend celery-worker celery-datafetch celery-userscans celery-beat
-
-# 2. Take a final SQLite backup
-sqlite3 data/stockscanner.db ".backup 'data/backups/stockscanner_final_pre_pg.db'"
-
-# 3. Start PostgreSQL only
-docker-compose up -d postgres
-
-# 4. Prepare schema against PostgreSQL
-docker-compose run --rm backend python -c "from app.database import init_db; init_db()"
-
-# 5. Import data into PostgreSQL
-docker-compose run --rm \
-  -e SQLITE_DB_PATH=/app/data/stockscanner.db \
-  backend \
-  python scripts/migrate_sqlite_to_postgres.py --source /app/data/stockscanner.db
-
-# 6. Start backend first and smoke test the API
-docker-compose up -d backend
-
-# 7. Start workers and beat after API validation passes
-docker-compose up -d celery-worker celery-datafetch celery-userscans celery-beat frontend db-backup
-```
-
-PostgreSQL backups are written by `db-backup` via `pg_dump`. Restore with `pg_restore -d <database> <dump-file>`.
-
-## Documentation
-
-- [Backend README](backend/README.md) — Architecture details, API reference, database schema, and development guide
-- [Frontend README](frontend/README.md) — Component structure, patterns, conventions, and development guide
+Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 ## Application Pages
 
@@ -434,194 +105,42 @@ PostgreSQL backups are written by `db-backup` via `pg_dump`. Restore with `pg_re
 | `/chatbot` | Chatbot | Multi-provider AI research assistant with web search |
 | `/stock/:symbol` | Stock Detail | Individual stock analysis with charts and fundamentals |
 
-## API Documentation
+## Key Capabilities
 
-Visit `http://localhost:8000/docs` for interactive Swagger documentation.
+- **6 screening methodologies** with composite scoring (Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, Custom)
+- **80+ configurable filters** with saved presets across fundamental, technical, and rating categories
+- **AI chatbot** with 5 LLM providers, web search research mode, and persistent conversations
+- **Theme discovery** from RSS, Twitter/X, and news sources with AI clustering and lifecycle tracking
+- **Market breadth** dashboard with StockBee-style indicators and historical trends
+- **197 IBD industry groups** ranked by relative strength with movers and constituent analysis
+- **Watchlists** with RS/price sparklines, multi-period change bars, and drag-and-drop organization
+- **MCP integration** for AI copilot workflows with 8 tools ([details](docs/MCP_INTEGRATION.md))
+- **TradingView-style charts** with candlestick OHLC and technical overlays
+- **CSV export** for scan results
+- **Dark and light mode** UI
+- **Desktop apps** for macOS (.dmg) and Windows (.exe) with bundled data
+- **Docker deployment** with PostgreSQL, auto-HTTPS, and GHCR image releases
 
-### Endpoint Groups
+## Documentation
 
-**Core:**
-- `/api/v1/scans` — Scan management and results
-- `/api/v1/stocks` — Stock data, fundamentals, chart data
-- `/api/v1/features` — Feature store management
+| Guide | Audience |
+|-------|----------|
+| [Docker Deployment](docs/INSTALL_DOCKER.md) | Server, homelab, VPS users |
+| [macOS Installation](docs/INSTALL_MACOS.md) | macOS desktop users |
+| [Windows Installation](docs/INSTALL_WINDOWS.md) | Windows desktop users |
+| [Development Guide](docs/DEVELOPMENT.md) | Contributors, developers |
+| [Architecture](docs/ARCHITECTURE.md) | Understanding the system design |
+| [Environment Variables](docs/ENVIRONMENT.md) | Configuration reference |
+| [MCP Integration](docs/MCP_INTEGRATION.md) | AI copilot workflows |
+| [Backend API & Architecture](backend/README.md) | Backend developers |
+| [Frontend Components](frontend/README.md) | Frontend developers |
+| [Contributing](CONTRIBUTING.md) | Getting started as a contributor |
 
-**Market Analysis:**
-- `/api/v1/breadth` — Market breadth indicators
-- `/api/v1/groups` — IBD group rankings
-- `/api/v1/themes` — Theme discovery and analysis
-- `/api/v1/technical` — Technical indicators
-- `/api/v1/fundamentals` — Fundamental data
+## Tech Stack
 
-**AI & Research:**
-- `/api/v1/chatbot` — AI chat sessions and messages
-- `/api/v1/chatbot/folders` — Chat folder management
-- `/api/v1/prompt-presets` — Saved chatbot prompts
-
-**User Data:**
-- `/api/v1/user-watchlists` — Watchlist management
-- `/api/v1/user-themes` — User theme management
-- `/api/v1/market-scan` — Dashboard market scan lists
-- `/api/v1/filter-presets` — Saved scan filter configurations
-
-**System:**
-- `/api/v1/universe` — Stock universe management
-- `/api/v1/cache` — Cache management
-- `/api/v1/tasks` — Background task status
-- `/api/v1/config` — Admin configuration
-- `/api/v1/data-fetch-status` — Data fetch monitoring
-- `/api/v1/ticker-validation` — Ticker symbol validation
-
-**Health Endpoints (root-level):**
-```
-GET /livez   — Liveness probe (zero dependencies)
-GET /readyz  — Readiness probe (checks DB + Redis)
-GET /health  — Deprecated alias for /readyz
-```
-
-## Architecture
-
-### Multi-Screener Orchestrator
-The scan orchestrator (`scanners/scan_orchestrator.py`) coordinates all screener types:
-- All screeners extend `BaseStockScreener` abstract class
-- The `DataPreparationLayer` fetches data once and distributes it to all active screeners
-- Composite scoring via configurable aggregation (weighted_average, maximum, minimum)
-
-### Two-Queue Celery Architecture
-- `celery` queue: General compute tasks (4 workers)
-- `data_fetch` queue: API calls (1 worker, serialized to respect rate limits)
-
-### Redis Caching Strategy
-- DB 0: Celery broker
-- DB 1: Celery results (24h TTL, auto-cleanup)
-- DB 2: Application cache — price data (7d TTL), fundamentals (7d TTL), benchmark/SPY (24h TTL with distributed locking)
-
-### Feature Store
-Pre-computed daily stock snapshots stored in `stock_feature_daily`. A scheduled feature run scores every stock in the universe, then atomically publishes via pointer swap. Scan API endpoints read from the latest published run. Lifecycle: RUNNING → COMPLETED → quality checks → PUBLISHED (or QUARANTINED).
-
-### Layered Architecture
-Clean separation: `domain/` (business rules, ports) → `use_cases/` (application services) → `infra/` (SQLAlchemy repos, Celery) → `api/` (FastAPI routes). DI wired in `wiring/bootstrap.py`. See [Backend README](backend/README.md) for details.
-
-## Database
-
-Local development and desktop mode use an absolute SQLite path to prevent
-working-directory issues. Docker deployments use PostgreSQL via `DATABASE_URL`
-plus `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`.
-
-```env
-DATABASE_URL=sqlite:////Users/admin/StockScreenClaude/data/stockscanner.db
-```
-
-For local and desktop workflows, the SQLite database lives at
-`data/stockscanner.db` in the project root. Do not create local SQLite
-databases in `backend/data/` or other subdirectories.
-
-### Key Tables
-- `stock_prices`, `stock_fundamentals`, `stock_universe` — Core stock data
-- `scans`, `scan_results` — Scan metadata and results with multi-screener scores
-- `feature_runs`, `stock_feature_daily` — Feature Store (pre-computed scan snapshots)
-- `feature_run_pointers` — Atomic publish mechanism
-- `ibd_industry_groups`, `ibd_group_ranks` — Industry group rankings
-- `theme_clusters`, `theme_constituents` — Theme discovery
-- `chatbot_conversations`, `chatbot_messages` — Chatbot conversation history
-- `user_watchlists`, `watchlist_items` — Watchlist management
-- `user_themes`, `user_theme_stocks` — User theme tracking
-
-## Environment Variables
-
-### Local Development
-Create a `.env` file in the `backend/` directory (see `backend/.env.example`):
-
-```env
-# Database (MUST use absolute path: sqlite:/// + /absolute/path)
-DATABASE_URL=sqlite:////Users/yourusername/StockScreenClaude/data/stockscanner.db
-
-# Redis
-REDIS_HOST=localhost
-CELERY_BROKER_URL=redis://localhost:6379/0
-
-# Admin API key (required for /api/v1/config/* endpoints)
-ADMIN_API_KEY=your_key
-
-# LLM Providers (at least one required for chatbot)
-GROQ_API_KEY=your_key
-GEMINI_API_KEY=your_key
-DEEPSEEK_API_KEY=your_key      # Cost-effective fallback
-TOGETHER_API_KEY=your_key      # Wide model selection
-OPENROUTER_API_KEY=your_key    # 100+ models
-
-# Web Search (optional, for research mode)
-TAVILY_API_KEY=your_key
-SERPER_API_KEY=your_key
-
-# Deep research safety limits
-RESEARCH_READ_URL_MAX_BYTES=5000000
-
-# Data fetch lock (seconds to wait before failing)
-DATA_FETCH_LOCK_WAIT_SECONDS=7200
-
-# Optional one-time cleanup for legacy scan universes
-INVALID_UNIVERSE_CLEANUP_ENABLED=false
-
-# Data Sources
-ALPHA_VANTAGE_API_KEY=your_key
-XUI_ENABLED=true
-XUI_CONFIG_PATH=../data/xui-reader/config.toml
-XUI_PROFILE=default
-XUI_LIMIT_PER_SOURCE=50
-XUI_NEW_ONLY=true
-XUI_CHECKPOINT_MODE=auto
-XUI_BRIDGE_ENABLED=true
-XUI_BRIDGE_ALLOWED_ORIGINS=http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173
-XUI_BRIDGE_CHALLENGE_TTL_SECONDS=120
-XUI_BRIDGE_MAX_COOKIES=300
-TWITTER_REQUEST_DELAY=5.0
-
-# LLM Routing (optional, sensible defaults)
-LLM_DEFAULT_PROVIDER=groq
-LLM_CHATBOT_MODEL=groq/qwen-qwen3-32b
-LLM_FALLBACK_ENABLED=true
-
-# Scanning
-DEFAULT_UNIVERSE=all
-SCAN_BATCH_SIZE=20
-
-# Celery
-CELERY_TIMEZONE=America/New_York
-```
-
-### Docker Deployment
-Create a `.env` file in the project root from the template (Docker Compose requires this exact filename):
-```bash
-cp .env.docker.example .env
-```
-
-```env
-# Deployment
-DOMAIN=stocks.yourdomain.com           # For HTTPS scenario
-CORS_ORIGINS=https://stocks.yourdomain.com
-
-# API Keys (same as local dev)
-GROQ_API_KEY=your_key
-# ... other keys
-```
-
-## Development Notes
-
-### macOS Celery Configuration
-Use `--pool=solo` to avoid fork() crashes from Objective-C runtime safety checks:
-
-```bash
-export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-export TOKENIZERS_PARALLELISM=false
-```
-
-The `start_celery.sh` script handles this automatically.
-
-### Rate Limits
-- **yfinance**: 1 req/sec (self-imposed)
-- **Finviz**: Rate-limited via wrapper
-- **Alpha Vantage**: 25 req/day free tier
-- **SEC EDGAR**: 10 req/sec (150ms between requests)
+**Backend:** FastAPI, SQLAlchemy, Celery, Redis, PostgreSQL / SQLite
+**Frontend:** React 18, Vite, Material-UI, TanStack Query / Table, Recharts
+**Data:** yfinance, Finviz, Alpha Vantage, SEC EDGAR, xui-reader (Twitter/X)
 
 ## Disclaimer
 
