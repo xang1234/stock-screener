@@ -71,3 +71,4 @@ Reviewer due diligence beyond automated gates:
 - [ ] Spot-check: run a scan with Setup Engine enabled, verify results appear
       in the UI and match expected detector outputs
 - [ ] Frontend lint and tests pass: `make frontend`
+- [ ] Documentation review: verify `docs/INSTALL_*.md` match any compose or build changes

@@ -4,6 +4,7 @@ React 18 SPA for stock screening, market analysis, AI research, and portfolio tr
 
 > Full project overview and screenshots: [Root README](../README.md)
 > Backend docs: [Backend README](../backend/README.md)
+> Development setup: [Development Guide](../docs/DEVELOPMENT.md)
 
 ## Setup
 
