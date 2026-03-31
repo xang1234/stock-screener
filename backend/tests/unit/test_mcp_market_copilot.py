@@ -108,6 +108,20 @@ def test_theme_state_for_named_theme_returns_constituents(read_only_service):
     assert payload["alerts"][0]["alert_type"] == "velocity_spike"
 
 
+def test_watchlist_snapshot_does_not_treat_like_wildcards_as_fuzzy_matches(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("watchlist_snapshot", {"watchlist": "%"}))
+
+    assert "was not found" in payload["summary"]
+    assert payload["watchlist"] is None
+
+
+def test_theme_state_does_not_treat_like_wildcards_as_fuzzy_matches(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("theme_state", {"theme_name": "%", "limit": 5}))
+
+    assert "No active theme matched" in payload["summary"]
+    assert payload["themes"] == []
+
+
 def test_task_status_unknown_task_returns_guidance(read_only_service):
     payload = _tool_payload(
         read_only_service.call_tool(

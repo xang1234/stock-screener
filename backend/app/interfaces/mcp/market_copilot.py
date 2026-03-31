@@ -1050,7 +1050,12 @@ class MarketCopilotService:
         exact = query.filter(func.lower(UserWatchlist.name) == needle.lower()).first()
         if exact is not None:
             return exact
-        return query.filter(UserWatchlist.name.ilike(f"%{needle}%")).order_by(UserWatchlist.position.asc()).first()
+        escaped = self._escape_like_pattern(needle)
+        return (
+            query.filter(UserWatchlist.name.ilike(f"%{escaped}%", escape="\\"))
+            .order_by(UserWatchlist.position.asc())
+            .first()
+        )
 
     def _resolve_theme(self, db: Session, theme_name: str) -> ThemeCluster | None:
         exact = (
@@ -1060,9 +1065,10 @@ class MarketCopilotService:
         )
         if exact is not None:
             return exact
+        escaped = self._escape_like_pattern(theme_name)
         return (
             db.query(ThemeCluster)
-            .filter(ThemeCluster.is_active == True, ThemeCluster.display_name.ilike(f"%{theme_name}%"))
+            .filter(ThemeCluster.is_active == True, ThemeCluster.display_name.ilike(f"%{escaped}%", escape="\\"))
             .order_by(ThemeCluster.last_seen_at.desc().nullslast(), ThemeCluster.id.desc())
             .first()
         )
@@ -1277,3 +1283,6 @@ class MarketCopilotService:
         if isinstance(rating, str):
             return (rating,)
         return tuple(rating)
+
+    def _escape_like_pattern(self, value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
