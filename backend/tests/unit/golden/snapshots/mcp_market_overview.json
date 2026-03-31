@@ -40,13 +40,13 @@
       "source": "market_breadth"
     },
     {
-      "as_of": null,
+      "as_of": "2026-03-29",
       "label": "AI Infrastructure velocity spike",
       "reference": "theme_alerts:1",
       "source": "theme_alert"
     },
     {
-      "as_of": null,
+      "as_of": "2026-03-29",
       "label": "Daily Group Rankings",
       "reference": "scheduled_tasks:daily-group-ranking-calculation",
       "source": "scheduled_task"

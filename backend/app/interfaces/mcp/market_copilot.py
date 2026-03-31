@@ -1242,13 +1242,13 @@ class MarketCopilotService:
         source: str,
         label: str,
         reference: str,
-        as_of: date | None = None,
+        as_of: date | datetime | str | None = None,
     ) -> ToolCitation:
         return ToolCitation(
             source=source,
             label=label,
             reference=reference,
-            as_of=as_of.isoformat() if isinstance(as_of, date) else None,
+            as_of=self._as_of_string(as_of),
         )
 
     def _freshness(self, as_of_date: date | None = None, **sources: str | None) -> ToolFreshness:
@@ -1257,6 +1257,19 @@ class MarketCopilotService:
             as_of_date=as_of_date.isoformat() if isinstance(as_of_date, date) else None,
             sources=sources,
         )
+
+    def _as_of_string(self, value: date | datetime | str | None) -> str | None:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, str):
+            candidate = value[:10]
+            try:
+                return date.fromisoformat(candidate).isoformat()
+            except ValueError:
+                return None
+        return None
 
     def _rating_values(self, rating: str | list[str] | None) -> tuple[str, ...]:
         if rating is None:
