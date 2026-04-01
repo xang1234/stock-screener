@@ -33,6 +33,22 @@ export const setUnauthorizedResponseHandler = (handler) => {
   unauthorizedResponseHandler = typeof handler === 'function' ? handler : null;
 };
 
+export const notifyUnauthorizedResponse = ({ status, url, headers, error }) => {
+  if (
+    status === 401
+    && unauthorizedResponseHandler
+    && !isAuthUrl(url)
+    && !getHeaderValue(headers, 'X-Admin-Key')
+  ) {
+    unauthorizedResponseHandler(
+      error ?? {
+        response: { status },
+        config: { url, headers },
+      }
+    );
+  }
+};
+
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -76,14 +92,12 @@ apiClient.interceptors.response.use(
         data: error.response.data,
         url: error.config.url,
       });
-      if (
-        error.response.status === 401
-        && unauthorizedResponseHandler
-        && !isAuthUrl(error.config?.url)
-        && !getHeaderValue(error.config?.headers, 'X-Admin-Key')
-      ) {
-        unauthorizedResponseHandler(error);
-      }
+      notifyUnauthorizedResponse({
+        status: error.response.status,
+        url: error.config?.url,
+        headers: error.config?.headers,
+        error,
+      });
     } else if (error.request) {
       // Request made but no response
       console.error('API No Response:', error.request);

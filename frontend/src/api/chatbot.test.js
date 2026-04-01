@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockApiClient } = vi.hoisted(() => ({
+const { mockApiClient, mockNotifyUnauthorizedResponse } = vi.hoisted(() => ({
   mockApiClient: {
     defaults: {
       baseURL: 'https://api.example.com/api',
@@ -11,10 +11,12 @@ const { mockApiClient } = vi.hoisted(() => ({
     delete: vi.fn(),
     patch: vi.fn(),
   },
+  mockNotifyUnauthorizedResponse: vi.fn(),
 }));
 
 vi.mock('./client', () => ({
   default: mockApiClient,
+  notifyUnauthorizedResponse: mockNotifyUnauthorizedResponse,
 }));
 
 import { sendMessageStream } from './chatbot';
@@ -62,5 +64,44 @@ describe('chatbot streaming api', () => {
         }),
       );
     });
+  });
+
+  it('notifies the shared unauthorized handler when streaming requests return 401', async () => {
+    const onError = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+    }));
+
+    sendMessageStream(
+      'conv-123',
+      'hello world',
+      null,
+      false,
+      vi.fn(),
+      onError,
+      vi.fn(),
+    );
+
+    await vi.waitFor(() => {
+      expect(mockNotifyUnauthorizedResponse).toHaveBeenCalledWith({
+        status: 401,
+        url: 'https://api.example.com/api/v1/chatbot/conversations/conv-123/messages',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        error: expect.objectContaining({
+          message: 'HTTP error! status: 401',
+          status: 401,
+        }),
+      });
+    });
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'HTTP error! status: 401',
+        status: 401,
+      }),
+    );
   });
 });

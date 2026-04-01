@@ -1,7 +1,7 @@
 /**
  * API client for Chatbot endpoints.
  */
-import apiClient from './client';
+import apiClient, { notifyUnauthorizedResponse } from './client';
 
 /**
  * Create a new conversation.
@@ -78,18 +78,30 @@ export const sendMessageStream = (conversationId, content, enabledTools, researc
     requestBody.research_mode = true;
   }
 
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+  };
+
   fetch(url, {
     method: 'POST',
     credentials: apiClient.defaults.withCredentials ? 'include' : 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: requestHeaders,
     body: JSON.stringify(requestBody),
     signal: controller.signal,
   })
     .then(async (response) => {
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const error = new Error(`HTTP error! status: ${response.status}`);
+        error.status = response.status;
+
+        notifyUnauthorizedResponse({
+          status: response.status,
+          url,
+          headers: requestHeaders,
+          error,
+        });
+
+        throw error;
       }
 
       const reader = response.body.getReader();
