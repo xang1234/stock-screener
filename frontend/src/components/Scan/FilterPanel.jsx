@@ -86,6 +86,7 @@ function FilterPanel({
   filterOptions = {},
   expanded = true,
   onToggle,
+  presetsEnabled = true,
   // Preset props
   presets = [],
   activePresetId = null,
@@ -349,18 +350,20 @@ function FilterPanel({
         </Typography>
 
         {/* Filter Presets */}
-        <FilterPresets
-          presets={presets}
-          activePresetId={activePresetId}
-          hasUnsavedChanges={hasUnsavedChanges}
-          isLoading={presetsLoading}
-          isSaving={presetsSaving}
-          onLoadPreset={onLoadPreset}
-          onSavePreset={onSavePreset}
-          onUpdatePreset={onUpdatePreset}
-          onRenamePreset={onRenamePreset}
-          onDeletePreset={onDeletePreset}
-        />
+        {presetsEnabled && (
+          <FilterPresets
+            presets={presets}
+            activePresetId={activePresetId}
+            hasUnsavedChanges={hasUnsavedChanges}
+            isLoading={presetsLoading}
+            isSaving={presetsSaving}
+            onLoadPreset={onLoadPreset}
+            onSavePreset={onSavePreset}
+            onUpdatePreset={onUpdatePreset}
+            onRenamePreset={onRenamePreset}
+            onDeletePreset={onDeletePreset}
+          />
+        )}
 
         <Box sx={{ flexGrow: 1 }} />
 
@@ -968,16 +971,18 @@ function FilterPanel({
       </Collapse>
 
       {/* Save Preset Dialog */}
-      <SavePresetDialog
-        open={saveDialogOpen}
-        onClose={onSaveDialogClose}
-        onSave={onSaveDialogSave}
-        mode={saveDialogMode}
-        initialName={saveDialogInitialName}
-        initialDescription={saveDialogInitialDescription}
-        error={saveDialogError}
-        isLoading={presetsSaving}
-      />
+      {presetsEnabled && (
+        <SavePresetDialog
+          open={saveDialogOpen}
+          onClose={onSaveDialogClose}
+          onSave={onSaveDialogSave}
+          mode={saveDialogMode}
+          initialName={saveDialogInitialName}
+          initialDescription={saveDialogInitialDescription}
+          error={saveDialogError}
+          isLoading={presetsSaving}
+        />
+      )}
     </Paper>
   );
 }

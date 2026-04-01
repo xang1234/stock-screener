@@ -14,6 +14,7 @@ frontend/node_modules
 
 # Build artifacts
 frontend/dist
+frontend/public/static-data/
 
 # Environment variables (keep .example files)
 .env

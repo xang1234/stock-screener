@@ -43,6 +43,7 @@ import { useFilterPresets } from '../hooks/useFilterPresets';
 import { useRuntime } from '../contexts/RuntimeContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import { formatScanDropdownLabel } from '../utils/scanLabel';
+import { buildDefaultScanFilters } from '../features/scan/defaultFilters';
 
 // Test list of 20 popular stocks for quick testing
 const TEST_SYMBOLS = [
@@ -52,56 +53,7 @@ const TEST_SYMBOLS = [
   'UNH', 'HD', 'CVX', 'ABBV', 'KO'
 ];
 
-const buildDefaultFilters = () => ({
-  symbolSearch: '',
-  stage: null,
-  ratings: [],
-  ibdIndustries: { values: [], mode: 'include' },
-  gicsSectors: { values: [], mode: 'include' },
-  minVolume: null,
-  minMarketCap: null,
-  compositeScore: { min: null, max: null },
-  minerviniScore: { min: null, max: null },
-  canslimScore: { min: null, max: null },
-  ipoScore: { min: null, max: null },
-  customScore: { min: null, max: null },
-  volBreakthroughScore: { min: null, max: null },
-  seSetupScore: { min: null, max: null },
-  seDistanceToPivot: { min: null, max: null },
-  seBbSqueeze: { min: null, max: null },
-  seVolumeVs50d: { min: null, max: null },
-  seSetupReady: null,
-  seRsLineNewHigh: null,
-  rsRating: { min: null, max: null },
-  rs1m: { min: null, max: null },
-  rs3m: { min: null, max: null },
-  rs12m: { min: null, max: null },
-  price: { min: null, max: null },
-  adrPercent: { min: null, max: null },
-  epsGrowth: { min: null, max: null },
-  salesGrowth: { min: null, max: null },
-  vcpScore: { min: null, max: null },
-  vcpPivot: { min: null, max: null },
-  vcpDetected: null,
-  vcpReady: null,
-  maAlignment: null,
-  passesTemplate: null,
-  perfDay: { min: null, max: null },
-  perfWeek: { min: null, max: null },
-  perfMonth: { min: null, max: null },
-  perf3m: { min: null, max: null },
-  perf6m: { min: null, max: null },
-  gapPercent: { min: null, max: null },
-  volumeSurge: { min: null, max: null },
-  ema10Distance: { min: null, max: null },
-  ema20Distance: { min: null, max: null },
-  ema50Distance: { min: null, max: null },
-  week52HighDistance: { min: null, max: null },
-  week52LowDistance: { min: null, max: null },
-  ipoAfter: null,
-});
-
-const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultFilters());
+const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultScanFilters());
 
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
@@ -130,7 +82,7 @@ function ScanPage() {
   const [sortOrder, setSortOrder] = useState('desc');
 
   // Filters - new compact structure
-  const [filters, setFilters] = useState(buildDefaultFilters);
+  const [filters, setFilters] = useState(buildDefaultScanFilters);
 
   // Debounced filters for API calls (prevents rapid API spam during filter adjustments)
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
@@ -460,7 +412,7 @@ function ScanPage() {
 
   // Handle filter reset
   const handleResetFilters = () => {
-    setFilters(buildDefaultFilters());
+    setFilters(buildDefaultScanFilters());
     setPage(1);
     // Clear active preset when resetting filters
     setActivePresetId(null);

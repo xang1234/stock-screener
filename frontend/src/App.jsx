@@ -3,6 +3,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { CssBaseline, ThemeProvider, createTheme, CircularProgress, Box } from '@mui/material';
 
+import { STATIC_SITE_MODE } from './config/runtimeMode';
+import StaticAppShell from './static/StaticAppShell';
+
 // Eagerly loaded pages (most frequently used)
 import ScanPage from './pages/ScanPage';
 import MarketScanPage from './pages/MarketScanPage';
@@ -213,16 +216,20 @@ function App() {
 
   const theme = useMemo(() => createTheme(getDesignTokens(mode)), [mode]);
 
+  const appShell = STATIC_SITE_MODE ? <StaticAppShell /> : (
+    <RuntimeProvider>
+      <AppShell />
+    </RuntimeProvider>
+  );
+
   return (
     <QueryClientProvider client={queryClient}>
-      <RuntimeProvider>
-        <ColorModeContext.Provider value={colorMode}>
-          <ThemeProvider theme={theme}>
-            <CssBaseline />
-            <AppShell />
-          </ThemeProvider>
-        </ColorModeContext.Provider>
-      </RuntimeProvider>
+      <ColorModeContext.Provider value={colorMode}>
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          {appShell}
+        </ThemeProvider>
+      </ColorModeContext.Provider>
     </QueryClientProvider>
   );
 }
