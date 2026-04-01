@@ -11,6 +11,7 @@ from app.database import SessionLocal
 from app.infra.db.portability import is_sqlite
 from app.main import initialize_runtime
 from app.services.static_site_export_service import StaticSiteExportService
+from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 
 
 def _repo_root() -> Path:
@@ -38,23 +39,24 @@ def _run_daily_refresh(*, refresh_themes_best_effort: bool) -> tuple[dict[str, A
     from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
-    results: dict[str, Any] = {
-        "universe_refresh": refresh_stock_universe.run(),
-        "cache_refresh": smart_refresh_cache.run(mode="full"),
-        "fundamentals_refresh": refresh_all_fundamentals.run(),
-        "breadth_refresh": calculate_daily_breadth_with_gapfill.run(),
-        "groups_refresh": calculate_daily_group_rankings.run(),
-        "feature_snapshot": build_daily_snapshot.run(),
-    }
+    with disable_serialized_data_fetch_lock():
+        results: dict[str, Any] = {
+            "universe_refresh": refresh_stock_universe.run(),
+            "cache_refresh": smart_refresh_cache.run(mode="full"),
+            "fundamentals_refresh": refresh_all_fundamentals.run(),
+            "breadth_refresh": calculate_daily_breadth_with_gapfill.run(),
+            "groups_refresh": calculate_daily_group_rankings.run(),
+            "feature_snapshot": build_daily_snapshot.run(),
+        }
 
-    if refresh_themes_best_effort:
-        from app.tasks.theme_discovery_tasks import run_full_pipeline
+        if refresh_themes_best_effort:
+            from app.tasks.theme_discovery_tasks import run_full_pipeline
 
-        for pipeline in ("technical", "fundamental"):
-            try:
-                results[f"themes_{pipeline}"] = run_full_pipeline.run(pipeline=pipeline)
-            except Exception as exc:  # noqa: BLE001 - explicit best effort behavior
-                warnings.append(f"Theme refresh failed for {pipeline}: {exc}")
+            for pipeline in ("technical", "fundamental"):
+                try:
+                    results[f"themes_{pipeline}"] = run_full_pipeline.run(pipeline=pipeline)
+                except Exception as exc:  # noqa: BLE001 - explicit best effort behavior
+                    warnings.append(f"Theme refresh failed for {pipeline}: {exc}")
 
     return results, warnings
 

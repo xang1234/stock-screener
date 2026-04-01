@@ -5,6 +5,8 @@ Ensures only one data-fetching job runs at a time to prevent API rate limiting
 from yfinance, finviz, and other external data sources.
 """
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Optional, Tuple
@@ -19,6 +21,10 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 LOCK_KEY = "data_fetch_job_lock"
+_SERIALIZED_DATA_FETCH_LOCK_DISABLED: ContextVar[bool] = ContextVar(
+    "serialized_data_fetch_lock_disabled",
+    default=False,
+)
 
 # Lua script for atomic release: only deletes if the task_id field matches.
 # Prevents TOCTOU race where lock TTL expires between GET and DEL.
@@ -76,6 +82,16 @@ def _build_lock_contention_payload(
         "running_task_id": holder_task_id,
         "message": message,
     }
+
+
+@contextmanager
+def disable_serialized_data_fetch_lock():
+    """Temporarily bypass the distributed Redis lock for in-process workflows."""
+    token = _SERIALIZED_DATA_FETCH_LOCK_DISABLED.set(True)
+    try:
+        yield
+    finally:
+        _SERIALIZED_DATA_FETCH_LOCK_DISABLED.reset(token)
 
 
 class DataFetchLock:
@@ -295,6 +311,10 @@ def serialized_data_fetch(task_name: str):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            if _SERIALIZED_DATA_FETCH_LOCK_DISABLED.get():
+                logger.info("Bypassing distributed data-fetch lock for %s", task_name)
+                return func(*args, **kwargs)
+
             lock = DataFetchLock.get_instance()
 
             # Get task ID from Celery request if available

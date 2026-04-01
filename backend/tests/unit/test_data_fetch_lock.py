@@ -8,7 +8,12 @@ import pytest
 from unittest.mock import MagicMock, patch
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
-from app.tasks.data_fetch_lock import DataFetchLock, serialized_data_fetch, LOCK_KEY
+from app.tasks.data_fetch_lock import (
+    DataFetchLock,
+    LOCK_KEY,
+    disable_serialized_data_fetch_lock,
+    serialized_data_fetch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +327,19 @@ class TestSerializedDataFetchDecorator:
         my_func()
 
         mock_lock.release.assert_not_called()
+
+    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    def test_decorator_can_bypass_lock_for_in_process_workflows(self, mock_get_instance):
+        """Export/bootstrap flows can skip the distributed lock in a single process."""
+        @serialized_data_fetch("test_task")
+        def my_func():
+            return "ok"
+
+        with disable_serialized_data_fetch_lock():
+            result = my_func()
+
+        assert result == "ok"
+        mock_get_instance.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
