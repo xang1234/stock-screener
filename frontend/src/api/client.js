@@ -17,6 +17,7 @@ const isThemesApiUrl = (url) => {
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   timeout: DEFAULT_API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',

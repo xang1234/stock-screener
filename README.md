@@ -54,7 +54,7 @@ Visual performance tracking with RS and price sparklines (30-day trends), price 
 
 ```bash
 cp .env.docker.example .env
-# Edit .env: add at least one LLM API key (e.g., GROQ_API_KEY)
+# Edit .env: set SERVER_AUTH_PASSWORD and add at least one LLM API key (e.g., GROQ_API_KEY)
 docker-compose up
 # Open http://localhost
 ```

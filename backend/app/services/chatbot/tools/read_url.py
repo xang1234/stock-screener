@@ -2,6 +2,7 @@
 Read URL Tool - Fetches and extracts text content from URLs.
 Supports HTML pages and PDF documents.
 """
+import ssl
 import logging
 import re
 import socket
@@ -9,10 +10,153 @@ from typing import Dict, Any, Optional
 from ipaddress import ip_address
 from urllib.parse import urlparse, urljoin
 
+import httpcore
 import httpx
 from bs4 import BeautifulSoup
+from httpcore._backends.anyio import AnyIOBackend
 
 logger = logging.getLogger(__name__)
+
+
+def _is_disallowed_ip(host: str) -> bool:
+    ip = ip_address(host)
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+class _PinnedResponseStream(httpx.AsyncByteStream):
+    """Bridge httpcore response streams into httpx responses."""
+
+    def __init__(self, httpcore_stream):
+        self._httpcore_stream = httpcore_stream
+
+    async def __aiter__(self):
+        async for part in self._httpcore_stream:
+            yield part
+
+    async def aclose(self) -> None:
+        if hasattr(self._httpcore_stream, "aclose"):
+            await self._httpcore_stream.aclose()
+
+
+class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
+    """Resolve once, reject private/reserved answers, and connect by pinned IP."""
+
+    def __init__(self) -> None:
+        self._backend = AnyIOBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,
+    ) -> httpcore.AsyncNetworkStream:
+        resolved_ip = self._resolve_public_ip(host)
+        return await self._backend.connect_tcp(
+            host=resolved_ip,
+            port=port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options=None,
+    ) -> httpcore.AsyncNetworkStream:
+        return await self._backend.connect_unix_socket(
+            path=path,
+            timeout=timeout,
+            socket_options=socket_options,
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+    def _resolve_public_ip(self, host: str) -> str:
+        normalized = host.strip().lower().rstrip(".")
+        if normalized == "localhost":
+            raise httpcore.ConnectError("Blocked host")
+
+        try:
+            if _is_disallowed_ip(normalized):
+                raise httpcore.ConnectError("Blocked host")
+            return normalized
+        except ValueError:
+            pass
+
+        try:
+            infos = socket.getaddrinfo(normalized, None, type=socket.SOCK_STREAM)
+        except Exception as exc:
+            raise httpcore.ConnectError("Blocked host") from exc
+
+        public_ips: list[str] = []
+        for info in infos:
+            ip_str = info[4][0]
+            try:
+                if _is_disallowed_ip(ip_str):
+                    raise httpcore.ConnectError("Blocked host")
+            except ValueError:
+                continue
+            if ip_str not in public_ips:
+                public_ips.append(ip_str)
+
+        if not public_ips:
+            raise httpcore.ConnectError("Blocked host")
+
+        return public_ips[0]
+
+
+class _PinnedPublicIPTransport(httpx.AsyncBaseTransport):
+    """httpx transport that pins the validated DNS answer for the TCP connect."""
+
+    def __init__(self) -> None:
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0)
+        self._pool = httpcore.AsyncConnectionPool(
+            ssl_context=ssl.create_default_context(),
+            max_connections=limits.max_connections,
+            max_keepalive_connections=limits.max_keepalive_connections,
+            keepalive_expiry=limits.keepalive_expiry,
+            http1=True,
+            http2=False,
+            retries=0,
+            network_backend=_PinnedPublicIPBackend(),
+        )
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        req = httpcore.Request(
+            method=request.method,
+            url=httpcore.URL(
+                scheme=request.url.raw_scheme,
+                host=request.url.raw_host,
+                port=request.url.port,
+                target=request.url.raw_path,
+            ),
+            headers=request.headers.raw,
+            content=request.stream,
+            extensions=request.extensions,
+        )
+        response = await self._pool.handle_async_request(req)
+        return httpx.Response(
+            status_code=response.status,
+            headers=response.headers,
+            stream=_PinnedResponseStream(response.stream),
+            extensions=response.extensions,
+            request=request,
+        )
+
+    async def aclose(self) -> None:
+        await self._pool.aclose()
 
 
 class ReadUrlTool:
@@ -39,8 +183,10 @@ class ReadUrlTool:
         """Get or create async HTTP client."""
         if self._client is None:
             self._client = httpx.AsyncClient(
+                transport=_PinnedPublicIPTransport(),
                 timeout=self.timeout,
                 follow_redirects=False,
+                trust_env=False,
                 headers={
                     "User-Agent": self.USER_AGENT,
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -57,36 +203,23 @@ class ReadUrlTool:
         if normalized in {"localhost"}:
             return True
         try:
-            ip = ip_address(normalized)
-            return (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            )
+            return _is_disallowed_ip(normalized)
         except ValueError:
             # Resolve hostname and block if any IP is private/reserved
             try:
-                infos = socket.getaddrinfo(normalized, None)
+                infos = socket.getaddrinfo(normalized, None, type=socket.SOCK_STREAM)
             except Exception:
                 return True
+            has_public_ip = False
             for info in infos:
                 ip_str = info[4][0]
                 try:
-                    ip = ip_address(ip_str)
-                    if (
-                        ip.is_private
-                        or ip.is_loopback
-                        or ip.is_link_local
-                        or ip.is_multicast
-                        or ip.is_reserved
-                        or ip.is_unspecified
-                    ):
+                    if _is_disallowed_ip(ip_str):
                         return True
+                    has_public_ip = True
                 except ValueError:
                     continue
+            return not has_public_ip
         return False
 
     def _validate_url(self, url: str) -> Optional[str]:
@@ -94,6 +227,8 @@ class ReadUrlTool:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"}:
             return "Unsupported URL scheme"
+        if parsed.scheme != "https":
+            return "Only HTTPS URLs are allowed"
         if not parsed.netloc or not parsed.hostname:
             return "Invalid URL format"
         if self._is_blocked_host(parsed.hostname):
@@ -222,7 +357,7 @@ class ReadUrlTool:
                 "truncated": truncated,
             }
 
-        except httpx.TimeoutException:
+        except (httpx.TimeoutException, httpcore.TimeoutException):
             logger.warning(f"Timeout fetching URL: {url}")
             return {
                 "success": False,

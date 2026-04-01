@@ -36,6 +36,9 @@ frontend/dist
 data/.cache/*
 data/db_repair_backup_*/
 data/*.recovered_*
+data/xui-reader/**/storage_state.json
+data/xui-reader/**/*.sqlite
+data/xui-reader/**/*.sqlite3
 docker-data/postgres/
 
 # Logs

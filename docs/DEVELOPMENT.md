@@ -71,10 +71,13 @@ Requires backend API running on port 8000.
 Bootstrap shared xui profile/session state for theme discovery:
 
 ```bash
-xui config init --path ../data/xui-reader/config.toml
-xui profiles create default --path ../data/xui-reader/config.toml
-xui auth login --profile default --path ../data/xui-reader/config.toml
+export XUI_CONFIG_PATH="${XUI_CONFIG_PATH:-$HOME/.stockscanner/xui-reader/config.toml}"
+xui config init --path "$XUI_CONFIG_PATH"
+xui profiles create default --path "$XUI_CONFIG_PATH"
+xui auth login --profile default --path "$XUI_CONFIG_PATH"
 ```
+
+Use an app-data path outside the repo so browser session artifacts do not sit in the worktree.
 
 Alternative for Google-linked X accounts: use **Themes > Manage Sources > "Connect From Current Browser"** after loading the unpacked extension from `browser-extension/xui-session-bridge`.
 
