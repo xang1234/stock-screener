@@ -70,6 +70,73 @@ jobs:
         if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: pip install -r backend/requirements.txt
 
+      - name: Download weekly reference manifest
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/weekly-reference
+          gh release download weekly-reference-data \
+            --pattern weekly-reference-latest.json \
+            --dir /tmp/weekly-reference
+
+      - name: Download weekly reference bundle
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          print(manifest["bundle_asset_name"])
+          PY
+          )"
+          BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          print(manifest["sha256"])
+          PY
+          )"
+          echo "BUNDLE_ASSET_NAME=$BUNDLE_ASSET_NAME" >> "$GITHUB_ENV"
+          echo "BUNDLE_SHA256=$BUNDLE_SHA256" >> "$GITHUB_ENV"
+
+          gh release download weekly-reference-data \
+            --pattern "$BUNDLE_ASSET_NAME" \
+            --dir /tmp/weekly-reference
+
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          bundle_path = Path("/tmp/weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
+          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          expected = os.environ["BUNDLE_SHA256"]
+          if digest != expected:
+              raise SystemExit(
+                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
+                  f"{digest} != {expected}"
+              )
+          PY
+
+      - name: Import weekly reference bundle
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        run: |
+          cd backend
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
+
+      - name: Load tracked IBD industry seed
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        run: |
+          cd backend
+          python -m app.scripts.load_ibd_industry_groups \
+            --csv ../data/IBD_industry_group.csv
+
       - name: Install frontend dependencies
         if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: cd frontend && npm ci
@@ -81,6 +148,9 @@ jobs:
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
             --refresh-daily \
+            --skip-universe-refresh \
+            --skip-fundamentals-refresh \
+            --hydrate-published-snapshot \
             --refresh-themes-best-effort
 
       - name: Build static frontend

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import date, datetime
 
@@ -18,11 +19,12 @@ from app.services.provider_snapshot_service import ProviderSnapshotService, sett
 
 
 class _StubFundamentalsCache:
-    def __init__(self):
+    def __init__(self, cached: dict[str, dict] | None = None):
         self.stored: dict[str, dict] = {}
+        self.cached = cached or {}
 
     def get_many(self, symbols):
-        return {symbol: {} for symbol in symbols}
+        return {symbol: dict(self.cached.get(symbol) or {}) for symbol in symbols}
 
     @staticmethod
     def _merge_fundamentals(primary, fallback):
@@ -182,6 +184,61 @@ def test_hydrate_published_snapshot_fetches_yahoo_only_fields_for_missing_scan_d
     db.close()
 
 
+def test_hydrate_published_snapshot_can_skip_yahoo_when_disabled():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260319010101",
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="row-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL", "exchange": "NASDAQ", "market_cap": 1000}),
+            raw_payload_json=None,
+        )
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = ProviderSnapshotService()
+    service.fundamentals_cache = _StubFundamentalsCache()
+    service.price_cache = _StubPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+    yahoo_calls: list[str] = []
+    service._fetch_yahoo_only_fields = lambda symbol: yahoo_calls.append(symbol) or {}
+
+    stats = service.hydrate_published_snapshot(db, allow_yahoo_hydration=False)
+
+    assert stats["yahoo_hydrated"] == 0
+    assert stats["missing_yahoo"] == 1
+    assert yahoo_calls == []
+    db.close()
+
+
 def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -223,6 +280,151 @@ def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(mon
     assert result["coverage"]["active_symbols"] == 1
     assert result["coverage"]["covered_active_symbols"] == 1
     assert result["coverage"]["missing_active_symbols"] == 0
+    db.close()
+
+
+def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapshot(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+                sector="Technology",
+                industry="Software",
+                market_cap=123.0,
+            ),
+            StockUniverse(
+                symbol="OLD",
+                exchange="NYSE",
+                is_active=False,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason=None,
+            ),
+        ]
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260402081000",
+        coverage_stats_json=json.dumps({"active_symbols": 1, "covered_active_symbols": 1, "missing_active_symbols": 0}),
+        parity_stats_json=json.dumps({"missing_active_symbols": []}),
+        warnings_json=json.dumps([]),
+        symbols_total=1,
+        symbols_published=1,
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="row-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL", "exchange": "NASDAQ", "market_cap": 1000}),
+            raw_payload_json=json.dumps({"overview": {"Ticker": "AAPL"}}),
+        )
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = ProviderSnapshotService()
+    service.fundamentals_cache = _StubFundamentalsCache(
+        cached={
+            "AAPL": {
+                "ipo_date": date(2020, 1, 2),
+                "first_trade_date": 1577923200,
+                "eps_growth_qq": 12.3,
+                "sales_growth_qq": 4.5,
+                "eps_growth_yy": 22.0,
+                "sales_growth_yy": 9.0,
+                "description_yfinance": "Long summary",
+            }
+        }
+    )
+
+    bundle_path = tmp_path / "weekly-reference-20260402.json.gz"
+    latest_manifest_path = tmp_path / "weekly-reference-latest.json"
+    export_stats = service.export_weekly_reference_bundle(
+        db,
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+        latest_manifest_path=latest_manifest_path,
+    )
+
+    with gzip.open(bundle_path, "rt", encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    assert export_stats["rows"] == 1
+    assert export_stats["universe_rows"] == 1
+    assert payload["schema_version"] == ProviderSnapshotService.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
+    assert len(payload["snapshot"]["rows"]) == 1
+    assert payload["snapshot"]["rows"][0]["normalized_payload"]["ipo_date"] == "2020-01-02"
+    assert payload["snapshot"]["rows"][0]["normalized_payload"]["description_yfinance"] == "Long summary"
+    assert len(payload["universe"]) == 1
+    assert payload["universe"][0]["symbol"] == "AAPL"
+
+    manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
+    assert manifest["bundle_asset_name"] == bundle_path.name
+    assert manifest["sha256"]
+
+    unrelated_run = ProviderSnapshotRun(
+        snapshot_key="other_snapshot",
+        run_mode="publish",
+        status="published",
+        source_revision="other-snapshot:20260401000000",
+    )
+    db.add(unrelated_run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=unrelated_run.id,
+            symbol="QQQ",
+            exchange="NASDAQ",
+            row_hash="other-row-hash",
+            normalized_payload_json=json.dumps({"symbol": "QQQ"}),
+            raw_payload_json=None,
+        )
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key="other_snapshot",
+            run_id=unrelated_run.id,
+        )
+    )
+    db.commit()
+
+    import_stats = service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    imported_run = service.get_published_run(db)
+    imported_row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == imported_run.id).one()
+    imported_payload = json.loads(imported_row.normalized_payload_json)
+    imported_symbols = [row.symbol for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()]
+
+    assert import_stats["rows"] == 1
+    assert import_stats["universe_rows"] == 1
+    assert imported_run.source_revision == "fundamentals_v1:20260402081000"
+    assert imported_payload["ipo_date"] == "2020-01-02"
+    assert imported_symbols == ["AAPL"]
+    assert db.query(ProviderSnapshotRun).filter(
+        ProviderSnapshotRun.snapshot_key == ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS
+    ).count() == 1
+    assert db.query(ProviderSnapshotRun).filter(
+        ProviderSnapshotRun.snapshot_key == "other_snapshot"
+    ).count() == 1
+    assert db.query(ProviderSnapshotPointer).count() == 2
     db.close()
 
 

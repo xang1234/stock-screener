@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 import pandas as pd
@@ -26,6 +28,22 @@ from .price_cache_service import PriceCacheService
 from .technical_calculator_service import TechnicalCalculatorService
 
 logger = logging.getLogger(__name__)
+
+
+WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = "weekly-reference-bundle-v1"
+WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = "weekly-reference-manifest-v1"
+WEEKLY_REFERENCE_RELEASE_TAG = "weekly-reference-data"
+WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = "weekly-reference-latest.json"
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _deserialize_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
 
 
 class ProviderSnapshotService:
@@ -55,6 +73,10 @@ class ProviderSnapshotService:
         "eps_raw_score",
         "eps_years_available",
     )
+    WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
+    WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION
+    WEEKLY_REFERENCE_RELEASE_TAG = WEEKLY_REFERENCE_RELEASE_TAG
+    WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
 
     def __init__(self) -> None:
         self.parser = FinvizParser()
@@ -329,6 +351,7 @@ class ProviderSnapshotService:
         db: Session,
         *,
         snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
+        allow_yahoo_hydration: bool = True,
     ) -> Dict[str, Any]:
         """Hydrate stock_fundamentals/cache from the currently published snapshot."""
         run = self.get_published_run(db, snapshot_key=snapshot_key)
@@ -378,7 +401,7 @@ class ProviderSnapshotService:
                     snapshot_payload,
                     existing_data.get(row.symbol) or {},
                 )
-                if self._needs_yahoo_hydration(merged_payload):
+                if allow_yahoo_hydration and self._needs_yahoo_hydration(merged_payload):
                     yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
                     if yahoo_payload:
                         merged_payload = self.fundamentals_cache._merge_fundamentals(
@@ -388,6 +411,8 @@ class ProviderSnapshotService:
                         yahoo_hydrated += 1
                     if self._needs_yahoo_hydration(merged_payload):
                         missing_yahoo += 1
+                elif self._needs_yahoo_hydration(merged_payload):
+                    missing_yahoo += 1
                 merged_payload["description"] = (
                     merged_payload.get("description_finviz")
                     or merged_payload.get("description_yfinance")
@@ -430,6 +455,275 @@ class ProviderSnapshotService:
             ),
             "snapshot_coverage": coverage,
             "parity_summary": parity,
+        }
+
+    def export_weekly_reference_bundle(
+        self,
+        db: Session,
+        *,
+        output_path: Path,
+        bundle_asset_name: str,
+        latest_manifest_path: Path | None = None,
+        snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
+    ) -> Dict[str, Any]:
+        """Export the current published fundamentals snapshot + active universe bundle."""
+        run = self.get_published_run(db, snapshot_key=snapshot_key)
+        if run is None:
+            raise ValueError(f"No published snapshot for {snapshot_key}")
+
+        coverage = json.loads(run.coverage_stats_json) if run.coverage_stats_json else None
+        parity = json.loads(run.parity_stats_json) if run.parity_stats_json else None
+        warnings = json.loads(run.warnings_json) if run.warnings_json else []
+
+        active_universe_rows = (
+            db.query(StockUniverse)
+            .filter(StockUniverse.active_filter())
+            .order_by(StockUniverse.symbol.asc())
+            .all()
+        )
+        active_symbols = [row.symbol for row in active_universe_rows]
+        active_symbol_set = set(active_symbols)
+        fundamentals_by_symbol = self.fundamentals_cache.get_many(active_symbols) if active_symbols else {}
+        snapshot_rows = (
+            db.query(ProviderSnapshotRow)
+            .filter(ProviderSnapshotRow.run_id == run.id)
+            .order_by(ProviderSnapshotRow.symbol.asc())
+            .all()
+        )
+
+        bundle_rows: list[dict[str, Any]] = []
+        for row in snapshot_rows:
+            if row.symbol not in active_symbol_set:
+                continue
+            normalized_payload = json.loads(row.normalized_payload_json)
+            enriched_payload = self.fundamentals_cache._merge_fundamentals(
+                normalized_payload,
+                fundamentals_by_symbol.get(row.symbol) or {},
+            )
+            bundle_rows.append(
+                {
+                    "symbol": row.symbol,
+                    "exchange": row.exchange,
+                    "row_hash": row.row_hash,
+                    "normalized_payload": enriched_payload,
+                }
+            )
+
+        bundle_payload = {
+            "schema_version": self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+            "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "as_of_date": (
+                (run.published_at or run.created_at).date().isoformat()
+                if (run.published_at or run.created_at) is not None
+                else None
+            ),
+            "source_revision": run.source_revision,
+            "coverage": coverage,
+            "warnings": warnings,
+            "snapshot": {
+                "snapshot_key": run.snapshot_key,
+                "run_mode": run.run_mode,
+                "status": run.status,
+                "source_revision": run.source_revision,
+                "created_at": _serialize_datetime(run.created_at),
+                "published_at": _serialize_datetime(run.published_at),
+                "symbols_total": run.symbols_total,
+                "symbols_published": run.symbols_published,
+                "coverage_stats": coverage,
+                "parity_stats": parity,
+                "warnings": warnings,
+                "rows": bundle_rows,
+            },
+            "universe": [self._serialize_universe_row(row) for row in active_universe_rows],
+        }
+        self._write_bundle_payload(output_path, bundle_payload)
+
+        sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
+        manifest = {
+            "schema_version": self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
+            "generated_at": bundle_payload["generated_at"],
+            "as_of_date": bundle_payload["as_of_date"],
+            "source_revision": run.source_revision,
+            "coverage": coverage,
+            "warnings": warnings,
+            "bundle_asset_name": bundle_asset_name,
+            "sha256": sha256,
+        }
+        if latest_manifest_path is not None:
+            latest_manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+        return {
+            "bundle_path": str(output_path),
+            "manifest_path": str(latest_manifest_path) if latest_manifest_path is not None else None,
+            "bundle_asset_name": bundle_asset_name,
+            "sha256": sha256,
+            "source_revision": run.source_revision,
+            "rows": len(bundle_rows),
+            "universe_rows": len(active_universe_rows),
+            "as_of_date": bundle_payload["as_of_date"],
+        }
+
+    def import_weekly_reference_bundle(
+        self,
+        db: Session,
+        *,
+        input_path: Path,
+    ) -> Dict[str, Any]:
+        """Import a weekly reference bundle into the local database."""
+        payload = self._read_bundle_payload(input_path)
+        if payload.get("schema_version") != self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION:
+            raise ValueError(
+                "Unsupported weekly reference bundle schema version: "
+                f"{payload.get('schema_version')}"
+            )
+
+        snapshot = payload["snapshot"]
+        snapshot_key = snapshot["snapshot_key"]
+        universe_rows = payload.get("universe", [])
+        snapshot_rows = snapshot.get("rows", [])
+        coverage = snapshot.get("coverage_stats")
+        parity = snapshot.get("parity_stats")
+        warnings = snapshot.get("warnings")
+
+        existing_run_ids = [
+            row[0]
+            for row in db.query(ProviderSnapshotRun.id)
+            .filter(ProviderSnapshotRun.snapshot_key == snapshot_key)
+            .all()
+        ]
+        db.query(ProviderSnapshotPointer).filter(
+            ProviderSnapshotPointer.snapshot_key == snapshot_key
+        ).delete()
+        if existing_run_ids:
+            db.query(ProviderSnapshotRow).filter(
+                ProviderSnapshotRow.run_id.in_(existing_run_ids)
+            ).delete(synchronize_session=False)
+            db.query(ProviderSnapshotRun).filter(
+                ProviderSnapshotRun.id.in_(existing_run_ids)
+            ).delete(synchronize_session=False)
+        db.query(StockUniverse).delete()
+        db.commit()
+        db.expunge_all()
+
+        imported_universe = [
+            StockUniverse(**self._deserialize_universe_row(row))
+            for row in universe_rows
+        ]
+        if imported_universe:
+            db.bulk_save_objects(imported_universe)
+
+        run = ProviderSnapshotRun(
+            snapshot_key=snapshot["snapshot_key"],
+            run_mode=snapshot["run_mode"],
+            status=snapshot["status"],
+            source_revision=snapshot["source_revision"],
+            coverage_stats_json=json.dumps(coverage, sort_keys=True) if coverage is not None else None,
+            parity_stats_json=json.dumps(parity, sort_keys=True) if parity is not None else None,
+            warnings_json=json.dumps(warnings, sort_keys=True) if warnings else None,
+            symbols_total=snapshot.get("symbols_total", len(snapshot_rows)),
+            symbols_published=snapshot.get("symbols_published", len(snapshot_rows)),
+            created_at=_deserialize_datetime(snapshot.get("created_at")),
+            published_at=_deserialize_datetime(snapshot.get("published_at")),
+        )
+        db.add(run)
+        db.flush()
+
+        rows = [
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol=row["symbol"],
+                exchange=row.get("exchange"),
+                row_hash=row["row_hash"],
+                normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
+                raw_payload_json=None,
+            )
+            for row in snapshot_rows
+        ]
+        if rows:
+            db.bulk_save_objects(rows)
+
+        db.add(
+            ProviderSnapshotPointer(
+                snapshot_key=run.snapshot_key,
+                run_id=run.id,
+                updated_at=_deserialize_datetime(snapshot.get("published_at")) or datetime.utcnow(),
+            )
+        )
+        db.commit()
+
+        return {
+            "run_id": run.id,
+            "source_revision": run.source_revision,
+            "rows": len(rows),
+            "universe_rows": len(universe_rows),
+            "as_of_date": payload.get("as_of_date"),
+        }
+
+    @staticmethod
+    def _write_bundle_payload(path: Path, payload: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.suffix == ".gz":
+            with gzip.open(path, "wt", encoding="utf-8") as fh:
+                json.dump(payload, fh, sort_keys=True, default=str)
+        else:
+            path.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
+
+    @staticmethod
+    def _read_bundle_payload(path: Path) -> Dict[str, Any]:
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                return json.load(fh)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _serialize_universe_row(row: StockUniverse) -> Dict[str, Any]:
+        return {
+            "symbol": row.symbol,
+            "name": row.name,
+            "exchange": row.exchange,
+            "sector": row.sector,
+            "industry": row.industry,
+            "market_cap": row.market_cap,
+            "is_active": row.is_active,
+            "status": row.status,
+            "status_reason": row.status_reason,
+            "is_sp500": row.is_sp500,
+            "source": row.source,
+            "added_at": _serialize_datetime(row.added_at),
+            "first_seen_at": _serialize_datetime(row.first_seen_at),
+            "last_seen_in_source_at": _serialize_datetime(row.last_seen_in_source_at),
+            "deactivated_at": _serialize_datetime(row.deactivated_at),
+            "consecutive_fetch_failures": row.consecutive_fetch_failures,
+            "last_fetch_success_at": _serialize_datetime(row.last_fetch_success_at),
+            "last_fetch_failure_at": _serialize_datetime(row.last_fetch_failure_at),
+            "updated_at": _serialize_datetime(row.updated_at),
+        }
+
+    @staticmethod
+    def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "symbol": row["symbol"],
+            "name": row.get("name"),
+            "exchange": row.get("exchange"),
+            "sector": row.get("sector"),
+            "industry": row.get("industry"),
+            "market_cap": row.get("market_cap"),
+            "is_active": row.get("is_active", True),
+            "status": row.get("status", UNIVERSE_STATUS_ACTIVE),
+            "status_reason": row.get("status_reason"),
+            "is_sp500": row.get("is_sp500", False),
+            "source": row.get("source", "finviz"),
+            "added_at": _deserialize_datetime(row.get("added_at")),
+            "first_seen_at": _deserialize_datetime(row.get("first_seen_at")),
+            "last_seen_in_source_at": _deserialize_datetime(row.get("last_seen_in_source_at")),
+            "deactivated_at": _deserialize_datetime(row.get("deactivated_at")),
+            "consecutive_fetch_failures": row.get("consecutive_fetch_failures", 0),
+            "last_fetch_success_at": _deserialize_datetime(row.get("last_fetch_success_at")),
+            "last_fetch_failure_at": _deserialize_datetime(row.get("last_fetch_failure_at")),
+            "updated_at": _deserialize_datetime(row.get("updated_at")),
         }
 
 

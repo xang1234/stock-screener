@@ -29,6 +29,7 @@ frontend/public/static-data/
 *.parquet
 *.html
 !frontend/index.html
+!data/IBD_industry_group.csv
 *.db
 *.db-shm
 *.db-wal

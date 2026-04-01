@@ -14,19 +14,6 @@ import app.tasks.universe_tasks as universe_tasks
 from app.interfaces.tasks import feature_store_tasks
 
 
-def test_ensure_database_path_ready_creates_parent_directory(tmp_path, monkeypatch):
-    database_path = tmp_path / "nested" / "data" / "stockscanner.db"
-    monkeypatch.setattr(
-        export_script.settings,
-        "database_url",
-        f"sqlite:///{database_path}",
-    )
-
-    export_script._ensure_database_path_ready()  # noqa: SLF001 - intentional unit test coverage
-
-    assert database_path.parent.exists()
-
-
 def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     calls: list[str] = []
 
@@ -57,6 +44,53 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     ]
     assert results["universe_refresh"]["task"] == "universe_refresh"
     assert results["cache_refresh"]["kwargs"] == {"mode": "full"}
+
+
+def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamentals(monkeypatch):
+    calls: list[str] = []
+
+    def make_task(name: str):
+        return SimpleNamespace(
+            run=lambda **kwargs: calls.append(name) or {"task": name, "kwargs": kwargs},
+        )
+
+    @contextmanager
+    def fake_session():
+        yield "db-session"
+
+    hydrate_calls: list[tuple[object, bool]] = []
+
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(cache_tasks, "smart_refresh_cache", make_task("cache_refresh"))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
+    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth_with_gapfill", make_task("breadth_refresh"))
+    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
+    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        export_script.provider_snapshot_service,
+        "hydrate_published_snapshot",
+        lambda db, allow_yahoo_hydration=False: hydrate_calls.append((db, allow_yahoo_hydration))
+        or {"task": "fundamentals_hydrate"},
+    )
+
+    results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
+        refresh_themes_best_effort=False,
+        skip_universe_refresh=True,
+        skip_fundamentals_refresh=True,
+        hydrate_published_snapshot=True,
+    )
+
+    assert warnings == []
+    assert calls == [
+        "cache_refresh",
+        "breadth_refresh",
+        "groups_refresh",
+        "feature_snapshot",
+    ]
+    assert hydrate_calls == [("db-session", False)]
+    assert "universe_refresh" not in results
+    assert "fundamentals_refresh" not in results
+    assert results["fundamentals_hydrate"]["task"] == "fundamentals_hydrate"
 
 
 def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):

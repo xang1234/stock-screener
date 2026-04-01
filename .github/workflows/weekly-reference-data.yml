@@ -1,0 +1,88 @@
+name: Weekly Reference Data
+
+on:
+  schedule:
+    - cron: '10 12 * * 6'
+    - cron: '10 13 * * 6'
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-reference-data
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve schedule slot
+        id: schedule_guard
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: running workflow."
+            exit 0
+          fi
+
+          ny_day="$(TZ=America/New_York date +%u)"
+          ny_time="$(TZ=America/New_York date +%H:%M)"
+
+          if [ "$ny_day" -eq 6 ] && [ "$ny_time" = "08:10" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Scheduled slot matches 8:10 AM America/New_York on Saturday."
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping inactive schedule slot. New York local time: $ny_day $ny_time."
+          fi
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+
+      - uses: actions/setup-python@v5
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        run: pip install -r backend/requirements.txt
+
+      - name: Build weekly reference bundle
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        run: |
+          cd backend
+          python -m app.scripts.build_weekly_reference_bundle \
+            --output-dir /tmp/weekly-reference
+
+      - name: Ensure weekly release exists
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view weekly-reference-data >/dev/null 2>&1 || \
+          gh release create weekly-reference-data \
+            --title "Weekly Reference Data" \
+            --notes "Automated weekly fundamentals reference bundle for static-site builds."
+
+      - name: Upload weekly reference assets
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUNDLE_PATH="$(find /tmp/weekly-reference -maxdepth 1 -name 'weekly-reference-*.json.gz' | head -n 1)"
+          MANIFEST_PATH="/tmp/weekly-reference/weekly-reference-latest.json"
+
+          if [ -z "$BUNDLE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
+            echo "Missing weekly reference bundle outputs" >&2
+            exit 1
+          fi
+
+          gh release upload weekly-reference-data "$BUNDLE_PATH" --clobber
+          gh release upload weekly-reference-data "$MANIFEST_PATH" --clobber
