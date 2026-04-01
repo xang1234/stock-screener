@@ -129,6 +129,7 @@ function StaticScanPage() {
         onSortChange={(nextSortBy, nextSortOrder) => {
           setSortBy(nextSortBy);
           setSortOrder(nextSortOrder);
+          setPage(1);
         }}
         loading={false}
         showActions={false}
