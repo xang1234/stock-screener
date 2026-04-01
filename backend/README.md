@@ -44,9 +44,10 @@ redis-server
 ### 5. Bootstrap XUI Session State (Required for Twitter Theme Ingestion)
 
 ```bash
-xui config init --path ../data/xui-reader/config.toml
-xui profiles create default --path ../data/xui-reader/config.toml
-xui auth login --profile default --path ../data/xui-reader/config.toml
+export XUI_CONFIG_PATH="${XUI_CONFIG_PATH:-$HOME/.stockscanner/xui-reader/config.toml}"
+xui config init --path "$XUI_CONFIG_PATH"
+xui profiles create default --path "$XUI_CONFIG_PATH"
+xui auth login --profile default --path "$XUI_CONFIG_PATH"
 
 # Optional (preferred for Google-linked X accounts):
 # In Themes -> Manage Sources, click "Connect From Current Browser"

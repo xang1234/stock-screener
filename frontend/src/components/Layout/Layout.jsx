@@ -2,10 +2,10 @@ import { useContext, useState } from 'react';
 import {
   AppBar,
   Box,
+  Button,
   Container,
   Toolbar,
   Typography,
-  Button,
   IconButton,
   useTheme,
 } from '@mui/material';
@@ -25,7 +25,7 @@ function Layout({ children }) {
   const location = useLocation();
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
-  const { desktopMode, features } = useRuntime();
+  const { auth, desktopMode, features, isLoggingOut, logout } = useRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const navItems = [
@@ -87,6 +87,17 @@ function Layout({ children }) {
             >
               <SettingsIcon fontSize="small" />
             </IconButton>
+          )}
+          {auth?.required && auth?.authenticated && (
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => logout()}
+              disabled={isLoggingOut}
+              sx={{ ml: 1, fontSize: '12px' }}
+            >
+              Sign out
+            </Button>
           )}
           <IconButton
             sx={{ ml: 0.5 }}

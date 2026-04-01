@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ...config import settings
 from ...domain.scanning.defaults import get_default_scan_profile
 from ...schemas.app_runtime import (
     AppCapabilitiesResponse,
+    AppAuthStatusResponse,
     BootstrapStatusResponse,
     DataStatusResponse,
     ScanDefaultsResponse,
@@ -15,6 +16,7 @@ from ...schemas.app_runtime import (
     SetupStatusResponse,
     UpdateStatusResponse,
 )
+from ...services.server_auth import get_server_auth_status
 
 router = APIRouter()
 
@@ -117,7 +119,7 @@ def _get_bootstrap_state() -> dict:
 
 
 @router.get("/app-capabilities", response_model=AppCapabilitiesResponse)
-async def get_app_capabilities() -> AppCapabilitiesResponse:
+async def get_app_capabilities(request: Request) -> AppCapabilitiesResponse:
     """Return frontend capability flags and desktop setup/update status."""
     setup = _get_setup_state()
     update = _get_update_state()
@@ -125,12 +127,14 @@ async def get_app_capabilities() -> AppCapabilitiesResponse:
     from ...wiring.bootstrap import get_ui_snapshot_service
 
     setup_required = settings.desktop_mode and not bool(setup.get("app_ready"))
+    auth = get_server_auth_status(request)
     return AppCapabilitiesResponse(
         desktop_mode=settings.desktop_mode,
         features=settings.capability_flags(),
         ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
         scan_defaults=ScanDefaultsResponse(**get_default_scan_profile()),
         bootstrap_required=setup_required,
+        auth=AppAuthStatusResponse(**auth.__dict__),
         bootstrap=BootstrapStatusResponse(**_get_bootstrap_state()),
         setup_required=setup_required,
         setup=SetupStatusResponse(**setup),

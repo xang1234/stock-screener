@@ -382,6 +382,17 @@ def _desktop_static_available() -> bool:
     return settings.desktop_mode and _desktop_index_path().exists()
 
 
+def _safe_desktop_asset_path(full_path: str) -> Path | None:
+    """Resolve a desktop asset path and reject traversal outside the dist root."""
+    dist_root = settings.frontend_dist_path.resolve()
+    candidate = (dist_root / full_path).resolve()
+    try:
+        candidate.relative_to(dist_root)
+    except ValueError:
+        return None
+    return candidate
+
+
 def _is_reserved_frontend_path(path: str) -> bool:
     reserved_prefixes = (
         "api/",
@@ -489,8 +500,8 @@ async def desktop_spa_fallback(full_path: str):
     if not _desktop_static_available() or not full_path or _is_reserved_frontend_path(full_path):
         raise HTTPException(status_code=404, detail="Not found")
 
-    candidate = settings.frontend_dist_path / full_path
-    if candidate.is_file():
+    candidate = _safe_desktop_asset_path(full_path)
+    if candidate and candidate.is_file():
         return FileResponse(candidate)
 
     return FileResponse(_desktop_index_path())

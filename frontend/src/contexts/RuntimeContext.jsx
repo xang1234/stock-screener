@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { setUnauthorizedResponseHandler } from '../api/client';
 import {
   getAppCapabilities,
   getDesktopSetupStatus,
@@ -9,6 +10,7 @@ import {
   runDesktopUpdateNow,
   startDesktopSetup,
 } from '../api/appRuntime';
+import { loginServer, logoutServer } from '../api/auth';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 
 export const DEFAULT_DATA_STATUS = {
@@ -67,6 +69,13 @@ export const DEFAULT_CAPABILITIES = {
     chatbot: true,
     tasks: true,
   },
+  auth: {
+    required: false,
+    configured: true,
+    authenticated: true,
+    mode: 'session_cookie',
+    message: null,
+  },
   ui_snapshots: {
     enabled: false,
     scan: false,
@@ -93,6 +102,15 @@ function getPollingInterval(status) {
 
 export function RuntimeProvider({ children }) {
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    };
+
+    setUnauthorizedResponseHandler(handleUnauthorized);
+    return () => setUnauthorizedResponseHandler(null);
+  }, [queryClient]);
 
   const capabilitiesQuery = useQuery({
     queryKey: ['appCapabilities'],
@@ -147,6 +165,20 @@ export function RuntimeProvider({ children }) {
     },
   });
 
+  const loginMutation = useMutation({
+    mutationFn: ({ password }) => loginServer({ password }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    },
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: logoutServer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    },
+  });
+
   const capabilities = capabilitiesQuery.data ?? DEFAULT_CAPABILITIES;
   const setup = desktopMode
     ? (setupQuery.data ?? capabilities.setup ?? DEFAULT_SETUP)
@@ -155,9 +187,15 @@ export function RuntimeProvider({ children }) {
     ? (updateQuery.data ?? capabilities.update ?? DEFAULT_UPDATE)
     : DEFAULT_UPDATE;
   const dataStatus = setup.data_status ?? update.data_status ?? capabilities.data_status ?? DEFAULT_DATA_STATUS;
+  const runtimeReady = (
+    !capabilitiesQuery.isPlaceholderData
+    || capabilitiesQuery.isFetchedAfterMount
+    || capabilitiesQuery.isError
+  );
 
   const value = useMemo(() => {
     const features = capabilities.features ?? DEFAULT_CAPABILITIES.features;
+    const auth = capabilities.auth ?? DEFAULT_CAPABILITIES.auth;
     const setupRequired = desktopMode && !setup.app_ready;
     const setupRunning = setup.status === 'queued' || setup.status === 'running';
     const setupFailed = setup.status === 'failed';
@@ -166,6 +204,7 @@ export function RuntimeProvider({ children }) {
 
     return {
       capabilities,
+      auth,
       bootstrap: setup,
       bootstrapIncomplete: setupRequired,
       bootstrapRunning: setupRunning,
@@ -173,7 +212,7 @@ export function RuntimeProvider({ children }) {
       bootstrapWarnings: setup.warnings ?? [],
       desktopMode,
       features,
-      runtimeReady: !capabilitiesQuery.isPlaceholderData,
+      runtimeReady,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
       setup,
@@ -186,6 +225,11 @@ export function RuntimeProvider({ children }) {
       updateRunning,
       updateFailed,
       dataStatus,
+      login: (password) => loginMutation.mutateAsync({ password }),
+      logout: () => logoutMutation.mutateAsync(),
+      isLoggingIn: loginMutation.isPending,
+      loginError: loginMutation.error?.response?.data?.detail || loginMutation.error?.message || null,
+      isLoggingOut: logoutMutation.isPending,
       startSetup: (mode = 'quick_start', force = false) => startSetupMutation.mutate({ mode, force }),
       refreshNow: (scope = 'manual', force = false) => refreshNowMutation.mutate({ scope, force }),
       isStartingSetup: startSetupMutation.isPending,
@@ -195,10 +239,12 @@ export function RuntimeProvider({ children }) {
     };
   }, [
     capabilities,
-    capabilitiesQuery.isPlaceholderData,
     dataStatus,
     desktopMode,
+    loginMutation,
+    logoutMutation,
     refreshNowMutation,
+    runtimeReady,
     setup,
     startSetupMutation,
     update,

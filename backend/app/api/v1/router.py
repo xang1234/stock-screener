@@ -4,19 +4,33 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from ...config import settings
+from ...services.server_auth import require_server_session
 
 router = APIRouter()
 
 
-def _include(module_name: str, *, prefix: str = "", tags: list[str] | None = None) -> None:
+def _include(
+    module_name: str,
+    *,
+    prefix: str = "",
+    tags: list[str] | None = None,
+    protected: bool = True,
+) -> None:
     module = import_module(f"{__package__}.{module_name}")
-    router.include_router(module.router, prefix=prefix, tags=tags or [module_name])
+    dependencies = [Depends(require_server_session)] if protected else None
+    router.include_router(
+        module.router,
+        prefix=prefix,
+        tags=tags or [module_name],
+        dependencies=dependencies,
+    )
 
 
-_include("app_runtime")
+_include("app_runtime", protected=False)
+_include("auth", prefix="/auth", tags=["auth"], protected=False)
 _include("stocks", prefix="/stocks", tags=["stocks"])
 _include("technical", prefix="/technical", tags=["technical"])
 _include("scans", prefix="/scans", tags=["scans"])
@@ -47,4 +61,4 @@ if settings.feature_chatbot:
     _include("prompt_presets", prefix="/prompt-presets", tags=["prompt-presets"])
 
 if settings.feature_themes or settings.feature_chatbot:
-    _include("config", tags=["config"])
+    _include("config", tags=["config"], protected=False)

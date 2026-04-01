@@ -16,7 +16,7 @@ Zero-config local deployment:
 ```bash
 # 1. Set up environment (required for chatbot/LLM features)
 cp .env.docker.example .env
-# Edit .env: Add your API keys (GROQ_API_KEY, GEMINI_API_KEY, etc.)
+# Edit .env: Set SERVER_AUTH_PASSWORD and add your API keys (GROQ_API_KEY, GEMINI_API_KEY, etc.)
 
 # 2. Start all services
 docker-compose up
@@ -24,7 +24,7 @@ docker-compose up
 
 This starts PostgreSQL, Redis, Backend API, Celery workers, backup service, and Frontend. Access at **http://localhost**.
 
-> **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). Without this file, LLM API keys will be empty and the chatbot won't work. Scanning and other features work without API keys.
+> **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). `SERVER_AUTH_PASSWORD` is required for server access, and LLM API keys are required for chatbot features.
 
 ## Homelab (Behind Reverse Proxy)
 
@@ -33,7 +33,8 @@ For deployment behind Traefik, nginx proxy manager, or similar:
 ```bash
 # 1. Configure environment
 cp .env.docker.example .env.docker
-# Edit .env.docker: Set CORS_ORIGINS=https://stocks.home.lan
+# Edit .env.docker: Set SERVER_AUTH_PASSWORD, CORS_ORIGINS=https://stocks.home.lan,
+# and SERVER_AUTH_SECURE_COOKIE=true if your proxy terminates HTTPS
 
 # 2. Start with production settings
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -54,6 +55,7 @@ cp .env.docker.example .env.docker
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
 #   APP_IMAGE_TAG=v1.2.3
+#   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   CORS_ORIGINS=https://stocks.yourdomain.com
 
 # 2. Pull the tagged release images
@@ -89,6 +91,7 @@ Includes Caddy for automatic Let's Encrypt certificates:
 # 1. Configure environment
 cp .env.docker.example .env.docker
 # Edit .env.docker: Set DOMAIN=stocks.yourdomain.com
+# Edit .env.docker: Set SERVER_AUTH_PASSWORD=choose-a-long-random-password
 # Edit .env.docker: Set CORS_ORIGINS=https://stocks.yourdomain.com
 
 # 2. Ensure DNS A record points to your server IP
@@ -101,6 +104,8 @@ Requirements:
 - DNS A record pointing to your server
 - Ports 80 and 443 open
 - `DOMAIN` environment variable set
+
+The HTTPS overlay sets `SERVER_AUTH_SECURE_COOKIE=true` on the backend automatically so auth cookies remain Secure behind Caddy TLS termination.
 
 ## Services Architecture
 

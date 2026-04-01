@@ -26,11 +26,15 @@ def _get_resource_root() -> Path:
 def _get_default_desktop_data_dir() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "StockScanner"
-    for env_var in ("LOCALAPPDATA", "XDG_DATA_HOME"):
-        raw = os.getenv(env_var)
-        if raw:
-            return Path(raw).expanduser() / "StockScanner"
-    return _get_project_root() / "data"
+    raw = os.getenv("LOCALAPPDATA")
+    if raw:
+        return Path(raw).expanduser() / "StockScanner"
+    raw = os.getenv("XDG_DATA_HOME")
+    if raw:
+        return Path(raw).expanduser() / "StockScanner"
+    if sys.platform == "win32":
+        return Path.home() / "AppData" / "Local" / "StockScanner"
+    return Path.home() / ".local" / "share" / "StockScanner"
 
 
 _PROJECT_ROOT = _get_project_root()
@@ -55,7 +59,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""  # For LLM via OpenRouter (100+ models, unified billing)
     twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
     xui_enabled: bool = True  # Enable xui-reader ingestion for twitter sources
-    xui_config_path: str = f"{_PROJECT_ROOT}/data/xui-reader/config.toml"
+    xui_config_path: str = str(_get_default_desktop_data_dir() / "xui-reader" / "config.toml")
     xui_profile: str = "default"
     xui_limit_per_source: int = 50
     xui_new_only: bool = True
@@ -107,6 +111,12 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    server_auth_enabled: bool = True
+    server_auth_password: str = ""
+    server_auth_session_secret: str = ""
+    server_auth_cookie_name: str = "stockscanner_session"
+    server_auth_session_ttl_hours: int = 24
+    server_auth_secure_cookie: bool = False
 
     # Admin API key (required for config endpoints)
     admin_api_key: str = ""

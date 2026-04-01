@@ -44,6 +44,9 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - API_HOST=0.0.0.0
       - API_PORT=8000
+      - SERVER_AUTH_PASSWORD=${SERVER_AUTH_PASSWORD:?Set SERVER_AUTH_PASSWORD in your Docker environment}
+      - SERVER_AUTH_SESSION_SECRET=${SERVER_AUTH_SESSION_SECRET:-}
+      - SERVER_AUTH_SECURE_COOKIE=${SERVER_AUTH_SECURE_COOKIE:-false}
       # CORS - configurable for production, defaults to localhost for dev
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80,http://frontend}
       # API Keys (from .env or .env.docker)

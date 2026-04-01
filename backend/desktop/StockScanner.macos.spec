@@ -10,6 +10,7 @@ desktop_root = backend_root / "desktop"
 
 api_route_modules = [
     "app.api.v1.app_runtime",
+    "app.api.v1.auth",
     "app.api.v1.stocks",
     "app.api.v1.technical",
     "app.api.v1.scans",

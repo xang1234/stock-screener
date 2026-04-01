@@ -107,6 +107,16 @@ class ScanDefaultsResponse(BaseModel):
     criteria: dict[str, Any] = Field(default_factory=dict)
 
 
+class AppAuthStatusResponse(BaseModel):
+    """Authentication state exposed to the frontend shell."""
+
+    required: bool = False
+    configured: bool = True
+    authenticated: bool = True
+    mode: str = "session_cookie"
+    message: str | None = None
+
+
 class AppCapabilitiesResponse(BaseModel):
     """Feature/capability flags exposed to the frontend."""
 
@@ -115,6 +125,7 @@ class AppCapabilitiesResponse(BaseModel):
     ui_snapshots: dict[str, bool] = Field(default_factory=dict)
     scan_defaults: ScanDefaultsResponse
     api_base_path: str = "/api"
+    auth: AppAuthStatusResponse = Field(default_factory=AppAuthStatusResponse)
     bootstrap_required: bool
     bootstrap: BootstrapStatusResponse
     setup_required: bool = False

@@ -80,6 +80,9 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 | `API_HOST` | `0.0.0.0` | Server bind address |
 | `API_PORT` | `8000` | Server port |
 | `CORS_ORIGINS` | `http://localhost:5173` (local) | Comma-separated allowed origins |
+| `SERVER_AUTH_PASSWORD` | (empty) | Required for browser login in server/Docker deployments |
+| `SERVER_AUTH_SESSION_SECRET` | (empty) | Optional cookie-signing secret; defaults to `SERVER_AUTH_PASSWORD` |
+| `SERVER_AUTH_SECURE_COOKIE` | `false` | Force Secure auth cookies; set `true` when TLS terminates at a trusted HTTPS proxy |
 | `ADMIN_API_KEY` | (empty) | Required for `/api/v1/config/*` endpoints |
 
 ## Docker Deployment
@@ -88,6 +91,7 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 |----------|---------|-------------|
 | `DOMAIN` | `stocks.yourdomain.com` | For HTTPS/Caddy scenario only |
 | `CORS_ORIGINS` | `https://stocks.yourdomain.com` | Must match your access URL |
+| `SERVER_AUTH_PASSWORD` | `choose-a-long-random-password` | Required shared password for server login |
 | `BACKEND_IMAGE` | `ghcr.io/you/stockscreenclaude-backend` | GHCR image (release overlay) |
 | `FRONTEND_IMAGE` | `ghcr.io/you/stockscreenclaude-frontend` | GHCR image (release overlay) |
 | `APP_IMAGE_TAG` | `v1.2.3` | Release tag to deploy |
@@ -97,7 +101,7 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `XUI_ENABLED` | `true` | Enable Twitter/X ingestion |
-| `XUI_CONFIG_PATH` | `../data/xui-reader/config.toml` | Path to xui-reader config |
+| `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui-reader config |
 | `XUI_PROFILE` | `default` | xui-reader auth profile |
 | `XUI_LIMIT_PER_SOURCE` | `50` | Max items per source fetch |
 | `XUI_NEW_ONLY` | `true` | Only fetch new items |

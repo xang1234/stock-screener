@@ -8,15 +8,51 @@ import axios from 'axios';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const DEFAULT_API_TIMEOUT_MS = 30000;
 const THEMES_API_TIMEOUT_MS = 300000;
+let unauthorizedResponseHandler = null;
 
 const isThemesApiUrl = (url) => {
   if (!url || typeof url !== 'string') return false;
   return /(^|\/)v1\/themes(?:\/|$)/.test(url);
 };
 
+const isAuthUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return /(^|\/)v1\/auth(?:\/|$)/.test(url);
+};
+
+const getHeaderValue = (headers, name) => {
+  if (!headers) return undefined;
+  if (typeof headers.get === 'function') {
+    return headers.get(name);
+  }
+  const target = String(name).toLowerCase();
+  return Object.entries(headers).find(([key]) => key.toLowerCase() === target)?.[1];
+};
+
+export const setUnauthorizedResponseHandler = (handler) => {
+  unauthorizedResponseHandler = typeof handler === 'function' ? handler : null;
+};
+
+export const notifyUnauthorizedResponse = ({ status, url, headers, error }) => {
+  if (
+    status === 401
+    && unauthorizedResponseHandler
+    && !isAuthUrl(url)
+    && !getHeaderValue(headers, 'X-Admin-Key')
+  ) {
+    unauthorizedResponseHandler(
+      error ?? {
+        response: { status },
+        config: { url, headers },
+      }
+    );
+  }
+};
+
 // Create axios instance with default config
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   timeout: DEFAULT_API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
@@ -55,6 +91,12 @@ apiClient.interceptors.response.use(
         status: error.response.status,
         data: error.response.data,
         url: error.config.url,
+      });
+      notifyUnauthorizedResponse({
+        status: error.response.status,
+        url: error.config?.url,
+        headers: error.config?.headers,
+        error,
       });
     } else if (error.request) {
       // Request made but no response

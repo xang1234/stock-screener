@@ -21,6 +21,10 @@
 # =============================================================================
 
 services:
+  backend:
+    environment:
+      - SERVER_AUTH_SECURE_COOKIE=true
+
   # Caddy reverse proxy with automatic HTTPS
   caddy:
     image: caddy:2-alpine

@@ -9,6 +9,7 @@ import MarketScanPage from './pages/MarketScanPage';
 import StockDetails from './components/Stock/StockDetails';
 import Layout from './components/Layout/Layout';
 import DesktopSetupScreen from './components/App/DesktopSetupScreen';
+import ServerLoginScreen from './components/App/ServerLoginScreen';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
@@ -227,10 +228,34 @@ function App() {
 }
 
 function AppShell() {
-  const { desktopMode, features, setupRequired } = useRuntime();
+  const {
+    auth,
+    desktopMode,
+    features,
+    isLoggingIn,
+    login,
+    loginError,
+    runtimeReady,
+    setupRequired,
+  } = useRuntime();
+
+  if (!runtimeReady) {
+    return <PageLoadingFallback />;
+  }
 
   if (desktopMode && setupRequired) {
     return <DesktopSetupScreen />;
+  }
+
+  if (auth?.required && !auth?.authenticated) {
+    return (
+      <ServerLoginScreen
+        auth={auth}
+        isLoggingIn={isLoggingIn}
+        loginError={loginError}
+        onLogin={login}
+      />
+    );
   }
 
   const appRoutes = (
