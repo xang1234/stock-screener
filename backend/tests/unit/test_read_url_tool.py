@@ -54,6 +54,27 @@ async def test_pinned_public_ip_backend_retries_alternate_public_ips(monkeypatch
     assert attempts == ["2001:db8::1", "93.184.216.34"]
 
 
+@pytest.mark.asyncio
+async def test_pinned_public_ip_backend_retries_after_connect_timeout(monkeypatch):
+    backend = _PinnedPublicIPBackend()
+    attempts: list[str] = []
+    stream = object()
+
+    async def fake_connect_tcp(*, host, port, timeout=None, local_address=None, socket_options=None):
+        attempts.append(host)
+        if host == "2001:db8::1":
+            raise httpcore.ConnectTimeout("ipv6 timed out")
+        return stream
+
+    monkeypatch.setattr(backend, "_resolve_public_ips", lambda host: ("2001:db8::1", "93.184.216.34"))
+    monkeypatch.setattr(backend._backend, "connect_tcp", fake_connect_tcp)
+
+    result = await backend.connect_tcp("example.com", 443)
+
+    assert result is stream
+    assert attempts == ["2001:db8::1", "93.184.216.34"]
+
+
 def test_pinned_public_ip_backend_blocks_mixed_public_private_dns_answers(monkeypatch):
     backend = _PinnedPublicIPBackend()
 

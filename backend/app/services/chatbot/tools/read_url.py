@@ -69,7 +69,7 @@ class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
                     local_address=local_address,
                     socket_options=socket_options,
                 )
-            except (httpcore.ConnectError, OSError) as exc:
+            except (httpcore.ConnectError, httpcore.TimeoutException, OSError) as exc:
                 last_error = exc
 
         if last_error is None:
