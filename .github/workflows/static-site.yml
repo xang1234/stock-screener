@@ -2,7 +2,8 @@ name: Static Site
 
 on:
   schedule:
-    - cron: '30 1 * * 2-6'
+    - cron: '10 20 * * 1-5'
+    - cron: '10 21 * * 1-5'
   workflow_dispatch:
 
 concurrency:
@@ -18,31 +19,63 @@ jobs:
   build:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.schedule_guard.outputs.should_run }}
 
     steps:
+      - name: Resolve schedule slot
+        id: schedule_guard
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: running workflow."
+            exit 0
+          fi
+
+          ny_day="$(TZ=America/New_York date +%u)"
+          ny_time="$(TZ=America/New_York date +%H:%M)"
+
+          if [ "$ny_day" -ge 1 ] && [ "$ny_day" -le 5 ] && [ "$ny_time" = "16:10" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Scheduled slot matches 4:10 PM America/New_York."
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping inactive schedule slot. New York local time: $ny_day $ny_time."
+          fi
+
       - uses: actions/checkout@v4
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
 
       - uses: actions/setup-python@v5
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
       - uses: actions/setup-node@v4
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - uses: actions/configure-pages@v5
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
+        with:
+          enablement: true
 
       - name: Install backend dependencies
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: pip install -r backend/requirements.txt
 
       - name: Install frontend dependencies
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: cd frontend && npm ci
 
       - name: Export static data bundle
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: |
           cd backend
           python -m app.scripts.export_static_site \
@@ -51,18 +84,20 @@ jobs:
             --refresh-themes-best-effort
 
       - name: Build static frontend
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         env:
           VITE_STATIC_SITE: "true"
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
         run: cd frontend && npm run build
 
       - name: Upload Pages artifact
+        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
 
   deploy:
-    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && needs.build.outputs.should_deploy == 'true' }}
     needs: build
     runs-on: ubuntu-latest
     environment:
