@@ -27,6 +27,22 @@ const loadRequestInterceptor = async () => {
   return mockRequestUse.mock.calls[0][0];
 };
 
+const loadClientModule = async () => {
+  vi.resetModules();
+  mockRequestUse.mockReset();
+  mockResponseUse.mockReset();
+
+  const mockClient = {
+    interceptors: {
+      request: { use: mockRequestUse },
+      response: { use: mockResponseUse },
+    },
+  };
+  mockCreate.mockReturnValue(mockClient);
+
+  return import('./client');
+};
+
 describe('api client timeout policy', () => {
   beforeEach(() => {
     mockCreate.mockReset();
@@ -69,3 +85,49 @@ describe('api client timeout policy', () => {
   });
 });
 
+describe('api client auth failure handling', () => {
+  it('notifies the unauthorized handler for non-auth 401 responses', async () => {
+    const { setUnauthorizedResponseHandler } = await loadClientModule();
+    const onUnauthorized = vi.fn();
+    setUnauthorizedResponseHandler(onUnauthorized);
+    const responseErrorInterceptor = mockResponseUse.mock.calls[0][1];
+    const error = {
+      response: { status: 401, data: {} },
+      config: { url: '/v1/scans/active', headers: {} },
+    };
+
+    await expect(responseErrorInterceptor(error)).rejects.toBe(error);
+
+    expect(onUnauthorized).toHaveBeenCalledWith(error);
+  });
+
+  it('does not notify the unauthorized handler for auth endpoint failures', async () => {
+    const { setUnauthorizedResponseHandler } = await loadClientModule();
+    const onUnauthorized = vi.fn();
+    setUnauthorizedResponseHandler(onUnauthorized);
+    const responseErrorInterceptor = mockResponseUse.mock.calls[0][1];
+    const error = {
+      response: { status: 401, data: {} },
+      config: { url: '/v1/auth/login', headers: {} },
+    };
+
+    await expect(responseErrorInterceptor(error)).rejects.toBe(error);
+
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('does not notify the unauthorized handler for admin-key config failures', async () => {
+    const { setUnauthorizedResponseHandler } = await loadClientModule();
+    const onUnauthorized = vi.fn();
+    setUnauthorizedResponseHandler(onUnauthorized);
+    const responseErrorInterceptor = mockResponseUse.mock.calls[0][1];
+    const error = {
+      response: { status: 401, data: {} },
+      config: { url: '/v1/config/theme-policies', headers: { 'X-Admin-Key': 'bad-key' } },
+    };
+
+    await expect(responseErrorInterceptor(error)).rejects.toBe(error);
+
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+});

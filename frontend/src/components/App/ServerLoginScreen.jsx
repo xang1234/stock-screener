@@ -23,8 +23,12 @@ function ServerLoginScreen({
     if (!password.trim() || !onLogin) {
       return;
     }
-    await onLogin(password);
-    setPassword('');
+    try {
+      await onLogin(password);
+      setPassword('');
+    } catch {
+      // Leave the entered password in place so the user can correct and retry.
+    }
   };
 
   return (

@@ -8,10 +8,29 @@ import axios from 'axios';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 const DEFAULT_API_TIMEOUT_MS = 30000;
 const THEMES_API_TIMEOUT_MS = 300000;
+let unauthorizedResponseHandler = null;
 
 const isThemesApiUrl = (url) => {
   if (!url || typeof url !== 'string') return false;
   return /(^|\/)v1\/themes(?:\/|$)/.test(url);
+};
+
+const isAuthUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return /(^|\/)v1\/auth(?:\/|$)/.test(url);
+};
+
+const getHeaderValue = (headers, name) => {
+  if (!headers) return undefined;
+  if (typeof headers.get === 'function') {
+    return headers.get(name);
+  }
+  const target = String(name).toLowerCase();
+  return Object.entries(headers).find(([key]) => key.toLowerCase() === target)?.[1];
+};
+
+export const setUnauthorizedResponseHandler = (handler) => {
+  unauthorizedResponseHandler = typeof handler === 'function' ? handler : null;
 };
 
 // Create axios instance with default config
@@ -57,6 +76,14 @@ apiClient.interceptors.response.use(
         data: error.response.data,
         url: error.config.url,
       });
+      if (
+        error.response.status === 401
+        && unauthorizedResponseHandler
+        && !isAuthUrl(error.config?.url)
+        && !getHeaderValue(error.config?.headers, 'X-Admin-Key')
+      ) {
+        unauthorizedResponseHandler(error);
+      }
     } else if (error.request) {
       // Request made but no response
       console.error('API No Response:', error.request);

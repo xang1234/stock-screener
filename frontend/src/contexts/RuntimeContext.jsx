@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { setUnauthorizedResponseHandler } from '../api/client';
 import {
   getAppCapabilities,
   getDesktopSetupStatus,
@@ -101,6 +102,15 @@ function getPollingInterval(status) {
 
 export function RuntimeProvider({ children }) {
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    };
+
+    setUnauthorizedResponseHandler(handleUnauthorized);
+    return () => setUnauthorizedResponseHandler(null);
+  }, [queryClient]);
 
   const capabilitiesQuery = useQuery({
     queryKey: ['appCapabilities'],

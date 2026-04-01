@@ -70,3 +70,33 @@ async def test_protected_route_returns_503_when_auth_required_but_not_configured
 
     assert response.status_code == 503
     assert "SERVER_AUTH_PASSWORD" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_admin_api_key_does_not_authenticate_general_server_routes(client, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "server-secret")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
+    monkeypatch.setattr(server_auth.settings, "admin_api_key", "admin-secret")
+
+    response = await client.get("/api/v1/chatbot/health", headers={"X-Admin-Key": "admin-secret"})
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "")
+    monkeypatch.setattr(server_auth.settings, "admin_api_key", "admin-secret")
+
+    response = await client.get("/api/v1/chatbot/health")
+
+    assert response.status_code == 503

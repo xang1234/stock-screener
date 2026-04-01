@@ -31,7 +31,7 @@ def server_auth_required() -> bool:
 
 def server_auth_configured() -> bool:
     """Return True when the shared-secret auth inputs are available."""
-    return bool(_accepted_secrets() and _session_secret())
+    return bool(_server_auth_password() and _session_secret())
 
 
 def get_server_auth_status(request: Request | None = None) -> ServerAuthStatus:
@@ -100,7 +100,8 @@ def password_matches(candidate: str | None) -> bool:
     if candidate is None:
         return False
     supplied = str(candidate)
-    return any(hmac.compare_digest(supplied, secret) for secret in _accepted_secrets())
+    secret = _server_auth_password()
+    return bool(secret) and hmac.compare_digest(supplied, secret)
 
 
 def request_is_authenticated(request: Request | None) -> bool:
@@ -135,21 +136,15 @@ async def require_server_session(request: Request) -> bool:
     raise HTTPException(status_code=401, detail="Authentication required")
 
 
-def _accepted_secrets() -> tuple[str, ...]:
-    seen: list[str] = []
-    for value in (settings.server_auth_password, settings.admin_api_key):
-        raw = str(value or "").strip()
-        if raw and raw not in seen:
-            seen.append(raw)
-    return tuple(seen)
+def _server_auth_password() -> str:
+    return str(settings.server_auth_password or "").strip()
 
 
 def _session_secret() -> str:
     secret = str(settings.server_auth_session_secret or "").strip()
     if secret:
         return secret
-    fallback = _accepted_secrets()
-    return fallback[0] if fallback else ""
+    return _server_auth_password()
 
 
 def _header_secret_matches(request: Request) -> bool:
@@ -157,10 +152,6 @@ def _header_secret_matches(request: Request) -> bool:
     if authorization.lower().startswith("bearer "):
         if password_matches(authorization.split(" ", 1)[1].strip()):
             return True
-
-    x_admin_key = request.headers.get("x-admin-key")
-    if password_matches(x_admin_key):
-        return True
 
     x_server_password = request.headers.get("x-server-auth")
     return password_matches(x_server_password)
