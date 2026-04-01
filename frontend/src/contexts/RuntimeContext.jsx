@@ -187,6 +187,11 @@ export function RuntimeProvider({ children }) {
     ? (updateQuery.data ?? capabilities.update ?? DEFAULT_UPDATE)
     : DEFAULT_UPDATE;
   const dataStatus = setup.data_status ?? update.data_status ?? capabilities.data_status ?? DEFAULT_DATA_STATUS;
+  const runtimeReady = (
+    !capabilitiesQuery.isPlaceholderData
+    || capabilitiesQuery.isFetchedAfterMount
+    || capabilitiesQuery.isError
+  );
 
   const value = useMemo(() => {
     const features = capabilities.features ?? DEFAULT_CAPABILITIES.features;
@@ -207,7 +212,7 @@ export function RuntimeProvider({ children }) {
       bootstrapWarnings: setup.warnings ?? [],
       desktopMode,
       features,
-      runtimeReady: !capabilitiesQuery.isPlaceholderData,
+      runtimeReady,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
       setup,
@@ -234,12 +239,12 @@ export function RuntimeProvider({ children }) {
     };
   }, [
     capabilities,
-    capabilitiesQuery.isPlaceholderData,
     dataStatus,
     desktopMode,
     loginMutation,
     logoutMutation,
     refreshNowMutation,
+    runtimeReady,
     setup,
     startSetupMutation,
     update,
