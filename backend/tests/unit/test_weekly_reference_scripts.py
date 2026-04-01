@@ -37,7 +37,15 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     monkeypatch.setattr(
         build_script.provider_snapshot_service,
         "get_published_run",
-        lambda db: type("Run", (), {"published_at": published_at, "created_at": published_at})(),
+        lambda db: type(
+            "Run",
+            (),
+            {
+                "published_at": published_at,
+                "created_at": published_at,
+                "source_revision": "fundamentals_v1:20260404121000",
+            },
+        )(),
     )
 
     export_calls: list[tuple[Path, str, Path]] = []
@@ -60,8 +68,8 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     )
 
     assert build_script.main() == 0
-    assert export_calls[0][0] == tmp_path / "weekly-reference-20260404.json.gz"
-    assert export_calls[0][1] == "weekly-reference-20260404.json.gz"
+    assert export_calls[0][0] == tmp_path / "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
+    assert export_calls[0][1] == "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
     assert export_calls[0][2] == tmp_path / build_script.provider_snapshot_service.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
     assert "Weekly reference bundle complete:" in capsys.readouterr().out
 

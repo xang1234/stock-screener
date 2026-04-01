@@ -93,6 +93,43 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     assert results["fundamentals_hydrate"]["task"] == "fundamentals_hydrate"
 
 
+def test_run_daily_refresh_bypasses_smart_refresh_time_window_for_static_exports(monkeypatch):
+    calls: list[tuple[str, bool]] = []
+    state = {"time_window_bypassed": False}
+    events: list[str] = []
+
+    @contextmanager
+    def fake_time_window_bypass():
+        events.append("enter")
+        state["time_window_bypassed"] = True
+        try:
+            yield
+        finally:
+            state["time_window_bypassed"] = False
+            events.append("exit")
+
+    def make_task(name: str):
+        def run(**kwargs):
+            calls.append((name, state["time_window_bypassed"]))
+            return {"task": name, "kwargs": kwargs}
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(cache_tasks, "allow_smart_refresh_time_window_bypass", fake_time_window_bypass)
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
+    monkeypatch.setattr(cache_tasks, "smart_refresh_cache", make_task("cache_refresh"))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
+    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth_with_gapfill", make_task("breadth_refresh"))
+    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
+    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+
+    export_script._run_daily_refresh(refresh_themes_best_effort=False)  # noqa: SLF001 - intentional unit test coverage
+
+    assert events == ["enter", "exit"]
+    assert calls[0] == ("universe_refresh", False)
+    assert calls[1] == ("cache_refresh", True)
+
+
 def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     calls: list[tuple[str, bool]] = []
     state = {"lock_disabled": False}

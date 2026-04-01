@@ -13,7 +13,9 @@ from app.models.provider_snapshot import (
     ProviderSnapshotRow,
     ProviderSnapshotRun,
 )
+from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+import app.services.fundamentals_cache_service as fundamentals_cache_module
 from app.services.fundamentals_cache_service import FundamentalsCacheService
 from app.services.provider_snapshot_service import ProviderSnapshotService, settings
 
@@ -425,6 +427,93 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         ProviderSnapshotRun.snapshot_key == "other_snapshot"
     ).count() == 1
     assert db.query(ProviderSnapshotPointer).count() == 2
+    db.close()
+
+
+def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp_path, monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260404161000",
+        coverage_stats_json=json.dumps({"active_symbols": 1, "covered_active_symbols": 1, "missing_active_symbols": 0}),
+        parity_stats_json=json.dumps({"missing_active_symbols": []}),
+        warnings_json=json.dumps([]),
+        symbols_total=1,
+        symbols_published=1,
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="row-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL", "exchange": "NASDAQ", "market_cap": 1000}),
+            raw_payload_json=json.dumps({"overview": {"Ticker": "AAPL"}}),
+        )
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = ProviderSnapshotService()
+    service.fundamentals_cache = _StubFundamentalsCache(
+        cached={
+            "AAPL": {
+                "ipo_date": date(2020, 1, 2),
+                "first_trade_date": 1577923200,
+                "eps_growth_qq": 12.3,
+                "sales_growth_qq": 4.5,
+                "eps_growth_yy": 22.0,
+                "sales_growth_yy": 9.0,
+                "eps_rating": 95,
+                "sector": "Technology",
+                "industry": "Software",
+                "market_cap": 1000,
+                "avg_volume": 500000,
+            }
+        }
+    )
+
+    bundle_path = tmp_path / "weekly-reference-20260404.json.gz"
+    service.export_weekly_reference_bundle(
+        db,
+        output_path=bundle_path,
+        bundle_asset_name=bundle_path.name,
+    )
+    service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    monkeypatch.setattr(fundamentals_cache_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
+
+    service.fundamentals_cache = FundamentalsCacheService()
+    service.price_cache = _StubPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+
+    stats = service.hydrate_published_snapshot(db, allow_yahoo_hydration=False)
+
+    stored = db.query(StockFundamental).filter(StockFundamental.symbol == "AAPL").one()
+    assert stats["hydrated"] == 1
+    assert stored.ipo_date == date(2020, 1, 2)
     db.close()
 
 

@@ -15,6 +15,12 @@ def _default_output_dir() -> Path:
     return repo_root() / ".tmp" / "weekly-reference"
 
 
+def _default_bundle_name(published_run) -> str:
+    as_of = (published_run.published_at or published_run.created_at).date().isoformat().replace("-", "")
+    revision = (published_run.source_revision or "snapshot").replace(":", "-").replace("/", "-")
+    return f"weekly-reference-{as_of}-{revision}.json.gz"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -60,9 +66,7 @@ def main() -> int:
         if published_run is None:
             raise RuntimeError("Published weekly fundamentals snapshot was not found after hydration")
 
-        bundle_name = args.bundle_name or (
-            f"weekly-reference-{(published_run.published_at or published_run.created_at).date().isoformat().replace('-', '')}.json.gz"
-        )
+        bundle_name = args.bundle_name or _default_bundle_name(published_run)
         bundle_path = output_dir / bundle_name
         latest_manifest_path = output_dir / args.latest_manifest_name
         export_stats = provider_snapshot_service.export_weekly_reference_bundle(

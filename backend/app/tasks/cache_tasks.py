@@ -9,6 +9,8 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 from typing import List, Optional
 from datetime import datetime
@@ -23,6 +25,21 @@ from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+_SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
+    "smart_refresh_time_window_bypass",
+    default=False,
+)
+
+
+@contextmanager
+def allow_smart_refresh_time_window_bypass():
+    """Temporarily bypass the full-refresh schedule window guard for in-process tools."""
+    token = _SMART_REFRESH_TIME_WINDOW_BYPASS.set(True)
+    try:
+        yield
+    finally:
+        _SMART_REFRESH_TIME_WINDOW_BYPASS.reset(token)
 
 
 @celery_app.task(name='app.tasks.cache_tasks.warm_spy_cache')
@@ -1078,7 +1095,13 @@ def smart_refresh_cache(self, mode: str = "auto"):
     # Time-window guard: reject Beat-scheduled full mode outside expected windows.
     # This prevents catchup storms (Beat replaying missed schedules on restart).
     # Manual API calls set headers={'origin': 'manual'} to bypass this guard.
-    is_manual = getattr(self.request, 'headers', None) and self.request.headers.get('origin') == 'manual'
+    is_manual = (
+        _SMART_REFRESH_TIME_WINDOW_BYPASS.get()
+        or (
+            getattr(self.request, 'headers', None)
+            and self.request.headers.get('origin') == 'manual'
+        )
+    )
     if mode == "full" and not is_manual:
         now_et = get_eastern_now()
         weekday = now_et.weekday()  # 0=Mon, 6=Sun

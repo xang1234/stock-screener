@@ -26,7 +26,10 @@ def _run_daily_refresh(
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
-    from app.tasks.cache_tasks import smart_refresh_cache
+    from app.tasks.cache_tasks import (
+        allow_smart_refresh_time_window_bypass,
+        smart_refresh_cache,
+    )
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
     from app.tasks.group_rank_tasks import calculate_daily_group_rankings
     from app.tasks.universe_tasks import refresh_stock_universe
@@ -37,7 +40,8 @@ def _run_daily_refresh(
         if not skip_universe_refresh:
             results["universe_refresh"] = refresh_stock_universe.run()
 
-        results["cache_refresh"] = smart_refresh_cache.run(mode="full")
+        with allow_smart_refresh_time_window_bypass():
+            results["cache_refresh"] = smart_refresh_cache.run(mode="full")
 
         if not skip_fundamentals_refresh:
             results["fundamentals_refresh"] = refresh_all_fundamentals.run()

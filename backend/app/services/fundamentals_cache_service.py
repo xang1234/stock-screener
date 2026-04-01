@@ -78,6 +78,29 @@ class FundamentalsCacheService:
                 return None
         return None
 
+    @staticmethod
+    def _coerce_date(value: Any) -> Optional[date]:
+        """Best-effort conversion for date-only payload fields like ipo_date."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                return None
+        return None
+
+    def _normalize_payload_for_storage(self, data: Dict) -> Dict:
+        """Normalize payload types before writing to Redis/DB."""
+        normalized = dict(data)
+        if "ipo_date" in normalized:
+            normalized["ipo_date"] = self._coerce_date(normalized.get("ipo_date"))
+        return normalized
+
     def __init__(self, redis_client: Optional[redis.Redis] = None):
         """Initialize fundamentals cache service."""
         if redis_client:
@@ -520,7 +543,10 @@ class FundamentalsCacheService:
                 existing_record.employees = data.get("employees")
 
                 # IPO date (prefer explicit date, fall back to yfinance timestamp)
-                existing_record.ipo_date = data.get("ipo_date") or self._parse_ipo_date(data.get("first_trade_date_ms"))
+                existing_record.ipo_date = (
+                    self._coerce_date(data.get("ipo_date"))
+                    or self._parse_ipo_date(data.get("first_trade_date_ms"))
+                )
 
                 # Company descriptions
                 existing_record.description_yfinance = data.get("description_yfinance")
@@ -639,7 +665,10 @@ class FundamentalsCacheService:
                     country=data.get("country"),
                     employees=data.get("employees"),
                     # IPO date (prefer explicit date, fall back to yfinance timestamp)
-                    ipo_date=data.get("ipo_date") or self._parse_ipo_date(data.get("first_trade_date_ms")),
+                    ipo_date=(
+                        self._coerce_date(data.get("ipo_date"))
+                        or self._parse_ipo_date(data.get("first_trade_date_ms"))
+                    ),
                     # Company descriptions
                     description_yfinance=data.get("description_yfinance"),
                     description_finviz=data.get("description_finviz"),
@@ -1046,11 +1075,13 @@ class FundamentalsCacheService:
             logger.warning(f"Cannot store empty data for {symbol}")
             return
 
+        normalized_data = self._normalize_payload_for_storage(data)
+
         # Store in Redis
-        self._store_in_redis(symbol, data)
+        self._store_in_redis(symbol, normalized_data)
 
         # Store in database
-        self._store_in_database(symbol, data, data_source=data_source)
+        self._store_in_database(symbol, normalized_data, data_source=data_source)
 
         logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
 

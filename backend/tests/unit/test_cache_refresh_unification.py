@@ -111,6 +111,40 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     fake_db.close.assert_called_once()
 
 
+def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.order_by.return_value.all.return_value = []
+    fake_db.query.return_value = fake_query
+    fake_price_cache = MagicMock()
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 0, hour=9, date=lambda: date(2026, 3, 23)),
+    )
+    monkeypatch.setattr(
+        "app.services.price_cache_service.PriceCacheService.get_instance",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+
+    with module.allow_smart_refresh_time_window_bypass():
+        result = module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full")
+
+    assert result["status"] == "completed"
+    assert result["message"] == "No active symbols found in universe"
+    fake_price_cache.save_warmup_metadata.assert_called_once_with("completed", 0, 0)
+    fake_db.close.assert_called_once()
+
+
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 
