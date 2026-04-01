@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
+from app.models.stock import StockPrice
 from app.services.static_site_export_service import (
     STATIC_SITE_SCHEMA_VERSION,
     StaticSiteExportService,
@@ -22,7 +23,10 @@ from app.services.static_site_export_service import (
 @pytest.fixture
 def service_and_session_factory():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[FeatureRun.__table__, FeatureRunPointer.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[FeatureRun.__table__, FeatureRunPointer.__table__, StockPrice.__table__],
+    )
     session_factory = sessionmaker(
         bind=engine,
         autocommit=False,
@@ -259,3 +263,22 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
+
+
+def test_build_key_markets_skips_change_when_latest_close_is_null(service_and_session_factory):
+    service, session_factory = service_and_session_factory
+
+    with session_factory() as db:
+        db.add_all(
+            [
+                StockPrice(symbol="SPY", date=date(2026, 3, 30), close=500.0),
+                StockPrice(symbol="SPY", date=date(2026, 3, 31), close=None),
+            ]
+        )
+        db.commit()
+
+        markets = service._build_key_markets(db)  # noqa: SLF001 - intentional unit test coverage
+
+    spy = next(item for item in markets if item["symbol"] == "SPY")
+    assert spy["latest_close"] is None
+    assert spy["change_1d"] is None

@@ -352,7 +352,12 @@ class StaticSiteExportService:
             latest = ordered[-1] if ordered else None
             previous = ordered[-2] if len(ordered) > 1 else None
             change_1d = None
-            if latest is not None and previous is not None and previous.close:
+            if (
+                latest is not None
+                and previous is not None
+                and latest.close is not None
+                and previous.close not in (None, 0)
+            ):
                 change_1d = round(((latest.close - previous.close) / previous.close) * 100, 2)
 
             markets.append(

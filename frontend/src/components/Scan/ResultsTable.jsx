@@ -502,6 +502,7 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.perPage === nextProps.perPage &&
     prevProps.sortBy === nextProps.sortBy &&
     prevProps.sortOrder === nextProps.sortOrder &&
-    prevProps.loading === nextProps.loading
+    prevProps.loading === nextProps.loading &&
+    prevProps.showActions === nextProps.showActions
   );
 });

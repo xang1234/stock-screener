@@ -277,5 +277,17 @@ describe('FilterPanel', () => {
       // FilterSection shows "{N} active" chip when activeCount > 0
       expect(screen.getByText('1 active')).toBeInTheDocument();
     });
+
+    it('rerenders when presetsEnabled changes so preset controls disappear', () => {
+      const filters = defaultFilters();
+      const baseProps = makeProps({ filters, presetsEnabled: true });
+      const { rerender } = renderWithProviders(<FilterPanel {...baseProps} />);
+
+      expect(screen.getByText('Select Preset')).toBeInTheDocument();
+
+      rerender(<FilterPanel {...baseProps} presetsEnabled={false} />);
+
+      expect(screen.queryByText('Select Preset')).not.toBeInTheDocument();
+    });
   });
 });
