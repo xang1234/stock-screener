@@ -6,7 +6,9 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from app.config import settings
 from app.database import SessionLocal
+from app.infra.db.portability import is_sqlite
 from app.main import initialize_runtime
 from app.services.static_site_export_service import StaticSiteExportService
 
@@ -19,15 +21,25 @@ def _default_output_dir() -> Path:
     return _repo_root() / "frontend" / "public" / "static-data"
 
 
+def _ensure_database_path_ready() -> None:
+    if not is_sqlite(settings.database_url):
+        return
+
+    database_path = Path(settings.database_url.removeprefix("sqlite:///"))
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def _run_daily_refresh(*, refresh_themes_best_effort: bool) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
     from app.tasks.cache_tasks import smart_refresh_cache
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
     from app.tasks.group_rank_tasks import calculate_daily_group_rankings
+    from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
     results: dict[str, Any] = {
+        "universe_refresh": refresh_stock_universe.run(),
         "cache_refresh": smart_refresh_cache.run(mode="full"),
         "fundamentals_refresh": refresh_all_fundamentals.run(),
         "breadth_refresh": calculate_daily_breadth_with_gapfill.run(),
@@ -71,6 +83,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    _ensure_database_path_ready()
     initialize_runtime()
 
     refresh_warnings: list[str] = []
