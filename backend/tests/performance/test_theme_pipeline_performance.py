@@ -23,6 +23,7 @@ from app.database import Base, get_db
 from app import main as app_main
 from app.main import app
 from app.models.theme import ContentItem, ContentSource, ThemeCluster, ThemeEmbedding
+from app.services import server_auth
 from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_embedding_service import ThemeEmbeddingEngine
 from app.services.theme_extraction_service import ThemeExtractionService
@@ -41,6 +42,11 @@ API_EXTRACT_MIN_THROUGHPUT_ITEMS = 15.0
 
 API_CONSOLIDATE_P95_BUDGET_MS = 900.0
 API_CONSOLIDATE_MIN_THROUGHPUT_PAIRS = 120.0
+
+
+def _disable_server_auth_for_perf(monkeypatch) -> None:
+    """Keep perf budgets focused on endpoint latency, not auth configuration."""
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
 
 def _p95(values: list[float]) -> float:
@@ -301,6 +307,7 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         "trigger_ui_snapshot_rebuild_on_startup",
         _noop_startup_rebuild,
     )
+    _disable_server_auth_for_perf(monkeypatch)
 
     def _override_get_db():
         db = SessionLocal()
@@ -385,6 +392,7 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
         "find_all_similar_pairs",
         lambda self, threshold=None, pipeline=None, top_k=None, recall_sample_size=0: synthetic_pairs,
     )
+    _disable_server_auth_for_perf(monkeypatch)
 
     def _override_get_db():
         db = SessionLocal()
