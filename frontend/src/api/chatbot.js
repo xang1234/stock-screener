@@ -80,6 +80,7 @@ export const sendMessageStream = (conversationId, content, enabledTools, researc
 
   fetch(url, {
     method: 'POST',
+    credentials: apiClient.defaults.withCredentials ? 'include' : 'same-origin',
     headers: {
       'Content-Type': 'application/json',
     },
