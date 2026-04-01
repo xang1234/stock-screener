@@ -59,14 +59,22 @@ class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options=None,
     ) -> httpcore.AsyncNetworkStream:
-        resolved_ip = self._resolve_public_ip(host)
-        return await self._backend.connect_tcp(
-            host=resolved_ip,
-            port=port,
-            timeout=timeout,
-            local_address=local_address,
-            socket_options=socket_options,
-        )
+        last_error: Exception | None = None
+        for resolved_ip in self._resolve_public_ips(host):
+            try:
+                return await self._backend.connect_tcp(
+                    host=resolved_ip,
+                    port=port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, OSError) as exc:
+                last_error = exc
+
+        if last_error is None:
+            raise httpcore.ConnectError("Blocked host")
+        raise last_error
 
     async def connect_unix_socket(
         self,
@@ -83,7 +91,7 @@ class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
     async def sleep(self, seconds: float) -> None:
         await self._backend.sleep(seconds)
 
-    def _resolve_public_ip(self, host: str) -> str:
+    def _resolve_public_ips(self, host: str) -> tuple[str, ...]:
         normalized = host.strip().lower().rstrip(".")
         if normalized == "localhost":
             raise httpcore.ConnectError("Blocked host")
@@ -91,7 +99,7 @@ class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
         try:
             if _is_disallowed_ip(normalized):
                 raise httpcore.ConnectError("Blocked host")
-            return normalized
+            return (normalized,)
         except ValueError:
             pass
 
@@ -114,7 +122,7 @@ class _PinnedPublicIPBackend(httpcore.AsyncNetworkBackend):
         if not public_ips:
             raise httpcore.ConnectError("Blocked host")
 
-        return public_ips[0]
+        return tuple(public_ips)
 
 
 class _PinnedPublicIPTransport(httpx.AsyncBaseTransport):

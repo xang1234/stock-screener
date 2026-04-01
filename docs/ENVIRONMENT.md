@@ -82,6 +82,7 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 | `CORS_ORIGINS` | `http://localhost:5173` (local) | Comma-separated allowed origins |
 | `SERVER_AUTH_PASSWORD` | (empty) | Required for browser login in server/Docker deployments |
 | `SERVER_AUTH_SESSION_SECRET` | (empty) | Optional cookie-signing secret; defaults to `SERVER_AUTH_PASSWORD` |
+| `SERVER_AUTH_SECURE_COOKIE` | `false` | Force Secure auth cookies; set `true` when TLS terminates at a trusted HTTPS proxy |
 | `ADMIN_API_KEY` | (empty) | Required for `/api/v1/config/*` endpoints |
 
 ## Docker Deployment

@@ -207,7 +207,4 @@ def _request_is_secure(request: Request | None) -> bool:
         return True
     if request is None:
         return False
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    if forwarded_proto:
-        return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
     return request.url.scheme == "https"

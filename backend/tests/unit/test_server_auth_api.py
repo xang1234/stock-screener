@@ -57,6 +57,33 @@ async def test_protected_route_requires_login_and_accepts_session_cookie(client,
 
 
 @pytest.mark.asyncio
+async def test_config_route_accepts_admin_key_without_server_session(client, monkeypatch):
+    from app.api.v1 import config as config_api
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "server-secret")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
+    monkeypatch.setattr(server_auth.settings, "admin_api_key", "admin-secret")
+    monkeypatch.setattr(
+        config_api,
+        "_theme_policy_defaults",
+        lambda pipeline: {"matcher": {}, "lifecycle": {}},
+    )
+    monkeypatch.setattr(config_api, "_get_setting_json", lambda db, key, default: default)
+
+    response = await client.get(
+        "/api/v1/config/theme-policies",
+        params={"pipeline": "technical"},
+        headers={"X-Admin-Key": "admin-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pipeline"] == "technical"
+
+
+@pytest.mark.asyncio
 async def test_protected_route_returns_503_when_auth_required_but_not_configured(client, monkeypatch):
     from app.services import server_auth
 
@@ -100,3 +127,39 @@ async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkey
     response = await client.get("/api/v1/chatbot/health")
 
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_login_cookie_does_not_trust_forwarded_proto_header(client, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
+    monkeypatch.setattr(server_auth.settings, "server_auth_secure_cookie", False)
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"password": "secret-pass"},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+
+    assert response.status_code == 200
+    assert "Secure" not in response.headers["set-cookie"]
+
+
+@pytest.mark.asyncio
+async def test_login_cookie_can_be_forced_secure_with_explicit_setting(client, monkeypatch):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
+    monkeypatch.setattr(server_auth.settings, "server_auth_secure_cookie", True)
+
+    response = await client.post("/api/v1/auth/login", json={"password": "secret-pass"})
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers["set-cookie"]

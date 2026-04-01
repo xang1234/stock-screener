@@ -61,4 +61,4 @@ if settings.feature_chatbot:
     _include("prompt_presets", prefix="/prompt-presets", tags=["prompt-presets"])
 
 if settings.feature_themes or settings.feature_chatbot:
-    _include("config", tags=["config"])
+    _include("config", tags=["config"], protected=False)

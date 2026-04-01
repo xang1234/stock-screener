@@ -33,7 +33,8 @@ For deployment behind Traefik, nginx proxy manager, or similar:
 ```bash
 # 1. Configure environment
 cp .env.docker.example .env.docker
-# Edit .env.docker: Set SERVER_AUTH_PASSWORD and CORS_ORIGINS=https://stocks.home.lan
+# Edit .env.docker: Set SERVER_AUTH_PASSWORD, CORS_ORIGINS=https://stocks.home.lan,
+# and SERVER_AUTH_SECURE_COOKIE=true if your proxy terminates HTTPS
 
 # 2. Start with production settings
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -103,6 +104,8 @@ Requirements:
 - DNS A record pointing to your server
 - Ports 80 and 443 open
 - `DOMAIN` environment variable set
+
+The HTTPS overlay sets `SERVER_AUTH_SECURE_COOKIE=true` on the backend automatically so auth cookies remain Secure behind Caddy TLS termination.
 
 ## Services Architecture
 
