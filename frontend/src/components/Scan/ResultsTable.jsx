@@ -82,9 +82,9 @@ const columns = [
 /**
  * Memoized table row component to prevent unnecessary re-renders
  */
-const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHover, onOpenChart }) {
+const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHover, onOpenChart, showActions }) {
   const handleRowClick = useCallback(() => {
-    onRowClick(row.symbol);
+    onRowClick?.(row.symbol);
   }, [onRowClick, row.symbol]);
 
   const handleRowHover = useCallback(() => {
@@ -93,7 +93,7 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
 
   const handleChartClick = useCallback((e) => {
     e.stopPropagation();
-    onOpenChart(row.symbol);
+    onOpenChart?.(row.symbol);
   }, [onOpenChart, row.symbol]);
 
   return (
@@ -101,18 +101,20 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
       hover
       onClick={handleRowClick}
       onMouseEnter={handleRowHover}
-      sx={{ cursor: 'pointer', height: ROW_HEIGHT }}
+      sx={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_HEIGHT }}
     >
-      <TableCell align="center" onClick={(e) => e.stopPropagation()} sx={{ p: '2px', width: 60, minWidth: 60 }}>
-        <IconButton
-          size="small"
-          onClick={handleChartClick}
-          sx={{ color: 'primary.main', p: 0 }}
-        >
-          <ShowChartIcon sx={{ fontSize: 14 }} />
-        </IconButton>
-        <AddToWatchlistMenu symbols={row.symbol} size="small" />
-      </TableCell>
+      {showActions && (
+        <TableCell align="center" onClick={(e) => e.stopPropagation()} sx={{ p: '2px', width: 60, minWidth: 60 }}>
+          <IconButton
+            size="small"
+            onClick={handleChartClick}
+            sx={{ color: 'primary.main', p: 0 }}
+          >
+            <ShowChartIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+          <AddToWatchlistMenu symbols={row.symbol} size="small" />
+        </TableCell>
+      )}
 
       <TableCell sx={{ fontWeight: 600, width: 65, minWidth: 65 }}>
         {row.symbol}
@@ -338,15 +340,34 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
          prevProps.row.composite_score === nextProps.row.composite_score &&
          prevProps.row.rs_rating === nextProps.row.rs_rating &&
          prevProps.row.current_price === nextProps.row.current_price &&
-         prevProps.row.price_change_1d === nextProps.row.price_change_1d;
+         prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
+         prevProps.showActions === nextProps.showActions;
 });
 
 /**
  * Display scan results in a sortable, paginated table with row virtualization
  * @param {Function} onRowHover - Optional callback when hovering over a row (for prefetching)
  */
-function ResultsTable({ results, total, page, perPage, sortBy, sortOrder, onPageChange, onPerPageChange, onSortChange, onOpenChart, loading, onRowHover }) {
+function ResultsTable({
+  results,
+  total,
+  page,
+  perPage,
+  sortBy,
+  sortOrder,
+  onPageChange,
+  onPerPageChange,
+  onSortChange,
+  onOpenChart,
+  loading,
+  onRowHover,
+  showActions = true,
+}) {
   const parentRef = useRef(null);
+  const visibleColumns = useMemo(
+    () => (showActions ? columns : columns.filter((column) => column.id !== 'chart')),
+    [showActions]
+  );
 
   const handleChangePage = useCallback((event, newPage) => {
     onPageChange(newPage + 1); // Material-UI uses 0-based pages, API uses 1-based
@@ -358,7 +379,7 @@ function ResultsTable({ results, total, page, perPage, sortBy, sortOrder, onPage
   }, [sortBy, sortOrder, onSortChange]);
 
   const handleRowClick = useCallback((symbol) => {
-    onOpenChart(symbol);
+    onOpenChart?.(symbol);
   }, [onOpenChart]);
 
   // Virtualize rows - only render visible rows plus overscan
@@ -399,10 +420,10 @@ function ResultsTable({ results, total, page, perPage, sortBy, sortOrder, onPage
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: 2230 }}>
+        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2230 : 2170 }}>
           <TableHead>
             <TableRow>
-              {columns.map((column) => (
+              {visibleColumns.map((column) => (
                 <TableCell
                   key={column.id}
                   align={column.id === 'symbol' ? 'left' : 'center'}
@@ -439,9 +460,10 @@ function ResultsTable({ results, total, page, perPage, sortBy, sortOrder, onPage
                 <VirtualTableRow
                   key={row.symbol}
                   row={row}
-                  onRowClick={handleRowClick}
+                  onRowClick={onOpenChart ? handleRowClick : null}
                   onRowHover={onRowHover}
                   onOpenChart={onOpenChart}
+                  showActions={showActions}
                 />
               );
             })}
@@ -480,6 +502,7 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.perPage === nextProps.perPage &&
     prevProps.sortBy === nextProps.sortBy &&
     prevProps.sortOrder === nextProps.sortOrder &&
-    prevProps.loading === nextProps.loading
+    prevProps.loading === nextProps.loading &&
+    prevProps.showActions === nextProps.showActions
   );
 });

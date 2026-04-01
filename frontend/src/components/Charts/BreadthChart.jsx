@@ -77,6 +77,7 @@ function BreadthChart({
   error,
   timeRange = '1Y',
   onTimeRangeChange,
+  availableRanges = ['1M', '3M', '6M', '1Y'],
   height = 400,
   fillContainer = false,
 }) {
@@ -158,15 +159,16 @@ function BreadthChart({
             exclusive
             onChange={(e, newRange) => {
               if (newRange !== null) {
-                onTimeRangeChange(newRange);
+                onTimeRangeChange?.(newRange);
               }
             }}
             size="small"
           >
-            <ToggleButton value="1M">1M</ToggleButton>
-            <ToggleButton value="3M">3M</ToggleButton>
-            <ToggleButton value="6M">6M</ToggleButton>
-            <ToggleButton value="1Y">1Y</ToggleButton>
+            {availableRanges.map((range) => (
+              <ToggleButton key={range} value={range}>
+                {range}
+              </ToggleButton>
+            ))}
           </ToggleButtonGroup>
         </Box>
 

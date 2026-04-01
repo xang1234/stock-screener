@@ -151,6 +151,19 @@ describe('ResultsTable', () => {
       // MUI TablePagination renders "Rows per page:" text
       expect(screen.getByText(/rows per page/i)).toBeInTheDocument();
     });
+
+    it('rerenders when showActions changes so the action column is removed', () => {
+      const results = [fullSeRow];
+      const { rerender } = renderWithProviders(
+        <ResultsTable {...defaultProps} results={results} showActions={true} />
+      );
+
+      expect(screen.getByTestId('ShowChartIcon')).toBeInTheDocument();
+
+      rerender(<ResultsTable {...defaultProps} results={results} showActions={false} />);
+
+      expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
+    });
   });
 
   // ── interactions ─────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react';
+import { memo } from 'react';
 import {
   Paper,
   Typography,
@@ -86,6 +86,7 @@ function FilterPanel({
   filterOptions = {},
   expanded = true,
   onToggle,
+  presetsEnabled = true,
   // Preset props
   presets = [],
   activePresetId = null,
@@ -316,12 +317,9 @@ function FilterPanel({
 
   const activeFilters = getActiveFilters();
 
-  // Memoize category counts to prevent recalculation on expand/collapse
-  const { fundamentalCount, technicalCount, ratingCount } = useMemo(() => ({
-    fundamentalCount: countActiveInCategory(FUNDAMENTAL_KEYS),
-    technicalCount: countActiveInCategory(TECHNICAL_KEYS),
-    ratingCount: countActiveInCategory(RATING_KEYS),
-  }), [filters]);
+  const fundamentalCount = countActiveInCategory(FUNDAMENTAL_KEYS);
+  const technicalCount = countActiveInCategory(TECHNICAL_KEYS);
+  const ratingCount = countActiveInCategory(RATING_KEYS);
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -349,18 +347,20 @@ function FilterPanel({
         </Typography>
 
         {/* Filter Presets */}
-        <FilterPresets
-          presets={presets}
-          activePresetId={activePresetId}
-          hasUnsavedChanges={hasUnsavedChanges}
-          isLoading={presetsLoading}
-          isSaving={presetsSaving}
-          onLoadPreset={onLoadPreset}
-          onSavePreset={onSavePreset}
-          onUpdatePreset={onUpdatePreset}
-          onRenamePreset={onRenamePreset}
-          onDeletePreset={onDeletePreset}
-        />
+        {presetsEnabled && (
+          <FilterPresets
+            presets={presets}
+            activePresetId={activePresetId}
+            hasUnsavedChanges={hasUnsavedChanges}
+            isLoading={presetsLoading}
+            isSaving={presetsSaving}
+            onLoadPreset={onLoadPreset}
+            onSavePreset={onSavePreset}
+            onUpdatePreset={onUpdatePreset}
+            onRenamePreset={onRenamePreset}
+            onDeletePreset={onDeletePreset}
+          />
+        )}
 
         <Box sx={{ flexGrow: 1 }} />
 
@@ -968,16 +968,18 @@ function FilterPanel({
       </Collapse>
 
       {/* Save Preset Dialog */}
-      <SavePresetDialog
-        open={saveDialogOpen}
-        onClose={onSaveDialogClose}
-        onSave={onSaveDialogSave}
-        mode={saveDialogMode}
-        initialName={saveDialogInitialName}
-        initialDescription={saveDialogInitialDescription}
-        error={saveDialogError}
-        isLoading={presetsSaving}
-      />
+      {presetsEnabled && (
+        <SavePresetDialog
+          open={saveDialogOpen}
+          onClose={onSaveDialogClose}
+          onSave={onSaveDialogSave}
+          mode={saveDialogMode}
+          initialName={saveDialogInitialName}
+          initialDescription={saveDialogInitialDescription}
+          error={saveDialogError}
+          isLoading={presetsSaving}
+        />
+      )}
     </Paper>
   );
 }
@@ -989,11 +991,16 @@ export default memo(FilterPanel, (prevProps, nextProps) => {
     prevProps.filters === nextProps.filters &&
     prevProps.expanded === nextProps.expanded &&
     prevProps.filterOptions === nextProps.filterOptions &&
+    prevProps.presetsEnabled === nextProps.presetsEnabled &&
     prevProps.presets === nextProps.presets &&
     prevProps.activePresetId === nextProps.activePresetId &&
     prevProps.hasUnsavedChanges === nextProps.hasUnsavedChanges &&
     prevProps.presetsLoading === nextProps.presetsLoading &&
     prevProps.presetsSaving === nextProps.presetsSaving &&
-    prevProps.saveDialogOpen === nextProps.saveDialogOpen
+    prevProps.saveDialogOpen === nextProps.saveDialogOpen &&
+    prevProps.saveDialogMode === nextProps.saveDialogMode &&
+    prevProps.saveDialogInitialName === nextProps.saveDialogInitialName &&
+    prevProps.saveDialogInitialDescription === nextProps.saveDialogInitialDescription &&
+    prevProps.saveDialogError === nextProps.saveDialogError
   );
 });
