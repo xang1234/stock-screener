@@ -42,21 +42,42 @@ function StaticThemesPage() {
   const [pipeline, setPipeline] = useState('technical');
   const [themeView, setThemeView] = useState('grouped');
   const variantKey = `${pipeline}:${themeView}`;
-  const variantMeta = themesIndexQuery.data?.variants?.[variantKey];
+  const variants = themesIndexQuery.data?.variants ?? null;
+  const variantMeta = variants?.[variantKey];
+  const fallbackVariantKey = useMemo(() => {
+    if (variantMeta?.available) {
+      return variantKey;
+    }
+
+    const variantEntries = variants ? Object.entries(variants) : [];
+    const samePipelineVariant = variantEntries.find(
+      ([key, meta]) => meta?.available && key.startsWith(`${pipeline}:`)
+    );
+    if (samePipelineVariant) {
+      return samePipelineVariant[0];
+    }
+
+    const firstAvailableVariant = variantEntries.find(([_key, meta]) => meta?.available);
+    return firstAvailableVariant?.[0] || null;
+  }, [pipeline, variantKey, variantMeta?.available, variants]);
+  const activeVariantKey = variantMeta?.available ? variantKey : fallbackVariantKey;
+  const activeVariantMeta = activeVariantKey ? variants?.[activeVariantKey] : null;
+  const activeThemeView = activeVariantKey?.split(':')[1] || themeView;
+  const isFallbackActive = Boolean(activeVariantKey && activeVariantKey !== variantKey);
   const variantQuery = useQuery({
-    queryKey: ['staticThemesVariant', variantMeta?.path],
-    queryFn: () => fetchStaticJson(variantMeta.path),
-    enabled: Boolean(variantMeta?.available && variantMeta?.path),
+    queryKey: ['staticThemesVariant', activeVariantMeta?.path],
+    queryFn: () => fetchStaticJson(activeVariantMeta.path),
+    enabled: Boolean(activeVariantMeta?.available && activeVariantMeta?.path),
     staleTime: Infinity,
   });
 
   const rankings = useMemo(() => {
     const payload = variantQuery.data?.payload || {};
-    if (themeView === 'grouped') {
+    if (activeThemeView === 'grouped') {
       return payload.l1_rankings?.rankings || [];
     }
     return payload.rankings?.rankings || [];
-  }, [themeView, variantQuery.data]);
+  }, [activeThemeView, variantQuery.data]);
 
   if (manifestQuery.isLoading || themesIndexQuery.isLoading) {
     return (
@@ -74,8 +95,8 @@ function StaticThemesPage() {
     return <Alert severity="info">Themes are unavailable in this static build.</Alert>;
   }
 
-  if (!variantMeta?.available) {
-    return <Alert severity="warning">The selected theme view is unavailable in this export.</Alert>;
+  if (!activeVariantMeta?.available) {
+    return <Alert severity="warning">No exported theme views are available in this static build.</Alert>;
   }
 
   if (variantQuery.isLoading) {
@@ -92,6 +113,12 @@ function StaticThemesPage() {
 
   const payload = variantQuery.data?.payload || {};
   const emerging = payload.emerging?.themes || [];
+  const fallbackLabel = activeVariantKey
+    ? activeVariantKey
+        .split(':')
+        .map((value) => value.charAt(0).toUpperCase() + value.slice(1))
+        .join(' / ')
+    : null;
 
   return (
     <Box>
@@ -122,6 +149,12 @@ function StaticThemesPage() {
           <ToggleButton value="flat">Flat</ToggleButton>
         </ToggleButtonGroup>
       </Box>
+
+      {isFallbackActive && fallbackLabel && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          The selected theme view is unavailable in this export. Showing {fallbackLabel} instead.
+        </Alert>
+      )}
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={4}>
@@ -165,7 +198,7 @@ function StaticThemesPage() {
 
       <Paper sx={{ p: 2 }}>
         <Typography variant="h6" gutterBottom>
-          {themeView === 'grouped' ? 'Grouped Rankings' : 'Flat Rankings'}
+          {activeThemeView === 'grouped' ? 'Grouped Rankings' : 'Flat Rankings'}
         </Typography>
         <TableContainer>
           <Table size="small">

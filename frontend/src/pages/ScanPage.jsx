@@ -44,6 +44,7 @@ import { useRuntime } from '../contexts/RuntimeContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import { formatScanDropdownLabel } from '../utils/scanLabel';
 import { buildDefaultScanFilters } from '../features/scan/defaultFilters';
+import { normalizeScanFilterOptions } from '../features/scan/filterOptions';
 
 // Test list of 20 popular stocks for quick testing
 const TEST_SYMBOLS = [
@@ -924,11 +925,7 @@ function ScanPage() {
           filters={filters}
           onFilterChange={handleFilterChange}
           onReset={handleResetFilters}
-          filterOptions={{
-            ibdIndustries: filterOptionsData?.ibd_industries || [],
-            gicsSectors: filterOptionsData?.gics_sectors || [],
-            ratings: filterOptionsData?.ratings || [],
-          }}
+          filterOptions={normalizeScanFilterOptions(filterOptionsData)}
           expanded={showFilters}
           onToggle={() => setShowFilters(!showFilters)}
           // Preset props

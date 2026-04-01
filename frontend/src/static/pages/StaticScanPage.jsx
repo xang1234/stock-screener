@@ -11,6 +11,7 @@ import FilterPanel from '../../components/Scan/FilterPanel';
 import ResultsTable from '../../components/Scan/ResultsTable';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
 import { buildDefaultScanFilters } from '../../features/scan/defaultFilters';
+import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
 import { getStableFilterKey } from '../../utils/filterUtils';
 import {
   filterStaticScanRows,
@@ -110,7 +111,7 @@ function StaticScanPage() {
         filters={filters}
         onFilterChange={setFilters}
         onReset={() => setFilters(buildDefaultScanFilters())}
-        filterOptions={scanManifestQuery.data.filter_options}
+        filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
         expanded={showFilters}
         onToggle={() => setShowFilters((previous) => !previous)}
         presetsEnabled={false}
