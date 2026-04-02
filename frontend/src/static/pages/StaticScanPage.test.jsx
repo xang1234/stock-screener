@@ -8,6 +8,7 @@ import StaticScanPage from './StaticScanPage';
 
 const filterPanelSpy = vi.fn();
 const resultsTableSpy = vi.fn();
+const staticChartModalSpy = vi.fn();
 
 vi.mock('../../components/Scan/FilterPanel', () => ({
   default: (props) => {
@@ -24,14 +25,25 @@ vi.mock('../../components/Scan/ResultsTable', () => ({
         <div data-testid="results-table-page">{props.page}</div>
         <div data-testid="results-table-total">{props.total}</div>
         <div data-testid="results-table-rows">{props.results.map((row) => row.symbol).join(',')}</div>
+        <div data-testid="results-table-actions">{props.showActions ? 'actions-visible' : 'actions-hidden'}</div>
         <button type="button" onClick={() => props.onPageChange(3)}>
           go-to-page-3
         </button>
         <button type="button" onClick={() => props.onSortChange('rating', 'asc')}>
           resort
         </button>
+        <button type="button" onClick={() => props.onOpenChart?.('NVDA')}>
+          open-chart
+        </button>
       </div>
     );
+  },
+}));
+
+vi.mock('../StaticChartViewerModal', () => ({
+  default: (props) => {
+    staticChartModalSpy(props);
+    return props.open ? <div data-testid="static-chart-modal">{props.initialSymbol}</div> : null;
   },
 }));
 
@@ -68,6 +80,7 @@ describe('StaticScanPage', () => {
     vi.stubEnv('VITE_STATIC_SITE', 'true');
     filterPanelSpy.mockClear();
     resultsTableSpy.mockClear();
+    staticChartModalSpy.mockClear();
   });
 
   afterEach(() => {
@@ -115,6 +128,22 @@ describe('StaticScanPage', () => {
               { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
             ],
             chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 1,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
           }),
         };
       }
@@ -154,6 +183,7 @@ describe('StaticScanPage', () => {
       expect(screen.queryByText(/Loading full scan dataset/i)).not.toBeInTheDocument();
       expect(screen.getByTestId('filter-panel')).toBeInTheDocument();
       expect(screen.getByTestId('results-table-total')).toHaveTextContent('2');
+      expect(screen.getByTestId('results-table-actions')).toHaveTextContent('actions-visible');
     });
   });
 
@@ -195,6 +225,22 @@ describe('StaticScanPage', () => {
               { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
             ],
             chunks: [],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 1,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
           }),
         };
       }
@@ -259,6 +305,22 @@ describe('StaticScanPage', () => {
               { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
             ],
             chunks: [],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 1,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
           }),
         };
       }
@@ -296,5 +358,83 @@ describe('StaticScanPage', () => {
         sortOrder: 'asc',
       })
     );
+  });
+
+  it('opens the static chart modal for exported chart symbols', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 1,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+            ],
+            chunks: [],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 1,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
+    renderPage();
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('results-table-actions')).toHaveTextContent('actions-visible');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'open-chart' }));
+
+    expect(await screen.findByTestId('static-chart-modal')).toHaveTextContent('NVDA');
   });
 });

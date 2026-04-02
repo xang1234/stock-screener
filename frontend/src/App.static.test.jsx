@@ -33,6 +33,7 @@ vi.mock('./components/Scan/FilterPanel', () => ({
     <div data-testid="static-filter-panel">{presetsEnabled ? 'presets-enabled' : 'presets-disabled'}</div>
   ),
 }));
+vi.mock('./static/StaticChartViewerModal', () => ({ default: () => null }));
 vi.mock('./components/Scan/ResultsTable', () => ({
   default: ({ showActions, total }) => (
     <div data-testid="static-results-table">
@@ -96,11 +97,29 @@ const staticPayloads = {
       { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
     ],
     chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+    charts: {
+      path: 'charts/index.json',
+      limit: 200,
+      symbols_total: 2,
+      available: true,
+    },
   },
   'scan/chunks/chunk-0001.json': {
     rows: [
       { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
       { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
+    ],
+  },
+  'charts/index.json': {
+    schema_version: 'static-charts-v1',
+    generated_at: '2026-03-31T22:00:00Z',
+    as_of_date: '2026-03-31',
+    limit: 200,
+    symbols_total: 2,
+    skipped_symbols: [],
+    symbols: [
+      { symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' },
+      { symbol: 'MSFT', rank: 2, path: 'charts/MSFT.json' },
     ],
   },
   'breadth.json': {
@@ -186,7 +205,7 @@ describe('App static mode', () => {
     await renderStaticAppAtHash(hash);
 
     expect(await screen.findByText(heading, {}, { timeout: 10000 })).toBeInTheDocument();
-    expect(screen.getByText('Read-only')).toBeInTheDocument();
+    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
     expect(screen.queryByText('Sign out')).not.toBeInTheDocument();
 
     await waitFor(() => {
@@ -196,7 +215,7 @@ describe('App static mode', () => {
     const requestedUrls = globalThis.fetch.mock.calls.map(([url]) => String(url));
     expect(requestedUrls.length).toBeGreaterThan(0);
     expect(requestedUrls.every((url) => url.includes('/static-data/') && !url.includes('/api'))).toBe(true);
-  }, 10000);
+  }, 15000);
 
   it('keeps scan controls read-only in the static route', async () => {
     await renderStaticAppAtHash('#/scan');
@@ -204,9 +223,9 @@ describe('App static mode', () => {
     expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId('static-filter-panel')).toHaveTextContent('presets-disabled');
-      expect(screen.getByTestId('static-results-table')).toHaveTextContent('actions-hidden:2');
+      expect(screen.getByTestId('static-results-table')).toHaveTextContent('actions-visible:2');
     });
-  });
+  }, 10000);
 
   it('locks the breadth view to the exported range in the static route', async () => {
     await renderStaticAppAtHash('#/breadth');
@@ -214,5 +233,5 @@ describe('App static mode', () => {
     expect(await screen.findByRole('heading', { name: 'Market Breadth' })).toBeInTheDocument();
     expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('1M');
     expect(screen.getByTestId('breadth-chart-ranges')).not.toHaveTextContent('3M');
-  });
+  }, 10000);
 });

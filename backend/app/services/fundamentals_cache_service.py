@@ -1061,6 +1061,26 @@ class FundamentalsCacheService:
             logger.error(f"Error in bulk get fundamentals: {e}", exc_info=True)
             return {symbol: None for symbol in symbols}
 
+    def get_many_cached_only(self, symbols: list[str]) -> Dict[str, Optional[Dict]]:
+        """
+        Get fundamentals from the persistent cache only.
+
+        This bypasses both Redis and any live provider fallback so offline/static
+        export paths can reuse previously hydrated fundamentals without triggering
+        fresh network work.
+        """
+        if not symbols:
+            return {}
+
+        db_results = self._get_many_from_database(symbols)
+        hits = sum(1 for data, _ in db_results.values() if data is not None)
+        logger.info(
+            "Bulk cache-only fetched %d fundamentals rows from database (%d misses)",
+            hits,
+            len(symbols) - hits,
+        )
+        return {symbol: data for symbol, (data, _) in db_results.items()}
+
     def store(self, symbol: str, data: Dict, data_source: str = 'hybrid') -> None:
         """
         Store fundamental data in cache (Redis + Database).

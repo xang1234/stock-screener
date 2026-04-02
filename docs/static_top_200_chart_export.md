@@ -1,8 +1,8 @@
 # Static Top-200 Chart Export Review
 
-## Recommendation
+## Implemented Shape
 
-Add a separate static chart bundle for the top `200` symbols from the default daily scan ranking.
+The static site now exports a separate chart bundle for the top `200` symbols from the default daily scan ranking.
 
 The existing chart stack already computes the moving averages and weekly aggregation client-side from OHLCV data:
 
@@ -18,7 +18,7 @@ Export one manifest plus one JSON file per symbol:
 - `static-data/charts/index.json`
 - `static-data/charts/<SYMBOL>.json`
 
-Suggested `index.json` shape:
+Current `index.json` shape:
 
 ```json
 {
@@ -32,26 +32,39 @@ Suggested `index.json` shape:
 }
 ```
 
-Suggested per-symbol payload:
+Current per-symbol payload:
 
 ```json
 {
   "schema_version": "static-charts-v1",
   "symbol": "NVDA",
+  "rank": 1,
   "period": "6mo",
   "bars": [
     { "date": "2026-03-31", "open": 144.2, "high": 146.0, "low": 143.8, "close": 145.4, "volume": 28100200 }
-  ]
+  ],
+  "stock_data": {
+    "symbol": "NVDA",
+    "company_name": "NVIDIA Corporation",
+    "ibd_group_rank": 1,
+    "ibd_industry_group": "Semiconductors"
+  },
+  "fundamentals": {
+    "symbol": "NVDA",
+    "description": "..."
+  }
 }
 ```
 
 ## Export Source
 
-Use cached price history only:
+Use cached data only:
 
 - read from `PriceCacheService.get_cached_only(symbol, period="2y")`
+- bulk-export with `PriceCacheService.get_many_cached_only(symbols, period="2y")`
 - trim to `6mo` during export
-- skip symbols with no cached data instead of live-fetching during the static build
+- read sidebar fundamentals from `FundamentalsCacheService.get_many_cached_only(symbols)`
+- skip symbols with no cached price history instead of live-fetching during the static build
 
 That keeps the static Pages run aligned with the current no-Redis, batch-first design.
 
@@ -67,28 +80,16 @@ This is small relative to the scan dataset and well within GitHub Pages limits.
 
 ## UI Integration Cost
 
-Low-to-moderate for charts only:
+The static site now:
 
-- add a static chart client that reads `charts/index.json` and `charts/<SYMBOL>.json`
-- reuse the existing chart transforms in [CandlestickChart.jsx](/Users/admin/StockScreenClaude/frontend/src/components/Charts/CandlestickChart.jsx#L300)
-- limit the chart icon/modal to symbols present in the top-200 chart manifest
-
-Moderate-to-high for the full current modal:
-
-The live modal also pulls sidebar data beyond OHLCV:
-
-- chart metadata from [get_chart_data()](/Users/admin/StockScreenClaude/backend/app/api/v1/stocks.py#L194)
-- fundamentals from `getStockFundamentals`
-- group detail from `getGroupDetail`
-
-If the static site should match the live modal, the export would also need:
-
-- one static per-symbol metadata payload for the same fields returned by `chart-data`
-- optional static group detail payloads for the displayed group sidebar
+- reads `charts/index.json` plus per-symbol chart payloads
+- reuses the existing chart transforms in [CandlestickChart.jsx](/Users/admin/StockScreenClaude/frontend/src/components/Charts/CandlestickChart.jsx#L300)
+- reuses [StockMetricsSidebar.jsx](/Users/admin/StockScreenClaude/frontend/src/components/Scan/StockMetricsSidebar.jsx#L72) with exported scan-row and fundamentals metadata
+- enables chart actions only for symbols present in the top-200 chart manifest
 
 ## Suggested Rollout
 
 1. Export `charts/index.json` plus top-200 per-symbol `6mo` OHLCV files.
-2. Enable chart icons only for symbols present in that manifest.
+2. Include sidebar metadata (`stock_data` + `fundamentals`) in each per-symbol payload.
 3. Reuse the current chart rendering code with a static data adapter.
-4. Add static sidebar metadata only if the chart-only modal proves useful.
+4. Keep chart actions limited to symbols present in the exported manifest.

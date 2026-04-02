@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -10,6 +10,7 @@ import {
 import FilterPanel from '../../components/Scan/FilterPanel';
 import ResultsTable from '../../components/Scan/ResultsTable';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticChartIndex } from '../chartClient';
 import { buildDefaultScanFilters } from '../../features/scan/defaultFilters';
 import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
 import { getStableFilterKey } from '../../utils/filterUtils';
@@ -18,6 +19,7 @@ import {
   paginateStaticScanRows,
   sortStaticScanRows,
 } from '../scanClient';
+import StaticChartViewerModal from '../StaticChartViewerModal';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -29,6 +31,7 @@ function StaticScanPage() {
     enabled: Boolean(manifestQuery.data?.pages?.scan?.path),
     staleTime: Infinity,
   });
+  const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);
 
   const [filters, setFilters] = useState(buildDefaultScanFilters);
   const [showFilters, setShowFilters] = useState(true);
@@ -36,6 +39,8 @@ function StaticScanPage() {
   const [perPage, setPerPage] = useState(50);
   const [sortBy, setSortBy] = useState('composite_score');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
   const [hydrationState, setHydrationState] = useState({
     status: 'idle',
     rows: [],
@@ -140,6 +145,14 @@ function StaticScanPage() {
   }, [filterKey]);
 
   const hydratedRows = hydrationState.rows;
+  const chartEntries = useMemo(
+    () => chartIndexQuery.data?.symbols || [],
+    [chartIndexQuery.data]
+  );
+  const chartEnabledSymbols = useMemo(
+    () => new Set(chartEntries.map((entry) => entry.symbol)),
+    [chartEntries]
+  );
   const filteredRows = useMemo(
     () => (hydrationComplete ? filterStaticScanRows(hydratedRows, filters) : hydratedRows),
     [filters, hydratedRows, hydrationComplete]
@@ -152,6 +165,19 @@ function StaticScanPage() {
     () => (hydrationComplete ? paginateStaticScanRows(sortedRows, page, perPage) : filteredRows),
     [filteredRows, hydrationComplete, page, perPage, sortedRows]
   );
+  const chartsAvailable = chartEnabledSymbols.size > 0;
+  const isChartEnabled = useCallback(
+    (symbol) => chartEnabledSymbols.has(symbol),
+    [chartEnabledSymbols]
+  );
+
+  const handleOpenChart = (symbol) => {
+    if (!isChartEnabled(symbol)) {
+      return;
+    }
+    setSelectedChartSymbol(symbol);
+    setChartModalOpen(true);
+  };
 
   if (manifestQuery.isLoading || scanManifestQuery.isLoading) {
     return (
@@ -185,6 +211,11 @@ function StaticScanPage() {
         <Typography variant="body2" color="text.secondary">
           {scanManifestQuery.data.rows_total.toLocaleString()} total rows exported
         </Typography>
+        {scanManifestQuery.data.charts?.available ? (
+          <Typography variant="body2" color="text.secondary">
+            Static charts exported for the top {scanManifestQuery.data.charts.limit.toLocaleString()} ranked symbols.
+          </Typography>
+        ) : null}
       </Paper>
 
       {!hydrationComplete && (
@@ -199,6 +230,12 @@ function StaticScanPage() {
           Background hydration failed. Showing the exported first page only.
         </Alert>
       )}
+
+      {chartIndexQuery.isError && scanManifestQuery.data.charts?.path ? (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Static chart payloads failed to load. Scan results remain available without chart modals.
+        </Alert>
+      ) : null}
 
       {hydrationComplete && (
         <FilterPanel
@@ -229,9 +266,19 @@ function StaticScanPage() {
           setSortOrder(nextSortOrder);
           setPage(1);
         }}
+        onOpenChart={chartsAvailable ? handleOpenChart : undefined}
         loading={false}
-        showActions={false}
+        showActions={chartsAvailable}
+        showWatchlistMenu={false}
+        isChartEnabled={isChartEnabled}
         sortingEnabled={hydrationComplete}
+      />
+
+      <StaticChartViewerModal
+        open={chartModalOpen}
+        onClose={() => setChartModalOpen(false)}
+        initialSymbol={selectedChartSymbol}
+        chartIndex={chartIndexQuery.data}
       />
     </Box>
   );

@@ -82,10 +82,21 @@ const columns = [
 /**
  * Memoized table row component to prevent unnecessary re-renders
  */
-const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHover, onOpenChart, showActions }) {
+const VirtualTableRow = memo(function VirtualTableRow({
+  row,
+  onRowClick,
+  onRowHover,
+  onOpenChart,
+  showActions,
+  showWatchlistMenu,
+  chartEnabled,
+}) {
   const handleRowClick = useCallback(() => {
+    if (!chartEnabled) {
+      return;
+    }
     onRowClick?.(row.symbol);
-  }, [onRowClick, row.symbol]);
+  }, [chartEnabled, onRowClick, row.symbol]);
 
   const handleRowHover = useCallback(() => {
     onRowHover?.(row.symbol);
@@ -93,26 +104,31 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
 
   const handleChartClick = useCallback((e) => {
     e.stopPropagation();
+    if (!chartEnabled) {
+      return;
+    }
     onOpenChart?.(row.symbol);
-  }, [onOpenChart, row.symbol]);
+  }, [chartEnabled, onOpenChart, row.symbol]);
 
   return (
     <TableRow
       hover
       onClick={handleRowClick}
       onMouseEnter={handleRowHover}
-      sx={{ cursor: onRowClick ? 'pointer' : 'default', height: ROW_HEIGHT }}
+      sx={{ cursor: onRowClick && chartEnabled ? 'pointer' : 'default', height: ROW_HEIGHT }}
     >
       {showActions && (
         <TableCell align="center" onClick={(e) => e.stopPropagation()} sx={{ p: '2px', width: 60, minWidth: 60 }}>
-          <IconButton
-            size="small"
-            onClick={handleChartClick}
-            sx={{ color: 'primary.main', p: 0 }}
-          >
-            <ShowChartIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-          <AddToWatchlistMenu symbols={row.symbol} size="small" />
+          {chartEnabled ? (
+            <IconButton
+              size="small"
+              onClick={handleChartClick}
+              sx={{ color: 'primary.main', p: 0 }}
+            >
+              <ShowChartIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          ) : null}
+          {showWatchlistMenu ? <AddToWatchlistMenu symbols={row.symbol} size="small" /> : null}
         </TableCell>
       )}
 
@@ -341,7 +357,9 @@ const VirtualTableRow = memo(function VirtualTableRow({ row, onRowClick, onRowHo
          prevProps.row.rs_rating === nextProps.row.rs_rating &&
          prevProps.row.current_price === nextProps.row.current_price &&
          prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
-         prevProps.showActions === nextProps.showActions;
+         prevProps.showActions === nextProps.showActions &&
+         prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
+         prevProps.chartEnabled === nextProps.chartEnabled;
 });
 
 /**
@@ -362,7 +380,9 @@ function ResultsTable({
   loading,
   onRowHover,
   showActions = true,
+  showWatchlistMenu = true,
   sortingEnabled = true,
+  isChartEnabled,
 }) {
   const parentRef = useRef(null);
   const visibleColumns = useMemo(
@@ -465,6 +485,8 @@ function ResultsTable({
                   onRowHover={onRowHover}
                   onOpenChart={onOpenChart}
                   showActions={showActions}
+                  showWatchlistMenu={showWatchlistMenu}
+                  chartEnabled={isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)}
                 />
               );
             })}
@@ -505,6 +527,8 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.sortOrder === nextProps.sortOrder &&
     prevProps.loading === nextProps.loading &&
     prevProps.showActions === nextProps.showActions &&
+    prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
+    prevProps.isChartEnabled === nextProps.isChartEnabled &&
     prevProps.sortingEnabled === nextProps.sortingEnabled
   );
 });

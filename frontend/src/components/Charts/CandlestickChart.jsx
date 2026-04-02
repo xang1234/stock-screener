@@ -305,8 +305,18 @@ const transformToCandlestickData = (apiData, timeframe = 'daily') => {
  * @param {number} props.height - Chart height in pixels
  * @param {Object} props.visibleRange - Optional visible time range to restore { from: timestamp, to: timestamp }
  * @param {Function} props.onVisibleRangeChange - Callback when visible range changes
+ * @param {Array|null} props.priceData - Optional static OHLCV payload to render without API calls
+ * @param {number|null} props.dataUpdatedAtOverride - Optional timestamp (ms) for static bundles
  */
-function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange = null, onVisibleRangeChange = null }) {
+function CandlestickChart({
+  symbol,
+  period = '6mo',
+  height = 600,
+  visibleRange = null,
+  onVisibleRangeChange = null,
+  priceData = null,
+  dataUpdatedAtOverride = null,
+}) {
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
   const candlestickSeriesRef = useRef(null);
@@ -334,7 +344,7 @@ function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange =
 
   // Fetch price history data (uses shared query keys for cache consistency)
   const {
-    data: apiData,
+    data: fetchedApiData,
     isLoading,
     isFetching,
     error,
@@ -343,18 +353,25 @@ function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange =
   } = useQuery({
     queryKey: priceHistoryKeys.symbol(symbol, period),
     queryFn: () => fetchPriceHistory(symbol, period),
-    enabled: !!symbol,
+    enabled: !!symbol && !priceData,
     staleTime: PRICE_HISTORY_STALE_TIME,
     keepPreviousData: true,
     // Show stale/cached data immediately while fetching fresh data
     placeholderData: getCachedData,
   });
 
+  const apiData = priceData ?? fetchedApiData;
+  const effectiveDataUpdatedAt = dataUpdatedAtOverride ?? dataUpdatedAt;
+  const effectiveIsLoading = Boolean(!priceData && isLoading);
+  const effectiveIsFetching = Boolean(!priceData && isFetching);
+  const effectiveError = priceData ? null : error;
+  const effectiveRefetch = priceData ? () => Promise.resolve({ data: priceData }) : refetch;
+
   // Format last updated time
   const lastUpdatedText = useMemo(() => {
-    if (!dataUpdatedAt) return null;
+    if (!effectiveDataUpdatedAt) return null;
     const now = Date.now();
-    const diffMs = now - dataUpdatedAt;
+    const diffMs = now - effectiveDataUpdatedAt;
     const diffSec = Math.floor(diffMs / 1000);
     const diffMin = Math.floor(diffSec / 60);
     const diffHr = Math.floor(diffMin / 60);
@@ -362,8 +379,8 @@ function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange =
     if (diffSec < 60) return 'just now';
     if (diffMin < 60) return `${diffMin}m ago`;
     if (diffHr < 24) return `${diffHr}h ago`;
-    return new Date(dataUpdatedAt).toLocaleDateString();
-  }, [dataUpdatedAt]);
+    return new Date(effectiveDataUpdatedAt).toLocaleDateString();
+  }, [effectiveDataUpdatedAt]);
 
   // Transform data - memoized to avoid expensive EMA recalculations on every render
   const chartData = useMemo(() => {
@@ -672,11 +689,11 @@ function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange =
   // Determine overlay state
   // Only show full loading state if we have no data at all (not even placeholder)
   const hasData = chartData && chartData.candlesticks.length > 0;
-  const showLoading = isLoading && !hasData;
-  const showError = !isLoading && error && !hasData;
-  const showNoData = !isLoading && !error && !hasData;
+  const showLoading = effectiveIsLoading && !hasData;
+  const showError = !effectiveIsLoading && effectiveError && !hasData;
+  const showNoData = !effectiveIsLoading && !effectiveError && !hasData;
   // Show refresh indicator when fetching but we have data to display
-  const showRefreshIndicator = isFetching && hasData;
+  const showRefreshIndicator = effectiveIsFetching && hasData;
 
   return (
     <Box
@@ -846,8 +863,8 @@ function CandlestickChart({ symbol, period = '6mo', height = 600, visibleRange =
         >
           <Alert severity="error" sx={{ maxWidth: '100%' }}>
             <AlertTitle>Failed to load chart data</AlertTitle>
-            {error.message || 'An error occurred while fetching the chart data'}
-            <Button onClick={() => refetch()} variant="outlined" size="small" sx={{ mt: 1 }}>
+            {effectiveError.message || 'An error occurred while fetching the chart data'}
+            <Button onClick={() => effectiveRefetch()} variant="outlined" size="small" sx={{ mt: 1 }}>
               Retry
             </Button>
           </Alert>
