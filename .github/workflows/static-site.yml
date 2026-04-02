@@ -103,6 +103,8 @@ jobs:
           print(manifest["sha256"])
           PY
           )"
+          export BUNDLE_ASSET_NAME
+          export BUNDLE_SHA256
           echo "BUNDLE_ASSET_NAME=$BUNDLE_ASSET_NAME" >> "$GITHUB_ENV"
           echo "BUNDLE_SHA256=$BUNDLE_SHA256" >> "$GITHUB_ENV"
 
