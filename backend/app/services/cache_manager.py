@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .benchmark_cache_service import BenchmarkCacheService
 from .price_cache_service import PriceCacheService
-from .redis_pool import get_redis_client
+from .redis_pool import get_redis_client, is_redis_enabled
 from ..config import settings
 from ..utils.market_hours import is_market_open, format_market_status
 
@@ -40,8 +40,10 @@ class CacheManager:
         self.redis_client = get_redis_client()
         if self.redis_client:
             logger.info("Cache manager connected to Redis (using shared pool)")
-        else:
+        elif is_redis_enabled():
             logger.warning("Redis connection failed. Cache manager will use fallback mode.")
+        else:
+            logger.info("Redis disabled for this runtime. Cache manager will use fallback mode.")
 
         # Initialize cache services (they'll use their own pool connections)
         self.benchmark_cache = BenchmarkCacheService.get_instance(self.redis_client)

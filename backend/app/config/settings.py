@@ -135,6 +135,7 @@ class Settings(BaseSettings):
     setup_engine_enabled: bool = True  # Feature flag to toggle Setup Engine scanner
 
     # Celery / Redis
+    redis_enabled: bool = True
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0

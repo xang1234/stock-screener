@@ -13,6 +13,8 @@ import threading
 import time
 from typing import Dict, Optional
 
+from ..config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,6 +78,8 @@ class RedisRateLimiter:
 
     def _get_redis_client(self):
         """Get Redis client, returning None if unavailable."""
+        if not getattr(settings, "redis_enabled", True):
+            return None
         try:
             from .redis_pool import get_redis_client
             client = get_redis_client()

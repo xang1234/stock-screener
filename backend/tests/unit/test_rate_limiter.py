@@ -146,6 +146,18 @@ class TestRedisRateLimiterFallback:
         assert limiter._using_fallback is False
         assert limiter._fallback_warned is False  # Reset so next outage logs warning
 
+    def test_disabled_redis_skips_pool_lookup(self, monkeypatch):
+        """Explicit no-Redis mode should skip Redis probing entirely."""
+        import app.services.redis_pool as redis_pool
+
+        limiter = RedisRateLimiter(jitter_ms=0)
+        monkeypatch.setattr("app.services.rate_limiter.settings.redis_enabled", False)
+        lookup = MagicMock(side_effect=AssertionError("should not probe redis"))
+        monkeypatch.setattr(redis_pool, "get_redis_client", lookup)
+
+        assert limiter._get_redis_client() is None
+        lookup.assert_not_called()
+
 
 class TestRedisRateLimiterConcurrency:
     """Tests for thread safety."""

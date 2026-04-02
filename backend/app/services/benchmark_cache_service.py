@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..config import settings
-from .redis_pool import get_redis_client
+from .redis_pool import get_redis_client, is_redis_enabled
 from ..utils.market_hours import get_eastern_now, is_trading_day, is_market_open, get_last_trading_day
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,10 @@ class BenchmarkCacheService:
             self._redis_client = get_redis_client()
             if self._redis_client:
                 logger.info("Connected to Redis for benchmark caching (using shared pool)")
-            else:
+            elif is_redis_enabled():
                 logger.warning("Redis connection failed. Will use database fallback.")
+            else:
+                logger.info("Redis disabled for this runtime. Using database fallback.")
 
     @classmethod
     def get_instance(cls, redis_client: Optional[redis.Redis] = None):

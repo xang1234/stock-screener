@@ -31,7 +31,7 @@ from ..utils.market_hours import (
     is_market_open, get_eastern_now, EASTERN, MARKET_CLOSE_TIME,
     is_trading_day, get_last_trading_day
 )
-from .redis_pool import get_redis_client, get_bulk_redis_client
+from .redis_pool import get_redis_client, get_bulk_redis_client, is_redis_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +74,10 @@ class PriceCacheService:
             self._redis_client = get_redis_client()
             if self._redis_client:
                 logger.debug("Connected to Redis for price caching (using shared pool)")
-            else:
+            elif is_redis_enabled():
                 logger.warning("Redis connection failed. Will use database fallback.")
+            else:
+                logger.info("Redis disabled for this runtime. Using database fallback.")
 
     @classmethod
     def get_instance(cls, redis_client: Optional[redis.Redis] = None):
@@ -1716,20 +1718,22 @@ class PriceCacheService:
         if not symbols:
             return {}
 
+        expected_date = self._get_expected_data_date()
+        now_et = get_eastern_now()
+
         if not self._redis_client:
-            logger.warning("Redis not available for bulk get - using database fallback")
-            # Fallback: query database for each symbol
-            return {symbol: self.get_historical_data(symbol, period=period, force_refresh=False)
-                    for symbol in symbols}
+            logger.info("Redis unavailable for bulk get - using database and batch-fetch fallback")
+            return self._resolve_bulk_fallback(
+                symbols,
+                period=period,
+                expected_date=expected_date,
+                now_et=now_et,
+            )
 
         try:
             # Use bulk Redis client with longer timeout for large pipeline operations
             bulk_client = get_bulk_redis_client() or self._redis_client
             chunk_size = getattr(settings, 'redis_pipeline_chunk_size', 500)
-
-            # Pre-compute expected_date once (avoids per-symbol market hours calculation)
-            expected_date = self._get_expected_data_date()
-            now_et = get_eastern_now()
 
             # Parse results
             cached_data = {}
@@ -1838,83 +1842,15 @@ class PriceCacheService:
                     len(stale_data),
                     len(stale_intraday_data),
                 )
-
-                # STEP 1: Bulk database query (single DB session for all symbols)
-                db_results = self._get_many_from_database(needs_db_fallback, period)
-
-                # Separate DB hits from DB misses
-                db_hits = []
-                yfinance_needed = []
-
-                for symbol in needs_db_fallback:
-                    df, last_date = db_results.get(symbol, (None, None))
-                    is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
-                    if self._is_fetch_metadata_stale(fetch_meta_by_symbol.get(symbol), now_et=now_et):
-                        is_fresh = False
-                    if df is not None and not df.empty and is_fresh:
-                        cached_data[symbol] = df
-                        db_hits.append(symbol)
-                        # Warm Redis for next time
-                        self._store_recent_in_redis(symbol, df)
-                    else:
-                        yfinance_needed.append(symbol)
-
-                logger.info(f"Database query: {len(db_hits)} hits, {len(yfinance_needed)} need yfinance")
-
-                # STEP 2: Batch yfinance fetch for remaining symbols
-                if yfinance_needed:
-                    from .bulk_data_fetcher import BulkDataFetcher
-
-                    active_query_db = SessionLocal()
-                    try:
-                        active_symbols = {
-                            row[0]
-                            for row in active_query_db.query(StockUniverse.symbol).filter(
-                                StockUniverse.symbol.in_(yfinance_needed),
-                                StockUniverse.active_filter(),
-                            ).all()
-                        }
-                    finally:
-                        active_query_db.close()
-                    inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_symbols]
-                    active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_symbols]
-
-                    logger.info(
-                        "Batch fetching %d active symbols from yfinance (%d inactive skipped)",
-                        len(active_yfinance_needed),
-                        len(inactive_symbols),
+                cached_data.update(
+                    self._resolve_bulk_fallback(
+                        needs_db_fallback,
+                        period=period,
+                        expected_date=expected_date,
+                        now_et=now_et,
+                        fetch_meta_by_symbol=fetch_meta_by_symbol,
                     )
-
-                    bulk_fetcher = BulkDataFetcher()
-
-                    yfinance_success = 0
-                    yfinance_failed = 0
-
-                    if inactive_symbols:
-                        for symbol in inactive_symbols:
-                            df, _ = db_results.get(symbol, (None, None))
-                            cached_data[symbol] = df
-
-                    if active_yfinance_needed:
-                        bulk_results = bulk_fetcher.fetch_prices_in_batches(
-                            active_yfinance_needed,
-                            period=period,
-                            start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
-                        )
-                        batch_to_store = {}
-                        for symbol, data in bulk_results.items():
-                            if not data.get('has_error') and data.get('price_data') is not None:
-                                price_df = data['price_data']
-                                cached_data[symbol] = price_df
-                                yfinance_success += 1
-                                batch_to_store[symbol] = price_df
-                            else:
-                                cached_data[symbol] = None
-                                yfinance_failed += 1
-                        if batch_to_store:
-                            self.store_batch_in_cache(batch_to_store, also_store_db=True)
-
-                    logger.info(f"yfinance batch fetch complete: {yfinance_success} success, {yfinance_failed} failed")
+                )
 
             logger.info(
                 "Bulk fetched %d symbols: %d Redis hits, %d stale, %d stale intraday, %d insufficient, %d misses",
@@ -1931,6 +1867,103 @@ class PriceCacheService:
         except Exception as e:
             logger.error(f"Error in bulk get: {e}", exc_info=True)
             return {symbol: None for symbol in symbols}
+
+    def _resolve_bulk_fallback(
+        self,
+        symbols: list[str],
+        *,
+        period: str,
+        expected_date: Optional[date],
+        now_et: datetime,
+        fetch_meta_by_symbol: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    ) -> Dict[str, Optional[pd.DataFrame]]:
+        """
+        Resolve a multi-symbol cache miss via one DB query and one optional batch fetch.
+
+        This keeps the non-Redis path efficient and reuses the same freshness logic
+        as the Redis-assisted bulk path.
+        """
+        if not symbols:
+            return {}
+
+        fetch_meta_by_symbol = fetch_meta_by_symbol or {}
+        cached_data: Dict[str, Optional[pd.DataFrame]] = {}
+
+        db_results = self._get_many_from_database(symbols, period)
+        db_hits = []
+        yfinance_needed = []
+
+        for symbol in symbols:
+            df, last_date = db_results.get(symbol, (None, None))
+            is_fresh = (last_date >= expected_date) if (last_date and expected_date) else False
+            if self._is_fetch_metadata_stale(fetch_meta_by_symbol.get(symbol), now_et=now_et):
+                is_fresh = False
+            if df is not None and not df.empty and is_fresh:
+                cached_data[symbol] = df
+                db_hits.append(symbol)
+                if self._redis_client:
+                    self._store_recent_in_redis(symbol, df)
+            else:
+                yfinance_needed.append(symbol)
+
+        logger.info("Database query: %d hits, %d need yfinance", len(db_hits), len(yfinance_needed))
+
+        if not yfinance_needed:
+            return cached_data
+
+        from .bulk_data_fetcher import BulkDataFetcher
+
+        active_query_db = SessionLocal()
+        try:
+            active_symbols = {
+                row[0]
+                for row in active_query_db.query(StockUniverse.symbol).filter(
+                    StockUniverse.symbol.in_(yfinance_needed),
+                    StockUniverse.active_filter(),
+                ).all()
+            }
+        finally:
+            active_query_db.close()
+
+        inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_symbols]
+        active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_symbols]
+
+        logger.info(
+            "Batch fetching %d active symbols from yfinance (%d inactive skipped)",
+            len(active_yfinance_needed),
+            len(inactive_symbols),
+        )
+
+        if inactive_symbols:
+            for symbol in inactive_symbols:
+                df, _ = db_results.get(symbol, (None, None))
+                cached_data[symbol] = df
+
+        yfinance_success = 0
+        yfinance_failed = 0
+
+        if active_yfinance_needed:
+            bulk_fetcher = BulkDataFetcher()
+            bulk_results = bulk_fetcher.fetch_prices_in_batches(
+                active_yfinance_needed,
+                period=period,
+                start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
+            )
+            batch_to_store = {}
+            for symbol, data in bulk_results.items():
+                if not data.get('has_error') and data.get('price_data') is not None:
+                    price_df = data['price_data']
+                    cached_data[symbol] = price_df
+                    yfinance_success += 1
+                    batch_to_store[symbol] = price_df
+                else:
+                    cached_data[symbol] = None
+                    yfinance_failed += 1
+            if batch_to_store:
+                self.store_batch_in_cache(batch_to_store, also_store_db=True)
+
+        logger.info("yfinance batch fetch complete: %d success, %d failed", yfinance_success, yfinance_failed)
+        return cached_data
 
     def invalidate_cache(self, symbol: str) -> None:
         """

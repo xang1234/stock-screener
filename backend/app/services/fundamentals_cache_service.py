@@ -20,7 +20,7 @@ from ..database import SessionLocal
 from ..models.stock import StockFundamental
 from ..config import settings
 from .institutional_ownership_service import InstitutionalOwnershipService
-from .redis_pool import get_redis_client
+from .redis_pool import get_redis_client, is_redis_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +110,10 @@ class FundamentalsCacheService:
             self._redis_client = get_redis_client()
             if self._redis_client:
                 logger.debug("Connected to Redis for fundamentals caching (using shared pool)")
-            else:
+            elif is_redis_enabled():
                 logger.warning("Redis connection failed. Will use database fallback.")
+            else:
+                logger.info("Redis disabled for this runtime. Using database fallback.")
 
     @classmethod
     def get_instance(cls, redis_client: Optional[redis.Redis] = None):

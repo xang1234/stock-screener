@@ -30,6 +30,36 @@ logger = logging.getLogger(__name__)
 # Module-level pool instances (singletons)
 _pool: Optional[ConnectionPool] = None
 _bulk_pool: Optional[ConnectionPool] = None
+_shared_pool_disabled_logged = False
+_bulk_pool_disabled_logged = False
+
+
+def is_redis_enabled() -> bool:
+    """Return whether Redis-backed helpers should be used for this runtime."""
+    return bool(getattr(settings, "redis_enabled", True)) and _REDIS_IMPORT_ERROR is None
+
+
+def _log_disabled_once(*, bulk: bool) -> None:
+    """Log intentional Redis disablement at most once per pool type."""
+    global _shared_pool_disabled_logged, _bulk_pool_disabled_logged
+
+    if _REDIS_IMPORT_ERROR is not None:
+        message = "Redis package unavailable; Redis pool disabled: %s"
+        args = (_REDIS_IMPORT_ERROR,)
+    else:
+        message = "Redis disabled via configuration; using non-Redis fallback paths"
+        args = ()
+
+    if bulk:
+        if _bulk_pool_disabled_logged:
+            return
+        _bulk_pool_disabled_logged = True
+    else:
+        if _shared_pool_disabled_logged:
+            return
+        _shared_pool_disabled_logged = True
+
+    logger.info(message, *args)
 
 
 def get_redis_pool() -> Optional[ConnectionPool]:
@@ -49,8 +79,8 @@ def get_redis_pool() -> Optional[ConnectionPool]:
     if _pool is not None:
         return _pool
 
-    if _REDIS_IMPORT_ERROR is not None:
-        logger.info("Redis package unavailable; shared Redis pool disabled: %s", _REDIS_IMPORT_ERROR)
+    if not is_redis_enabled():
+        _log_disabled_once(bulk=False)
         return None
 
     try:
@@ -96,8 +126,8 @@ def get_bulk_redis_pool() -> Optional[ConnectionPool]:
     if _bulk_pool is not None:
         return _bulk_pool
 
-    if _REDIS_IMPORT_ERROR is not None:
-        logger.info("Redis package unavailable; bulk Redis pool disabled: %s", _REDIS_IMPORT_ERROR)
+    if not is_redis_enabled():
+        _log_disabled_once(bulk=True)
         return None
 
     try:
@@ -179,7 +209,7 @@ def reset_pool() -> None:
     This closes all connections in both pools and clears the singletons.
     The next call to get_redis_pool()/get_bulk_redis_pool() will create fresh pools.
     """
-    global _pool, _bulk_pool
+    global _pool, _bulk_pool, _shared_pool_disabled_logged, _bulk_pool_disabled_logged
 
     if _pool is not None:
         try:
@@ -198,3 +228,6 @@ def reset_pool() -> None:
             logger.warning(f"Error disconnecting bulk pool: {e}")
         finally:
             _bulk_pool = None
+
+    _shared_pool_disabled_logged = False
+    _bulk_pool_disabled_logged = False

@@ -386,6 +386,23 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
     db.close()
 
 
+def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
+    service = PriceCacheService(redis_client=None)
+    service._redis_client = None
+    expected_df = _price_df(date(2026, 3, 18), 123.0)
+
+    bulk_db_lookup = MagicMock(return_value={"AAPL": (expected_df, date(2026, 3, 18))})
+    monkeypatch.setattr(service, "_get_many_from_database", bulk_db_lookup)
+    monkeypatch.setattr(service, "get_historical_data", MagicMock(side_effect=AssertionError("per-symbol fallback should not run")))
+    monkeypatch.setattr(service, "_get_expected_data_date", lambda: date(2026, 3, 18))
+    monkeypatch.setattr("app.services.price_cache_service.get_eastern_now", lambda: datetime(2026, 3, 18, 17, 0, 0))
+
+    result = service.get_many(["AAPL"], period="2y")
+
+    bulk_db_lookup.assert_called_once_with(["AAPL"], "2y")
+    assert result["AAPL"] is expected_df
+
+
 def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
