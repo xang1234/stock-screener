@@ -200,6 +200,29 @@ class PriceCacheService:
         results = self._get_many_from_database(symbols, period)
         return {symbol: data for symbol, (data, _) in results.items()}
 
+    def get_many_cached_only_fresh(
+        self,
+        symbols: List[str],
+        period: str = "2y"
+    ) -> Dict[str, Optional[pd.DataFrame]]:
+        """
+        Get fresh-enough cached price data for multiple symbols without Yahoo fetches.
+
+        Symbols with stale or missing database rows return None so callers can
+        distinguish safe cached-only reads from symbols that still lack current
+        technical input data.
+        """
+        results = self._get_many_from_database(symbols, period)
+        fresh_results: Dict[str, Optional[pd.DataFrame]] = {}
+
+        for symbol, (data, last_date) in results.items():
+            if data is not None and not data.empty and self._is_data_fresh(last_date):
+                fresh_results[symbol] = data
+            else:
+                fresh_results[symbol] = None
+
+        return fresh_results
+
     def _get_from_database(self, symbol: str, period: str) -> tuple[Optional[pd.DataFrame], Optional[date]]:
         """
         Get cached price data from database.

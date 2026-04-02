@@ -403,6 +403,29 @@ def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
     assert result["AAPL"] is expected_df
 
 
+def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
+    service = PriceCacheService(redis_client=None)
+    fresh_df = _price_df(date(2026, 3, 18), 123.0)
+    stale_df = _price_df(date(2026, 3, 17), 111.0)
+
+    monkeypatch.setattr(
+        service,
+        "_get_many_from_database",
+        lambda symbols, period: {
+            "AAPL": (fresh_df, date(2026, 3, 18)),
+            "MSFT": (stale_df, date(2026, 3, 17)),
+            "NVDA": (None, None),
+        },
+    )
+    monkeypatch.setattr(service, "_is_data_fresh", lambda last_date: last_date == date(2026, 3, 18))
+
+    result = service.get_many_cached_only_fresh(["AAPL", "MSFT", "NVDA"], period="2y")
+
+    assert result["AAPL"] is fresh_df
+    assert result["MSFT"] is None
+    assert result["NVDA"] is None
+
+
 def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

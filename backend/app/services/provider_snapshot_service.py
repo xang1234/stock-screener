@@ -131,8 +131,8 @@ class ProviderSnapshotService:
         return {key: value for key, value in normalized.items() if value is not None}
 
     @classmethod
-    def _should_skip_yahoo_enrichment(cls, symbol: str) -> bool:
-        """Return True for derivative-style suffixes that Yahoo often lacks."""
+    def _should_skip_yahoo_price_enrichment(cls, symbol: str) -> bool:
+        """Return True for derivative-style suffixes that Yahoo price history often lacks."""
         normalized = (symbol or "").strip().upper()
         if not normalized:
             return False
@@ -458,7 +458,7 @@ class ProviderSnapshotService:
             live_price_symbols = [
                 symbol
                 for symbol in chunk_symbols
-                if not self._should_skip_yahoo_enrichment(symbol)
+                if not self._should_skip_yahoo_price_enrichment(symbol)
             ]
             cached_only_symbols = [
                 symbol
@@ -470,7 +470,9 @@ class ProviderSnapshotService:
             if live_price_symbols:
                 price_data.update(self.price_cache.get_many(live_price_symbols, period="2y"))
             if cached_only_symbols:
-                cached_only_getter = getattr(self.price_cache, "get_many_cached_only", None)
+                cached_only_getter = getattr(self.price_cache, "get_many_cached_only_fresh", None)
+                if not callable(cached_only_getter):
+                    cached_only_getter = getattr(self.price_cache, "get_many_cached_only", None)
                 if callable(cached_only_getter):
                     price_data.update(cached_only_getter(cached_only_symbols, period="2y"))
                 else:
@@ -479,7 +481,6 @@ class ProviderSnapshotService:
 
             technicals = self.technical_calc.calculate_batch(price_data)
             technicals_refreshed_at = datetime.utcnow().isoformat()
-            cached_only_symbol_set = set(cached_only_symbols)
 
             for row in chunk_rows:
                 snapshot_payload = json.loads(row.normalized_payload_json)
@@ -488,8 +489,7 @@ class ProviderSnapshotService:
                     snapshot_payload.update(technical_payload)
                     snapshot_payload["technicals_refreshed_at"] = technicals_refreshed_at
                 else:
-                    if row.symbol not in cached_only_symbol_set:
-                        missing_prices += 1
+                    missing_prices += 1
 
                 snapshot_payload["finviz_snapshot_revision"] = run.source_revision
                 snapshot_payload["finviz_snapshot_at"] = (
@@ -500,19 +500,15 @@ class ProviderSnapshotService:
                     existing_data.get(row.symbol) or {},
                 )
                 if allow_yahoo_hydration and self._needs_yahoo_hydration(merged_payload):
-                    if self._should_skip_yahoo_enrichment(row.symbol):
-                        skipped_yahoo_field_symbols += 1
+                    yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
+                    if yahoo_payload:
+                        merged_payload = self.fundamentals_cache._merge_fundamentals(
+                            merged_payload,
+                            yahoo_payload,
+                        )
+                        yahoo_hydrated += 1
+                    if self._needs_yahoo_hydration(merged_payload):
                         missing_yahoo += 1
-                    else:
-                        yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
-                        if yahoo_payload:
-                            merged_payload = self.fundamentals_cache._merge_fundamentals(
-                                merged_payload,
-                                yahoo_payload,
-                            )
-                            yahoo_hydrated += 1
-                        if self._needs_yahoo_hydration(merged_payload):
-                            missing_yahoo += 1
                 elif self._needs_yahoo_hydration(merged_payload):
                     missing_yahoo += 1
                 merged_payload["description"] = (

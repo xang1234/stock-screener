@@ -51,6 +51,10 @@ class _StubPriceCache:
     def get_many_cached_only(symbols, period="2y"):
         return {symbol: None for symbol in symbols}
 
+    @staticmethod
+    def get_many_cached_only_fresh(symbols, period="2y"):
+        return {symbol: None for symbol in symbols}
+
 
 class _StubTechnicalCalc:
     @staticmethod
@@ -298,14 +302,14 @@ def test_hydrate_published_snapshot_skips_unsupported_yahoo_symbols():
     class _RecordingPriceCache:
         def __init__(self):
             self.live_calls: list[tuple[list[str], str]] = []
-            self.cached_only_calls: list[tuple[list[str], str]] = []
+            self.cached_only_fresh_calls: list[tuple[list[str], str]] = []
 
         def get_many(self, symbols, period="2y"):
             self.live_calls.append((list(symbols), period))
             return {symbol: None for symbol in symbols}
 
-        def get_many_cached_only(self, symbols, period="2y"):
-            self.cached_only_calls.append((list(symbols), period))
+        def get_many_cached_only_fresh(self, symbols, period="2y"):
+            self.cached_only_fresh_calls.append((list(symbols), period))
             return {symbol: None for symbol in symbols}
 
     service = ProviderSnapshotService()
@@ -318,10 +322,11 @@ def test_hydrate_published_snapshot_skips_unsupported_yahoo_symbols():
     stats = service.hydrate_published_snapshot(db, allow_yahoo_hydration=True)
 
     assert service.price_cache.live_calls == [(["AAPL"], "2y")]
-    assert service.price_cache.cached_only_calls == [(["BIII-U"], "2y")]
-    assert yahoo_calls == ["AAPL"]
+    assert service.price_cache.cached_only_fresh_calls == [(["BIII-U"], "2y")]
+    assert yahoo_calls == ["AAPL", "BIII-U"]
+    assert stats["missing_prices"] == 2
     assert stats["skipped_yahoo_price_symbols"] == 1
-    assert stats["skipped_yahoo_field_symbols"] == 1
+    assert stats["skipped_yahoo_field_symbols"] == 0
     db.close()
 
 
