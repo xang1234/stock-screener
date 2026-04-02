@@ -25,8 +25,18 @@ class DataPrepStockDataProvider(StockDataProvider):
         )
 
     def prepare_data_bulk(
-        self, symbols: list[str], requirements: object, *, allow_partial: bool = True
+        self,
+        symbols: list[str],
+        requirements: object,
+        *,
+        allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         return self._layer.prepare_data_bulk(
-            symbols, requirements, allow_partial=allow_partial
+            symbols,
+            requirements,
+            allow_partial=allow_partial,
+            batch_only_prices=batch_only_prices,
+            batch_only_fundamentals=batch_only_fundamentals,
         )

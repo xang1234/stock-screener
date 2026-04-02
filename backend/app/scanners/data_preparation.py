@@ -204,6 +204,8 @@ class DataPreparationLayer:
         requirements: DataRequirements,
         *,
         allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
     ) -> Dict[str, StockData]:
         """
         Fetch data for multiple stocks efficiently using bulk cache operations.
@@ -263,36 +265,43 @@ class DataPreparationLayer:
             price_data = cached_prices.get(symbol)
 
             if price_data is None or price_data.empty:
-                # Cache miss or insufficient - fetch directly
-                # (yfinance_service has its own rate limiter)
-                try:
-                    price_data = self._fetch_with_retry(
-                        yfinance_service.get_historical_data,
-                        symbol,
-                        period=requirements.price_period,
-                    )
-                    if price_data is None or price_data.empty:
-                        fetch_errors["price_data"] = "No price data returned"
-                except Exception as e:
-                    logger.error(f"Error fetching price data for {symbol}: {e}")
-                    fetch_errors["price_data"] = str(e)
+                if batch_only_prices:
+                    fetch_errors["price_data"] = "No price data returned from batch-only price path"
                     price_data = pd.DataFrame()
+                else:
+                    # Cache miss or insufficient - fetch directly
+                    # (yfinance_service has its own rate limiter)
+                    try:
+                        price_data = self._fetch_with_retry(
+                            yfinance_service.get_historical_data,
+                            symbol,
+                            period=requirements.price_period,
+                        )
+                        if price_data is None or price_data.empty:
+                            fetch_errors["price_data"] = "No price data returned"
+                    except Exception as e:
+                        logger.error(f"Error fetching price data for {symbol}: {e}")
+                        fetch_errors["price_data"] = str(e)
+                        price_data = pd.DataFrame()
 
             # Get fundamentals (from cache or fetch)
             fundamentals = cached_fundamentals.get(symbol)
             if fundamentals is None and requirements.needs_fundamentals:
-                # Cache miss - fetch
-                try:
-                    fundamentals = self._fetch_with_retry(
-                        self.fundamentals_cache.get_fundamentals,
-                        symbol,
-                        force_refresh=False,
-                    )
-                    if fundamentals is None:
-                        fetch_errors["fundamentals"] = "No fundamental data returned"
-                except Exception as e:
-                    logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
-                    fetch_errors["fundamentals"] = str(e)
+                if batch_only_fundamentals:
+                    fetch_errors["fundamentals"] = "No fundamental data returned from batch-only fundamentals path"
+                else:
+                    # Cache miss - fetch
+                    try:
+                        fundamentals = self._fetch_with_retry(
+                            self.fundamentals_cache.get_fundamentals,
+                            symbol,
+                            force_refresh=False,
+                        )
+                        if fundamentals is None:
+                            fetch_errors["fundamentals"] = "No fundamental data returned"
+                    except Exception as e:
+                        logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
+                        fetch_errors["fundamentals"] = str(e)
 
             # Extract quarterly growth from fundamentals (consolidated cache)
             quarterly_growth = None

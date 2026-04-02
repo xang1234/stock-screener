@@ -19,7 +19,6 @@ def _default_output_dir() -> Path:
 
 def _run_daily_refresh(
     *,
-    refresh_themes_best_effort: bool,
     skip_universe_refresh: bool = False,
     skip_fundamentals_refresh: bool = False,
     hydrate_published_snapshot: bool = False,
@@ -31,7 +30,10 @@ def _run_daily_refresh(
         smart_refresh_cache,
     )
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
-    from app.tasks.group_rank_tasks import calculate_daily_group_rankings
+    from app.tasks.group_rank_tasks import (
+        allow_same_day_group_rank_warmup_bypass,
+        calculate_daily_group_rankings,
+    )
     from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
@@ -54,17 +56,9 @@ def _run_daily_refresh(
                 )
 
         results["breadth_refresh"] = calculate_daily_breadth_with_gapfill.run()
-        results["groups_refresh"] = calculate_daily_group_rankings.run()
-        results["feature_snapshot"] = build_daily_snapshot.run()
-
-        if refresh_themes_best_effort:
-            from app.tasks.theme_discovery_tasks import run_full_pipeline
-
-            for pipeline in ("technical", "fundamental"):
-                try:
-                    results[f"themes_{pipeline}"] = run_full_pipeline.run(pipeline=pipeline)
-                except Exception as exc:  # noqa: BLE001 - explicit best effort behavior
-                    warnings.append(f"Theme refresh failed for {pipeline}: {exc}")
+        with allow_same_day_group_rank_warmup_bypass():
+            results["groups_refresh"] = calculate_daily_group_rankings.run()
+        results["feature_snapshot"] = build_daily_snapshot.run(static_daily_mode=True)
 
     return results, warnings
 
@@ -80,11 +74,6 @@ def main() -> int:
         "--refresh-daily",
         action="store_true",
         help="Run the synchronous daily refresh/build steps before exporting.",
-    )
-    parser.add_argument(
-        "--refresh-themes-best-effort",
-        action="store_true",
-        help="Attempt the theme pipelines during refresh and continue if they fail.",
     )
     parser.add_argument(
         "--skip-universe-refresh",
@@ -113,7 +102,6 @@ def main() -> int:
     refresh_warnings: list[str] = []
     if args.refresh_daily:
         refresh_results, refresh_warnings = _run_daily_refresh(
-            refresh_themes_best_effort=args.refresh_themes_best_effort,
             skip_universe_refresh=args.skip_universe_refresh,
             skip_fundamentals_refresh=args.skip_fundamentals_refresh,
             hydrate_published_snapshot=args.hydrate_published_snapshot,

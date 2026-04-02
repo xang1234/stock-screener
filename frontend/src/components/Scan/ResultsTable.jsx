@@ -362,6 +362,7 @@ function ResultsTable({
   loading,
   onRowHover,
   showActions = true,
+  sortingEnabled = true,
 }) {
   const parentRef = useRef(null);
   const visibleColumns = useMemo(
@@ -434,7 +435,7 @@ function ResultsTable({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {column.sortable ? (
+                  {column.sortable && sortingEnabled ? (
                     <TableSortLabel
                       active={sortBy === column.id}
                       direction={sortBy === column.id ? sortOrder : 'asc'}
@@ -503,6 +504,7 @@ export default memo(ResultsTable, (prevProps, nextProps) => {
     prevProps.sortBy === nextProps.sortBy &&
     prevProps.sortOrder === nextProps.sortOrder &&
     prevProps.loading === nextProps.loading &&
-    prevProps.showActions === nextProps.showActions
+    prevProps.showActions === nextProps.showActions &&
+    prevProps.sortingEnabled === nextProps.sortingEnabled
   );
 });

@@ -8,6 +8,8 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 from typing import Optional
 from datetime import datetime, date, timedelta
@@ -26,6 +28,20 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+_ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
+    "allow_same_day_group_rank_warmup_bypass",
+    default=False,
+)
+
+
+@contextmanager
+def allow_same_day_group_rank_warmup_bypass():
+    """Allow same-day cache-only rankings without warmup metadata in-process."""
+    token = _ALLOW_SAME_DAY_WARMUP_BYPASS.set(True)
+    try:
+        yield
+    finally:
+        _ALLOW_SAME_DAY_WARMUP_BYPASS.reset(token)
 
 
 def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
@@ -118,18 +134,23 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
         same_day_cache_only = calculation_date is None and calc_date == today_et
 
         if same_day_cache_only:
-            completeness_error = _validate_same_day_cache_only_group_rankings(
-                service.price_cache,
-            )
-            if completeness_error:
-                logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
-                logger.info("=" * 60)
-                return {
-                    'error': completeness_error,
-                    'date': calc_date.strftime('%Y-%m-%d'),
-                    'timestamp': datetime.now().isoformat(),
-                    'cache_only': True,
-                }
+            if _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
+                logger.info(
+                    "Bypassing same-day group ranking warmup metadata gate for in-process static export"
+                )
+            else:
+                completeness_error = _validate_same_day_cache_only_group_rankings(
+                    service.price_cache,
+                )
+                if completeness_error:
+                    logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
+                    logger.info("=" * 60)
+                    return {
+                        'error': completeness_error,
+                        'date': calc_date.strftime('%Y-%m-%d'),
+                        'timestamp': datetime.now().isoformat(),
+                        'cache_only': True,
+                    }
 
         # Calculate rankings
         logger.info(f"Starting group ranking calculation for {calc_date}...")

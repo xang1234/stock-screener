@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -22,6 +22,8 @@ vi.mock('../../components/Scan/ResultsTable', () => ({
     return (
       <div>
         <div data-testid="results-table-page">{props.page}</div>
+        <div data-testid="results-table-total">{props.total}</div>
+        <div data-testid="results-table-rows">{props.results.map((row) => row.symbol).join(',')}</div>
         <button type="button" onClick={() => props.onPageChange(3)}>
           go-to-page-3
         </button>
@@ -32,6 +34,16 @@ vi.mock('../../components/Scan/ResultsTable', () => ({
     );
   },
 }));
+
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
 
 const renderPage = () => {
   const queryClient = new QueryClient({
@@ -56,6 +68,96 @@ describe('StaticScanPage', () => {
     vi.stubEnv('VITE_STATIC_SITE', 'true');
     filterPanelSpy.mockClear();
     resultsTableSpy.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the exported first page before background hydration completes', async () => {
+    const chunkRequest = deferred();
+
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 2,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+            ],
+            chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+          }),
+        };
+      }
+
+      if (path === 'scan/chunks/chunk-0001.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => chunkRequest.promise,
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/Loading full scan dataset: 1 \/ 2 rows/i)).toBeInTheDocument();
+    expect(screen.getByTestId('results-table-rows')).toHaveTextContent('NVDA');
+    expect(screen.queryByTestId('filter-panel')).not.toBeInTheDocument();
+
+    await act(async () => {
+      chunkRequest.resolve({
+        rows: [
+          { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+          { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2 },
+        ],
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading full scan dataset/i)).not.toBeInTheDocument();
+      expect(screen.getByTestId('filter-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('results-table-total')).toHaveTextContent('2');
+    });
+  });
+
+  it('normalizes exported filter options before rendering the filter panel', async () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];
 
@@ -89,17 +191,10 @@ describe('StaticScanPage', () => {
               gics_sectors: ['Technology'],
               ratings: ['Strong Buy'],
             },
-            chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 1 }],
-          }),
-        };
-      }
-
-      if (path === 'scan/chunks/chunk-0001.json') {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            rows: [{ symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 }],
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+            ],
+            chunks: [],
           }),
         };
       }
@@ -110,14 +205,7 @@ describe('StaticScanPage', () => {
         json: async () => ({}),
       };
     });
-  });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it('normalizes exported filter options before rendering the filter panel', async () => {
     renderPage();
 
     await waitFor(() => {
@@ -133,7 +221,55 @@ describe('StaticScanPage', () => {
     });
   });
 
-  it('resets back to page 1 when the sort changes', async () => {
+  it('resets back to page 1 when the sort changes after hydration completes', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 1,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+            ],
+            chunks: [],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
     renderPage();
     const user = userEvent.setup();
 

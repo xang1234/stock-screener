@@ -49,6 +49,7 @@ from app.domain.scanning.ports import (
     StockDataProvider,
     StockScanner,
 )
+from app.utils.symbol_support import split_supported_price_symbols
 from app.use_cases.feature_store.publish_run import (
     PublishFeatureRunUseCase,
     PublishRunCommand,
@@ -115,6 +116,9 @@ class BuildDailySnapshotCommand:
     chunk_size: int = 50
     correlation_id: str | None = None
     code_version: str | None = None
+    exclude_unsupported_price_symbols: bool = False
+    batch_only_prices: bool = False
+    batch_only_fundamentals: bool = False
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
@@ -136,6 +140,7 @@ class BuildDailySnapshotResult:
     total_symbols: int
     processed_symbols: int
     failed_symbols: int
+    skipped_symbols: int
     dq_passed: bool
     warnings: tuple[str, ...]
     row_count: int
@@ -187,6 +192,24 @@ class BuildDailyFeatureSnapshotUseCase:
             symbols = uow.universe.resolve_symbols(cmd.universe_def)
             if not symbols:
                 raise ValidationError("Universe resolved to zero symbols")
+            run_warnings: list[str] = []
+            skipped_symbols: list[str] = []
+            if cmd.exclude_unsupported_price_symbols:
+                symbols, skipped_symbols = split_supported_price_symbols(symbols)
+                if skipped_symbols:
+                    run_warnings.append(
+                        "Skipped unsupported Yahoo price symbols in static daily snapshot: "
+                        f"{len(skipped_symbols)}"
+                    )
+                    logger.info(
+                        "Run will skip %d unsupported Yahoo price symbols before hashing: %s",
+                        len(skipped_symbols),
+                        ", ".join(skipped_symbols[:10]),
+                    )
+                if not symbols:
+                    raise ValidationError(
+                        "Universe resolved to zero symbols after excluding unsupported Yahoo price symbols"
+                    )
             total = len(symbols)
 
             signature_payload = build_scan_signature_payload(
@@ -223,6 +246,8 @@ class BuildDailyFeatureSnapshotUseCase:
                     progress,
                     cancel,
                     symbols,
+                    tuple(run_warnings),
+                    len(skipped_symbols),
                     progress_state,
                 )
             except Exception as exc:
@@ -279,6 +304,8 @@ class BuildDailyFeatureSnapshotUseCase:
         progress: ProgressSink,
         cancel: CancellationToken,
         symbols: list[str],
+        run_warnings: tuple[str, ...],
+        skipped_symbols: int,
         progress_state: _SnapshotRunProgress,
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
@@ -349,8 +376,9 @@ class BuildDailyFeatureSnapshotUseCase:
                     total_symbols=total,
                     processed_symbols=progress_state.attempted_symbols,
                     failed_symbols=progress_state.failed_symbols,
+                    skipped_symbols=skipped_symbols,
                     dq_passed=False,
-                    warnings=("Cancelled by user",),
+                    warnings=(*run_warnings, "Cancelled by user"),
                     row_count=uow.feature_store.count_by_run_id(run_id),
                     duration_seconds=round(duration, 2),
                 )
@@ -363,6 +391,8 @@ class BuildDailyFeatureSnapshotUseCase:
                         [symbol.upper() for symbol in chunk],
                         merged_requirements,
                         allow_partial=True,
+                        batch_only_prices=cmd.batch_only_prices,
+                        batch_only_fundamentals=cmd.batch_only_fundamentals,
                     )
                 except Exception:
                     logger.warning(
@@ -502,8 +532,9 @@ class BuildDailyFeatureSnapshotUseCase:
             total_symbols=total,
             processed_symbols=progress_state.attempted_symbols,
             failed_symbols=progress_state.failed_symbols,
+            skipped_symbols=skipped_symbols,
             dq_passed=pub_result.dq_passed,
-            warnings=pub_result.warnings,
+            warnings=(*run_warnings, *pub_result.warnings),
             row_count=actual_count,
             duration_seconds=round(duration, 2),
         )

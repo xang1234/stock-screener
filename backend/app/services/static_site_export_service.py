@@ -15,7 +15,9 @@ from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock import StockPrice
+from app.schemas.groups import GroupRankResponse, GroupRankingsResponse, MoversResponse
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
+from app.services.ibd_group_rank_service import IBDGroupRankService
 from app.services.ui_snapshot_service import UISnapshotService
 
 
@@ -71,12 +73,7 @@ class StaticSiteExportService:
                 run=latest_run,
             )
             breadth_payload = self._build_breadth_payload(generated_at=generated_at)
-            groups_payload = self._build_groups_payload(generated_at=generated_at)
-            themes_index = self._build_themes_payloads(
-                output_dir=output_dir,
-                generated_at=generated_at,
-                warnings=warnings,
-            )
+            groups_payload = self._build_groups_payload(db=db, generated_at=generated_at)
             home_payload = self._build_home_payload(
                 db=db,
                 generated_at=generated_at,
@@ -84,18 +81,15 @@ class StaticSiteExportService:
                 scan_manifest=scan_manifest,
                 breadth_payload=breadth_payload,
                 groups_payload=groups_payload,
-                themes_index=themes_index,
             )
 
         breadth_path = Path("breadth.json")
         groups_path = Path("groups.json")
         home_path = Path("home.json")
-        themes_index_path = Path("themes/index.json")
 
         self._write_json(output_dir / breadth_path, breadth_payload)
         self._write_json(output_dir / groups_path, groups_payload)
         self._write_json(output_dir / home_path, home_payload)
-        self._write_json(output_dir / themes_index_path, themes_index)
 
         manifest = {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -105,14 +99,12 @@ class StaticSiteExportService:
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
-                "themes": bool(themes_index.get("available", False)),
             },
             "pages": {
                 "home": {"path": home_path.as_posix()},
                 "scan": {"path": Path("scan/manifest.json").as_posix()},
                 "breadth": {"path": breadth_path.as_posix()},
                 "groups": {"path": groups_path.as_posix()},
-                "themes": {"path": themes_index_path.as_posix()},
             },
             "warnings": warnings,
         }
@@ -202,6 +194,7 @@ class StaticSiteExportService:
                 ratings=list(filter_options.ratings),
             ).model_dump(mode="json"),
             "chunks": chunk_refs,
+            "initial_rows": serialized_rows[:50],
             "preview_rows": serialized_rows[:10],
         }
         self._write_json(scan_dir / "manifest.json", manifest)
@@ -219,9 +212,10 @@ class StaticSiteExportService:
             "payload": payload,
         }
 
-    def _build_groups_payload(self, *, generated_at: str) -> dict[str, Any]:
-        snapshot = self._ui_snapshot_service.publish_groups_bootstrap()
-        if snapshot is None:
+    def _build_groups_payload(self, *, db: Session, generated_at: str) -> dict[str, Any]:
+        service = IBDGroupRankService.get_instance()
+        rankings = service.get_current_rankings(db, limit=197)
+        if not rankings:
             return {
                 "schema_version": STATIC_SITE_SCHEMA_VERSION,
                 "generated_at": generated_at,
@@ -229,69 +223,25 @@ class StaticSiteExportService:
                 "message": "No published group rankings are available.",
                 "payload": None,
             }
-        raw = snapshot.to_dict()
+        movers = service.get_rank_movers(db, period="3m", limit=10)
+        ranking_date = rankings[0]["date"]
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
             "available": True,
-            "published_at": _coerce_datetime(raw.get("published_at")),
-            "source_revision": raw.get("source_revision"),
-            "payload": raw.get("payload", {}),
-        }
-
-    def _build_themes_payloads(
-        self,
-        *,
-        output_dir: Path,
-        generated_at: str,
-        warnings: list[str],
-    ) -> dict[str, Any]:
-        themes_dir = output_dir / "themes"
-        themes_dir.mkdir(parents=True, exist_ok=True)
-
-        variants: dict[str, dict[str, Any]] = {}
-        for pipeline in ("technical", "fundamental"):
-            for theme_view in ("grouped", "flat"):
-                variant_key = f"{pipeline}:{theme_view}"
-                rel_path = Path(f"themes/{pipeline}-{theme_view}.json")
-                try:
-                    snapshot = self._ui_snapshot_service.publish_themes_bootstrap(
-                        pipeline=pipeline,
-                        theme_view=theme_view,
-                    ).to_dict()
-                    payload = {
-                        "schema_version": STATIC_SITE_SCHEMA_VERSION,
-                        "generated_at": generated_at,
-                        "available": True,
-                        "published_at": _coerce_datetime(snapshot.get("published_at")),
-                        "source_revision": snapshot.get("source_revision"),
-                        "payload": snapshot.get("payload", {}),
-                    }
-                    self._write_json(output_dir / rel_path, payload)
-                    preview_rankings = (
-                        (((payload.get("payload") or {}).get("rankings") or {}).get("rankings"))
-                        or (((payload.get("payload") or {}).get("l1_rankings") or {}).get("rankings"))
-                        or []
-                    )[:5]
-                    variants[variant_key] = {
-                        "available": True,
-                        "path": rel_path.as_posix(),
-                        "preview_rankings": preview_rankings,
-                    }
-                except Exception as exc:  # noqa: BLE001 - best effort by design
-                    warnings.append(f"Themes export failed for {variant_key}: {exc}")
-                    variants[variant_key] = {
-                        "available": False,
-                        "path": rel_path.as_posix(),
-                        "error": str(exc),
-                    }
-
-        return {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "available": any(entry.get("available") for entry in variants.values()),
-            "variants": variants,
-            "warnings": [warning for warning in warnings if warning.startswith("Themes export failed")],
+            "payload": {
+                "rankings": GroupRankingsResponse(
+                    date=ranking_date,
+                    total_groups=len(rankings),
+                    rankings=[GroupRankResponse(**row) for row in rankings],
+                ).model_dump(mode="json"),
+                "movers_period": "3m",
+                "movers": MoversResponse(
+                    period=movers["period"],
+                    gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
+                    losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                ).model_dump(mode="json"),
+            },
         }
 
     def _build_home_payload(
@@ -303,16 +253,11 @@ class StaticSiteExportService:
         scan_manifest: dict[str, Any],
         breadth_payload: dict[str, Any],
         groups_payload: dict[str, Any],
-        themes_index: dict[str, Any],
     ) -> dict[str, Any]:
         key_markets = self._build_key_markets(db)
         top_groups = (
             ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
         )[:5]
-        top_themes = []
-        technical_flat = themes_index.get("variants", {}).get("technical:flat", {})
-        if technical_flat.get("available"):
-            top_themes = technical_flat.get("preview_rankings") or []
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
 
@@ -326,7 +271,6 @@ class StaticSiteExportService:
                 "scan_published_at": _coerce_datetime(latest_run.published_at),
                 "breadth_latest_date": breadth_current.get("date"),
                 "groups_latest_date": (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date")),
-                "themes_available": themes_index.get("available", False),
             },
             "key_markets": key_markets,
             "scan_summary": {
@@ -335,7 +279,6 @@ class StaticSiteExportService:
                 "top_results": scan_manifest.get("preview_rows", []),
             },
             "top_groups": top_groups,
-            "top_themes": top_themes,
         }
 
     def _build_key_markets(self, db: Session) -> list[dict[str, Any]]:

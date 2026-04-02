@@ -428,6 +428,23 @@ class TestBulkDataPreparation:
         # Both symbols should have the same benchmark_data reference
         assert results["AAPL"].benchmark_data is results["MSFT"].benchmark_data
 
+    def test_bulk_batch_only_prices_never_falls_back_to_per_symbol_fetch(
+        self, data_layer, mock_price_cache, mock_yfinance,
+        mock_fundamentals_cache,
+    ):
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df(price=180.0)}
+
+        results = data_layer.prepare_data_bulk(
+            ["AAPL", "MSFT"],
+            REQUIREMENTS,
+            batch_only_prices=True,
+        )
+
+        assert results["AAPL"].fetch_errors == {}
+        assert results["MSFT"].fetch_errors["price_data"] == "No price data returned from batch-only price path"
+        assert results["MSFT"].price_data.empty
+        mock_yfinance.get_historical_data.assert_not_called()
+
 
 # ===================================================================
 # Class 7: Adapter delegation
@@ -451,7 +468,30 @@ class TestAdapterDelegation:
             adapter.prepare_data_bulk(["AAPL", "MSFT"], REQUIREMENTS)
 
             mock_pdb.assert_called_once_with(
-                ["AAPL", "MSFT"], REQUIREMENTS, allow_partial=True,
+                ["AAPL", "MSFT"],
+                REQUIREMENTS,
+                allow_partial=True,
+                batch_only_prices=False,
+                batch_only_fundamentals=False,
+            )
+
+    def test_adapter_delegates_prepare_data_bulk_batch_only_flags(self):
+        with patch.object(DataPreparationLayer, "prepare_data_bulk") as mock_pdb:
+            mock_pdb.return_value = {}
+            adapter = DataPrepStockDataProvider()
+            adapter.prepare_data_bulk(
+                ["AAPL", "MSFT"],
+                REQUIREMENTS,
+                batch_only_prices=True,
+                batch_only_fundamentals=True,
+            )
+
+            mock_pdb.assert_called_once_with(
+                ["AAPL", "MSFT"],
+                REQUIREMENTS,
+                allow_partial=True,
+                batch_only_prices=True,
+                batch_only_fundamentals=True,
             )
 
     def test_adapter_forwards_allow_partial(self):

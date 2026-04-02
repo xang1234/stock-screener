@@ -4,7 +4,10 @@ from unittest.mock import Mock
 
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
@@ -28,8 +31,15 @@ def _add_rank(session, group, rank_date, rank):
     session.flush()
 
 
-def test_get_historical_rank_picks_closest_date(db_session):
+def _make_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+
+
+def test_get_historical_rank_picks_closest_date():
     service = IBDGroupRankService.get_instance()
+    db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
     current_date = date(2024, 1, 22)
 
@@ -46,10 +56,12 @@ def test_get_historical_rank_picks_closest_date(db_session):
         assert result[(group, '1w')] == 10
     finally:
         db_session.rollback()
+        db_session.close()
 
 
-def test_get_historical_rank_prefers_earlier_on_tie(db_session):
+def test_get_historical_rank_prefers_earlier_on_tie():
     service = IBDGroupRankService.get_instance()
+    db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
     current_date = date(2024, 1, 22)
 
@@ -66,6 +78,7 @@ def test_get_historical_rank_prefers_earlier_on_tie(db_session):
         assert result[(group, '1w')] == 11
     finally:
         db_session.rollback()
+        db_session.close()
 
 
 def _price_frame() -> pd.DataFrame:
@@ -129,6 +142,7 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
         "spy_cached": True,
+        "skipped_unsupported_symbols": 0,
     }
     price_cache.get_cached_only.assert_called_once_with("SPY", period="2y")
     price_cache.get_many_cached_only.assert_called_once_with(["AAPL"], period="2y")
@@ -180,8 +194,52 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
         "spy_cached": True,
+        "skipped_unsupported_symbols": 0,
     }
     benchmark_cache.get_spy_data.assert_called_once_with(period="2y")
+    price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
+
+
+def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypatch):
+    service = IBDGroupRankService.get_instance()
+    spy_data = _price_frame()
+    aapl_data = _price_frame()
+
+    price_cache = Mock()
+    price_cache.get_many.return_value = {"AAPL": aapl_data}
+    service.price_cache = price_cache
+
+    benchmark_cache = Mock()
+    benchmark_cache.get_spy_data.return_value = spy_data
+    service.benchmark_cache = benchmark_cache
+
+    monkeypatch.setattr(
+        "app.services.stock_universe_service.stock_universe_service.get_active_symbols",
+        lambda db: ["AAPL", "MZYX-U"],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: ["Software"],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
+        lambda db, group: ["AAPL", "MZYX-U"],
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_market_caps_for_symbols",
+        lambda db, symbols: {"AAPL": 1_000_000_000},
+    )
+
+    _spy, all_prices, active_symbols, _market_caps, stats = service._prefetch_all_data(
+        db_session,
+        cache_only=False,
+    )
+
+    assert active_symbols == {"AAPL", "MZYX-U"}
+    assert all_prices == {"AAPL": aapl_data}
+    assert stats["target_symbols"] == 1
+    assert stats["skipped_unsupported_symbols"] == 1
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 

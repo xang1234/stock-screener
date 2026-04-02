@@ -348,7 +348,13 @@ class FakeStockDataProvider(StockDataProvider):
         return self._make_stock_data(symbol)
 
     def prepare_data_bulk(
-        self, symbols: list[str], requirements: object, *, allow_partial: bool = True
+        self,
+        symbols: list[str],
+        requirements: object,
+        *,
+        allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
     ) -> dict[str, StockData]:
         return {s: self.prepare_data(s, requirements) for s in symbols}
 

@@ -168,6 +168,7 @@ class TestHappyPath:
         assert result.total_symbols == 3
         assert result.processed_symbols == 3
         assert result.failed_symbols == 0
+        assert result.skipped_symbols == 0
         assert result.dq_passed is True
         assert result.run_id == 1
 
@@ -307,12 +308,24 @@ class TestBulkDataPreparation:
                 requirements: object,
                 *,
                 allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
             ) -> dict[str, object]:
-                self.bulk_calls.append((tuple(symbols), requirements, allow_partial))
+                self.bulk_calls.append(
+                    (
+                        tuple(symbols),
+                        requirements,
+                        allow_partial,
+                        batch_only_prices,
+                        batch_only_fundamentals,
+                    )
+                )
                 return super().prepare_data_bulk(
                     symbols,
                     requirements,
                     allow_partial=allow_partial,
+                    batch_only_prices=batch_only_prices,
+                    batch_only_fundamentals=batch_only_fundamentals,
                 )
 
         class BulkAwareScanner:
@@ -364,8 +377,8 @@ class TestBulkDataPreparation:
         assert result.status == RunStatus.PUBLISHED.value
         assert scanner.requirements_calls == [(("minervini",), {})]
         assert provider.bulk_calls == [
-            (("AAPL", "MSFT"), {"needs": "price+fundamentals"}, True),
-            (("GOOGL",), {"needs": "price+fundamentals"}, True),
+            (("AAPL", "MSFT"), {"needs": "price+fundamentals"}, True, False, False),
+            (("GOOGL",), {"needs": "price+fundamentals"}, True, False, False),
         ]
         assert [call["symbol"] for call in scanner.calls] == ["AAPL", "MSFT", "GOOGL"]
         assert all(
@@ -389,6 +402,8 @@ class TestBulkDataPreparation:
                 requirements: object,
                 *,
                 allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
             ) -> dict[str, object]:
                 self.bulk_calls += 1
                 raise RuntimeError("bulk prep failed")
@@ -445,6 +460,25 @@ class TestBulkDataPreparation:
             for call in scanner.calls
         )
         assert all(call["pre_fetched_data"] is None for call in scanner.calls)
+
+    @_PATCH_TRADING_DAY
+    def test_static_daily_mode_excludes_unsupported_symbols_before_hashing(self, _mock_td):
+        uow, scanner = _make_uow(symbols=["AAPL", "MZYX-U", "MSFT-WS", "NVDA"])
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(exclude_unsupported_price_symbols=True),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert result.total_symbols == 2
+        assert result.skipped_symbols == 2
+        assert scanner.calls == ["AAPL", "NVDA"]
+        assert any("Skipped unsupported Yahoo price symbols" in warning for warning in result.warnings)
+        assert uow.feature_store._universe[result.run_id] == ["AAPL", "NVDA"]
 
 
 # ---------------------------------------------------------------------------

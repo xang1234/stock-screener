@@ -71,6 +71,7 @@ function StaticGroupsPage() {
   const payload = groupsQuery.data.payload || {};
   const rankings = payload.rankings?.rankings || [];
   const movers = payload.movers || {};
+  const moversPeriod = payload.movers_period || movers.period || '3m';
 
   return (
     <Box>
@@ -83,10 +84,10 @@ function StaticGroupsPage() {
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={12} md={6}>
-          <MoversCard title="Top Gainers" rows={movers.gainers} />
+          <MoversCard title={`Top Gainers (${moversPeriod.toUpperCase()})`} rows={movers.gainers} />
         </Grid>
         <Grid item xs={12} md={6}>
-          <MoversCard title="Top Losers" rows={movers.losers} />
+          <MoversCard title={`Top Losers (${moversPeriod.toUpperCase()})`} rows={movers.losers} />
         </Grid>
       </Grid>
 
@@ -104,6 +105,7 @@ function StaticGroupsPage() {
                 <TableCell align="right">Stocks</TableCell>
                 <TableCell align="right">1W</TableCell>
                 <TableCell align="right">1M</TableCell>
+                <TableCell align="right">3M</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -115,6 +117,7 @@ function StaticGroupsPage() {
                   <TableCell align="right">{row.num_stocks}</TableCell>
                   <TableCell align="right">{row.rank_change_1w ?? '-'}</TableCell>
                   <TableCell align="right">{row.rank_change_1m ?? '-'}</TableCell>
+                  <TableCell align="right">{row.rank_change_3m ?? '-'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

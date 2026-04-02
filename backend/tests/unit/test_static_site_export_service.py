@@ -156,18 +156,6 @@ def test_export_writes_serializable_manifest_and_page_bundles(
             },
         },
     }
-    themes_index = {
-        "schema_version": STATIC_SITE_SCHEMA_VERSION,
-        "generated_at": "2026-03-31T22:00:00Z",
-        "available": True,
-        "variants": {
-            "technical:flat": {
-                "available": True,
-                "path": "themes/technical-flat.json",
-                "preview_rankings": [{"theme": "AI Infrastructure", "rank": 1}],
-            },
-        },
-    }
     home_payload = {
         "schema_version": STATIC_SITE_SCHEMA_VERSION,
         "generated_at": "2026-03-31T22:00:00Z",
@@ -176,19 +164,12 @@ def test_export_writes_serializable_manifest_and_page_bundles(
         "key_markets": [],
         "scan_summary": {"top_results": [{"symbol": "NVDA"}]},
         "top_groups": [{"industry_group": "Semiconductors", "rank": 1}],
-        "top_themes": [{"theme": "AI Infrastructure", "rank": 1}],
     }
 
     monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: scan_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
     monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
     monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
-
-    def _build_themes_payloads(**kwargs):
-        kwargs["warnings"].append("Themes export failed for fundamental:flat: upstream unavailable")
-        return themes_index
-
-    monkeypatch.setattr(service, "_build_themes_payloads", _build_themes_payloads)
 
     output_dir = tmp_path / "static-data"
     result = service.export(output_dir)
@@ -197,17 +178,17 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
     groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
     home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
-    themes = json.loads((output_dir / "themes" / "index.json").read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == STATIC_SITE_SCHEMA_VERSION
     assert manifest["pages"]["scan"]["path"] == "scan/manifest.json"
-    assert manifest["warnings"] == ["Themes export failed for fundamental:flat: upstream unavailable"]
+    assert "themes" not in manifest["features"]
+    assert "themes" not in manifest["pages"]
+    assert manifest["warnings"] == []
     assert breadth["payload"]["current"]["date"] == "2026-03-31"
     assert groups["payload"]["rankings"]["rankings"][0]["industry_group"] == "Semiconductors"
-    assert home["top_themes"][0]["theme"] == "AI Infrastructure"
-    assert themes["variants"]["technical:flat"]["path"] == "themes/technical-flat.json"
+    assert not (output_dir / "themes").exists()
     assert result.manifest == manifest
-    assert result.warnings == ("Themes export failed for fundamental:flat: upstream unavailable",)
+    assert result.warnings == ()
 
 
 def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory, monkeypatch, tmp_path):
@@ -260,6 +241,7 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
 
     assert manifest["chunk_size"] == 3
     assert manifest["rows_total"] == 5
+    assert [row["symbol"] for row in manifest["initial_rows"]] == ["SYM0", "SYM1", "SYM2", "SYM3", "SYM4"]
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]

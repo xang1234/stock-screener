@@ -40,7 +40,13 @@ class FakeDataProvider(StockDataProvider):
         return self._map[symbol]
 
     def prepare_data_bulk(
-        self, symbols: list[str], requirements: object
+        self,
+        symbols: list[str],
+        requirements: object,
+        *,
+        allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         return {s: self._map[s] for s in symbols if s in self._map}
 

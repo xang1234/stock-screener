@@ -60,6 +60,52 @@ def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypat
     fake_db.commit.assert_not_called()
 
 
+def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = None
+    fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
+    ]
+
+    monkeypatch.setattr(
+        module,
+        "IBDGroupRankService",
+        type(
+            "FakeGroupRankServiceFacade",
+            (),
+            {"get_instance": staticmethod(lambda: fake_service)},
+        ),
+    )
+
+    with module.allow_same_day_group_rank_warmup_bypass():
+        result = module.calculate_daily_group_rankings.run()
+
+    assert result["groups_ranked"] == 1
+    assert result["cache_only"] is True
+    fake_service.calculate_group_rankings.assert_called_once_with(
+        fake_db,
+        datetime(2026, 3, 20, 17, 40, 0).date(),
+        cache_only=True,
+        require_complete_cache=True,
+    )
+
+
 def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(monkeypatch):
     import app.tasks.group_rank_tasks as module
 

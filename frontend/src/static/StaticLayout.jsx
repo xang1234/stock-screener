@@ -21,7 +21,6 @@ const NAV_ITEMS = [
   { path: '/scan', label: 'Scan' },
   { path: '/breadth', label: 'Breadth' },
   { path: '/groups', label: 'Groups' },
-  { path: '/themes', label: 'Themes' },
 ];
 
 function StaticLayout({ children }) {

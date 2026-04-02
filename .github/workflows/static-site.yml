@@ -154,8 +154,7 @@ jobs:
             --refresh-daily \
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
-            --hydrate-published-snapshot \
-            --refresh-themes-best-effort
+            --hydrate-published-snapshot
 
       - name: Build static frontend
         if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
