@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -73,6 +73,8 @@ class ProviderSnapshotService:
         "eps_raw_score",
         "eps_years_available",
     )
+    YAHOO_UNSUPPORTED_SUFFIXES = ("U", "UN", "UNT", "UNIT", "R", "RT")
+    YAHOO_UNSUPPORTED_PREFIXES = ("W", "WS", "WT")
     WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
     WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION
     WEEKLY_REFERENCE_RELEASE_TAG = WEEKLY_REFERENCE_RELEASE_TAG
@@ -100,11 +102,17 @@ class ProviderSnapshotService:
             return value
         return str(value).strip()
 
-    def _fetch_category_dataframe(self, category: str, exchange: str) -> pd.DataFrame:
+    def _fetch_category_dataframe(
+        self,
+        category: str,
+        exchange: str,
+        *,
+        show_progress: bool = False,
+    ) -> pd.DataFrame:
         screener_cls = self._load_screener_class(category)
         screener = screener_cls()
         screener.set_filter(filters_dict={"Exchange": exchange})
-        df = screener.screener_view(verbose=0)
+        df = screener.screener_view(verbose=1 if show_progress else 0)
         return df if df is not None else pd.DataFrame()
 
     def _normalize_row(self, raw_row: Dict[str, Any], exchange: str) -> Dict[str, Any]:
@@ -122,38 +130,84 @@ class ProviderSnapshotService:
             normalized["country"] = raw_row.get("Country")
         return {key: value for key, value in normalized.items() if value is not None}
 
-    def _build_snapshot_rows(self, exchange_filter: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    @classmethod
+    def _should_skip_yahoo_enrichment(cls, symbol: str) -> bool:
+        """Return True for derivative-style suffixes that Yahoo often lacks."""
+        normalized = (symbol or "").strip().upper()
+        if not normalized:
+            return False
+
+        for delimiter in ("-", ".", "/"):
+            if delimiter not in normalized:
+                continue
+            suffix = normalized.rsplit(delimiter, 1)[1]
+            if suffix in cls.YAHOO_UNSUPPORTED_SUFFIXES:
+                return True
+            if any(suffix.startswith(prefix) for prefix in cls.YAHOO_UNSUPPORTED_PREFIXES):
+                return True
+        return False
+
+    def _build_snapshot_rows(
+        self,
+        exchange_filter: Optional[str] = None,
+        *,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        show_finviz_progress: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
         exchanges = [exchange_filter.upper()] if exchange_filter else list(self.EXCHANGES)
         merged_rows: Dict[str, Dict[str, Any]] = {}
+        total_fetches = len(exchanges) * len(self.CATEGORY_LOADERS)
+        completed_fetches = 0
 
         for exchange in exchanges:
             for category in self.CATEGORY_LOADERS:
-                df = self._fetch_category_dataframe(category, exchange)
+                df = self._fetch_category_dataframe(
+                    category,
+                    exchange,
+                    show_progress=show_finviz_progress,
+                )
                 if df is None or df.empty:
                     logger.warning("Finviz %s snapshot returned no rows for %s", category, exchange)
-                    continue
+                else:
+                    for _, series in df.iterrows():
+                        symbol = str(series.get("Ticker", "")).strip().upper()
+                        if not symbol:
+                            continue
 
-                for _, series in df.iterrows():
-                    symbol = str(series.get("Ticker", "")).strip().upper()
-                    if not symbol:
-                        continue
+                        raw_row = {
+                            column: self._serialize_raw_value(value)
+                            for column, value in series.to_dict().items()
+                        }
+                        merged = merged_rows.setdefault(
+                            symbol,
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "normalized_payload": {"symbol": symbol, "exchange": exchange},
+                                "raw_payload": {},
+                            },
+                        )
+                        merged["exchange"] = exchange
+                        merged["raw_payload"][category] = raw_row
+                        merged["normalized_payload"].update(self._normalize_row(raw_row, exchange))
 
-                    raw_row = {
-                        column: self._serialize_raw_value(value)
-                        for column, value in series.to_dict().items()
-                    }
-                    merged = merged_rows.setdefault(
-                        symbol,
+                completed_fetches += 1
+                if progress_callback is not None:
+                    progress_callback(
                         {
-                            "symbol": symbol,
+                            "stage": "snapshot_fetch_complete",
                             "exchange": exchange,
-                            "normalized_payload": {"symbol": symbol, "exchange": exchange},
-                            "raw_payload": {},
-                        },
+                            "category": category,
+                            "completed_fetches": completed_fetches,
+                            "total_fetches": total_fetches,
+                            "rows": 0 if df is None else len(df),
+                            "percent_complete": (
+                                round((completed_fetches / total_fetches) * 100, 1)
+                                if total_fetches
+                                else 100.0
+                            ),
+                        }
                     )
-                    merged["exchange"] = exchange
-                    merged["raw_payload"][category] = raw_row
-                    merged["normalized_payload"].update(self._normalize_row(raw_row, exchange))
 
         for symbol, row in merged_rows.items():
             payload_json = json.dumps(row["normalized_payload"], sort_keys=True, default=str)
@@ -252,6 +306,8 @@ class ProviderSnapshotService:
         snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
         exchange_filter: Optional[str] = None,
         publish: bool = False,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        show_finviz_progress: bool = False,
     ) -> Dict[str, Any]:
         """Create a preview or publish snapshot run and optionally publish it."""
         source_revision = f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -264,7 +320,11 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        merged_rows = self._build_snapshot_rows(exchange_filter=exchange_filter)
+        merged_rows = self._build_snapshot_rows(
+            exchange_filter=exchange_filter,
+            progress_callback=progress_callback,
+            show_finviz_progress=show_finviz_progress,
+        )
         active_symbols = {
             row[0]
             for row in db.query(StockUniverse.symbol).filter(
@@ -352,6 +412,7 @@ class ProviderSnapshotService:
         *,
         snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
         allow_yahoo_hydration: bool = True,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """Hydrate stock_fundamentals/cache from the currently published snapshot."""
         run = self.get_published_run(db, snapshot_key=snapshot_key)
@@ -375,14 +436,50 @@ class ProviderSnapshotService:
         missing_prices = 0
         yahoo_hydrated = 0
         missing_yahoo = 0
+        skipped_yahoo_price_symbols = 0
+        skipped_yahoo_field_symbols = 0
+        total_symbols = len(active_rows)
+        total_chunks = (total_symbols + self.HYDRATE_CHUNK_SIZE - 1) // self.HYDRATE_CHUNK_SIZE if total_symbols else 0
 
-        for chunk_start in range(0, len(active_rows), self.HYDRATE_CHUNK_SIZE):
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": "hydrate_start",
+                    "total_symbols": total_symbols,
+                    "total_chunks": total_chunks,
+                    "chunk_size": self.HYDRATE_CHUNK_SIZE,
+                }
+            )
+
+        for chunk_index, chunk_start in enumerate(range(0, len(active_rows), self.HYDRATE_CHUNK_SIZE), start=1):
             chunk_rows = active_rows[chunk_start:chunk_start + self.HYDRATE_CHUNK_SIZE]
             chunk_symbols = [row.symbol for row in chunk_rows]
             existing_data = self.fundamentals_cache.get_many(chunk_symbols)
-            price_data = self.price_cache.get_many(chunk_symbols, period="2y")
+            live_price_symbols = [
+                symbol
+                for symbol in chunk_symbols
+                if not self._should_skip_yahoo_enrichment(symbol)
+            ]
+            cached_only_symbols = [
+                symbol
+                for symbol in chunk_symbols
+                if symbol not in live_price_symbols
+            ]
+
+            price_data: Dict[str, Any] = {}
+            if live_price_symbols:
+                price_data.update(self.price_cache.get_many(live_price_symbols, period="2y"))
+            if cached_only_symbols:
+                cached_only_getter = getattr(self.price_cache, "get_many_cached_only", None)
+                if callable(cached_only_getter):
+                    price_data.update(cached_only_getter(cached_only_symbols, period="2y"))
+                else:
+                    price_data.update({symbol: None for symbol in cached_only_symbols})
+                skipped_yahoo_price_symbols += len(cached_only_symbols)
+
             technicals = self.technical_calc.calculate_batch(price_data)
             technicals_refreshed_at = datetime.utcnow().isoformat()
+            cached_only_symbol_set = set(cached_only_symbols)
 
             for row in chunk_rows:
                 snapshot_payload = json.loads(row.normalized_payload_json)
@@ -391,7 +488,8 @@ class ProviderSnapshotService:
                     snapshot_payload.update(technical_payload)
                     snapshot_payload["technicals_refreshed_at"] = technicals_refreshed_at
                 else:
-                    missing_prices += 1
+                    if row.symbol not in cached_only_symbol_set:
+                        missing_prices += 1
 
                 snapshot_payload["finviz_snapshot_revision"] = run.source_revision
                 snapshot_payload["finviz_snapshot_at"] = (
@@ -402,15 +500,19 @@ class ProviderSnapshotService:
                     existing_data.get(row.symbol) or {},
                 )
                 if allow_yahoo_hydration and self._needs_yahoo_hydration(merged_payload):
-                    yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
-                    if yahoo_payload:
-                        merged_payload = self.fundamentals_cache._merge_fundamentals(
-                            merged_payload,
-                            yahoo_payload,
-                        )
-                        yahoo_hydrated += 1
-                    if self._needs_yahoo_hydration(merged_payload):
+                    if self._should_skip_yahoo_enrichment(row.symbol):
+                        skipped_yahoo_field_symbols += 1
                         missing_yahoo += 1
+                    else:
+                        yahoo_payload = self._fetch_yahoo_only_fields(row.symbol)
+                        if yahoo_payload:
+                            merged_payload = self.fundamentals_cache._merge_fundamentals(
+                                merged_payload,
+                                yahoo_payload,
+                            )
+                            yahoo_hydrated += 1
+                        if self._needs_yahoo_hydration(merged_payload):
+                            missing_yahoo += 1
                 elif self._needs_yahoo_hydration(merged_payload):
                     missing_yahoo += 1
                 merged_payload["description"] = (
@@ -424,6 +526,32 @@ class ProviderSnapshotService:
                 )
                 hydrated += 1
 
+            if progress_callback is not None:
+                processed_symbols = chunk_start + len(chunk_rows)
+                progress_callback(
+                    {
+                        "stage": "hydrate_chunk_complete",
+                        "chunk_index": chunk_index,
+                        "total_chunks": total_chunks,
+                        "processed_symbols": processed_symbols,
+                        "total_symbols": total_symbols,
+                        "percent_complete": (
+                            round((processed_symbols / total_symbols) * 100, 1)
+                            if total_symbols
+                            else 100.0
+                        ),
+                        "chunk_symbols": len(chunk_rows),
+                        "live_price_symbols": len(live_price_symbols),
+                        "cached_only_symbols": len(cached_only_symbols),
+                        "hydrated": hydrated,
+                        "missing_prices": missing_prices,
+                        "yahoo_hydrated": yahoo_hydrated,
+                        "missing_yahoo": missing_yahoo,
+                        "skipped_yahoo_price_symbols": skipped_yahoo_price_symbols,
+                        "skipped_yahoo_field_symbols": skipped_yahoo_field_symbols,
+                    }
+                )
+
         return {
             "run_id": run.id,
             "snapshot_revision": run.source_revision,
@@ -431,6 +559,8 @@ class ProviderSnapshotService:
             "missing_prices": missing_prices,
             "yahoo_hydrated": yahoo_hydrated,
             "missing_yahoo": missing_yahoo,
+            "skipped_yahoo_price_symbols": skipped_yahoo_price_symbols,
+            "skipped_yahoo_field_symbols": skipped_yahoo_field_symbols,
         }
 
     def get_snapshot_stats(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Dict[str, Any]:

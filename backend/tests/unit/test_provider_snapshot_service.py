@@ -47,6 +47,10 @@ class _StubPriceCache:
     def get_many(symbols, period="2y"):
         return {symbol: None for symbol in symbols}
 
+    @staticmethod
+    def get_many_cached_only(symbols, period="2y"):
+        return {symbol: None for symbol in symbols}
+
 
 class _StubTechnicalCalc:
     @staticmethod
@@ -88,7 +92,7 @@ def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkey
     monkeypatch.setattr(
         service,
         "_build_snapshot_rows",
-        lambda exchange_filter=None: {
+        lambda exchange_filter=None, **kwargs: {
             "AAPL": {
                 "exchange": "NASDAQ",
                 "row_hash": "hash-aapl",
@@ -241,6 +245,146 @@ def test_hydrate_published_snapshot_can_skip_yahoo_when_disabled():
     db.close()
 
 
+def test_hydrate_published_snapshot_skips_unsupported_yahoo_symbols():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="BIII-U",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260404161000",
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    for symbol in ("AAPL", "BIII-U"):
+        db.add(
+            ProviderSnapshotRow(
+                run_id=run.id,
+                symbol=symbol,
+                exchange="NASDAQ",
+                row_hash=f"row-hash-{symbol}",
+                normalized_payload_json=json.dumps({"symbol": symbol, "exchange": "NASDAQ", "market_cap": 1000}),
+                raw_payload_json=None,
+            )
+        )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    class _RecordingPriceCache:
+        def __init__(self):
+            self.live_calls: list[tuple[list[str], str]] = []
+            self.cached_only_calls: list[tuple[list[str], str]] = []
+
+        def get_many(self, symbols, period="2y"):
+            self.live_calls.append((list(symbols), period))
+            return {symbol: None for symbol in symbols}
+
+        def get_many_cached_only(self, symbols, period="2y"):
+            self.cached_only_calls.append((list(symbols), period))
+            return {symbol: None for symbol in symbols}
+
+    service = ProviderSnapshotService()
+    service.fundamentals_cache = _StubFundamentalsCache()
+    service.price_cache = _RecordingPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+    yahoo_calls: list[str] = []
+    service._fetch_yahoo_only_fields = lambda symbol: yahoo_calls.append(symbol) or {}
+
+    stats = service.hydrate_published_snapshot(db, allow_yahoo_hydration=True)
+
+    assert service.price_cache.live_calls == [(["AAPL"], "2y")]
+    assert service.price_cache.cached_only_calls == [(["BIII-U"], "2y")]
+    assert yahoo_calls == ["AAPL"]
+    assert stats["skipped_yahoo_price_symbols"] == 1
+    assert stats["skipped_yahoo_field_symbols"] == 1
+    db.close()
+
+
+def test_hydrate_published_snapshot_emits_progress_events():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260404161000",
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotRow(
+            run_id=run.id,
+            symbol="AAPL",
+            exchange="NASDAQ",
+            row_hash="row-hash",
+            normalized_payload_json=json.dumps({"symbol": "AAPL", "exchange": "NASDAQ", "market_cap": 1000}),
+            raw_payload_json=None,
+        )
+    )
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = ProviderSnapshotService()
+    service.fundamentals_cache = _StubFundamentalsCache()
+    service.price_cache = _StubPriceCache()
+    service.technical_calc = _StubTechnicalCalc()
+    progress_events: list[dict[str, object]] = []
+
+    service.hydrate_published_snapshot(
+        db,
+        allow_yahoo_hydration=False,
+        progress_callback=progress_events.append,
+    )
+
+    assert progress_events[0]["stage"] == "hydrate_start"
+    assert progress_events[0]["total_symbols"] == 1
+    assert progress_events[1]["stage"] == "hydrate_chunk_complete"
+    assert progress_events[1]["processed_symbols"] == 1
+    assert progress_events[1]["percent_complete"] == 100.0
+    db.close()
+
+
 def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -268,7 +412,7 @@ def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(mon
     monkeypatch.setattr(
         service,
         "_build_snapshot_rows",
-        lambda exchange_filter=None: {
+        lambda exchange_filter=None, **kwargs: {
             "AAPL": {
                 "exchange": "NASDAQ",
                 "row_hash": "hash-aapl",

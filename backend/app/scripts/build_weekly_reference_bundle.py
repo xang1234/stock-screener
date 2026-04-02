@@ -21,6 +21,44 @@ def _default_bundle_name(published_run) -> str:
     return f"weekly-reference-{as_of}-{revision}.json.gz"
 
 
+def _print_progress(event: dict[str, object]) -> None:
+    stage = event.get("stage")
+    if stage == "snapshot_fetch_complete":
+        print(
+            "[snapshot] "
+            f"{event['completed_fetches']}/{event['total_fetches']} "
+            f"({event['percent_complete']}%) "
+            f"{event['exchange']} {event['category']} rows={event['rows']}",
+            flush=True,
+        )
+        return
+
+    if stage == "hydrate_start":
+        print(
+            "[hydrate] "
+            f"starting {event['total_symbols']} symbols in {event['total_chunks']} chunks "
+            f"(chunk_size={event['chunk_size']})",
+            flush=True,
+        )
+        return
+
+    if stage == "hydrate_chunk_complete":
+        print(
+            "[hydrate] "
+            f"chunk {event['chunk_index']}/{event['total_chunks']} "
+            f"processed {event['processed_symbols']}/{event['total_symbols']} "
+            f"({event['percent_complete']}%) "
+            f"live_price={event['live_price_symbols']} "
+            f"cached_only={event['cached_only_symbols']} "
+            f"yahoo_hydrated={event['yahoo_hydrated']} "
+            f"missing_prices={event['missing_prices']} "
+            f"missing_yahoo={event['missing_yahoo']} "
+            f"skipped_yahoo_price={event['skipped_yahoo_price_symbols']} "
+            f"skipped_yahoo_fields={event['skipped_yahoo_field_symbols']}",
+            flush=True,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -46,11 +84,17 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with SessionLocal() as db:
+        print("Starting stock universe refresh from Finviz...", flush=True)
         universe_stats = stock_universe_service.populate_universe(db)
+        print(f"Universe refresh complete: {universe_stats}", flush=True)
+
+        print("Starting published fundamentals snapshot build from Finviz...", flush=True)
         snapshot_stats = provider_snapshot_service.create_snapshot_run(
             db,
             run_mode="publish",
             publish=True,
+            progress_callback=_print_progress,
+            show_finviz_progress=True,
         )
         if not snapshot_stats.get("published"):
             raise RuntimeError(
@@ -58,9 +102,11 @@ def main() -> int:
                 f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
             )
 
+        print("Starting snapshot hydration (batched price enrichment + Yahoo-only fallback)...", flush=True)
         hydrate_stats = provider_snapshot_service.hydrate_published_snapshot(
             db,
             allow_yahoo_hydration=True,
+            progress_callback=_print_progress,
         )
         published_run = provider_snapshot_service.get_published_run(db)
         if published_run is None:

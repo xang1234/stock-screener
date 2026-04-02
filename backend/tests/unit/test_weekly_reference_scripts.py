@@ -27,12 +27,52 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     monkeypatch.setattr(
         build_script.provider_snapshot_service,
         "create_snapshot_run",
-        lambda db, run_mode, publish: {"published": True, "source_revision": "fundamentals_v1:20260404121000"},
+        lambda db, run_mode, publish, **kwargs: (
+            kwargs["progress_callback"](
+                {
+                    "stage": "snapshot_fetch_complete",
+                    "completed_fetches": 1,
+                    "total_fetches": 12,
+                    "percent_complete": 8.3,
+                    "exchange": "NYSE",
+                    "category": "overview",
+                    "rows": 20,
+                }
+            )
+            or {"published": True, "source_revision": "fundamentals_v1:20260404121000"}
+        ),
     )
     monkeypatch.setattr(
         build_script.provider_snapshot_service,
         "hydrate_published_snapshot",
-        lambda db, allow_yahoo_hydration=True: {"hydrated": 10},
+        lambda db, allow_yahoo_hydration=True, **kwargs: (
+            kwargs["progress_callback"](
+                {
+                    "stage": "hydrate_start",
+                    "total_symbols": 10,
+                    "total_chunks": 1,
+                    "chunk_size": 200,
+                }
+            )
+            or kwargs["progress_callback"](
+                {
+                    "stage": "hydrate_chunk_complete",
+                    "chunk_index": 1,
+                    "total_chunks": 1,
+                    "processed_symbols": 10,
+                    "total_symbols": 10,
+                    "percent_complete": 100.0,
+                    "live_price_symbols": 9,
+                    "cached_only_symbols": 1,
+                    "yahoo_hydrated": 3,
+                    "missing_prices": 0,
+                    "missing_yahoo": 1,
+                    "skipped_yahoo_price_symbols": 1,
+                    "skipped_yahoo_field_symbols": 1,
+                }
+            )
+            or {"hydrated": 10}
+        ),
     )
     monkeypatch.setattr(
         build_script.provider_snapshot_service,
@@ -71,7 +111,12 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     assert export_calls[0][0] == tmp_path / "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
     assert export_calls[0][1] == "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
     assert export_calls[0][2] == tmp_path / build_script.provider_snapshot_service.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
-    assert "Weekly reference bundle complete:" in capsys.readouterr().out
+    stdout = capsys.readouterr().out
+    assert "Starting stock universe refresh from Finviz..." in stdout
+    assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
+    assert "[hydrate] starting 10 symbols in 1 chunks (chunk_size=200)" in stdout
+    assert "[hydrate] chunk 1/1 processed 10/10 (100.0%)" in stdout
+    assert "Weekly reference bundle complete:" in stdout
 
 
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):
