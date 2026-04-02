@@ -19,16 +19,27 @@ import { getGroupRankColor } from '../utils/colorUtils';
 import { useChartNavigation } from '../hooks/useChartNavigation';
 import { fetchStaticChartPayload, staticChartKeys } from './chartClient';
 
-function StaticChartViewerModal({ open, onClose, initialSymbol, chartIndex }) {
+function StaticChartViewerModal({
+  open,
+  onClose,
+  initialSymbol,
+  chartIndex,
+  navigationSymbols = null,
+}) {
   const queryClient = useQueryClient();
   const [visibleRange, setVisibleRange] = useState(null);
 
   const entries = useMemo(() => chartIndex?.symbols || [], [chartIndex]);
-  const symbols = useMemo(() => entries.map((entry) => entry.symbol), [entries]);
   const entryBySymbol = useMemo(
     () => new Map(entries.map((entry) => [entry.symbol, entry])),
     [entries]
   );
+  const symbols = useMemo(() => {
+    if (Array.isArray(navigationSymbols) && navigationSymbols.length > 0) {
+      return navigationSymbols.filter((symbol) => entryBySymbol.has(symbol));
+    }
+    return entries.map((entry) => entry.symbol);
+  }, [entries, entryBySymbol, navigationSymbols]);
 
   const { currentIndex, currentSymbol, totalCount, goNext, goPrevious } = useChartNavigation(
     symbols,
@@ -67,8 +78,15 @@ function StaticChartViewerModal({ open, onClose, initialSymbol, chartIndex }) {
     };
 
     const timeouts = [];
-    const nextEntries = entries.slice(currentIndex + 1, currentIndex + 3);
-    const previousEntries = entries.slice(Math.max(0, currentIndex - 2), currentIndex).reverse();
+    const nextEntries = symbols
+      .slice(currentIndex + 1, currentIndex + 3)
+      .map((symbol) => entryBySymbol.get(symbol))
+      .filter(Boolean);
+    const previousEntries = symbols
+      .slice(Math.max(0, currentIndex - 2), currentIndex)
+      .reverse()
+      .map((symbol) => entryBySymbol.get(symbol))
+      .filter(Boolean);
 
     if (nextEntries[0]) {
       prefetch(nextEntries[0]);
@@ -87,7 +105,7 @@ function StaticChartViewerModal({ open, onClose, initialSymbol, chartIndex }) {
     return () => {
       timeouts.forEach(clearTimeout);
     };
-  }, [currentIndex, entries, open, queryClient, symbols.length]);
+  }, [currentIndex, entryBySymbol, open, queryClient, symbols]);
 
   useEffect(() => {
     if (!open) {

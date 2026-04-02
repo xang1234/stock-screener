@@ -31,6 +31,7 @@ SCAN_CHUNK_SIZE = 1000
 STATIC_CHART_LIMIT = 200
 STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
+STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 
 _DEFAULT_KEY_MARKETS = (
     {"symbol": "SPY", "display_name": "S&P 500 ETF"},
@@ -268,44 +269,50 @@ class StaticSiteExportService:
         chart_dir = output_dir / "charts"
         chart_dir.mkdir(parents=True, exist_ok=True)
 
-        candidate_rows = list(rows[:STATIC_CHART_LIMIT])
-        symbols = [row.symbol for row in candidate_rows if getattr(row, "symbol", None)]
-        price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
-        fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
-
         entries: list[dict[str, Any]] = []
         skipped_symbols: list[str] = []
+        for start in range(0, len(rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
+            if len(entries) >= STATIC_CHART_LIMIT:
+                break
 
-        for rank, row in enumerate(candidate_rows, start=1):
-            symbol = getattr(row, "symbol", None)
-            if not symbol:
-                continue
+            batch_rows = list(rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
+            symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
+            price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
+            fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
 
-            bars = self._serialize_chart_bars(price_data.get(symbol))
-            if not bars:
-                skipped_symbols.append(symbol)
-                continue
+            for rank, row in enumerate(batch_rows, start=start + 1):
+                if len(entries) >= STATIC_CHART_LIMIT:
+                    break
 
-            rel_path = self._chart_payload_path(symbol)
-            payload = {
-                "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-                "generated_at": generated_at,
-                "as_of_date": run.as_of_date.isoformat(),
-                "symbol": symbol,
-                "rank": rank,
-                "period": STATIC_CHART_PERIOD,
-                "bars": bars,
-                "stock_data": self._serialize_scan_row(row),
-                "fundamentals": fundamentals.get(symbol),
-            }
-            self._write_json(output_dir / rel_path, payload)
-            entries.append(
-                {
+                symbol = getattr(row, "symbol", None)
+                if not symbol:
+                    continue
+
+                bars = self._serialize_chart_bars(price_data.get(symbol))
+                if not bars:
+                    skipped_symbols.append(symbol)
+                    continue
+
+                rel_path = self._chart_payload_path(symbol)
+                payload = {
+                    "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+                    "generated_at": generated_at,
+                    "as_of_date": run.as_of_date.isoformat(),
                     "symbol": symbol,
                     "rank": rank,
-                    "path": rel_path.as_posix(),
+                    "period": STATIC_CHART_PERIOD,
+                    "bars": bars,
+                    "stock_data": self._serialize_scan_row(row),
+                    "fundamentals": fundamentals.get(symbol),
                 }
-            )
+                self._write_json(output_dir / rel_path, payload)
+                entries.append(
+                    {
+                        "symbol": symbol,
+                        "rank": rank,
+                        "path": rel_path.as_posix(),
+                    }
+                )
 
         index_rel_path = Path("charts/index.json")
         index_payload = {

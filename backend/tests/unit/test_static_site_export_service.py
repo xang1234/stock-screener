@@ -383,6 +383,74 @@ def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(
     assert nvda_payload["bars"][-1]["close"] == 103.0
 
 
+def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=18,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=18,
+    )
+
+    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 2)
+    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 2)
+
+    def make_price_frame(close: float) -> pd.DataFrame:
+        dates = pd.date_range("2026-03-28", periods=2, freq="D")
+        return pd.DataFrame(
+            {
+                "Open": [close - 1, close],
+                "High": [close, close + 1],
+                "Low": [close - 2, close - 1],
+                "Close": [close - 0.5, close],
+                "Volume": [1000000, 1100000],
+            },
+            index=dates,
+        )
+
+    service._price_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols, period="2y": {
+            "NVDA": None,
+            "MSFT": make_price_frame(204.0),
+            "AAPL": make_price_frame(175.0),
+        }
+    )
+    service._fundamentals_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols: {symbol: {"symbol": symbol} for symbol in symbols}
+    )
+
+    rows = [
+        SimpleNamespace(symbol="NVDA", composite_score=99.0, rating="Strong Buy", current_price=0.0, screeners_run=[], extended_fields={}),
+        SimpleNamespace(symbol="MSFT", composite_score=98.0, rating="Buy", current_price=0.0, screeners_run=[], extended_fields={}),
+        SimpleNamespace(symbol="AAPL", composite_score=97.0, rating="Buy", current_price=0.0, screeners_run=[], extended_fields={}),
+    ]
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 18)
+        manifest = service._export_chart_bundle(  # noqa: SLF001 - intentional unit coverage
+            output_dir=tmp_path,
+            generated_at="2026-04-02T22:00:00Z",
+            run=run,
+            rows=rows,
+        )
+
+    index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
+
+    assert manifest["symbols_total"] == 2
+    assert [entry["symbol"] for entry in index_payload["symbols"]] == ["MSFT", "AAPL"]
+    assert [entry["rank"] for entry in index_payload["symbols"]] == [2, 3]
+    assert index_payload["skipped_symbols"] == ["NVDA"]
+
+
 def test_build_key_markets_skips_change_when_latest_close_is_null(service_and_session_factory):
     service, session_factory = service_and_session_factory
 

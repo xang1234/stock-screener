@@ -178,6 +178,12 @@ function StaticScanPage() {
     setSelectedChartSymbol(symbol);
     setChartModalOpen(true);
   };
+  const navigationSymbols = useMemo(() => {
+    const orderedRows = hydrationComplete ? sortedRows : pagedRows;
+    return orderedRows
+      .map((row) => row.symbol)
+      .filter((symbol) => chartEnabledSymbols.has(symbol));
+  }, [chartEnabledSymbols, hydrationComplete, pagedRows, sortedRows]);
 
   if (manifestQuery.isLoading || scanManifestQuery.isLoading) {
     return (
@@ -279,6 +285,7 @@ function StaticScanPage() {
         onClose={() => setChartModalOpen(false)}
         initialSymbol={selectedChartSymbol}
         chartIndex={chartIndexQuery.data}
+        navigationSymbols={navigationSymbols}
       />
     </Box>
   );

@@ -437,4 +437,91 @@ describe('StaticScanPage', () => {
 
     expect(await screen.findByTestId('static-chart-modal')).toHaveTextContent('NVDA');
   });
+
+  it('passes the current sorted chart navigation order into the static modal', async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 2,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy', 'Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
+              { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
+            ],
+            chunks: [],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 2,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [
+              { symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' },
+              { symbol: 'MSFT', rank: 2, path: 'charts/MSFT.json' },
+            ],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
+    renderPage();
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'resort' }));
+    await user.click(screen.getByRole('button', { name: 'open-chart' }));
+
+    await waitFor(() => {
+      expect(staticChartModalSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          open: true,
+          initialSymbol: 'NVDA',
+          navigationSymbols: ['MSFT', 'NVDA'],
+        })
+      );
+    });
+  });
 });
