@@ -1,8 +1,12 @@
-# StockScreenClaude
+# Stock Scanner
 
 A professional stock screening platform with 6 screening methodologies, AI-powered research, theme discovery from social and news feeds, and real-time market breadth analysis. Runs as a Docker stack, native macOS app, or Windows desktop application.
 
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
+
+Static demo: [https://xang1234.github.io/stock-screener/](https://xang1234.github.io/stock-screener/)
+
+The static page is for demo purposes only. It is a read-only daily snapshot with reduced functionality compared with the full application, which includes live workflows such as chatbot, themes pipeline, watchlists, and the full interactive backend.
 
 ## Highlights
 
