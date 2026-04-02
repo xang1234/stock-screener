@@ -1003,7 +1003,7 @@ class IBDGroupRankService:
         deleted = self._delete_rankings_for_range(db, start_date, end_date)
 
         # 2. Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1294,7 +1294,7 @@ class IBDGroupRankService:
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")

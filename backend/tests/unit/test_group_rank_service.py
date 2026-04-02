@@ -331,3 +331,64 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
     store_rankings.assert_not_called()
+
+
+def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
+    service = IBDGroupRankService.get_instance()
+    price_data = _price_frame()
+
+    monkeypatch.setattr(
+        service,
+        "_delete_rankings_for_range",
+        lambda db, start_date, end_date: 0,
+    )
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db: (
+            price_data,
+            {"AAPL": price_data},
+            {"AAPL"},
+            {"AAPL": 1_000_000_000},
+            {"target_symbols": 1, "symbols_with_prices": 1, "cache_miss_symbols": 0, "spy_cached": True},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: [],
+    )
+
+    stats = service.backfill_rankings_optimized(
+        db_session,
+        date(2026, 3, 17),
+        date(2026, 3, 17),
+    )
+
+    assert stats["processed"] == 0
+    assert stats["errors"] == 1
+
+
+def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
+    service = IBDGroupRankService.get_instance()
+    price_data = _price_frame()
+
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db: (
+            price_data,
+            {"AAPL": price_data},
+            {"AAPL"},
+            {"AAPL": 1_000_000_000},
+            {"target_symbols": 1, "symbols_with_prices": 1, "cache_miss_symbols": 0, "spy_cached": True},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: [],
+    )
+
+    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 17)])
+
+    assert stats["processed"] == 0
+    assert stats["errors"] == 1

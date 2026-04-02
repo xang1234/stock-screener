@@ -121,10 +121,11 @@ function StaticScanPage() {
         }
       } catch (error) {
         if (!cancelled) {
+          const accumulatedRows = Array.from(rowsBySymbol.values());
           setHydrationState({
             status: 'error',
-            rows: initialRows,
-            loadedRows: initialLoadedRows,
+            rows: accumulatedRows,
+            loadedRows: Math.min(accumulatedRows.length, totalRows),
             error: error instanceof Error ? error.message : 'Unknown hydration error',
           });
         }
@@ -219,7 +220,9 @@ function StaticScanPage() {
         </Typography>
         {scanManifestQuery.data.charts?.available ? (
           <Typography variant="body2" color="text.secondary">
-            Static charts exported for the top {scanManifestQuery.data.charts.limit.toLocaleString()} ranked symbols.
+            Static charts exported for{' '}
+            {(scanManifestQuery.data.charts.symbols_total ?? scanManifestQuery.data.charts.limit).toLocaleString()}{' '}
+            ranked symbols.
           </Typography>
         ) : null}
       </Paper>

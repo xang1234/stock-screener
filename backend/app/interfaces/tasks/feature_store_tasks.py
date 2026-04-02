@@ -140,7 +140,6 @@ def _create_auto_scan_for_published_run(
         else:
             universe_def = normalize_universe_definition(universe_name)
             feature_run = uow.feature_runs.get_run(feature_run_id)
-            symbols = uow.universe.resolve_symbols(universe_def)
             run_universe_count = 0
             session = getattr(uow, "session", None)
             if session is not None:
@@ -150,6 +149,9 @@ def _create_auto_scan_for_published_run(
                     .scalar()
                     or 0
                 )
+            symbols = []
+            if run_universe_count <= 0:
+                symbols = uow.universe.resolve_symbols(universe_def)
             ran_at = feature_run.published_at or datetime.now(timezone.utc)
             passed_stocks = (
                 feature_run.stats.passed_symbols

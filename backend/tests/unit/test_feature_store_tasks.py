@@ -327,6 +327,7 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
 
     assert result["status"] == "published"
     assert fake_use_case.received_cmd.require_bulk_prefetch is True
+    assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is True
     assert fake_use_case.received_cmd.batch_only_prices is True
     assert fake_use_case.received_cmd.batch_only_fundamentals is True
 
@@ -405,7 +406,68 @@ def test_create_auto_scan_uses_saved_run_universe_count_for_total_stocks():
 
     assert scan_id == "scan-123"
     assert created_scan["total_stocks"] == 2
-    assert created_scan["passed_stocks"] == 1
+
+
+def test_create_auto_scan_skips_resolving_live_universe_when_run_universe_count_exists():
+    created_scan = {}
+    resolve_calls = []
+
+    class _CountQuery:
+        def filter(self, *_args):
+            return self
+
+        def scalar(self):
+            return 3
+
+    class _AutoScanUoW:
+        def __init__(self) -> None:
+            self.session = SimpleNamespace(query=lambda *_args, **_kwargs: _CountQuery())
+            self.scans = SimpleNamespace(
+                get_by_idempotency_key=lambda _key: None,
+                create=lambda **kwargs: created_scan.update(kwargs) or SimpleNamespace(
+                    scan_id="scan-456",
+                    universe_key="all",
+                ),
+            )
+            self.universe = SimpleNamespace(
+                resolve_symbols=lambda _universe_def: resolve_calls.append(_universe_def) or ["AAPL", "MSFT"]
+            )
+            self.feature_runs = SimpleNamespace(
+                get_run=lambda _run_id: SimpleNamespace(
+                    published_at=datetime(2026, 3, 16, 21, 30, tzinfo=timezone.utc),
+                    stats=SimpleNamespace(passed_symbols=2),
+                )
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def commit(self):
+            return None
+
+    with patch("app.database.SessionLocal"), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        return_value=_AutoScanUoW(),
+    ), patch(
+        "app.services.ui_snapshot_service.safe_publish_scan_bootstrap"
+    ), patch(
+        "app.services.scan_execution.cleanup_old_scans"
+    ):
+        scan_id = _create_auto_scan_for_published_run(
+            feature_run_id=9,
+            universe_name="all",
+            screeners=["minervini"],
+            criteria={},
+            composite_method="average",
+        )
+
+    assert scan_id == "scan-456"
+    assert created_scan["total_stocks"] == 3
+    assert resolve_calls == []
+    assert created_scan["passed_stocks"] == 2
 
 
 def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():

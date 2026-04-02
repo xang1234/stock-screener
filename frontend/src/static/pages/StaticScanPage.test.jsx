@@ -524,4 +524,121 @@ describe('StaticScanPage', () => {
       );
     });
   });
+
+  it('preserves already hydrated rows on chunk failure and shows the actual exported chart count', async () => {
+    const firstChunk = deferred();
+
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 3,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy', 'Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
+            ],
+            chunks: [
+              { path: 'scan/chunks/chunk-0001.json', count: 1 },
+              { path: 'scan/chunks/chunk-0002.json', count: 1 },
+              { path: 'scan/chunks/chunk-0003.json', count: 1 },
+            ],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 143,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
+          }),
+        };
+      }
+
+      if (path === 'scan/chunks/chunk-0001.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => firstChunk.promise,
+        };
+      }
+
+      if (path === 'scan/chunks/chunk-0002.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            rows: [
+              { symbol: 'AAPL', company_name: 'Apple Inc.', composite_score: 87.1, rating: 'Buy' },
+            ],
+          }),
+        };
+      }
+
+      if (path === 'scan/chunks/chunk-0003.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new Error('chunk failed');
+          },
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
+    renderPage();
+
+    await act(async () => {
+      firstChunk.resolve({
+        rows: [
+          { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
+        ],
+      });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(/Background hydration failed/i)).toBeInTheDocument();
+    expect(screen.getByTestId('results-table-rows')).toHaveTextContent('NVDA,MSFT,AAPL');
+    expect(screen.getByText(/Static charts exported for 143 ranked symbols/i)).toBeInTheDocument();
+  });
 });
