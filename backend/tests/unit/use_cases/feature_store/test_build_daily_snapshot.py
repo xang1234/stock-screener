@@ -462,6 +462,80 @@ class TestBulkDataPreparation:
         assert all(call["pre_fetched_data"] is None for call in scanner.calls)
 
     @_PATCH_TRADING_DAY
+    def test_static_daily_mode_refuses_per_symbol_fallback_when_bulk_prep_fails(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT"])
+
+        class FailingProvider(FakeStockDataProvider):
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
+            ) -> dict[str, object]:
+                raise RuntimeError("bulk prep failed")
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
+                self.calls.append(symbol)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        provider = FailingProvider()
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=provider,
+        )
+
+        with pytest.raises(RuntimeError, match="refusing per-symbol fallback"):
+            use_case.execute(
+                uow,
+                _make_cmd(
+                    chunk_size=2,
+                    require_bulk_prefetch=True,
+                    batch_only_prices=True,
+                    batch_only_fundamentals=True,
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert scanner.calls == []
+
+    @_PATCH_TRADING_DAY
+    def test_static_daily_mode_requires_bulk_requirements_support(self, _mock_td):
+        uow, scanner = _make_uow(symbols=["AAPL", "MSFT"])
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=FakeStockDataProvider(),
+        )
+
+        with pytest.raises(RuntimeError, match="requires scanner bulk requirements support"):
+            use_case.execute(
+                uow,
+                _make_cmd(
+                    require_bulk_prefetch=True,
+                    batch_only_prices=True,
+                    batch_only_fundamentals=True,
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+    @_PATCH_TRADING_DAY
     def test_static_daily_mode_excludes_unsupported_symbols_before_hashing(self, _mock_td):
         uow, scanner = _make_uow(symbols=["AAPL", "MZYX-U", "MSFT-WS", "NVDA"])
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)

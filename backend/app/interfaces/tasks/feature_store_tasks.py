@@ -120,7 +120,10 @@ def _create_auto_scan_for_published_run(
     composite_method: str,
 ) -> str:
     """Create a completed scan row bound to a published feature run."""
+    from sqlalchemy import func
+
     from app.database import SessionLocal
+    from app.infra.db.models.feature_store import FeatureRunUniverseSymbol
     from app.infra.db.uow import SqlUnitOfWork
     from app.models.scan_result import SCAN_TRIGGER_SOURCE_AUTO
     from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
@@ -138,6 +141,15 @@ def _create_auto_scan_for_published_run(
             universe_def = normalize_universe_definition(universe_name)
             feature_run = uow.feature_runs.get_run(feature_run_id)
             symbols = uow.universe.resolve_symbols(universe_def)
+            run_universe_count = 0
+            session = getattr(uow, "session", None)
+            if session is not None:
+                run_universe_count = (
+                    session.query(func.count(FeatureRunUniverseSymbol.symbol))
+                    .filter(FeatureRunUniverseSymbol.run_id == feature_run_id)
+                    .scalar()
+                    or 0
+                )
             ran_at = feature_run.published_at or datetime.now(timezone.utc)
             passed_stocks = (
                 feature_run.stats.passed_symbols
@@ -159,7 +171,7 @@ def _create_auto_scan_for_published_run(
                 universe_symbols=universe_def.symbols,
                 screener_types=screeners,
                 composite_method=composite_method,
-                total_stocks=len(symbols),
+                total_stocks=run_universe_count or len(symbols),
                 passed_stocks=passed_stocks,
                 status="completed",
                 task_id=None,
@@ -331,6 +343,7 @@ def build_daily_snapshot(
         exclude_unsupported_price_symbols=static_daily_mode,
         batch_only_prices=static_daily_mode,
         batch_only_fundamentals=static_daily_mode,
+        require_bulk_prefetch=static_daily_mode,
     )
 
     try:

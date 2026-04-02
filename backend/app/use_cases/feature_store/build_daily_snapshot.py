@@ -119,6 +119,7 @@ class BuildDailySnapshotCommand:
     exclude_unsupported_price_symbols: bool = False
     batch_only_prices: bool = False
     batch_only_fundamentals: bool = False
+    require_bulk_prefetch: bool = False
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
@@ -323,6 +324,11 @@ class BuildDailyFeatureSnapshotUseCase:
         merged_requirements = None
         bulk_prefetch_enabled = self._data_provider is not None
 
+        if cmd.require_bulk_prefetch and not bulk_prefetch_enabled:
+            raise RuntimeError(
+                "Static daily snapshot requires a bulk-capable data provider"
+            )
+
         if bulk_prefetch_enabled:
             get_requirements = getattr(self._scanner, "get_merged_requirements", None)
             if callable(get_requirements):
@@ -335,7 +341,11 @@ class BuildDailyFeatureSnapshotUseCase:
                         "Run %d: pre-merged data requirements for batch processing",
                         run_id,
                     )
-                except Exception:
+                except Exception as exc:
+                    if cmd.require_bulk_prefetch:
+                        raise RuntimeError(
+                            "Static daily snapshot failed to prepare merged bulk requirements"
+                        ) from exc
                     logger.warning(
                         "Run %d: failed to pre-merge data requirements; "
                         "falling back to per-symbol fetch",
@@ -344,6 +354,10 @@ class BuildDailyFeatureSnapshotUseCase:
                     )
                     bulk_prefetch_enabled = False
             else:
+                if cmd.require_bulk_prefetch:
+                    raise RuntimeError(
+                        "Static daily snapshot requires scanner bulk requirements support"
+                    )
                 bulk_prefetch_enabled = False
 
         for chunk in _chunked(symbols, cmd.chunk_size):
@@ -394,7 +408,11 @@ class BuildDailyFeatureSnapshotUseCase:
                         batch_only_prices=cmd.batch_only_prices,
                         batch_only_fundamentals=cmd.batch_only_fundamentals,
                     )
-                except Exception:
+                except Exception as exc:
+                    if cmd.require_bulk_prefetch:
+                        raise RuntimeError(
+                            "Static daily snapshot bulk prefetch failed; refusing per-symbol fallback"
+                        ) from exc
                     logger.warning(
                         "Run %d: bulk data fetch failed for chunk; "
                         "falling back to per-symbol fetch",

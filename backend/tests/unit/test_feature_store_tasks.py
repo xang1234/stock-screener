@@ -11,6 +11,7 @@ import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 
 from app.interfaces.tasks.feature_store_tasks import (
+    _create_auto_scan_for_published_run,
     _fail_stale_feature_runs,
     build_daily_snapshot,
 )
@@ -34,9 +35,11 @@ class _FakeUseCase:
             total_symbols=2,
             processed_symbols=2,
             failed_symbols=0,
+            skipped_symbols=0,
             row_count=2,
             duration_seconds=12.5,
             dq_passed=True,
+            warnings=(),
         )
 
 
@@ -290,6 +293,119 @@ def test_build_daily_snapshot_creates_auto_scan_after_publish():
         criteria=get_default_scan_profile()["criteria"],
         composite_method=get_default_scan_profile()["composite_method"],
     )
+
+
+def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            static_daily_mode=True,
+        )
+
+    assert result["status"] == "published"
+    assert fake_use_case.received_cmd.require_bulk_prefetch is True
+    assert fake_use_case.received_cmd.batch_only_prices is True
+    assert fake_use_case.received_cmd.batch_only_fundamentals is True
+
+
+def test_create_auto_scan_uses_saved_run_universe_count_for_total_stocks():
+    created_scan = {}
+
+    class _CountQuery:
+        def filter(self, *_args):
+            return self
+
+        def scalar(self):
+            return 2
+
+    class _AutoScanUoW:
+        def __init__(self) -> None:
+            self.session = SimpleNamespace(query=lambda *_args, **_kwargs: _CountQuery())
+            self.scans = SimpleNamespace(
+                get_by_idempotency_key=lambda _key: None,
+                create=lambda **kwargs: created_scan.update(kwargs) or SimpleNamespace(
+                    scan_id="scan-123",
+                    universe_key="all",
+                ),
+            )
+            self.universe = SimpleNamespace(
+                resolve_symbols=lambda _universe_def: ["AAPL", "MZYX-U", "MSFT"],
+            )
+            self.feature_runs = SimpleNamespace(
+                get_run=lambda _run_id: SimpleNamespace(
+                    published_at=datetime(2026, 3, 16, 21, 30, tzinfo=timezone.utc),
+                    stats=SimpleNamespace(passed_symbols=1),
+                ),
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def commit(self):
+            return None
+
+    universe_def = SimpleNamespace(
+        label=lambda: "All Active Stocks",
+        key=lambda: "all",
+        type=SimpleNamespace(value="all"),
+        exchange=None,
+        index=None,
+        symbols=None,
+    )
+
+    with patch(
+        "app.database.SessionLocal",
+        return_value=SimpleNamespace(close=lambda: None),
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _AutoScanUoW(),
+    ), patch(
+        "app.services.universe_resolver.normalize_universe_definition",
+        return_value=universe_def,
+    ), patch(
+        "app.services.scan_execution.cleanup_old_scans",
+        return_value=None,
+    ), patch(
+        "app.services.ui_snapshot_service.safe_publish_scan_bootstrap",
+        return_value=None,
+    ):
+        scan_id = _create_auto_scan_for_published_run(
+            feature_run_id=41,
+            universe_name="all",
+            screeners=["minervini"],
+            criteria={},
+            composite_method="weighted_average",
+        )
+
+    assert scan_id == "scan-123"
+    assert created_scan["total_stocks"] == 2
+    assert created_scan["passed_stocks"] == 1
 
 
 def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():

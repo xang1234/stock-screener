@@ -763,7 +763,7 @@ class IBDGroupRankService:
 
         # 1. Get SPY data once
         if cache_only:
-            spy_data = self.price_cache.get_cached_only("SPY", period="2y")
+            spy_data = self.price_cache.get_cached_only_fresh("SPY", period="2y")
         else:
             spy_data = self.benchmark_cache.get_spy_data(period="2y")
         if spy_data is None or spy_data.empty:
@@ -806,7 +806,7 @@ class IBDGroupRankService:
 
         # 4. Batch fetch ALL prices in one call
         if cache_only:
-            all_prices = self.price_cache.get_many_cached_only(
+            all_prices = self.price_cache.get_many_cached_only_fresh(
                 list(symbols_to_fetch),
                 period="2y",
             )
