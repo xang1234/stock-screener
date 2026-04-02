@@ -2,8 +2,8 @@ name: Weekly Reference Data
 
 on:
   schedule:
-    - cron: '10 12 * * 6'
-    - cron: '10 13 * * 6'
+    - cron: '10 8 * * 6'
+      timezone: 'America/New_York'
   workflow_dispatch:
 
 concurrency:
@@ -21,50 +21,24 @@ jobs:
       REDIS_ENABLED: "false"
 
     steps:
-      - name: Resolve schedule slot
-        id: schedule_guard
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Manual dispatch: running workflow."
-            exit 0
-          fi
-
-          ny_day="$(TZ=America/New_York date +%u)"
-          ny_time="$(TZ=America/New_York date +%H:%M)"
-
-          if [ "$ny_day" -eq 6 ] && [ "$ny_time" = "08:10" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Scheduled slot matches 8:10 AM America/New_York on Saturday."
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping inactive schedule slot. New York local time: $ny_day $ny_time."
-          fi
-
       - uses: actions/checkout@v4
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
 
       - uses: actions/setup-python@v5
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: pip install -r backend/requirements.txt
 
       - name: Build weekly reference bundle
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         run: |
           cd backend
           python -m app.scripts.build_weekly_reference_bundle \
             --output-dir /tmp/weekly-reference
 
       - name: Ensure weekly release exists
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -74,7 +48,6 @@ jobs:
             --notes "Automated weekly fundamentals reference bundle for static-site builds."
 
       - name: Upload weekly reference assets
-        if: ${{ steps.schedule_guard.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
