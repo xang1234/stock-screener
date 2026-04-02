@@ -271,7 +271,15 @@ class TestParityWithOrchestrator:
             def prepare_data(self, symbol, requirements):
                 return stock_data
 
-            def prepare_data_bulk(self, symbols, requirements):
+            def prepare_data_bulk(
+                self,
+                symbols,
+                requirements,
+                *,
+                allow_partial=True,
+                batch_only_prices=False,
+                batch_only_fundamentals=False,
+            ):
                 return {s: stock_data for s in symbols}
 
         provider = LocalFakeProvider()

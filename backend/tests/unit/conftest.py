@@ -77,7 +77,15 @@ def _stub_external_data(monkeypatch):
     def _prepare_data_stub(self, symbol, requirements, *, allow_partial=True):
         return _make_stub_stock_data(symbol)
 
-    def _prepare_data_bulk_stub(self, symbols, requirements, *, allow_partial=True):
+    def _prepare_data_bulk_stub(
+        self,
+        symbols,
+        requirements,
+        *,
+        allow_partial=True,
+        batch_only_prices=False,
+        batch_only_fundamentals=False,
+    ):
         return {symbol: _make_stub_stock_data(symbol) for symbol in symbols}
 
     monkeypatch.setattr(DataPreparationLayer, "prepare_data", _prepare_data_stub, raising=True)

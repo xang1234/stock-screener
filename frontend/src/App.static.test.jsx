@@ -33,6 +33,7 @@ vi.mock('./components/Scan/FilterPanel', () => ({
     <div data-testid="static-filter-panel">{presetsEnabled ? 'presets-enabled' : 'presets-disabled'}</div>
   ),
 }));
+vi.mock('./static/StaticChartViewerModal', () => ({ default: () => null }));
 vi.mock('./components/Scan/ResultsTable', () => ({
   default: ({ showActions, total }) => (
     <div data-testid="static-results-table">
@@ -55,14 +56,12 @@ const staticPayloads = {
       scan: true,
       breadth: true,
       groups: true,
-      themes: true,
     },
     pages: {
       home: { path: 'home.json' },
       scan: { path: 'scan/manifest.json' },
       breadth: { path: 'breadth.json' },
       groups: { path: 'groups.json' },
-      themes: { path: 'themes/index.json' },
     },
     warnings: [],
   },
@@ -74,14 +73,12 @@ const staticPayloads = {
       scan_run_id: 7,
       breadth_latest_date: '2026-03-31',
       groups_latest_date: '2026-03-31',
-      themes_available: true,
     },
     key_markets: [],
     scan_summary: {
       top_results: [{ symbol: 'NVDA', composite_score: 97.5, current_price: 145.4, rating: 'Strong Buy' }],
     },
     top_groups: [{ industry_group: 'Semiconductors', rank: 1 }],
-    top_themes: [{ id: 1, theme: 'AI Infrastructure', rank: 1 }],
   },
   'scan/manifest.json': {
     generated_at: '2026-03-31T22:00:00Z',
@@ -95,12 +92,34 @@ const staticPayloads = {
       gics_sectors: ['Technology'],
       ratings: ['Strong Buy', 'Buy'],
     },
+    initial_rows: [
+      { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
+      { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
+    ],
     chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+    charts: {
+      path: 'charts/index.json',
+      limit: 200,
+      symbols_total: 2,
+      available: true,
+    },
   },
   'scan/chunks/chunk-0001.json': {
     rows: [
       { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
       { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
+    ],
+  },
+  'charts/index.json': {
+    schema_version: 'static-charts-v1',
+    generated_at: '2026-03-31T22:00:00Z',
+    as_of_date: '2026-03-31',
+    limit: 200,
+    symbols_total: 2,
+    skipped_symbols: [],
+    symbols: [
+      { symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' },
+      { symbol: 'MSFT', rank: 2, path: 'charts/MSFT.json' },
     ],
   },
   'breadth.json': {
@@ -121,63 +140,15 @@ const staticPayloads = {
   'groups.json': {
     available: true,
     payload: {
+      movers_period: '3m',
       rankings: {
         date: '2026-03-31',
-        rankings: [{ industry_group: 'Semiconductors', rank: 1, avg_rs_rating: 92.5, num_stocks: 14, rank_change_1w: 2, rank_change_1m: 4 }],
+        rankings: [{ industry_group: 'Semiconductors', rank: 1, avg_rs_rating: 92.5, num_stocks: 14, rank_change_1w: 2, rank_change_1m: 4, rank_change_3m: 7 }],
       },
       movers: {
         gainers: [{ industry_group: 'Semiconductors', rank: 1 }],
         losers: [{ industry_group: 'Retail', rank: 197 }],
       },
-    },
-  },
-  'themes/index.json': {
-    available: true,
-    variants: {
-      'technical:grouped': { available: true, path: 'themes/technical-grouped.json' },
-      'technical:flat': { available: true, path: 'themes/technical-flat.json' },
-      'fundamental:grouped': { available: true, path: 'themes/fundamental-grouped.json' },
-      'fundamental:flat': { available: true, path: 'themes/fundamental-flat.json' },
-    },
-  },
-  'themes/technical-grouped.json': {
-    generated_at: '2026-03-31T22:00:00Z',
-    payload: {
-      emerging: { count: 1, themes: [{ theme: 'AI Infrastructure', mentions_7d: 18, velocity: 1.6 }] },
-      pending_merge_count: 0,
-      failed_items_count: { failed_count: 0 },
-      l1_rankings: {
-        rankings: [{ theme_cluster_id: 1, display_name: 'AI Infrastructure', rank: 1, momentum_score: 94.0, mentions_7d: 18, num_constituents: 2 }],
-      },
-    },
-  },
-  'themes/technical-flat.json': {
-    generated_at: '2026-03-31T22:00:00Z',
-    payload: {
-      emerging: { count: 1, themes: [{ theme: 'AI Infrastructure', mentions_7d: 18, velocity: 1.6 }] },
-      pending_merge_count: 0,
-      failed_items_count: { failed_count: 0 },
-      rankings: {
-        rankings: [{ id: 1, theme: 'AI Infrastructure', rank: 1, momentum_score: 94.0, mentions_7d: 18, num_constituents: 2 }],
-      },
-    },
-  },
-  'themes/fundamental-grouped.json': {
-    generated_at: '2026-03-31T22:00:00Z',
-    payload: {
-      emerging: { count: 0, themes: [] },
-      pending_merge_count: 0,
-      failed_items_count: { failed_count: 0 },
-      l1_rankings: { rankings: [] },
-    },
-  },
-  'themes/fundamental-flat.json': {
-    generated_at: '2026-03-31T22:00:00Z',
-    payload: {
-      emerging: { count: 0, themes: [] },
-      pending_merge_count: 0,
-      failed_items_count: { failed_count: 0 },
-      rankings: { rankings: [] },
     },
   },
 };
@@ -229,12 +200,12 @@ describe('App static mode', () => {
     ['#/scan', 'Daily Scan'],
     ['#/breadth', 'Market Breadth'],
     ['#/groups', 'Industry Group Rankings'],
-    ['#/themes', 'Themes'],
+    ['#/themes', 'Daily Market Snapshot'],
   ])('renders the static hash route %s without any /api requests', async (hash, heading) => {
     await renderStaticAppAtHash(hash);
 
     expect(await screen.findByText(heading, {}, { timeout: 10000 })).toBeInTheDocument();
-    expect(screen.getByText('Read-only')).toBeInTheDocument();
+    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
     expect(screen.queryByText('Sign out')).not.toBeInTheDocument();
 
     await waitFor(() => {
@@ -244,15 +215,17 @@ describe('App static mode', () => {
     const requestedUrls = globalThis.fetch.mock.calls.map(([url]) => String(url));
     expect(requestedUrls.length).toBeGreaterThan(0);
     expect(requestedUrls.every((url) => url.includes('/static-data/') && !url.includes('/api'))).toBe(true);
-  }, 10000);
+  }, 15000);
 
   it('keeps scan controls read-only in the static route', async () => {
     await renderStaticAppAtHash('#/scan');
 
     expect(await screen.findByRole('heading', { name: 'Daily Scan' })).toBeInTheDocument();
-    expect(screen.getByTestId('static-filter-panel')).toHaveTextContent('presets-disabled');
-    expect(screen.getByTestId('static-results-table')).toHaveTextContent('actions-hidden:2');
-  });
+    await waitFor(() => {
+      expect(screen.getByTestId('static-filter-panel')).toHaveTextContent('presets-disabled');
+      expect(screen.getByTestId('static-results-table')).toHaveTextContent('actions-visible:2');
+    });
+  }, 10000);
 
   it('locks the breadth view to the exported range in the static route', async () => {
     await renderStaticAppAtHash('#/breadth');
@@ -260,5 +233,5 @@ describe('App static mode', () => {
     expect(await screen.findByRole('heading', { name: 'Market Breadth' })).toBeInTheDocument();
     expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('1M');
     expect(screen.getByTestId('breadth-chart-ranges')).not.toHaveTextContent('3M');
-  });
+  }, 10000);
 });

@@ -29,9 +29,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
 
-    results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
-        refresh_themes_best_effort=False,
-    )
+    results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
     assert warnings == []
     assert calls == [
@@ -74,7 +72,6 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     )
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
-        refresh_themes_best_effort=False,
         skip_universe_refresh=True,
         skip_fundamentals_refresh=True,
         hydrate_published_snapshot=True,
@@ -123,7 +120,7 @@ def test_run_daily_refresh_bypasses_smart_refresh_time_window_for_static_exports
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
 
-    export_script._run_daily_refresh(refresh_themes_best_effort=False)  # noqa: SLF001 - intentional unit test coverage
+    export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
     assert events == ["enter", "exit"]
     assert calls[0] == ("universe_refresh", False)
@@ -160,7 +157,42 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
 
-    export_script._run_daily_refresh(refresh_themes_best_effort=False)  # noqa: SLF001 - intentional unit test coverage
+    export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
     assert events == ["enter", "exit"]
     assert all(lock_disabled for _, lock_disabled in calls)
+
+
+def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypatch):
+    calls: list[tuple[str, dict, bool]] = []
+    state = {"group_bypass": False}
+
+    @contextmanager
+    def fake_group_bypass():
+        state["group_bypass"] = True
+        try:
+            yield
+        finally:
+            state["group_bypass"] = False
+
+    def make_task(name: str):
+        def run(**kwargs):
+            calls.append((name, kwargs, state["group_bypass"]))
+            return {"task": name, "kwargs": kwargs}
+
+        return SimpleNamespace(run=run)
+
+    monkeypatch.setattr(group_rank_tasks, "allow_same_day_group_rank_warmup_bypass", fake_group_bypass)
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
+    monkeypatch.setattr(cache_tasks, "smart_refresh_cache", make_task("cache_refresh"))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
+    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth_with_gapfill", make_task("breadth_refresh"))
+    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
+    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+
+    export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    groups_call = next(call for call in calls if call[0] == "groups_refresh")
+    feature_call = next(call for call in calls if call[0] == "feature_snapshot")
+    assert groups_call[2] is True
+    assert feature_call[1] == {"static_daily_mode": True}

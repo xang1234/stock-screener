@@ -15,6 +15,7 @@ from ..database import SessionLocal
 from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
 from ..models.scan_result import Scan, ScanResult
+from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService
@@ -700,7 +701,11 @@ class IBDGroupRankService:
             List of symbols that are both in the group AND active in stock_universe
         """
         group_symbols = IBDIndustryService.get_group_symbols(db, group_name)
-        return [s for s in group_symbols if s in active_symbols]
+        return [
+            symbol
+            for symbol in group_symbols
+            if symbol in active_symbols and not is_unsupported_yahoo_price_symbol(symbol)
+        ]
 
     def _get_market_caps_for_symbols(
         self,
@@ -758,7 +763,7 @@ class IBDGroupRankService:
 
         # 1. Get SPY data once
         if cache_only:
-            spy_data = self.price_cache.get_cached_only("SPY", period="2y")
+            spy_data = self.price_cache.get_cached_only_fresh("SPY", period="2y")
         else:
             spy_data = self.benchmark_cache.get_spy_data(period="2y")
         if spy_data is None or spy_data.empty:
@@ -780,10 +785,18 @@ class IBDGroupRankService:
         # 3. Collect ALL unique symbols across ALL groups (filtered by active)
         all_groups = IBDIndustryService.get_all_groups(db)
         symbols_to_fetch = set()
+        skipped_unsupported_symbols = set()
 
         for group in all_groups:
             group_symbols = IBDIndustryService.get_group_symbols(db, group)
-            validated = [s for s in group_symbols if s in active_symbols]
+            validated = []
+            for symbol in group_symbols:
+                if symbol not in active_symbols:
+                    continue
+                if is_unsupported_yahoo_price_symbol(symbol):
+                    skipped_unsupported_symbols.add(symbol)
+                    continue
+                validated.append(symbol)
             symbols_to_fetch.update(validated)
 
         logger.info(
@@ -793,7 +806,7 @@ class IBDGroupRankService:
 
         # 4. Batch fetch ALL prices in one call
         if cache_only:
-            all_prices = self.price_cache.get_many_cached_only(
+            all_prices = self.price_cache.get_many_cached_only_fresh(
                 list(symbols_to_fetch),
                 period="2y",
             )
@@ -813,6 +826,7 @@ class IBDGroupRankService:
             "symbols_with_prices": valid_count,
             "cache_miss_symbols": len(symbols_to_fetch) - valid_count,
             "spy_cached": True,
+            "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
         }
 
         return spy_data, all_prices, active_symbols, market_caps, stats
@@ -989,7 +1003,7 @@ class IBDGroupRankService:
         deleted = self._delete_rankings_for_range(db, start_date, end_date)
 
         # 2. Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1280,7 +1294,7 @@ class IBDGroupRankService:
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")

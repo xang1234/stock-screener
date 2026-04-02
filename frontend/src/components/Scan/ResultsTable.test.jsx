@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { fullSeRow, nullSeRow, mixedSeRow } from '../../test/fixtures/setupEngineFixtures';
@@ -164,6 +164,21 @@ describe('ResultsTable', () => {
 
       expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
     });
+
+    it('keeps the action column but hides the chart button when a row is not chart-enabled', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[fullSeRow]}
+          showActions={true}
+          showWatchlistMenu={false}
+          isChartEnabled={() => false}
+        />
+      );
+
+      expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
+      expect(screen.getByText('FULL')).toBeInTheDocument();
+    });
   });
 
   // ── interactions ─────────────────────────────────────────────────────
@@ -174,9 +189,7 @@ describe('ResultsTable', () => {
         <ResultsTable {...defaultProps} onOpenChart={onOpenChart} results={[fullSeRow]} />
       );
 
-      const user = userEvent.setup();
-      // Click the row containing the symbol text
-      await user.click(screen.getByText('FULL'));
+      fireEvent.click(screen.getByText('FULL'));
       expect(onOpenChart).toHaveBeenCalledWith('FULL');
     });
 

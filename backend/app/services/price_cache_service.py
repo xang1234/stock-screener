@@ -180,6 +180,33 @@ class PriceCacheService:
         logger.debug(f"Cache-only MISS for {symbol}")
         return None
 
+    def get_cached_only_fresh(
+        self,
+        symbol: str,
+        period: str = "2y"
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get cache-only price data when the cached row is still fresh enough.
+
+        Returns None for stale same-day/intraday rows so callers can treat the
+        symbol as a cache miss without triggering Yahoo fetches.
+        """
+        cached_data, last_date = self._get_from_database(symbol, period)
+        if cached_data is None or cached_data.empty:
+            logger.debug(f"Fresh cache-only MISS for {symbol}")
+            return None
+
+        if not self._is_data_fresh(last_date):
+            logger.debug(f"Fresh cache-only STALE for {symbol} (last: {last_date})")
+            return None
+
+        if self._is_intraday_data_stale(symbol):
+            logger.debug(f"Fresh cache-only INTRADAY_STALE for {symbol}")
+            return None
+
+        logger.debug(f"Fresh cache-only HIT for {symbol} (last: {last_date})")
+        return cached_data
+
     def get_many_cached_only(
         self,
         symbols: List[str],
@@ -216,7 +243,12 @@ class PriceCacheService:
         fresh_results: Dict[str, Optional[pd.DataFrame]] = {}
 
         for symbol, (data, last_date) in results.items():
-            if data is not None and not data.empty and self._is_data_fresh(last_date):
+            if (
+                data is not None
+                and not data.empty
+                and self._is_data_fresh(last_date)
+                and not self._is_intraday_data_stale(symbol)
+            ):
                 fresh_results[symbol] = data
             else:
                 fresh_results[symbol] = None

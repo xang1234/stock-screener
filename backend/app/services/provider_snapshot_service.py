@@ -21,6 +21,7 @@ from ..models.provider_snapshot import (
     ProviderSnapshotRun,
 )
 from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
+from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .fundamentals_cache_service import FundamentalsCacheService
@@ -133,19 +134,7 @@ class ProviderSnapshotService:
     @classmethod
     def _should_skip_yahoo_price_enrichment(cls, symbol: str) -> bool:
         """Return True for derivative-style suffixes that Yahoo price history often lacks."""
-        normalized = (symbol or "").strip().upper()
-        if not normalized:
-            return False
-
-        for delimiter in ("-", ".", "/"):
-            if delimiter not in normalized:
-                continue
-            suffix = normalized.rsplit(delimiter, 1)[1]
-            if suffix in cls.YAHOO_UNSUPPORTED_SUFFIXES:
-                return True
-            if any(suffix.startswith(prefix) for prefix in cls.YAHOO_UNSUPPORTED_PREFIXES):
-                return True
-        return False
+        return is_unsupported_yahoo_price_symbol(symbol)
 
     def _build_snapshot_rows(
         self,

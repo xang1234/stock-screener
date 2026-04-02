@@ -70,7 +70,6 @@ function StaticHomePage() {
   const freshness = home?.freshness || {};
   const topResults = home?.scan_summary?.top_results || [];
   const topGroups = home?.top_groups || [];
-  const topThemes = home?.top_themes || [];
 
   return (
     <Box>
@@ -101,12 +100,6 @@ function StaticHomePage() {
             value={freshness.groups_latest_date || '-'}
           />
         </Grid>
-        <Grid item xs={12} md={3}>
-          <SummaryCard
-            label="Themes"
-            value={freshness.themes_available ? 'Available' : 'Unavailable'}
-          />
-        </Grid>
       </Grid>
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -134,7 +127,7 @@ function StaticHomePage() {
       </Grid>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} lg={5}>
+        <Grid item xs={12} lg={7}>
           <Paper sx={{ p: 2, height: '100%' }}>
             <Typography variant="h6" gutterBottom>
               Top Scan Candidates
@@ -164,7 +157,7 @@ function StaticHomePage() {
           </Paper>
         </Grid>
 
-        <Grid item xs={12} lg={3.5}>
+        <Grid item xs={12} lg={5}>
           <Paper sx={{ p: 2, height: '100%' }}>
             <Typography variant="h6" gutterBottom>
               Leading Groups
@@ -182,32 +175,6 @@ function StaticHomePage() {
                     <TableRow key={group.industry_group}>
                       <TableCell>{group.industry_group}</TableCell>
                       <TableCell align="right">{group.rank}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} lg={3.5}>
-          <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Leading Themes
-            </Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Theme</TableCell>
-                    <TableCell align="right">Rank</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topThemes.map((theme) => (
-                    <TableRow key={theme.theme_cluster_id ?? theme.id ?? theme.display_name ?? theme.theme}>
-                      <TableCell>{theme.theme || theme.display_name}</TableCell>
-                      <TableCell align="right">{theme.rank ?? '-'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

@@ -240,7 +240,13 @@ class StockDataProvider(abc.ABC):
 
     @abc.abstractmethod
     def prepare_data_bulk(
-        self, symbols: list[str], requirements: object, *, allow_partial: bool = True
+        self,
+        symbols: list[str],
+        requirements: object,
+        *,
+        allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
     ) -> dict[str, object]:
         ...
 

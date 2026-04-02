@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import shutil
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,13 +16,22 @@ from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
 from app.models.stock import StockPrice
+from app.schemas.groups import GroupRankResponse, GroupRankingsResponse, MoversResponse
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
+from app.services.fundamentals_cache_service import FundamentalsCacheService
+from app.services.ibd_group_rank_service import IBDGroupRankService
+from app.services.price_cache_service import PriceCacheService
 from app.services.ui_snapshot_service import UISnapshotService
 
 
 STATIC_SITE_SCHEMA_VERSION = "static-site-v1"
 SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
+CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
 SCAN_CHUNK_SIZE = 1000
+STATIC_CHART_LIMIT = 200
+STATIC_CHART_PERIOD = "6mo"
+STATIC_CHART_PERIOD_DAYS = 180
+STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 
 _DEFAULT_KEY_MARKETS = (
     {"symbol": "SPY", "display_name": "S&P 500 ETF"},
@@ -49,6 +59,8 @@ class StaticSiteExportService:
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
         self._ui_snapshot_service = UISnapshotService(session_factory)
+        self._price_cache = PriceCacheService.get_instance()
+        self._fundamentals_cache = FundamentalsCacheService.get_instance()
 
     def export(self, output_dir: Path, *, clean: bool = True) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
@@ -64,19 +76,23 @@ class StaticSiteExportService:
             if latest_run is None:
                 raise RuntimeError("No published feature run is available for static-site export")
 
+            scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
             scan_manifest = self._export_scan_bundle(
                 db=db,
                 output_dir=output_dir,
                 generated_at=generated_at,
                 run=latest_run,
+                rows=scan_rows,
+                filter_options=filter_options,
             )
-            breadth_payload = self._build_breadth_payload(generated_at=generated_at)
-            groups_payload = self._build_groups_payload(generated_at=generated_at)
-            themes_index = self._build_themes_payloads(
+            chart_manifest = self._export_chart_bundle(
                 output_dir=output_dir,
                 generated_at=generated_at,
-                warnings=warnings,
+                run=latest_run,
+                rows=scan_rows,
             )
+            breadth_payload = self._build_breadth_payload(generated_at=generated_at)
+            groups_payload = self._build_groups_payload(db=db, generated_at=generated_at)
             home_payload = self._build_home_payload(
                 db=db,
                 generated_at=generated_at,
@@ -84,18 +100,32 @@ class StaticSiteExportService:
                 scan_manifest=scan_manifest,
                 breadth_payload=breadth_payload,
                 groups_payload=groups_payload,
-                themes_index=themes_index,
+            )
+
+        scan_manifest["charts"] = {
+            "path": chart_manifest["path"],
+            "limit": chart_manifest["limit"],
+            "symbols_total": chart_manifest["symbols_total"],
+            "available": chart_manifest["available"],
+        }
+        self._write_json(output_dir / "scan" / "manifest.json", scan_manifest)
+
+        skipped_chart_symbols = chart_manifest.get("skipped_symbols") or []
+        if skipped_chart_symbols:
+            preview = ", ".join(skipped_chart_symbols[:5])
+            warnings.append(
+                "Static charts skipped "
+                f"{len(skipped_chart_symbols)} symbols without cached {STATIC_CHART_PERIOD} price history"
+                + (f": {preview}" if preview else "")
             )
 
         breadth_path = Path("breadth.json")
         groups_path = Path("groups.json")
         home_path = Path("home.json")
-        themes_index_path = Path("themes/index.json")
 
         self._write_json(output_dir / breadth_path, breadth_payload)
         self._write_json(output_dir / groups_path, groups_payload)
         self._write_json(output_dir / home_path, home_payload)
-        self._write_json(output_dir / themes_index_path, themes_index)
 
         manifest = {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -105,14 +135,20 @@ class StaticSiteExportService:
                 "scan": True,
                 "breadth": bool(breadth_payload.get("available", True)),
                 "groups": bool(groups_payload.get("available", False)),
-                "themes": bool(themes_index.get("available", False)),
+                "charts": bool(chart_manifest.get("available", False)),
             },
             "pages": {
                 "home": {"path": home_path.as_posix()},
                 "scan": {"path": Path("scan/manifest.json").as_posix()},
                 "breadth": {"path": breadth_path.as_posix()},
                 "groups": {"path": groups_path.as_posix()},
-                "themes": {"path": themes_index_path.as_posix()},
+            },
+            "assets": {
+                "charts": {
+                    "path": chart_manifest["path"],
+                    "limit": chart_manifest["limit"],
+                    "symbols_total": chart_manifest["symbols_total"],
+                },
             },
             "warnings": warnings,
         }
@@ -144,14 +180,7 @@ class StaticSiteExportService:
             .first()
         )
 
-    def _export_scan_bundle(
-        self,
-        *,
-        db: Session,
-        output_dir: Path,
-        generated_at: str,
-        run: FeatureRun,
-    ) -> dict[str, Any]:
+    def _load_scan_export_source(self, db: Session, run: FeatureRun) -> tuple[list[Any], Any]:
         repo = SqlFeatureStoreRepository(db)
         rows = repo.query_all_as_scan_results(
             run.id,
@@ -160,6 +189,27 @@ class StaticSiteExportService:
             include_sparklines=True,
         )
         filter_options = repo.get_filter_options_for_run(run.id)
+        return rows, filter_options
+
+    def _export_scan_bundle(
+        self,
+        *,
+        db: Session,
+        output_dir: Path,
+        generated_at: str,
+        run: FeatureRun,
+        rows: list[Any] | None = None,
+        filter_options: Any | None = None,
+    ) -> dict[str, Any]:
+        if rows is None or filter_options is None:
+            repo = SqlFeatureStoreRepository(db)
+            rows = repo.query_all_as_scan_results(
+                run.id,
+                FilterSpec(),
+                SortSpec(field="composite_score", order=SortOrder.DESC),
+                include_sparklines=True,
+            )
+            filter_options = repo.get_filter_options_for_run(run.id)
 
         scan_dir = output_dir / "scan"
         chunk_dir = scan_dir / "chunks"
@@ -202,10 +252,86 @@ class StaticSiteExportService:
                 ratings=list(filter_options.ratings),
             ).model_dump(mode="json"),
             "chunks": chunk_refs,
+            "initial_rows": serialized_rows[:50],
             "preview_rows": serialized_rows[:10],
         }
         self._write_json(scan_dir / "manifest.json", manifest)
         return manifest
+
+    def _export_chart_bundle(
+        self,
+        *,
+        output_dir: Path,
+        generated_at: str,
+        run: FeatureRun,
+        rows: list[Any],
+    ) -> dict[str, Any]:
+        chart_dir = output_dir / "charts"
+        chart_dir.mkdir(parents=True, exist_ok=True)
+
+        entries: list[dict[str, Any]] = []
+        skipped_symbols: list[str] = []
+        for start in range(0, len(rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
+            if len(entries) >= STATIC_CHART_LIMIT:
+                break
+
+            batch_rows = list(rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
+            symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
+            price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
+            fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
+
+            for rank, row in enumerate(batch_rows, start=start + 1):
+                if len(entries) >= STATIC_CHART_LIMIT:
+                    break
+
+                symbol = getattr(row, "symbol", None)
+                if not symbol:
+                    continue
+
+                bars = self._serialize_chart_bars(price_data.get(symbol))
+                if not bars:
+                    skipped_symbols.append(symbol)
+                    continue
+
+                rel_path = self._chart_payload_path(symbol)
+                payload = {
+                    "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+                    "generated_at": generated_at,
+                    "as_of_date": run.as_of_date.isoformat(),
+                    "symbol": symbol,
+                    "rank": rank,
+                    "period": STATIC_CHART_PERIOD,
+                    "bars": bars,
+                    "stock_data": self._serialize_scan_row(row),
+                    "fundamentals": fundamentals.get(symbol),
+                }
+                self._write_json(output_dir / rel_path, payload)
+                entries.append(
+                    {
+                        "symbol": symbol,
+                        "rank": rank,
+                        "path": rel_path.as_posix(),
+                    }
+                )
+
+        index_rel_path = Path("charts/index.json")
+        index_payload = {
+            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+            "generated_at": generated_at,
+            "as_of_date": run.as_of_date.isoformat(),
+            "limit": STATIC_CHART_LIMIT,
+            "symbols_total": len(entries),
+            "skipped_symbols": skipped_symbols,
+            "symbols": entries,
+        }
+        self._write_json(output_dir / index_rel_path, index_payload)
+        return {
+            "path": index_rel_path.as_posix(),
+            "limit": STATIC_CHART_LIMIT,
+            "symbols_total": len(entries),
+            "available": bool(entries),
+            "skipped_symbols": skipped_symbols,
+        }
 
     def _build_breadth_payload(self, *, generated_at: str) -> dict[str, Any]:
         snapshot = self._ui_snapshot_service.publish_breadth_bootstrap().to_dict()
@@ -219,9 +345,10 @@ class StaticSiteExportService:
             "payload": payload,
         }
 
-    def _build_groups_payload(self, *, generated_at: str) -> dict[str, Any]:
-        snapshot = self._ui_snapshot_service.publish_groups_bootstrap()
-        if snapshot is None:
+    def _build_groups_payload(self, *, db: Session, generated_at: str) -> dict[str, Any]:
+        service = IBDGroupRankService.get_instance()
+        rankings = service.get_current_rankings(db, limit=197)
+        if not rankings:
             return {
                 "schema_version": STATIC_SITE_SCHEMA_VERSION,
                 "generated_at": generated_at,
@@ -229,69 +356,25 @@ class StaticSiteExportService:
                 "message": "No published group rankings are available.",
                 "payload": None,
             }
-        raw = snapshot.to_dict()
+        movers = service.get_rank_movers(db, period="3m", limit=10)
+        ranking_date = rankings[0]["date"]
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
             "available": True,
-            "published_at": _coerce_datetime(raw.get("published_at")),
-            "source_revision": raw.get("source_revision"),
-            "payload": raw.get("payload", {}),
-        }
-
-    def _build_themes_payloads(
-        self,
-        *,
-        output_dir: Path,
-        generated_at: str,
-        warnings: list[str],
-    ) -> dict[str, Any]:
-        themes_dir = output_dir / "themes"
-        themes_dir.mkdir(parents=True, exist_ok=True)
-
-        variants: dict[str, dict[str, Any]] = {}
-        for pipeline in ("technical", "fundamental"):
-            for theme_view in ("grouped", "flat"):
-                variant_key = f"{pipeline}:{theme_view}"
-                rel_path = Path(f"themes/{pipeline}-{theme_view}.json")
-                try:
-                    snapshot = self._ui_snapshot_service.publish_themes_bootstrap(
-                        pipeline=pipeline,
-                        theme_view=theme_view,
-                    ).to_dict()
-                    payload = {
-                        "schema_version": STATIC_SITE_SCHEMA_VERSION,
-                        "generated_at": generated_at,
-                        "available": True,
-                        "published_at": _coerce_datetime(snapshot.get("published_at")),
-                        "source_revision": snapshot.get("source_revision"),
-                        "payload": snapshot.get("payload", {}),
-                    }
-                    self._write_json(output_dir / rel_path, payload)
-                    preview_rankings = (
-                        (((payload.get("payload") or {}).get("rankings") or {}).get("rankings"))
-                        or (((payload.get("payload") or {}).get("l1_rankings") or {}).get("rankings"))
-                        or []
-                    )[:5]
-                    variants[variant_key] = {
-                        "available": True,
-                        "path": rel_path.as_posix(),
-                        "preview_rankings": preview_rankings,
-                    }
-                except Exception as exc:  # noqa: BLE001 - best effort by design
-                    warnings.append(f"Themes export failed for {variant_key}: {exc}")
-                    variants[variant_key] = {
-                        "available": False,
-                        "path": rel_path.as_posix(),
-                        "error": str(exc),
-                    }
-
-        return {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "available": any(entry.get("available") for entry in variants.values()),
-            "variants": variants,
-            "warnings": [warning for warning in warnings if warning.startswith("Themes export failed")],
+            "payload": {
+                "rankings": GroupRankingsResponse(
+                    date=ranking_date,
+                    total_groups=len(rankings),
+                    rankings=[GroupRankResponse(**row) for row in rankings],
+                ).model_dump(mode="json"),
+                "movers_period": "3m",
+                "movers": MoversResponse(
+                    period=movers["period"],
+                    gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
+                    losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                ).model_dump(mode="json"),
+            },
         }
 
     def _build_home_payload(
@@ -303,16 +386,11 @@ class StaticSiteExportService:
         scan_manifest: dict[str, Any],
         breadth_payload: dict[str, Any],
         groups_payload: dict[str, Any],
-        themes_index: dict[str, Any],
     ) -> dict[str, Any]:
         key_markets = self._build_key_markets(db)
         top_groups = (
             ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
         )[:5]
-        top_themes = []
-        technical_flat = themes_index.get("variants", {}).get("technical:flat", {})
-        if technical_flat.get("available"):
-            top_themes = technical_flat.get("preview_rankings") or []
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
 
@@ -326,7 +404,6 @@ class StaticSiteExportService:
                 "scan_published_at": _coerce_datetime(latest_run.published_at),
                 "breadth_latest_date": breadth_current.get("date"),
                 "groups_latest_date": (((groups_payload.get("payload") or {}).get("rankings") or {}).get("date")),
-                "themes_available": themes_index.get("available", False),
             },
             "key_markets": key_markets,
             "scan_summary": {
@@ -335,7 +412,6 @@ class StaticSiteExportService:
                 "top_results": scan_manifest.get("preview_rows", []),
             },
             "top_groups": top_groups,
-            "top_themes": top_themes,
         }
 
     def _build_key_markets(self, db: Session) -> list[dict[str, Any]]:
@@ -394,6 +470,42 @@ class StaticSiteExportService:
             }
         )
         return item
+
+    def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
+        if data is None or getattr(data, "empty", True):
+            return []
+
+        cutoff_date = datetime.utcnow() - timedelta(days=STATIC_CHART_PERIOD_DAYS)
+        cutoff_ts = cutoff_date
+        if data.index.tz is not None:
+            cutoff_ts = cutoff_date.replace(tzinfo=data.index.tz)
+
+        filtered = data[data.index >= cutoff_ts]
+        if filtered.empty:
+            return []
+
+        frame = filtered.reset_index()
+        date_col = frame.columns[0]
+        frame = frame.rename(columns={date_col: "Date"})
+        frame["Date"] = frame["Date"].dt.strftime("%Y-%m-%d")
+
+        bars: list[dict[str, Any]] = []
+        for _, row in frame.iterrows():
+            bars.append(
+                {
+                    "date": row["Date"],
+                    "open": round(float(row["Open"]), 2),
+                    "high": round(float(row["High"]), 2),
+                    "low": round(float(row["Low"]), 2),
+                    "close": round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                }
+            )
+        return bars
+
+    @staticmethod
+    def _chart_payload_path(symbol: str) -> Path:
+        return Path("charts") / f"{quote(symbol, safe='')}.json"
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:

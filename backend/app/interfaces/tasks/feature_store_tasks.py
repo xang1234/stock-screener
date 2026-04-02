@@ -120,7 +120,10 @@ def _create_auto_scan_for_published_run(
     composite_method: str,
 ) -> str:
     """Create a completed scan row bound to a published feature run."""
+    from sqlalchemy import func
+
     from app.database import SessionLocal
+    from app.infra.db.models.feature_store import FeatureRunUniverseSymbol
     from app.infra.db.uow import SqlUnitOfWork
     from app.models.scan_result import SCAN_TRIGGER_SOURCE_AUTO
     from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
@@ -137,7 +140,18 @@ def _create_auto_scan_for_published_run(
         else:
             universe_def = normalize_universe_definition(universe_name)
             feature_run = uow.feature_runs.get_run(feature_run_id)
-            symbols = uow.universe.resolve_symbols(universe_def)
+            run_universe_count = 0
+            session = getattr(uow, "session", None)
+            if session is not None:
+                run_universe_count = (
+                    session.query(func.count(FeatureRunUniverseSymbol.symbol))
+                    .filter(FeatureRunUniverseSymbol.run_id == feature_run_id)
+                    .scalar()
+                    or 0
+                )
+            symbols = []
+            if run_universe_count <= 0:
+                symbols = uow.universe.resolve_symbols(universe_def)
             ran_at = feature_run.published_at or datetime.now(timezone.utc)
             passed_stocks = (
                 feature_run.stats.passed_symbols
@@ -159,7 +173,7 @@ def _create_auto_scan_for_published_run(
                 universe_symbols=universe_def.symbols,
                 screener_types=screeners,
                 composite_method=composite_method,
-                total_stocks=len(symbols),
+                total_stocks=run_universe_count or len(symbols),
                 passed_stocks=passed_stocks,
                 status="completed",
                 task_id=None,
@@ -203,6 +217,7 @@ def build_daily_snapshot(
     criteria: dict | None = None,
     composite_method: str | None = None,
     skip_if_published: bool = True,
+    static_daily_mode: bool = False,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -223,6 +238,7 @@ def build_daily_snapshot(
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.progress_sink import CeleryProgressSink
     from app.services.universe_resolver import normalize_universe_definition
+    from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailySnapshotCommand,
         _is_us_trading_day,
@@ -278,6 +294,9 @@ def build_daily_snapshot(
         with uow_check:
             universe_def = normalize_universe_definition(universe_name)
             symbols = uow_check.universe.resolve_symbols(universe_def)
+            skipped_symbols: list[str] = []
+            if static_daily_mode:
+                symbols, skipped_symbols = split_supported_price_symbols(symbols)
             signature_payload = build_scan_signature_payload(
                 universe_type=getattr(universe_def, "type", "all"),
                 screeners=screeners,
@@ -310,6 +329,7 @@ def build_daily_snapshot(
                     "existing_run_id": matching_run.id,
                     "as_of_date": str(as_of),
                     "cleaned_stale_runs": cleaned_stale_runs,
+                    "skipped_symbols": len(skipped_symbols),
                 }
 
     # ── Execute use case ─────────────────────────────────────
@@ -322,6 +342,10 @@ def build_daily_snapshot(
         criteria=criteria,
         composite_method=composite_method,
         correlation_id=correlation_id,
+        exclude_unsupported_price_symbols=static_daily_mode,
+        batch_only_prices=static_daily_mode,
+        batch_only_fundamentals=static_daily_mode,
+        require_bulk_prefetch=static_daily_mode,
     )
 
     try:
@@ -343,10 +367,10 @@ def build_daily_snapshot(
     auto_scan_id = None
     logger.info(
         "build_daily_snapshot completed: run_id=%d status=%s "
-        "total=%d processed=%d failed=%d row_count=%d duration=%.2fs dq_passed=%s",
+        "total=%d processed=%d failed=%d skipped=%d row_count=%d duration=%.2fs dq_passed=%s",
         result.run_id, result.status,
         result.total_symbols, result.processed_symbols,
-        result.failed_symbols, result.row_count,
+        result.failed_symbols, result.skipped_symbols, result.row_count,
         result.duration_seconds, result.dq_passed,
     )
 
@@ -371,9 +395,11 @@ def build_daily_snapshot(
         "total_symbols": result.total_symbols,
         "processed_symbols": result.processed_symbols,
         "failed_symbols": result.failed_symbols,
+        "skipped_symbols": result.skipped_symbols,
         "row_count": result.row_count,
         "duration_seconds": result.duration_seconds,
         "dq_passed": result.dq_passed,
         "auto_scan_id": auto_scan_id,
         "cleaned_stale_runs": cleaned_stale_runs,
+        "warnings": list(result.warnings),
     }
