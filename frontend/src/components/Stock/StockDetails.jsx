@@ -304,7 +304,7 @@ function StockDetails() {
           </AccordionSummary>
           <AccordionDetails>
             <SectionHeader>OVERVIEW</SectionHeader>
-            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.5, mb: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, mb: 2 }}>
               <MetricRow label="Composite" value={decision.composite_score != null ? decision.composite_score.toFixed(1) : '-'} color="primary.main" />
               <MetricRow label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
               <MetricRow label="Method" value={decision.composite_method || '-'} />
@@ -343,7 +343,7 @@ function StockDetails() {
                         sx={{ height: 20, fontSize: '0.7rem' }}
                       />
                     </Box>
-                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.25 }}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, rowGap: 0.25 }}>
                       {screener.criteria.map((criterion) => (
                         <Box key={criterion.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
@@ -443,7 +443,7 @@ function StockDetails() {
           </AccordionSummary>
           <AccordionDetails>
             {data.themes?.length ? (
-              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5 }}>
                 {data.themes.map((theme) => (
                   <Box key={theme.theme_id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
                     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.5 }}>
@@ -483,7 +483,7 @@ function StockDetails() {
             )}
           </AccordionSummary>
           <AccordionDetails>
-            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, rowGap: 0.5 }}>
               {regime ? (
                 <>
                   <MetricRow label="Stance" value={regime.label} />
