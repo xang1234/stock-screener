@@ -23,6 +23,15 @@ def test_parse_watchlist_import_symbols_skips_csv_headers():
     ]
 
 
+def test_parse_watchlist_import_symbols_handles_tab_delimited_spreadsheet_paste():
+    content = "symbol\tname\nAAPL\tApple Inc.\nMSFT\tMicrosoft\n"
+
+    assert parse_watchlist_import_symbols(content) == [
+        "AAPL",
+        "MSFT",
+    ]
+
+
 def test_split_import_results_classifies_existing_and_invalid_symbols():
     added, existing, invalid = split_import_results(
         ["NVDA", "MSFT", "BAD$", "AAPL"],

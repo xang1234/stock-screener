@@ -33,10 +33,10 @@ def parse_watchlist_import_symbols(
 
     if normalized_hint == "csv" or (
         normalized_hint == "auto"
-        and "," in stripped
         and "\n" in stripped
+        and any(delimiter in stripped for delimiter in (",", "\t", ";"))
     ):
-        tokens = _parse_csv_symbols(stripped)
+        tokens = _parse_tabular_symbols(stripped)
     else:
         tokens = _parse_text_symbols(stripped)
 
@@ -51,8 +51,15 @@ def parse_watchlist_import_symbols(
     return deduped
 
 
-def _parse_csv_symbols(content: str) -> list[str]:
-    reader = csv.reader(io.StringIO(content))
+def _parse_tabular_symbols(content: str) -> list[str]:
+    sample = "\n".join(content.splitlines()[:5])
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        delimiter = "\t" if "\t" in sample else ","
+
+    reader = csv.reader(io.StringIO(content), delimiter=delimiter)
     rows = [row for row in reader if any(cell.strip() for cell in row)]
     if not rows:
         return []

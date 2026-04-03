@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from ...database import get_db
@@ -173,20 +173,8 @@ def _build_chart_data_payload(latest_run, item) -> dict:
     }
 
 
-def _symbol_search_sort_key(query: str, candidate: StockUniverse) -> tuple:
-    query_lower = query.lower()
-    symbol = (candidate.symbol or "").lower()
-    name = (candidate.name or "").lower()
-
-    return (
-        0 if symbol == query_lower else 1,
-        0 if symbol.startswith(query_lower) else 1,
-        0 if query_lower in symbol else 1,
-        0 if name.startswith(query_lower) else 1,
-        0 if query_lower in name else 1,
-        len(symbol),
-        symbol,
-    )
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _build_decision_factor_records(explanation) -> tuple[list[dict], list[dict]]:
@@ -358,20 +346,31 @@ async def search_stocks(
         return []
 
     query_lower = query.lower()
+    escaped_query = _escape_like(query_lower)
+    symbol_lower = func.lower(func.coalesce(StockUniverse.symbol, ""))
+    name_lower = func.lower(func.coalesce(StockUniverse.name, ""))
     rows = (
         db.query(StockUniverse)
         .filter(
             StockUniverse.active_filter(),
             or_(
-                StockUniverse.symbol.ilike(f"%{query}%"),
-                StockUniverse.name.ilike(f"%{query}%"),
+                symbol_lower.like(f"%{escaped_query}%", escape="\\"),
+                name_lower.like(f"%{escaped_query}%", escape="\\"),
             ),
         )
-        .limit(max(limit * 6, 24))
+        .order_by(
+            case((symbol_lower == query_lower, 0), else_=1),
+            case((symbol_lower.like(f"{escaped_query}%", escape="\\"), 0), else_=1),
+            case((symbol_lower.like(f"%{escaped_query}%", escape="\\"), 0), else_=1),
+            case((name_lower.like(f"{escaped_query}%", escape="\\"), 0), else_=1),
+            case((name_lower.like(f"%{escaped_query}%", escape="\\"), 0), else_=1),
+            func.length(func.coalesce(StockUniverse.symbol, "")),
+            symbol_lower,
+        )
+        .limit(limit)
         .all()
     )
 
-    ranked = sorted(rows, key=lambda row: _symbol_search_sort_key(query_lower, row))
     return [
         StockSearchResult(
             symbol=row.symbol,
@@ -379,7 +378,7 @@ async def search_stocks(
             sector=row.sector,
             industry=row.industry,
         )
-        for row in ranked[:limit]
+        for row in rows
     ]
 
 

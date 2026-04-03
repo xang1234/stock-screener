@@ -6,13 +6,17 @@ import { renderWithProviders } from '../../test/renderWithProviders';
 import StockDetails from './StockDetails';
 
 const getStockDecisionDashboard = vi.fn();
+const candlestickChartPropsSpy = vi.fn();
 
 vi.mock('../../api/stocks', () => ({
   getStockDecisionDashboard: (...args) => getStockDecisionDashboard(...args),
 }));
 
 vi.mock('../Charts/CandlestickChart', () => ({
-  default: ({ symbol }) => <div data-testid="candlestick-chart">{symbol}</div>,
+  default: (props) => {
+    candlestickChartPropsSpy(props);
+    return <div data-testid="candlestick-chart">{props.symbol}</div>;
+  },
 }));
 
 vi.mock('../common/AddToWatchlistMenu', () => ({
@@ -21,6 +25,7 @@ vi.mock('../common/AddToWatchlistMenu', () => ({
 
 describe('StockDetails', () => {
   it('renders the decision workspace from dashboard payload', async () => {
+    candlestickChartPropsSpy.mockClear();
     getStockDecisionDashboard.mockResolvedValue({
       symbol: 'NVDA',
       info: {
@@ -92,5 +97,6 @@ describe('StockDetails', () => {
     expect(screen.getByText('Industry Peers')).toBeInTheDocument();
     expect(screen.getByText('AI Infrastructure')).toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
+    expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
   });
 });

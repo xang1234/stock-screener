@@ -188,7 +188,6 @@ function StockDetails() {
               <CandlestickChart
                 symbol={data.symbol}
                 priceData={data.chart?.price_history || []}
-                dataUpdatedAtOverride={Date.now()}
                 height={520}
               />
             </Box>

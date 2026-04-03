@@ -308,6 +308,35 @@ async def test_search_stocks_endpoint_ranks_exact_and_prefix_matches(client, ses
 
 
 @pytest.mark.asyncio
+async def test_search_stocks_endpoint_keeps_exact_match_when_query_has_many_matches(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    session.add_all(
+        [
+            StockUniverse(symbol="A", name="Agilent", sector="Healthcare", industry="Diagnostics", is_active=True, status="active"),
+            StockUniverse(symbol="AA", name="Alcoa", sector="Materials", industry="Metals", is_active=True, status="active"),
+            StockUniverse(symbol="AAPL", name="Apple Inc.", sector="Technology", industry="Consumer Electronics", is_active=True, status="active"),
+        ]
+        + [
+            StockUniverse(
+                symbol=f"AB{idx:02d}",
+                name=f"Alpha Noise {idx}",
+                sector="Misc",
+                industry="Noise",
+                is_active=True,
+                status="active",
+            )
+            for idx in range(30)
+        ]
+    )
+    session.commit()
+
+    response = await client.get("/api/v1/stocks/search", params={"q": "a", "limit": 3})
+
+    assert response.status_code == 200
+    assert [row["symbol"] for row in response.json()] == ["A", "AA", "AAPL"]
+
+
+@pytest.mark.asyncio
 async def test_decision_dashboard_endpoint_returns_normalized_payload(client, session, monkeypatch):
     app.dependency_overrides[get_db] = _override_db(session)
     latest_run, feature_item, feature_row, peers = _make_feature_context()
