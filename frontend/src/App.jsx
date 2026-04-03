@@ -276,7 +276,7 @@ function AppShell() {
             <Route path="/groups" element={<GroupRankingsPage />} />
             {features.themes && <Route path="/themes" element={<ThemesPage />} />}
             {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
-            <Route path="/stock/:symbol" element={<StockDetails />} />
+            <Route path="/stocks/:ticker" element={<StockDetails />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
