@@ -497,7 +497,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       <Dialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Import Symbols</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          <Typography id="watchlist-import-help" variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             Paste newline, comma, tab, or CSV-formatted symbols. The importer will dedupe entries and report invalid symbols.
           </Typography>
           <TextField
@@ -505,6 +505,10 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
             multiline
             minRows={8}
             fullWidth
+            inputProps={{
+              'aria-label': 'Symbols to import',
+              'aria-describedby': 'watchlist-import-help',
+            }}
             placeholder={'NVDA\nMSFT\nAAPL'}
             value={importContent}
             onChange={(event) => setImportContent(event.target.value)}

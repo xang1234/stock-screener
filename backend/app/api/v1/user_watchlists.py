@@ -5,8 +5,9 @@ Handles CRUD operations and data retrieval for watchlists and items.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 from typing import List, Dict
 import logging
 
@@ -31,6 +32,23 @@ from ...services.watchlist_import_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _is_duplicate_watchlist_symbol_error(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return (
+        "uix_watchlist_symbol" in message
+        or (
+            "unique constraint failed" in message
+            and "watchlist_items.watchlist_id" in message
+            and "watchlist_items.symbol" in message
+        )
+        or (
+            "duplicate key value violates unique constraint" in message
+            and "watchlist" in message
+            and "symbol" in message
+        )
+    )
 
 
 # ================= Watchlist CRUD =================
@@ -431,6 +449,7 @@ async def import_items(
         WatchlistItem.watchlist_id == watchlist_id
     ).scalar() or -1
 
+    added_symbols = []
     added_items = []
     for symbol in addable_symbols:
         max_pos += 1
@@ -439,7 +458,16 @@ async def import_items(
             symbol=symbol,
             position=max_pos,
         )
-        db.add(item)
+        try:
+            with db.begin_nested():
+                db.add(item)
+                db.flush()
+        except IntegrityError as exc:
+            if _is_duplicate_watchlist_symbol_error(exc):
+                skipped_existing.append(symbol)
+                continue
+            raise
+        added_symbols.append(symbol)
         added_items.append(item)
 
     db.commit()
@@ -449,7 +477,7 @@ async def import_items(
 
     return WatchlistImportResult(
         requested_count=len(parsed_symbols),
-        added=addable_symbols,
+        added=added_symbols,
         skipped_existing=skipped_existing,
         invalid_symbols=invalid_symbols,
         added_items=[WatchlistItemResponse.model_validate(item) for item in added_items],

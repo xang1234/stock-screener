@@ -6,6 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -477,7 +478,7 @@ async def test_decision_dashboard_endpoint_reports_degraded_mode_without_feature
     app.dependency_overrides[get_db] = _override_db(session)
     app.dependency_overrides[get_uow] = lambda: _FakeUow(None)
 
-    monkeypatch.setattr(stocks_module, "_get_stock_info_or_404", lambda symbol: {
+    monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {
         "symbol": symbol,
         "name": "NVIDIA Corp",
     })
@@ -548,3 +549,40 @@ async def test_watchlist_import_endpoint_handles_tsv_with_auto_format(client, se
     assert payload["added"] == ["MSFT", "NVDA"]
     assert payload["skipped_existing"] == ["AAPL"]
     assert payload["invalid_symbols"] == ["BAD$"]
+
+
+@pytest.mark.asyncio
+async def test_watchlist_import_endpoint_downgrades_duplicate_insert_race(client, session, monkeypatch):
+    app.dependency_overrides[get_db] = _override_db(session)
+    watchlist = _seed_search_and_import_data(session)
+    original_flush = session.flush
+    state = {"raised": False}
+
+    def flaky_flush(*args, **kwargs):
+        pending_symbols = {
+            item.symbol
+            for item in session.new
+            if isinstance(item, WatchlistItem)
+        }
+        if "MSFT" in pending_symbols and not state["raised"]:
+            state["raised"] = True
+            raise IntegrityError(
+                "INSERT INTO watchlist_items",
+                {"symbol": "MSFT"},
+                Exception("UNIQUE constraint failed: watchlist_items.watchlist_id, watchlist_items.symbol"),
+            )
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(session, "flush", flaky_flush)
+
+    response = await client.post(
+        f"/api/v1/user-watchlists/{watchlist.id}/items/import",
+        json={"content": "AAPL\nMSFT\nNVDA", "format": "text"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_count"] == 3
+    assert payload["added"] == ["NVDA"]
+    assert payload["skipped_existing"] == ["AAPL", "MSFT"]
+    assert payload["invalid_symbols"] == []

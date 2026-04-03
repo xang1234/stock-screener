@@ -50,7 +50,8 @@ function SymbolSearchDialog({ open, onClose }) {
 
   const handleSelect = (symbol) => {
     if (!symbol) return;
-    navigate(`/stock/${symbol.toUpperCase()}`);
+    const normalizedSymbol = encodeURIComponent(symbol.toUpperCase());
+    navigate(`/stock/${normalizedSymbol}`);
     onClose();
   };
 
@@ -73,10 +74,13 @@ function SymbolSearchDialog({ open, onClose }) {
 
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (results[highlightedIndex]) {
+      const normalizedQuery = query.trim();
+      const resultsAreCurrent = normalizedQuery === debouncedQuery;
+
+      if (resultsAreCurrent && results[highlightedIndex]) {
         handleSelect(results[highlightedIndex].symbol);
-      } else if (query.trim()) {
-        handleSelect(query.trim());
+      } else if (normalizedQuery) {
+        handleSelect(normalizedQuery);
       }
       return;
     }

@@ -51,7 +51,7 @@ describe('UserWatchlistManager import flow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
     const importDialog = await screen.findByRole('dialog', { name: 'Import Symbols' });
-    const importTextbox = within(importDialog).getByRole('textbox');
+    const importTextbox = within(importDialog).getByRole('textbox', { name: 'Symbols to import' });
 
     fireEvent.change(importTextbox, { target: { value: 'NVDA\nMSFT\nAAPL' } });
     fireEvent.click(within(importDialog).getByRole('button', { name: 'Import' }));

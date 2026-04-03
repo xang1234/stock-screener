@@ -1,6 +1,6 @@
 import { useLocation } from 'react-router-dom';
 import { Routes, Route, MemoryRouter } from 'react-router-dom';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
@@ -36,6 +36,7 @@ function renderDialog() {
 
 describe('SymbolSearchDialog', () => {
   beforeEach(() => {
+    searchStocks.mockReset();
     searchStocks.mockResolvedValue([
       { symbol: 'NVDA', name: 'NVIDIA', sector: 'Technology', industry: 'Semiconductors' },
       { symbol: 'NVDS', name: 'Inverse NVIDIA', sector: 'ETF', industry: 'Leveraged' },
@@ -59,6 +60,35 @@ describe('SymbolSearchDialog', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('location')).toHaveTextContent('/stock/NVDS');
+    });
+  });
+
+  it('encodes direct symbol input before routing', async () => {
+    searchStocks.mockResolvedValueOnce([]);
+    renderDialog();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText('Search symbols'), 'brk/b');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent('/stock/BRK%2FB');
+    });
+  });
+
+  it('uses the live query when debounced results are stale', async () => {
+    renderDialog();
+
+    const input = screen.getByLabelText('Search symbols');
+    fireEvent.change(input, { target: { value: 'nvd' } });
+
+    expect(await screen.findByText(/NVDA · NVIDIA/)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'msft' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent('/stock/MSFT');
     });
   });
 });
