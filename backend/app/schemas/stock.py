@@ -1,7 +1,9 @@
 """Stock data schemas"""
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, List, Optional
 from datetime import datetime
+
+from .scanning import ScanResultItem, ScreenerExplanationResponse
 
 
 class StockInfo(BaseModel):
@@ -49,3 +51,113 @@ class StockData(BaseModel):
     info: StockInfo
     fundamentals: Optional[StockFundamentals] = None
     technicals: Optional[StockTechnicals] = None
+
+
+class StockSearchResult(BaseModel):
+    """Global symbol search result."""
+
+    symbol: str
+    name: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class StockPriceHistoryPoint(BaseModel):
+    """Single OHLCV bar."""
+
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class StockChartSnapshot(BaseModel):
+    """Chart payload for the decision workspace."""
+
+    price_history: List[StockPriceHistoryPoint]
+    chart_data: dict[str, Any]
+
+
+class StockDecisionFactor(BaseModel):
+    """Deterministic strength/weakness factor."""
+
+    screener_name: str
+    criterion_name: str
+    score: float
+    max_score: float
+    passed: bool
+
+
+class StockDecisionFreshness(BaseModel):
+    """Freshness metadata for the workspace."""
+
+    feature_run_id: Optional[int] = None
+    feature_as_of_date: Optional[str] = None
+    feature_completed_at: Optional[str] = None
+    breadth_date: Optional[str] = None
+    has_price_history: bool = False
+
+
+class StockDecisionSummary(BaseModel):
+    """Compact deterministic decision summary."""
+
+    composite_score: Optional[float] = None
+    rating: Optional[str] = None
+    screeners_passed: int = 0
+    screeners_total: int = 0
+    composite_method: Optional[str] = None
+    top_strengths: List[StockDecisionFactor]
+    top_weaknesses: List[StockDecisionFactor]
+    freshness: StockDecisionFreshness
+
+
+class StockThemeSummary(BaseModel):
+    """Theme linkage for a stock."""
+
+    theme_id: int
+    display_name: str
+    pipeline: Optional[str] = None
+    category: Optional[str] = None
+    lifecycle_state: Optional[str] = None
+    is_emerging: bool = False
+    confidence: Optional[float] = None
+    mention_count: Optional[int] = None
+    correlation_to_theme: Optional[float] = None
+    momentum_score: Optional[float] = None
+    mention_velocity: Optional[float] = None
+    basket_return_1m: Optional[float] = None
+    status: Optional[str] = None
+
+
+class StockRegimeSummary(BaseModel):
+    """Simple deterministic market-regime summary."""
+
+    label: str
+    summary: str
+    breadth_date: Optional[str] = None
+    up_4pct: Optional[int] = None
+    down_4pct: Optional[int] = None
+    ratio_5day: Optional[float] = None
+    ratio_10day: Optional[float] = None
+    total_stocks_scanned: Optional[int] = None
+    feature_run_stale: bool = False
+
+
+class StockDecisionDashboardResponse(BaseModel):
+    """Full stock decision workspace payload."""
+
+    symbol: str
+    as_of_date: Optional[str] = None
+    freshness: StockDecisionFreshness
+    info: Optional[StockInfo] = None
+    fundamentals: Optional[StockFundamentals] = None
+    technicals: Optional[StockTechnicals] = None
+    chart: StockChartSnapshot
+    decision_summary: StockDecisionSummary
+    screener_explanations: List[ScreenerExplanationResponse]
+    peers: List[ScanResultItem]
+    themes: List[StockThemeSummary]
+    regime: StockRegimeSummary
+    degraded_reasons: List[str]

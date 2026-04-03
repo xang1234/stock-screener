@@ -164,3 +164,26 @@ export const getChartData = async (symbol) => {
   const response = await apiClient.get(`/v1/stocks/${symbol}/chart-data`);
   return response.data;
 };
+
+/**
+ * Search symbols across the active universe.
+ * @param {string} query - Symbol or company-name query
+ * @param {number} limit - Maximum number of results
+ * @returns {Promise<Object[]>} Search results
+ */
+export const searchStocks = async (query, limit = 8) => {
+  const response = await apiClient.get('/v1/stocks/search', {
+    params: { q: query, limit },
+  });
+  return response.data;
+};
+
+/**
+ * Get the full stock decision workspace payload.
+ * @param {string} symbol - Stock ticker symbol
+ * @returns {Promise<Object>} Decision dashboard payload
+ */
+export const getStockDecisionDashboard = async (symbol) => {
+  const response = await apiClient.get(`/v1/stocks/${symbol}/decision-dashboard`);
+  return response.data;
+};

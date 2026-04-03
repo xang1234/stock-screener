@@ -35,6 +35,10 @@ vi.mock('../App/DesktopBootstrapBanner', () => ({
   default: () => <div data-testid="bootstrap-banner" />,
 }));
 
+vi.mock('./SymbolSearchDialog', () => ({
+  default: () => <div data-testid="symbol-search-dialog" />,
+}));
+
 function renderLayout() {
   return render(
     <ThemeProvider theme={createTheme()}>

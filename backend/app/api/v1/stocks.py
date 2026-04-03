@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 """Stock data API endpoints"""
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from datetime import UTC, datetime, timedelta
 import logging
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session
+
 from ...database import get_db
-from ...schemas.stock import StockInfo, StockTechnicals, StockData
+from ...models.market_breadth import MarketBreadth
+from ...models.stock_universe import StockUniverse
+from ...models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics
+from ...schemas.scanning import ExplainResponse, ScanResultItem
+from ...schemas.stock import (
+    StockData,
+    StockDecisionDashboardResponse,
+    StockInfo,
+    StockSearchResult,
+    StockTechnicals,
+)
+from ...use_cases.scanning.explain_stock import ExplainStockUseCase
 from ...wiring.bootstrap import get_uow
 
 logger = logging.getLogger(__name__)
@@ -25,6 +39,350 @@ def _build_data_fetcher(db: Session):
     return DataFetcher(db)
 
 
+def _get_stock_info_or_404(symbol: str):
+    info = _get_yfinance_service().get_stock_info(symbol.upper())
+    if not info:
+        logger.error(
+            "Failed to fetch stock info for %s - check yfinance service logs for details",
+            symbol,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unable to fetch data for {symbol}. This could be due to: invalid symbol, "
+                "network issues, or yfinance API problems. Check backend logs for details."
+            ),
+        )
+    return info
+
+
+def _get_stock_fundamentals_payload(symbol: str, *, force_refresh: bool = False):
+    from ...services.fundamentals_cache_service import FundamentalsCacheService
+
+    cache = FundamentalsCacheService.get_instance()
+    data = cache.get_fundamentals(symbol.upper(), force_refresh=force_refresh)
+    if not data:
+        return None
+    if "symbol" not in data:
+        data["symbol"] = symbol.upper()
+    return data
+
+
+def _get_stock_technicals_payload(
+    symbol: str,
+    db: Session,
+    *,
+    force_refresh: bool = False,
+):
+    fetcher = _build_data_fetcher(db)
+    return fetcher.get_stock_technicals(symbol.upper(), force_refresh=force_refresh)
+
+
+def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
+    """Get historical price data (OHLCV only) from cache."""
+
+    import pandas as pd
+
+    from ...services.price_cache_service import PriceCacheService
+
+    period_days = {
+        "1mo": 30,
+        "3mo": 90,
+        "6mo": 180,
+        "1y": 365,
+        "2y": 730,
+        "5y": 1825,
+    }
+    days = period_days.get(period, 180)
+
+    cache_service = PriceCacheService.get_instance()
+    data = cache_service.get_cached_only(symbol.upper(), period="2y")
+
+    if data is None or len(data) == 0:
+        logger.warning("No cached data for %s", symbol)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Historical data not available for {symbol}. Run a scan to populate cache.",
+        )
+
+    cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=days))
+    if data.index.tz is not None:
+        cutoff_date = cutoff_date.tz_localize(data.index.tz)
+
+    data = data[data.index >= cutoff_date]
+    if len(data) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data available for {symbol} in the last {period}",
+        )
+
+    df = data.reset_index()
+    date_col = df.columns[0]
+    df = df.rename(columns={date_col: "Date"})
+    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+
+    result = []
+    for _, row in df.iterrows():
+        result.append(
+            {
+                "date": row["Date"],
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row["Volume"]),
+            }
+        )
+
+    logger.info("Returning %s price records for %s", len(result), symbol)
+    return result
+
+
+def _build_chart_data_payload(latest_run, item) -> dict:
+    ef = item.extended_fields or {}
+    return {
+        "source": "feature_store",
+        "scan_date": latest_run.completed_at.isoformat() if latest_run.completed_at else None,
+        "symbol": item.symbol,
+        "company_name": ef.get("company_name"),
+        "current_price": item.current_price,
+        "gics_sector": ef.get("gics_sector"),
+        "gics_industry": ef.get("gics_industry"),
+        "ibd_industry_group": ef.get("ibd_industry_group"),
+        "ibd_group_rank": ef.get("ibd_group_rank"),
+        "rs_rating": ef.get("rs_rating"),
+        "rs_rating_1m": ef.get("rs_rating_1m"),
+        "rs_rating_3m": ef.get("rs_rating_3m"),
+        "rs_rating_12m": ef.get("rs_rating_12m"),
+        "rs_trend": ef.get("rs_trend"),
+        "stage": ef.get("stage"),
+        "adr_percent": ef.get("adr_percent"),
+        "eps_rating": ef.get("eps_rating"),
+        "minervini_score": ef.get("minervini_score"),
+        "composite_score": item.composite_score,
+        "vcp_detected": ef.get("vcp_detected", False),
+        "vcp_score": ef.get("vcp_score"),
+        "vcp_pivot": ef.get("vcp_pivot"),
+        "vcp_ready_for_breakout": ef.get("vcp_ready_for_breakout", False),
+        "ma_alignment": ef.get("ma_alignment"),
+        "passes_template": ef.get("passes_template"),
+        "eps_growth_qq": ef.get("eps_growth_qq"),
+        "sales_growth_qq": ef.get("sales_growth_qq"),
+        "eps_growth_yy": ef.get("eps_growth_yy"),
+        "sales_growth_yy": ef.get("sales_growth_yy"),
+    }
+
+
+def _symbol_search_sort_key(query: str, candidate: StockUniverse) -> tuple:
+    query_lower = query.lower()
+    symbol = (candidate.symbol or "").lower()
+    name = (candidate.name or "").lower()
+
+    return (
+        0 if symbol == query_lower else 1,
+        0 if symbol.startswith(query_lower) else 1,
+        0 if query_lower in symbol else 1,
+        0 if name.startswith(query_lower) else 1,
+        0 if query_lower in name else 1,
+        len(symbol),
+        symbol,
+    )
+
+
+def _build_decision_factor_records(explanation) -> tuple[list[dict], list[dict]]:
+    strengths = []
+    weaknesses = []
+
+    for screener in explanation.screener_explanations:
+        for criterion in screener.criteria:
+            max_score = criterion.max_score or 0.0
+            ratio = criterion.score / max_score if max_score > 0 else 0.0
+            record = {
+                "screener_name": screener.screener_name,
+                "criterion_name": criterion.name,
+                "score": criterion.score,
+                "max_score": criterion.max_score,
+                "passed": criterion.passed,
+                "_ratio": ratio,
+            }
+            if criterion.passed:
+                strengths.append(record)
+            else:
+                weaknesses.append(record)
+
+    strengths.sort(key=lambda row: (-row["_ratio"], -row["score"], row["criterion_name"]))
+    weaknesses.sort(key=lambda row: (row["_ratio"], row["score"], row["criterion_name"]))
+
+    def _strip_ratio(rows: list[dict]) -> list[dict]:
+        return [{key: value for key, value in row.items() if key != "_ratio"} for row in rows[:3]]
+
+    return _strip_ratio(strengths), _strip_ratio(weaknesses)
+
+
+def _is_feature_run_stale(latest_run) -> bool:
+    if latest_run is None or latest_run.as_of_date is None:
+        return True
+    age_days = (datetime.now(UTC).date() - latest_run.as_of_date).days
+    return age_days > 3
+
+
+def _build_regime_payload(breadth: MarketBreadth | None, latest_run) -> dict:
+    if breadth is None:
+        return {
+            "label": "unavailable",
+            "summary": "Market breadth snapshot is unavailable.",
+            "breadth_date": None,
+            "up_4pct": None,
+            "down_4pct": None,
+            "ratio_5day": None,
+            "ratio_10day": None,
+            "total_stocks_scanned": None,
+            "feature_run_stale": _is_feature_run_stale(latest_run),
+        }
+
+    score = 0
+    if breadth.stocks_up_4pct > breadth.stocks_down_4pct:
+        score += 1
+    elif breadth.stocks_up_4pct < breadth.stocks_down_4pct:
+        score -= 1
+
+    if breadth.ratio_5day is not None:
+        score += 1 if breadth.ratio_5day >= 1 else -1
+    if breadth.ratio_10day is not None:
+        score += 1 if breadth.ratio_10day >= 1 else -1
+    if _is_feature_run_stale(latest_run):
+        score -= 1
+
+    if score >= 2:
+        label = "offense"
+    elif score <= -1:
+        label = "defense"
+    else:
+        label = "balanced"
+
+    summary = (
+        f"Breadth on {breadth.date.isoformat()} shows {breadth.stocks_up_4pct} stocks up 4%+ "
+        f"vs {breadth.stocks_down_4pct} down 4%+, with 5d/10d ratios at "
+        f"{breadth.ratio_5day if breadth.ratio_5day is not None else '-'} / "
+        f"{breadth.ratio_10day if breadth.ratio_10day is not None else '-'}. "
+        f"Current stance: {label}."
+    )
+    return {
+        "label": label,
+        "summary": summary,
+        "breadth_date": breadth.date.isoformat(),
+        "up_4pct": breadth.stocks_up_4pct,
+        "down_4pct": breadth.stocks_down_4pct,
+        "ratio_5day": breadth.ratio_5day,
+        "ratio_10day": breadth.ratio_10day,
+        "total_stocks_scanned": breadth.total_stocks_scanned,
+        "feature_run_stale": _is_feature_run_stale(latest_run),
+    }
+
+
+def _load_theme_summaries(db: Session, symbol: str) -> list[dict]:
+    latest_metrics_subquery = (
+        db.query(
+            ThemeMetrics.theme_cluster_id.label("theme_cluster_id"),
+            func.max(ThemeMetrics.date).label("latest_date"),
+        )
+        .group_by(ThemeMetrics.theme_cluster_id)
+        .subquery()
+    )
+
+    rows = (
+        db.query(ThemeCluster, ThemeConstituent, ThemeMetrics)
+        .join(
+            ThemeConstituent,
+            ThemeConstituent.theme_cluster_id == ThemeCluster.id,
+        )
+        .outerjoin(
+            latest_metrics_subquery,
+            latest_metrics_subquery.c.theme_cluster_id == ThemeCluster.id,
+        )
+        .outerjoin(
+            ThemeMetrics,
+            and_(
+                ThemeMetrics.theme_cluster_id == ThemeCluster.id,
+                ThemeMetrics.date == latest_metrics_subquery.c.latest_date,
+            ),
+        )
+        .filter(
+            ThemeConstituent.symbol == symbol,
+            ThemeConstituent.is_active.is_(True),
+            ThemeCluster.is_active.is_(True),
+        )
+        .all()
+    )
+
+    def _theme_sort_key(row):
+        cluster, constituent, metrics = row
+        return (
+            -(metrics.momentum_score or -9999),
+            -(constituent.confidence or -9999),
+            cluster.display_name.lower(),
+        )
+
+    results = []
+    for cluster, constituent, metrics in sorted(rows, key=_theme_sort_key)[:8]:
+        results.append(
+            {
+                "theme_id": cluster.id,
+                "display_name": cluster.display_name,
+                "pipeline": cluster.pipeline,
+                "category": cluster.category,
+                "lifecycle_state": cluster.lifecycle_state,
+                "is_emerging": bool(cluster.is_emerging),
+                "confidence": constituent.confidence,
+                "mention_count": constituent.mention_count,
+                "correlation_to_theme": constituent.correlation_to_theme,
+                "momentum_score": metrics.momentum_score if metrics else None,
+                "mention_velocity": metrics.mention_velocity if metrics else None,
+                "basket_return_1m": metrics.basket_return_1m if metrics else None,
+                "status": metrics.status if metrics else None,
+            }
+        )
+    return results
+
+
+@router.get("/search", response_model=list[StockSearchResult])
+async def search_stocks(
+    q: str = Query(..., min_length=1, max_length=50),
+    limit: int = Query(8, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """Search active universe symbols by symbol or company name."""
+
+    query = q.strip()
+    if not query:
+        return []
+
+    query_lower = query.lower()
+    rows = (
+        db.query(StockUniverse)
+        .filter(
+            StockUniverse.active_filter(),
+            or_(
+                StockUniverse.symbol.ilike(f"%{query}%"),
+                StockUniverse.name.ilike(f"%{query}%"),
+            ),
+        )
+        .limit(max(limit * 6, 24))
+        .all()
+    )
+
+    ranked = sorted(rows, key=lambda row: _symbol_search_sort_key(query_lower, row))
+    return [
+        StockSearchResult(
+            symbol=row.symbol,
+            name=row.name,
+            sector=row.sector,
+            industry=row.industry,
+        )
+        for row in ranked[:limit]
+    ]
+
+
 @router.get("/{symbol}/info", response_model=StockInfo)
 async def get_stock_info(symbol: str):
     """
@@ -36,16 +394,7 @@ async def get_stock_info(symbol: str):
     Returns:
         Basic stock information
     """
-    info = _get_yfinance_service().get_stock_info(symbol.upper())
-
-    if not info:
-        logger.error(f"Failed to fetch stock info for {symbol} - check yfinance service logs for details")
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unable to fetch data for {symbol}. This could be due to: invalid symbol, network issues, or yfinance API problems. Check backend logs for details."
-        )
-
-    return info
+    return _get_stock_info_or_404(symbol)
 
 
 @router.get("/{symbol}/fundamentals")
@@ -64,21 +413,12 @@ async def get_stock_fundamentals(
     Returns:
         Fundamental data including earnings, revenue, margins, description
     """
-    from ...services.fundamentals_cache_service import FundamentalsCacheService
-
-    cache = FundamentalsCacheService.get_instance()
-    data = cache.get_fundamentals(symbol.upper(), force_refresh=force_refresh)
-
+    data = _get_stock_fundamentals_payload(symbol, force_refresh=force_refresh)
     if not data:
         raise HTTPException(
             status_code=404,
             detail=f"Fundamental data not available for {symbol}"
         )
-
-    # Add symbol to response if not present
-    if 'symbol' not in data:
-        data['symbol'] = symbol.upper()
-
     return data
 
 
@@ -98,8 +438,7 @@ async def get_stock_technicals(
     Returns:
         Technical indicators including MAs, RS rating, 52-week range
     """
-    fetcher = _build_data_fetcher(db)
-    data = fetcher.get_stock_technicals(symbol.upper(), force_refresh=force_refresh)
+    data = _get_stock_technicals_payload(symbol, db, force_refresh=force_refresh)
 
     if not data:
         raise HTTPException(
@@ -133,26 +472,18 @@ async def get_stock_data(
     symbol = symbol.upper()
 
     # Get basic info
-    info = _get_yfinance_service().get_stock_info(symbol)
-    if not info:
-        logger.error(f"Failed to fetch stock info for {symbol} - check yfinance service logs for details")
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unable to fetch data for {symbol}. This could be due to: invalid symbol, network issues, or yfinance API problems. Check backend logs for details."
-        )
+    info = _get_stock_info_or_404(symbol)
 
     result = {"info": info}
 
     # Get fundamentals if requested
     if include_fundamentals:
-        fetcher = _build_data_fetcher(db)
-        fundamentals = fetcher.get_stock_fundamentals(symbol, force_refresh=force_refresh)
+        fundamentals = _get_stock_fundamentals_payload(symbol, force_refresh=force_refresh)
         result["fundamentals"] = fundamentals
 
     # Get technicals if requested
     if include_technicals:
-        fetcher = _build_data_fetcher(db)
-        technicals = fetcher.get_stock_technicals(symbol, force_refresh=force_refresh)
+        technicals = _get_stock_technicals_payload(symbol, db, force_refresh=force_refresh)
         result["technicals"] = technicals
 
     return result
@@ -210,7 +541,6 @@ async def get_chart_data(
     symbol = symbol.upper()
 
     with uow:
-        # Find the latest published feature run
         latest_run = uow.feature_runs.get_latest_published()
         if latest_run is None:
             raise HTTPException(
@@ -218,127 +548,156 @@ async def get_chart_data(
                 detail=f"No published scan data available for {symbol}",
             )
 
-        item = uow.feature_store.get_by_symbol_for_run(
-            latest_run.id, symbol
-        )
+        item = uow.feature_store.get_by_symbol_for_run(latest_run.id, symbol)
         if item is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"No scan data found for {symbol}",
             )
 
-    ef = item.extended_fields or {}
+    return _build_chart_data_payload(latest_run, item)
+
+
+@router.get("/{symbol}/decision-dashboard", response_model=StockDecisionDashboardResponse)
+async def get_stock_decision_dashboard(
+    symbol: str,
+    db: Session = Depends(get_db),
+    uow=Depends(get_uow),
+):
+    """Get a normalized stock decision workspace payload."""
+
+    symbol = symbol.upper()
+    degraded_reasons: list[str] = []
+
+    info = _get_stock_info_or_404(symbol)
+    fundamentals = _get_stock_fundamentals_payload(symbol)
+    technicals = _get_stock_technicals_payload(symbol, db)
+    if fundamentals is None:
+        degraded_reasons.append("missing_fundamentals")
+    if technicals is None:
+        degraded_reasons.append("missing_technicals")
+
+    try:
+        price_history = _load_price_history(symbol, period="6mo")
+    except HTTPException:
+        price_history = []
+        degraded_reasons.append("missing_price_history")
+
+    with uow:
+        latest_run = uow.feature_runs.get_latest_published()
+        feature_item = None
+        feature_row = None
+        if latest_run is None:
+            degraded_reasons.append("missing_feature_run")
+        else:
+            feature_item = uow.feature_store.get_by_symbol_for_run(
+                latest_run.id,
+                symbol,
+                include_sparklines=False,
+                include_setup_payload=False,
+            )
+            feature_row = uow.feature_store.get_row_by_symbol(latest_run.id, symbol)
+            if feature_item is None or feature_row is None:
+                degraded_reasons.append("symbol_missing_from_feature_run")
+
+        breadth = (
+            db.query(MarketBreadth)
+            .order_by(MarketBreadth.date.desc())
+            .first()
+        )
+        if breadth is None:
+            degraded_reasons.append("missing_breadth")
+
+        if feature_item is not None:
+            industry_group = feature_item.extended_fields.get("ibd_industry_group")
+            if industry_group:
+                peer_items = [
+                    peer
+                    for peer in uow.feature_store.get_peers_by_industry_for_run(latest_run.id, industry_group)
+                    if peer.symbol != symbol
+                ][:15]
+            else:
+                peer_items = []
+                degraded_reasons.append("missing_industry_group")
+        else:
+            peer_items = []
+
+    screener_explanations = []
+    decision_summary = {
+        "composite_score": None,
+        "rating": None,
+        "screeners_passed": 0,
+        "screeners_total": 0,
+        "composite_method": None,
+        "top_strengths": [],
+        "top_weaknesses": [],
+        "freshness": {
+            "feature_run_id": latest_run.id if latest_run else None,
+            "feature_as_of_date": latest_run.as_of_date.isoformat() if latest_run and latest_run.as_of_date else None,
+            "feature_completed_at": latest_run.completed_at.isoformat() if latest_run and latest_run.completed_at else None,
+            "breadth_date": breadth.date.isoformat() if breadth else None,
+            "has_price_history": bool(price_history),
+        },
+    }
+
+    if feature_row is not None:
+        explanation_item = ExplainStockUseCase._build_item_from_feature_row(feature_row)
+        explanation = ExplainStockUseCase.build_explanation_from_item(explanation_item)
+        explanation_response = ExplainResponse.from_domain(explanation)
+        screener_explanations = explanation_response.screener_explanations
+        top_strengths, top_weaknesses = _build_decision_factor_records(explanation)
+        decision_summary = {
+            "composite_score": explanation.composite_score,
+            "rating": explanation.rating,
+            "screeners_passed": explanation.screeners_passed,
+            "screeners_total": explanation.screeners_total,
+            "composite_method": explanation.composite_method,
+            "top_strengths": top_strengths,
+            "top_weaknesses": top_weaknesses,
+            "freshness": decision_summary["freshness"],
+        }
+    else:
+        degraded_reasons.append("missing_explanation")
+
+    themes = _load_theme_summaries(db, symbol)
+    if not themes:
+        degraded_reasons.append("missing_theme_links")
+
+    chart_data = (
+        _build_chart_data_payload(latest_run, feature_item)
+        if latest_run is not None and feature_item is not None
+        else {
+            "source": "unavailable",
+            "scan_date": None,
+            "symbol": symbol,
+            "company_name": info.get("name"),
+            "current_price": info.get("current_price"),
+        }
+    )
 
     return {
-        "source": "feature_store",
-        "scan_date": latest_run.completed_at.isoformat() if latest_run.completed_at else None,
-        # Basic info
-        "symbol": item.symbol,
-        "company_name": ef.get("company_name"),
-        "current_price": item.current_price,
-        # Industry classification
-        "gics_sector": ef.get("gics_sector"),
-        "gics_industry": ef.get("gics_industry"),
-        "ibd_industry_group": ef.get("ibd_industry_group"),
-        "ibd_group_rank": ef.get("ibd_group_rank"),
-        # RS data
-        "rs_rating": ef.get("rs_rating"),
-        "rs_rating_1m": ef.get("rs_rating_1m"),
-        "rs_rating_3m": ef.get("rs_rating_3m"),
-        "rs_rating_12m": ef.get("rs_rating_12m"),
-        "rs_trend": ef.get("rs_trend"),
-        # Technical data
-        "stage": ef.get("stage"),
-        "adr_percent": ef.get("adr_percent"),
-        "eps_rating": ef.get("eps_rating"),
-        # Scores
-        "minervini_score": ef.get("minervini_score"),
-        "composite_score": item.composite_score,
-        # VCP data
-        "vcp_detected": ef.get("vcp_detected", False),
-        "vcp_score": ef.get("vcp_score"),
-        "vcp_pivot": ef.get("vcp_pivot"),
-        "vcp_ready_for_breakout": ef.get("vcp_ready_for_breakout", False),
-        # MA data
-        "ma_alignment": ef.get("ma_alignment"),
-        "passes_template": ef.get("passes_template"),
-        # Growth metrics
-        "eps_growth_qq": ef.get("eps_growth_qq"),
-        "sales_growth_qq": ef.get("sales_growth_qq"),
-        "eps_growth_yy": ef.get("eps_growth_yy"),
-        "sales_growth_yy": ef.get("sales_growth_yy"),
+        "symbol": symbol,
+        "as_of_date": latest_run.as_of_date.isoformat() if latest_run and latest_run.as_of_date else None,
+        "freshness": decision_summary["freshness"],
+        "info": info,
+        "fundamentals": fundamentals,
+        "technicals": technicals,
+        "chart": {
+            "price_history": price_history,
+            "chart_data": chart_data,
+        },
+        "decision_summary": decision_summary,
+        "screener_explanations": screener_explanations,
+        "peers": [
+            ScanResultItem.from_domain(peer, include_setup_payload=False)
+            for peer in peer_items
+        ],
+        "themes": themes,
+        "regime": _build_regime_payload(breadth, latest_run),
+        "degraded_reasons": sorted(set(degraded_reasons)),
     }
 
 
 @router.get("/{symbol}/history")
 async def get_price_history(symbol: str, period: str = "6mo"):
-    """
-    Get historical price data (OHLCV only) from cache.
-    Uses cached data from database/Redis - does not call yfinance directly.
-    """
-    from ...services.price_cache_service import PriceCacheService
-    import pandas as pd
-
-    # Map period to days for filtering
-    period_days = {
-        "1mo": 30,
-        "3mo": 90,
-        "6mo": 180,
-        "1y": 365,
-        "2y": 730,
-        "5y": 1825,
-    }
-    days = period_days.get(period, 180)
-
-    # Get from cache (database) - no yfinance calls
-    cache_service = PriceCacheService.get_instance()
-    data = cache_service.get_cached_only(symbol.upper(), period="2y")
-
-    if data is None or len(data) == 0:
-        logger.warning(f"No cached data for {symbol}")
-        raise HTTPException(
-            status_code=404,
-            detail=f"Historical data not available for {symbol}. Run a scan to populate cache."
-        )
-
-    logger.info(f"Retrieved {len(data)} rows from cache for {symbol}")
-
-    # Filter to requested period using pandas Timestamp for timezone safety
-    from datetime import datetime, timedelta
-    cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=days))
-
-    # Handle timezone-aware index
-    if data.index.tz is not None:
-        cutoff_date = cutoff_date.tz_localize(data.index.tz)
-
-    data = data[data.index >= cutoff_date]
-
-    if len(data) == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No data available for {symbol} in the last {period}"
-        )
-
-    # Convert to list of dicts for JSON response
-    # Reset index and ensure column is named 'Date'
-    df = data.reset_index()
-    # The first column after reset_index is the former index
-    date_col = df.columns[0]
-    df = df.rename(columns={date_col: 'Date'})
-
-    # Convert dates to string format
-    df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-
-    result = []
-    for _, row in df.iterrows():
-        result.append({
-            'date': row['Date'],
-            'open': round(float(row['Open']), 2),
-            'high': round(float(row['High']), 2),
-            'low': round(float(row['Low']), 2),
-            'close': round(float(row['Close']), 2),
-            'volume': int(row['Volume']),
-        })
-
-    logger.info(f"Returning {len(result)} price records for {symbol}")
-    return result
+    return _load_price_history(symbol, period)

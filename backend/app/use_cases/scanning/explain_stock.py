@@ -110,6 +110,63 @@ class ExplainStockUseCase:
         "Pass": 0.0,
     }
 
+    @classmethod
+    def build_explanation_from_item(
+        cls,
+        item: ScanResultItemDomain,
+    ) -> StockExplanation:
+        """Build a domain explanation from a prepared scan-result item."""
+
+        screener_explanations: list[ScreenerExplanation] = []
+        for screener_name, output in item.screener_outputs.items():
+            max_scores_lookup = cls._MAX_SCORES.get(screener_name, {})
+
+            criteria: list[CriterionResult] = []
+            for criterion_name, raw_value in output.breakdown.items():
+                if isinstance(raw_value, dict):
+                    score = float(raw_value.get("points", 0))
+                    max_score = float(
+                        raw_value.get(
+                            "max_points",
+                            max_scores_lookup.get(criterion_name, 0.0),
+                        )
+                    )
+                    passed = raw_value.get("passes", score > 0)
+                else:
+                    score = float(raw_value)
+                    max_score = max_scores_lookup.get(criterion_name, 0.0)
+                    passed = score > 0
+
+                criteria.append(
+                    CriterionResult(
+                        name=criterion_name,
+                        score=score,
+                        max_score=max_score,
+                        passed=passed,
+                    )
+                )
+
+            screener_explanations.append(
+                ScreenerExplanation(
+                    screener_name=screener_name,
+                    score=output.score,
+                    passes=output.passes,
+                    rating=output.rating,
+                    criteria=tuple(criteria),
+                )
+            )
+
+        return StockExplanation(
+            symbol=item.symbol,
+            composite_score=item.composite_score,
+            rating=item.rating,
+            composite_method=item.composite_method,
+            screeners_passed=item.screeners_passed,
+            screeners_total=item.screeners_total,
+            screener_explanations=tuple(screener_explanations),
+            rating_thresholds=dict(cls._RATING_THRESHOLDS),
+        )
+
     @staticmethod
     def _build_item_from_feature_row(row: FeatureRow) -> ScanResultItemDomain:
         """Reconstruct ScanResultItemDomain from FeatureRow with screener_outputs."""
@@ -172,57 +229,6 @@ class ExplainStockUseCase:
                     raise EntityNotFoundError("ScanResult", query.symbol)
                 item = self._build_item_from_details(query.symbol, details)
 
-        # Build per-screener explanations
-        screener_explanations: list[ScreenerExplanation] = []
-        for screener_name, output in item.screener_outputs.items():
-            max_scores_lookup = self._MAX_SCORES.get(screener_name, {})
-
-            criteria: list[CriterionResult] = []
-            for criterion_name, raw_value in output.breakdown.items():
-                if isinstance(raw_value, dict):
-                    # Nested format (e.g. Minervini): {points, max_points, value, passes}
-                    score = float(raw_value.get("points", 0))
-                    max_score = float(
-                        raw_value.get(
-                            "max_points",
-                            max_scores_lookup.get(criterion_name, 0.0),
-                        )
-                    )
-                    passed = raw_value.get("passes", score > 0)
-                else:
-                    # Flat format (e.g. CANSLIM, IPO, Volume Breakthrough)
-                    score = float(raw_value)
-                    max_score = max_scores_lookup.get(criterion_name, 0.0)
-                    passed = score > 0
-
-                criteria.append(
-                    CriterionResult(
-                        name=criterion_name,
-                        score=score,
-                        max_score=max_score,
-                        passed=passed,
-                    )
-                )
-
-            screener_explanations.append(
-                ScreenerExplanation(
-                    screener_name=screener_name,
-                    score=output.score,
-                    passes=output.passes,
-                    rating=output.rating,
-                    criteria=tuple(criteria),
-                )
-            )
-
-        explanation = StockExplanation(
-            symbol=item.symbol,
-            composite_score=item.composite_score,
-            rating=item.rating,
-            composite_method=item.composite_method,
-            screeners_passed=item.screeners_passed,
-            screeners_total=item.screeners_total,
-            screener_explanations=tuple(screener_explanations),
-            rating_thresholds=dict(self._RATING_THRESHOLDS),
+        return ExplainStockResult(
+            explanation=self.build_explanation_from_item(item)
         )
-
-        return ExplainStockResult(explanation=explanation)

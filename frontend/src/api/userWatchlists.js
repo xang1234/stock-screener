@@ -101,6 +101,20 @@ export const bulkAddItems = async (watchlistId, symbols) => {
 };
 
 /**
+ * Import pasted text or CSV content into a watchlist.
+ * @param {number} watchlistId - The watchlist ID
+ * @param {Object} payload - Import payload { content, format? }
+ * @returns {Promise<Object>} Partial-success import result
+ */
+export const importItems = async (watchlistId, payload) => {
+  const response = await apiClient.post(
+    `${BASE_PATH}/${watchlistId}/items/import`,
+    payload
+  );
+  return response.data;
+};
+
+/**
  * Update an item.
  * @param {number} itemId - The item ID
  * @param {Object} updates - Fields to update { display_name?, notes?, position? }

@@ -22,6 +22,11 @@ from ...schemas.user_watchlist import (
     WatchlistStockData, PriceChangeBounds,
     ReorderWatchlistsRequest, ReorderItemsRequest,
     BulkAddItemsRequest,
+    WatchlistImportRequest, WatchlistImportResult,
+)
+from ...services.watchlist_import_service import (
+    parse_watchlist_import_symbols,
+    split_import_results,
 )
 
 logger = logging.getLogger(__name__)
@@ -373,6 +378,77 @@ async def bulk_add_items(
         db.refresh(item)
 
     return [WatchlistItemResponse.model_validate(item) for item in added_items]
+
+
+@router.post("/{watchlist_id}/items/import", response_model=WatchlistImportResult)
+async def import_items(
+    watchlist_id: int,
+    import_data: WatchlistImportRequest,
+    db: Session = Depends(get_db),
+):
+    """Import symbols from pasted text or CSV with partial-success feedback."""
+
+    watchlist = db.query(UserWatchlist).filter(UserWatchlist.id == watchlist_id).first()
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    parsed_symbols = parse_watchlist_import_symbols(
+        import_data.content,
+        format_hint=import_data.format,
+    )
+    if not parsed_symbols:
+        return WatchlistImportResult(
+            requested_count=0,
+            added=[],
+            skipped_existing=[],
+            invalid_symbols=[],
+            added_items=[],
+        )
+
+    existing_items = db.query(WatchlistItem).filter(
+        WatchlistItem.watchlist_id == watchlist_id
+    ).all()
+    existing_symbols = {item.symbol for item in existing_items}
+
+    known_symbols = {
+        row.symbol
+        for row in db.query(StockUniverse.symbol).all()
+        if row.symbol
+    }
+
+    addable_symbols, skipped_existing, invalid_symbols = split_import_results(
+        parsed_symbols,
+        known_symbols,
+        existing_symbols,
+    )
+
+    max_pos = db.query(func.max(WatchlistItem.position)).filter(
+        WatchlistItem.watchlist_id == watchlist_id
+    ).scalar() or -1
+
+    added_items = []
+    for symbol in addable_symbols:
+        max_pos += 1
+        item = WatchlistItem(
+            watchlist_id=watchlist_id,
+            symbol=symbol,
+            position=max_pos,
+        )
+        db.add(item)
+        added_items.append(item)
+
+    db.commit()
+
+    for item in added_items:
+        db.refresh(item)
+
+    return WatchlistImportResult(
+        requested_count=len(parsed_symbols),
+        added=addable_symbols,
+        skipped_existing=skipped_existing,
+        invalid_symbols=invalid_symbols,
+        added_items=[WatchlistItemResponse.model_validate(item) for item in added_items],
+    )
 
 
 @router.put("/items/{item_id}", response_model=WatchlistItemResponse)
