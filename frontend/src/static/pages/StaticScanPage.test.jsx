@@ -119,13 +119,15 @@ describe('StaticScanPage', () => {
             sort: { field: 'composite_score', order: 'desc' },
             default_page_size: 50,
             rows_total: 2,
+            default_filters: { minVolume: 100000000 },
+            default_filtered_rows_total: 1,
             filter_options: {
               ibd_industries: ['Semiconductors'],
               gics_sectors: ['Technology'],
               ratings: ['Strong Buy'],
             },
             initial_rows: [
-              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, volume: 150000000 },
             ],
             chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
             charts: {
@@ -172,8 +174,8 @@ describe('StaticScanPage', () => {
     await act(async () => {
       chunkRequest.resolve({
         rows: [
-          { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5 },
-          { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2 },
+          { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, volume: 150000000 },
+          { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, volume: 120000000 },
         ],
       });
       await Promise.resolve();
@@ -216,6 +218,8 @@ describe('StaticScanPage', () => {
             sort: { field: 'composite_score', order: 'desc' },
             default_page_size: 50,
             rows_total: 1,
+            default_filters: { minVolume: 100000000 },
+            default_filtered_rows_total: 1,
             filter_options: {
               ibd_industries: ['Semiconductors'],
               gics_sectors: ['Technology'],
@@ -257,10 +261,18 @@ describe('StaticScanPage', () => {
     await waitFor(() => {
       expect(filterPanelSpy).toHaveBeenCalledWith(
         expect.objectContaining({
+          filters: expect.objectContaining({
+            minVolume: 100000000,
+          }),
           filterOptions: {
             ibdIndustries: ['Semiconductors'],
             gicsSectors: ['Technology'],
             ratings: ['Strong Buy'],
+          },
+          sectionDefaultExpanded: {
+            fundamental: false,
+            technical: false,
+            rating: false,
           },
         })
       );

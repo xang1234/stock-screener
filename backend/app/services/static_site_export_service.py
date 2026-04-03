@@ -32,6 +32,7 @@ STATIC_CHART_LIMIT = 200
 STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
 STATIC_CHART_LOOKUP_BATCH_SIZE = 250
+STATIC_DEFAULT_SCAN_FILTERS = {"minVolume": 100_000_000}
 
 _DEFAULT_KEY_MARKETS = (
     {"symbol": "SPY", "display_name": "S&P 500 ETF"},
@@ -91,8 +92,15 @@ class StaticSiteExportService:
                 run=latest_run,
                 rows=scan_rows,
             )
-            breadth_payload = self._build_breadth_payload(generated_at=generated_at)
-            groups_payload = self._build_groups_payload(db=db, generated_at=generated_at)
+            breadth_payload = self._build_breadth_payload(
+                generated_at=generated_at,
+                expected_as_of_date=latest_run.as_of_date,
+            )
+            groups_payload = self._build_groups_payload(
+                db=db,
+                generated_at=generated_at,
+                expected_as_of_date=latest_run.as_of_date,
+            )
             home_payload = self._build_home_payload(
                 db=db,
                 generated_at=generated_at,
@@ -217,6 +225,7 @@ class StaticSiteExportService:
 
         chunk_refs: list[dict[str, Any]] = []
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
+        default_filtered_rows = self._apply_static_default_filters(serialized_rows)
         for index in range(0, len(serialized_rows), SCAN_CHUNK_SIZE):
             chunk_rows = serialized_rows[index:index + SCAN_CHUNK_SIZE]
             chunk_num = (index // SCAN_CHUNK_SIZE) + 1
@@ -246,14 +255,16 @@ class StaticSiteExportService:
             "default_page_size": 50,
             "chunk_size": SCAN_CHUNK_SIZE,
             "rows_total": len(serialized_rows),
+            "default_filters": dict(STATIC_DEFAULT_SCAN_FILTERS),
+            "default_filtered_rows_total": len(default_filtered_rows),
             "filter_options": FilterOptionsResponse(
                 ibd_industries=list(filter_options.ibd_industries),
                 gics_sectors=list(filter_options.gics_sectors),
                 ratings=list(filter_options.ratings),
             ).model_dump(mode="json"),
             "chunks": chunk_refs,
-            "initial_rows": serialized_rows[:50],
-            "preview_rows": serialized_rows[:10],
+            "initial_rows": default_filtered_rows[:50],
+            "preview_rows": default_filtered_rows[:10],
         }
         self._write_json(scan_dir / "manifest.json", manifest)
         return manifest
@@ -333,9 +344,20 @@ class StaticSiteExportService:
             "skipped_symbols": skipped_symbols,
         }
 
-    def _build_breadth_payload(self, *, generated_at: str) -> dict[str, Any]:
+    def _build_breadth_payload(
+        self,
+        *,
+        generated_at: str,
+        expected_as_of_date: date,
+    ) -> dict[str, Any]:
         snapshot = self._ui_snapshot_service.publish_breadth_bootstrap().to_dict()
         payload = snapshot.get("payload", {})
+        current_date = ((payload.get("current") or {}).get("date"))
+        if current_date != expected_as_of_date.isoformat():
+            raise RuntimeError(
+                "Breadth snapshot date mismatch for static-site export: "
+                f"expected {expected_as_of_date.isoformat()}, got {current_date or 'none'}"
+            )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
@@ -345,19 +367,36 @@ class StaticSiteExportService:
             "payload": payload,
         }
 
-    def _build_groups_payload(self, *, db: Session, generated_at: str) -> dict[str, Any]:
+    def _build_groups_payload(
+        self,
+        *,
+        db: Session,
+        generated_at: str,
+        expected_as_of_date: date,
+    ) -> dict[str, Any]:
         service = IBDGroupRankService.get_instance()
-        rankings = service.get_current_rankings(db, limit=197)
+        rankings = service.get_current_rankings(
+            db,
+            limit=197,
+            calculation_date=expected_as_of_date,
+        )
         if not rankings:
-            return {
-                "schema_version": STATIC_SITE_SCHEMA_VERSION,
-                "generated_at": generated_at,
-                "available": False,
-                "message": "No published group rankings are available.",
-                "payload": None,
-            }
-        movers = service.get_rank_movers(db, period="3m", limit=10)
+            raise RuntimeError(
+                "No group rankings are available for static-site export date "
+                f"{expected_as_of_date.isoformat()}"
+            )
+        movers = service.get_rank_movers(
+            db,
+            period="3m",
+            limit=10,
+            calculation_date=expected_as_of_date,
+        )
         ranking_date = rankings[0]["date"]
+        if ranking_date != expected_as_of_date.isoformat():
+            raise RuntimeError(
+                "Group rankings date mismatch for static-site export: "
+                f"expected {expected_as_of_date.isoformat()}, got {ranking_date}"
+            )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
@@ -409,6 +448,7 @@ class StaticSiteExportService:
             "scan_summary": {
                 "run_id": latest_run.id,
                 "rows_total": scan_manifest.get("rows_total", 0),
+                "default_filtered_rows_total": scan_manifest.get("default_filtered_rows_total", 0),
                 "top_results": scan_manifest.get("preview_rows", []),
             },
             "top_groups": top_groups,
@@ -470,6 +510,17 @@ class StaticSiteExportService:
             }
         )
         return item
+
+    @staticmethod
+    def _apply_static_default_filters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        min_volume = STATIC_DEFAULT_SCAN_FILTERS.get("minVolume")
+        if min_volume is None:
+            return list(rows)
+        return [
+            row
+            for row in rows
+            if row.get("volume") is not None and row["volume"] >= min_volume
+        ]
 
     def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
         if data is None or getattr(data, "empty", True):

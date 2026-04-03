@@ -11,7 +11,10 @@ import FilterPanel from '../../components/Scan/FilterPanel';
 import ResultsTable from '../../components/Scan/ResultsTable';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
-import { buildDefaultScanFilters } from '../../features/scan/defaultFilters';
+import {
+  applyScanFilterDefaults,
+  buildDefaultScanFilters,
+} from '../../features/scan/defaultFilters';
 import { normalizeScanFilterOptions } from '../../features/scan/filterOptions';
 import { getStableFilterKey } from '../../utils/filterUtils';
 import {
@@ -47,6 +50,18 @@ function StaticScanPage() {
     loadedRows: 0,
     error: null,
   });
+  const sectionDefaultExpanded = useMemo(
+    () => ({
+      fundamental: false,
+      technical: false,
+      rating: false,
+    }),
+    []
+  );
+  const manifestDefaultFilters = useMemo(
+    () => applyScanFilterDefaults(scanManifestQuery.data?.default_filters),
+    [scanManifestQuery.data?.default_filters]
+  );
 
   useEffect(() => {
     if (scanManifestQuery.data?.default_page_size) {
@@ -57,6 +72,13 @@ function StaticScanPage() {
       setSortOrder(scanManifestQuery.data.sort.order || 'desc');
     }
   }, [scanManifestQuery.data]);
+
+  useEffect(() => {
+    if (!scanManifestQuery.data) {
+      return;
+    }
+    setFilters(manifestDefaultFilters);
+  }, [manifestDefaultFilters, scanManifestQuery.data]);
 
   useEffect(() => {
     const manifest = scanManifestQuery.data;
@@ -205,7 +227,7 @@ function StaticScanPage() {
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
         Fixed daily ranking from published run {scanManifestQuery.data.run_id} as of {scanManifestQuery.data.as_of_date}.
-        The first page renders from the exported top rows, then the remaining chunks hydrate in the background.
+        The first page renders from the exported default-filtered top rows, then the remaining chunks hydrate in the background.
       </Typography>
 
       <Paper sx={{ p: 2, mb: 2 }}>
@@ -217,6 +239,9 @@ function StaticScanPage() {
         </Typography>
         <Typography variant="body2" color="text.secondary">
           {scanManifestQuery.data.rows_total.toLocaleString()} total rows exported
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Default view applies dollar volume &gt; $100M to {scanManifestQuery.data.default_filtered_rows_total?.toLocaleString?.() ?? 0} rows.
         </Typography>
         {scanManifestQuery.data.charts?.available ? (
           <Typography variant="body2" color="text.secondary">
@@ -250,11 +275,12 @@ function StaticScanPage() {
         <FilterPanel
           filters={filters}
           onFilterChange={setFilters}
-          onReset={() => setFilters(buildDefaultScanFilters())}
+          onReset={() => setFilters(manifestDefaultFilters)}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
           presetsEnabled={false}
+          sectionDefaultExpanded={sectionDefaultExpanded}
         />
       )}
 

@@ -111,6 +111,94 @@ def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> in
     return cleaned
 
 
+def _enrich_feature_run_with_ibd_metadata(
+    *,
+    feature_run_id: int,
+    ranking_date: date,
+    session_factory=None,
+) -> dict[str, int | str]:
+    """Backfill IBD industry/rank metadata into persisted feature-row details."""
+    from app.database import SessionLocal
+    from app.infra.db.models.feature_store import StockFeatureDaily
+    from app.models.industry import IBDGroupRank, IBDIndustryGroup
+
+    session_factory = session_factory or SessionLocal
+    db = session_factory()
+    try:
+        rows = (
+            db.query(StockFeatureDaily)
+            .filter(StockFeatureDaily.run_id == feature_run_id)
+            .all()
+        )
+        if not rows:
+            return {
+                "run_id": feature_run_id,
+                "ranking_date": ranking_date.isoformat(),
+                "total_rows": 0,
+                "updated_rows": 0,
+                "missing_industry_rows": 0,
+                "missing_rank_rows": 0,
+            }
+
+        industries_by_symbol = {
+            symbol: industry_group
+            for symbol, industry_group in (
+                db.query(StockFeatureDaily.symbol, IBDIndustryGroup.industry_group)
+                .join(
+                    IBDIndustryGroup,
+                    IBDIndustryGroup.symbol == StockFeatureDaily.symbol,
+                )
+                .filter(StockFeatureDaily.run_id == feature_run_id)
+                .all()
+            )
+        }
+        ranks_by_group = {
+            industry_group: rank
+            for industry_group, rank in (
+                db.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
+                .filter(IBDGroupRank.date == ranking_date)
+                .all()
+            )
+        }
+
+        updated_rows = 0
+        missing_industry_rows = 0
+        missing_rank_rows = 0
+
+        for row in rows:
+            details = dict(row.details_json or {})
+            industry_group = industries_by_symbol.get(row.symbol)
+            group_rank = ranks_by_group.get(industry_group) if industry_group else None
+            if industry_group is None:
+                missing_industry_rows += 1
+            elif group_rank is None:
+                missing_rank_rows += 1
+
+            if (
+                details.get("ibd_industry_group") != industry_group
+                or details.get("ibd_group_rank") != group_rank
+            ):
+                details["ibd_industry_group"] = industry_group
+                details["ibd_group_rank"] = group_rank
+                row.details_json = details
+                updated_rows += 1
+
+        db.commit()
+        return {
+            "run_id": feature_run_id,
+            "ranking_date": ranking_date.isoformat(),
+            "total_rows": len(rows),
+            "updated_rows": updated_rows,
+            "missing_industry_rows": missing_industry_rows,
+            "missing_rank_rows": missing_rank_rows,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _create_auto_scan_for_published_run(
     *,
     feature_run_id: int,
@@ -365,6 +453,7 @@ def build_daily_snapshot(
         raise
 
     auto_scan_id = None
+    metadata_refresh_stats = None
     logger.info(
         "build_daily_snapshot completed: run_id=%d status=%s "
         "total=%d processed=%d failed=%d skipped=%d row_count=%d duration=%.2fs dq_passed=%s",
@@ -375,6 +464,16 @@ def build_daily_snapshot(
     )
 
     if result.status == "published":
+        metadata_refresh_stats = _enrich_feature_run_with_ibd_metadata(
+            feature_run_id=result.run_id,
+            ranking_date=as_of,
+        )
+        logger.info(
+            "Enriched feature run %d with IBD metadata for %s: %s rows updated",
+            result.run_id,
+            as_of,
+            metadata_refresh_stats["updated_rows"],
+        )
         auto_scan_id = _create_auto_scan_for_published_run(
             feature_run_id=result.run_id,
             universe_name=universe_name,
@@ -400,6 +499,7 @@ def build_daily_snapshot(
         "duration_seconds": result.duration_seconds,
         "dq_passed": result.dq_passed,
         "auto_scan_id": auto_scan_id,
+        "metadata_refresh": metadata_refresh_stats if result.status == "published" else None,
         "cleaned_stale_runs": cleaned_stale_runs,
         "warnings": list(result.warnings),
     }

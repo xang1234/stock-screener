@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDefaultScanFilters } from '../features/scan/defaultFilters';
+import {
+  applyScanFilterDefaults,
+  buildDefaultScanFilters,
+} from '../features/scan/defaultFilters';
 import {
   filterStaticScanRows,
   paginateStaticScanRows,
@@ -15,7 +18,7 @@ const rows = [
     rating: 'Strong Buy',
     ibd_industry_group: 'Semiconductors',
     gics_sector: 'Technology',
-    volume: 26_000_000,
+    volume: 126_000_000,
     market_cap: 3_000_000_000_000,
     ipo_date: '1999-01-22',
     composite_score: 97.5,
@@ -23,6 +26,8 @@ const rows = [
     current_price: 145.4,
     passes_template: true,
     ma_alignment: true,
+    eps_growth_qq: 45,
+    price_change_1d: 4.2,
   },
   {
     symbol: 'MSFT',
@@ -31,7 +36,7 @@ const rows = [
     rating: 'Buy',
     ibd_industry_group: 'Software',
     gics_sector: 'Technology',
-    volume: 14_000_000,
+    volume: 95_000_000,
     market_cap: 3_200_000_000_000,
     ipo_date: '1986-03-13',
     composite_score: 89.2,
@@ -39,6 +44,8 @@ const rows = [
     current_price: 430.2,
     passes_template: true,
     ma_alignment: true,
+    eps_growth_qq: 12,
+    price_change_1d: 1.8,
   },
   {
     symbol: 'SNOW',
@@ -55,6 +62,8 @@ const rows = [
     current_price: 176.0,
     passes_template: false,
     ma_alignment: false,
+    eps_growth_qq: -8,
+    price_change_1d: -3.5,
   },
 ];
 
@@ -74,6 +83,39 @@ describe('static scan client', () => {
     const filtered = filterStaticScanRows(rows, filters);
 
     expect(filtered).toEqual([rows[0]]);
+  });
+
+  it('applies the static default dollar-volume filter contract', () => {
+    const filters = applyScanFilterDefaults({ minVolume: 100_000_000 });
+
+    const filtered = filterStaticScanRows(rows, filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['NVDA']);
+  });
+
+  it('supports market-cap, categorical, date, range, and boolean filters together', () => {
+    const filters = buildDefaultScanFilters();
+    filters.minMarketCap = 100_000_000_000;
+    filters.ibdIndustries = { values: ['Semiconductors', 'Software'], mode: 'include' };
+    filters.gicsSectors = { values: ['Technology'], mode: 'include' };
+    filters.ipoAfter = '1990-01-01';
+    filters.epsGrowth = { min: 20, max: null };
+    filters.perfDay = { min: 0, max: null };
+    filters.passesTemplate = true;
+    filters.maAlignment = true;
+
+    const filtered = filterStaticScanRows(rows, filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['NVDA']);
+  });
+
+  it('supports exclude-mode categorical filters', () => {
+    const filters = buildDefaultScanFilters();
+    filters.ibdIndustries = { values: ['Semiconductors'], mode: 'exclude' };
+
+    const filtered = filterStaticScanRows(rows, filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['MSFT', 'SNOW']);
   });
 
   it('sorts and paginates rows in-browser without any backend assistance', () => {

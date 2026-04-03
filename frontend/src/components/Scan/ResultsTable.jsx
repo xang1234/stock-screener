@@ -41,6 +41,7 @@ const columns = [
   { id: 'rs_trend', label: 'RS Trend', sortable: true, width: 110 },
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
   { id: 'gics_sector', label: 'Sector', sortable: true, width: 80 },
+  { id: 'ibd_industry_group', label: 'IBD Industry', sortable: true, width: 140 },
   { id: 'ibd_group_rank', label: 'Grp', sortable: true, width: 45 },
   { id: 'composite_score', label: 'Comp', sortable: true, width: 50 },
   { id: 'minervini_score', label: 'Min', sortable: true, width: 45 },
@@ -158,6 +159,10 @@ const VirtualTableRow = memo(function VirtualTableRow({
 
       <TableCell align="center" sx={{ color: 'text.secondary', width: 80, minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.gics_sector || '-'}
+      </TableCell>
+
+      <TableCell align="left" sx={{ color: 'text.secondary', width: 140, minWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {row.ibd_industry_group || '-'}
       </TableCell>
 
       <TableCell align="center" sx={{
@@ -441,7 +446,7 @@ function ResultsTable({
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2230 : 2170 }}>
+        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2370 : 2310 }}>
           <TableHead>
             <TableRow>
               {visibleColumns.map((column) => (

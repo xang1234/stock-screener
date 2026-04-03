@@ -49,3 +49,10 @@ export const buildDefaultScanFilters = () => ({
   beta: { min: null, max: null },
   betaAdjRs: { min: null, max: null },
 });
+
+export const applyScanFilterDefaults = (defaults = {}) => ({
+  ...buildDefaultScanFilters(),
+  ...defaults,
+  ibdIndustries: defaults.ibdIndustries ?? { values: [], mode: 'include' },
+  gicsSectors: defaults.gicsSectors ?? { values: [], mode: 'include' },
+});

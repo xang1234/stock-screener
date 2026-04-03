@@ -3,25 +3,217 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import func
+
 from app.database import SessionLocal
+from app.models.industry import IBDGroupRank
+from app.models.stock import StockPrice
+from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
+from app.services.bulk_data_fetcher import BulkDataFetcher
+from app.services.ibd_industry_service import IBDIndustryService
+from app.services.ibd_group_rank_service import IBDGroupRankService
+from app.services.price_cache_service import PriceCacheService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.services.provider_snapshot_service import provider_snapshot_service
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
-from app.utils.market_hours import get_last_market_close
+from app.utils.market_hours import get_last_market_close, is_trading_day
+from app.utils.symbol_support import split_supported_price_symbols
+
+
+STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
+STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
+STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
 
 
 def _default_output_dir() -> Path:
     return repo_root() / "frontend" / "public" / "static-data"
 
 
+def _tracked_ibd_csv_path() -> Path:
+    return repo_root() / "data" / "IBD_industry_group.csv"
+
+
 def _resolve_latest_completed_us_trading_date() -> date:
     """Return the latest completed NYSE session date for static exports."""
     return get_last_market_close().date()
+
+
+def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
+    return [items[index:index + chunk_size] for index in range(0, len(items), chunk_size)]
+
+
+def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
+    """Refresh recent price bars in batches without Redis or warmup metadata."""
+    price_cache = PriceCacheService.get_instance()
+    fetcher = BulkDataFetcher()
+
+    with SessionLocal() as db:
+        active_symbols = [
+            symbol
+            for symbol, in db.query(StockUniverse.symbol)
+            .filter(StockUniverse.is_active == True)
+            .order_by(StockUniverse.market_cap.desc().nullslast(), StockUniverse.symbol.asc())
+            .all()
+        ]
+        supported_symbols, skipped_symbols = split_supported_price_symbols(active_symbols)
+        latest_rows = (
+            db.query(StockPrice.symbol, func.max(StockPrice.date))
+            .filter(StockPrice.symbol.in_(supported_symbols))
+            .group_by(StockPrice.symbol)
+            .all()
+        )
+
+    latest_by_symbol = {symbol: latest_date for symbol, latest_date in latest_rows}
+    db_fresh_symbols = [
+        symbol for symbol in supported_symbols if latest_by_symbol.get(symbol) is not None and latest_by_symbol[symbol] >= as_of_date
+    ]
+    stale_symbols = [
+        symbol for symbol in supported_symbols if latest_by_symbol.get(symbol) is not None and latest_by_symbol[symbol] < as_of_date
+    ]
+    no_history_symbols = [
+        symbol for symbol in supported_symbols if symbol not in latest_by_symbol
+    ]
+
+    if not stale_symbols:
+        if no_history_symbols:
+            print(
+                "[static-daily prices] No reusable cached price history found; "
+                "relying on the batch-only feature snapshot path for full history fetch.",
+                flush=True,
+            )
+        else:
+            print(
+                f"[static-daily prices] Database already has fresh price rows for "
+                f"{len(db_fresh_symbols):,} supported symbols as of {as_of_date}.",
+                flush=True,
+            )
+        return {
+            "status": "skipped",
+            "as_of_date": as_of_date.isoformat(),
+            "total_active_symbols": len(active_symbols),
+            "supported_symbols": len(supported_symbols),
+            "db_fresh_symbols": len(db_fresh_symbols),
+            "stale_symbols": len(stale_symbols),
+            "no_history_symbols": len(no_history_symbols),
+            "skipped_unsupported_symbols": len(skipped_symbols),
+            "yahoo_fetched_symbols": 0,
+            "yahoo_failed_symbols": 0,
+        }
+
+    refreshed = 0
+    failed = 0
+    total = len(stale_symbols)
+    total_batches = (total + STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE - 1) // STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE
+
+    print(
+        f"[static-daily prices] Refreshing {total:,} stale symbols in {total_batches} batches "
+        f"for {as_of_date} (DB fresh: {len(db_fresh_symbols):,}, unsupported skipped: {len(skipped_symbols):,}).",
+        flush=True,
+    )
+
+    for batch_index, batch_symbols in enumerate(
+        _iter_chunks(stale_symbols, STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE),
+        start=1,
+    ):
+        processed_before = refreshed + failed
+        print(
+            f"[static-daily prices] Batch {batch_index}/{total_batches}: "
+            f"{processed_before:,}/{total:,} processed, fetching {len(batch_symbols):,} symbols from Yahoo.",
+            flush=True,
+        )
+        batch_results = fetcher.fetch_prices_in_batches(
+            batch_symbols,
+            period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
+        )
+        batch_to_store: dict[str, Any] = {}
+        for symbol, payload in batch_results.items():
+            price_data = payload.get("price_data")
+            if not payload.get("has_error") and price_data is not None and not price_data.empty:
+                batch_to_store[symbol] = price_data
+                refreshed += 1
+            else:
+                failed += 1
+        if batch_to_store:
+            price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+        print(
+            f"[static-daily prices] Batch {batch_index}/{total_batches} complete: "
+            f"{refreshed + failed:,}/{total:,} processed, {refreshed:,} refreshed, {failed:,} failed.",
+            flush=True,
+        )
+
+    return {
+        "status": "completed",
+        "as_of_date": as_of_date.isoformat(),
+        "total_active_symbols": len(active_symbols),
+        "supported_symbols": len(supported_symbols),
+        "db_fresh_symbols": len(db_fresh_symbols),
+        "stale_symbols": len(stale_symbols),
+        "no_history_symbols": len(no_history_symbols),
+        "skipped_unsupported_symbols": len(skipped_symbols),
+        "yahoo_fetched_symbols": refreshed,
+        "yahoo_failed_symbols": failed,
+    }
+
+
+def _generate_trading_dates(start_date: date, end_date: date) -> list[date]:
+    trading_dates: list[date] = []
+    current = start_date
+    while current <= end_date:
+        if is_trading_day(current):
+            trading_dates.append(current)
+        current += timedelta(days=1)
+    return trading_dates
+
+
+def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
+    """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
+    start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
+    desired_dates = _generate_trading_dates(start_date, as_of_date)
+
+    with SessionLocal() as db:
+        existing_dates = {
+            record_date
+            for record_date, in db.query(IBDGroupRank.date)
+            .filter(IBDGroupRank.date >= start_date, IBDGroupRank.date <= as_of_date)
+            .distinct()
+            .all()
+        }
+        missing_dates = [calc_date for calc_date in desired_dates if calc_date not in existing_dates]
+        if not missing_dates:
+            print(
+                f"[static-groups] Existing rankings already cover {len(desired_dates):,} trading dates "
+                f"through {as_of_date}.",
+                flush=True,
+            )
+            return {
+                "status": "skipped",
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "missing_dates": 0,
+                "processed": 0,
+                "errors": 0,
+            }
+
+        print(
+            f"[static-groups] Backfilling {len(missing_dates):,} missing trading dates "
+            f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
+            flush=True,
+        )
+        stats = IBDGroupRankService.get_instance().fill_gaps_optimized(db, missing_dates)
+        stats.update(
+            {
+                "status": "completed",
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "missing_dates": len(missing_dates),
+            }
+        )
+        return stats
 
 
 def _run_daily_refresh(
@@ -30,11 +222,13 @@ def _run_daily_refresh(
     skip_fundamentals_refresh: bool = False,
     hydrate_published_snapshot: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
-    from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
-    from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
-    from app.tasks.cache_tasks import (
-        allow_smart_refresh_time_window_bypass,
-        smart_refresh_cache,
+    from app.interfaces.tasks.feature_store_tasks import (
+        build_daily_snapshot,
+        _enrich_feature_run_with_ibd_metadata,
+    )
+    from app.tasks.breadth_tasks import (
+        allow_same_day_breadth_warmup_bypass,
+        calculate_daily_breadth,
     )
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
     from app.tasks.group_rank_tasks import (
@@ -50,9 +244,6 @@ def _run_daily_refresh(
         if not skip_universe_refresh:
             results["universe_refresh"] = refresh_stock_universe.run()
 
-        with allow_smart_refresh_time_window_bypass():
-            results["cache_refresh"] = smart_refresh_cache.run(mode="full")
-
         if not skip_fundamentals_refresh:
             results["fundamentals_refresh"] = refresh_all_fundamentals.run()
 
@@ -63,13 +254,37 @@ def _run_daily_refresh(
                     allow_yahoo_hydration=False,
                 )
 
-        results["breadth_refresh"] = calculate_daily_breadth_with_gapfill.run()
-        with allow_same_day_group_rank_warmup_bypass():
-            results["groups_refresh"] = calculate_daily_group_rankings.run()
+        with SessionLocal() as db:
+            results["ibd_seed_refresh"] = {
+                "csv_path": str(_tracked_ibd_csv_path()),
+                "loaded": IBDIndustryService.load_from_csv(db, csv_path=_tracked_ibd_csv_path()),
+            }
+
+        results["price_refresh"] = _refresh_static_daily_prices(as_of_date=as_of_date)
         results["feature_snapshot"] = build_daily_snapshot.run(
             as_of_date_str=as_of_date.isoformat(),
             static_daily_mode=True,
         )
+        with allow_same_day_breadth_warmup_bypass():
+            results["breadth_refresh"] = calculate_daily_breadth.run(
+                calculation_date=as_of_date.isoformat(),
+                force_cache_only=True,
+            )
+        results["groups_history_refresh"] = _ensure_group_rank_history(as_of_date=as_of_date)
+        with allow_same_day_group_rank_warmup_bypass():
+            results["groups_refresh"] = calculate_daily_group_rankings.run(
+                calculation_date=as_of_date.isoformat(),
+                force_cache_only=True,
+            )
+        feature_run_id = (
+            results.get("feature_snapshot", {}).get("run_id")
+            or results.get("feature_snapshot", {}).get("existing_run_id")
+        )
+        if feature_run_id is not None:
+            results["feature_metadata_refresh"] = _enrich_feature_run_with_ibd_metadata(
+                feature_run_id=feature_run_id,
+                ranking_date=as_of_date,
+            )
 
     return results, warnings
 

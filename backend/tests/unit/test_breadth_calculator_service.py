@@ -44,7 +44,7 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
     ]
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = {
+    price_cache.get_many_cached_only_fresh.return_value = {
         "AAA": _make_price_df(date(2026, 3, 20), 100.0),
         "BBB": _make_price_df(date(2026, 3, 20), 200.0),
     }
@@ -70,8 +70,41 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
     assert metrics["skipped_stocks"] == 0
     assert metrics["ratio_5day"] == 1.5
     assert metrics["ratio_10day"] == 2.5
-    price_cache.get_many_cached_only.assert_called_once_with(["AAA", "BBB"], period="2y")
+    assert metrics["cache_miss_stocks"] == 0
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
     price_cache.get_historical_data.assert_not_called()
+
+
+def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAA"),
+        SimpleNamespace(symbol="BBB"),
+    ]
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": _make_price_df(date(2026, 3, 20), 100.0),
+        "BBB": None,
+    }
+
+    monkeypatch.setattr(
+        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
+        staticmethod(lambda: price_cache),
+    )
+
+    calculator = BreadthCalculatorService(db)
+    monkeypatch.setattr(
+        calculator,
+        "_calculate_ratios",
+        lambda calculation_date: {"ratio_5day": 1.5, "ratio_10day": 2.5},
+    )
+
+    metrics = calculator.calculate_daily_breadth(date(2026, 3, 20), cache_only=True)
+
+    assert metrics["total_stocks_scanned"] == 1
+    assert metrics["cache_miss_stocks"] == 1
+    assert metrics["skipped_stocks"] == 1
 
 
 def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch):

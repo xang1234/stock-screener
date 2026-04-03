@@ -88,7 +88,7 @@ def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
     max_retries=2,
 )
 @serialized_data_fetch('calculate_daily_group_rankings')
-def calculate_daily_group_rankings(self, calculation_date: str = None):
+def calculate_daily_group_rankings(self, calculation_date: str = None, force_cache_only: bool = False):
     """
     Calculate and store daily IBD industry group rankings.
 
@@ -131,10 +131,10 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
     try:
         # Initialize service
         service = IBDGroupRankService.get_instance()
-        same_day_cache_only = calculation_date is None and calc_date == today_et
+        same_day_cache_only = force_cache_only or calc_date == today_et
 
         if same_day_cache_only:
-            if _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
+            if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
                 logger.info(
                     "Bypassing same-day group ranking warmup metadata gate for in-process static export"
                 )

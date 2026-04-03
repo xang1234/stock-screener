@@ -126,6 +126,18 @@ describe('ResultsTable', () => {
         expect(screen.getByText(label)).toBeInTheDocument();
       });
     });
+
+    it('renders a readable IBD industry group column', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[{ ...fullSeRow, ibd_industry_group: 'Semiconductors' }]}
+        />
+      );
+
+      expect(screen.getByText('IBD Industry')).toBeInTheDocument();
+      expect(screen.getByText('Semiconductors')).toBeInTheDocument();
+    });
   });
 
   // ── structural ───────────────────────────────────────────────────────
