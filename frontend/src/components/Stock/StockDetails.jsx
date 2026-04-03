@@ -343,7 +343,7 @@ function StockDetails() {
                         sx={{ height: 20, fontSize: '0.7rem' }}
                       />
                     </Box>
-                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, rowGap: 0.25 }}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', columnGap: 1.5, rowGap: 0.25 }}>
                       {screener.criteria.map((criterion) => (
                         <Box key={criterion.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
@@ -483,7 +483,7 @@ function StockDetails() {
             )}
           </AccordionSummary>
           <AccordionDetails>
-            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, rowGap: 0.5 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', columnGap: 1.5, rowGap: 0.5 }}>
               {regime ? (
                 <>
                   <MetricRow label="Stance" value={regime.label} />
