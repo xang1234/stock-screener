@@ -2,14 +2,14 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
-  Card,
-  CardContent,
   Chip,
   CircularProgress,
   Divider,
-  Grid,
   Link,
   List,
   ListItem,
@@ -23,10 +23,13 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
 import { getStockDecisionDashboard } from '../../api/stocks';
 import CandlestickChart from '../Charts/CandlestickChart';
+import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
+import { getGroupRankColor } from '../../utils/colorUtils';
 import {
   formatLargeNumber,
   formatPercent,
@@ -71,8 +74,48 @@ function FactorList({ title, items, emptyText }) {
   );
 }
 
+function MetricBox({ label, value, bgcolor }) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <Box sx={{ borderRadius: 1, px: 1.5, py: 0.5, textAlign: 'center', minWidth: 36, bgcolor }}>
+        <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', color: 'white', fontWeight: 'bold' }}>
+          {value}
+        </Typography>
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
+        {label}
+      </Typography>
+    </Box>
+  );
+}
+
+function InfoBox({ label, value }) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <Box sx={{
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1,
+        px: 1.5,
+        py: 0.5,
+        minWidth: 80,
+        maxWidth: 180,
+        textAlign: 'center',
+        bgcolor: 'background.paper',
+      }}>
+        <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem' }}>
+          {value || '-'}
+        </Typography>
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
+        {label}
+      </Typography>
+    </Box>
+  );
+}
+
 function StockDetails() {
-  const { symbol } = useParams();
+  const { ticker: symbol } = useParams();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['stockDecisionDashboard', symbol],
@@ -81,17 +124,10 @@ function StockDetails() {
     staleTime: 60_000,
   });
 
-  const headerChips = useMemo(() => {
-    if (!data) return [];
-    const chart = data.chart?.chart_data || {};
-    return [
-      { label: 'Stage', value: chart.stage },
-      { label: 'RS', value: chart.rs_rating != null ? chart.rs_rating.toFixed(0) : null },
-      { label: 'EPS', value: chart.eps_rating },
-      { label: 'VCP', value: chart.vcp_detected ? 'Yes' : 'No' },
-      { label: 'ADR', value: chart.adr_percent != null ? formatPercent(chart.adr_percent) : null },
-    ].filter((chip) => chip.value != null && chip.value !== '-');
-  }, [data]);
+  const sidebarFundamentals = useMemo(
+    () => data ? { ...(data.fundamentals || {}), symbol: data.symbol } : {},
+    [data]
+  );
 
   if (isLoading) {
     return (
@@ -135,30 +171,75 @@ function StockDetails() {
   const freshness = decision.freshness || data.freshness || {};
   const regime = data.regime || null;
 
+  const adrValue = chart.adr_percent;
+  const epsRating = chart.eps_rating;
+  const groupRank = chart.ibd_group_rank;
+
   return (
     <Box>
-      <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        justifyContent="space-between"
-        alignItems={{ xs: 'flex-start', md: 'center' }}
-        spacing={2}
-        sx={{ mb: 2 }}
+      {/* ─── Header ─── */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          px: 2,
+          py: 1.5,
+          borderBottom: 1,
+          borderColor: 'divider',
+          bgcolor: 'background.default',
+          borderRadius: '4px 4px 0 0',
+          flexWrap: 'wrap',
+          gap: 1,
+        }}
       >
-        <Box>
-          <Typography variant="h4" sx={{ fontWeight: 800, letterSpacing: '-0.02em' }}>
-            {data.symbol}
-          </Typography>
-          <Typography variant="body1" color="text.secondary">
-            {info.name || 'Unknown company'}
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
-            {info.sector && <Chip size="small" label={info.sector} />}
-            {info.industry && <Chip size="small" variant="outlined" label={info.industry} />}
-            {price != null && <Chip size="small" color="primary" label={`$${Number(price).toFixed(2)}`} />}
-          </Stack>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box>
+            <Typography variant="h5" fontWeight="bold">
+              {data.symbol}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {info.name || 'Unknown company'}
+            </Typography>
+          </Box>
+
+          {groupRank != null && (
+            <MetricBox
+              label="Grp Rnk"
+              value={groupRank}
+              bgcolor={getGroupRankColor(groupRank)}
+            />
+          )}
+
+          {adrValue != null && (
+            <MetricBox
+              label="ADR"
+              value={`${Number(adrValue).toFixed(1)}%`}
+              bgcolor={Number(adrValue) >= 4 ? 'success.main' : Number(adrValue) >= 2 ? 'warning.main' : 'error.main'}
+            />
+          )}
+
+          {epsRating != null && (
+            <MetricBox
+              label="EPS Rtg"
+              value={epsRating}
+              bgcolor={epsRating >= 80 ? 'success.main' : epsRating >= 50 ? 'warning.main' : 'error.main'}
+            />
+          )}
+
+          {(chart.ibd_industry_group || info.sector || info.industry) && (
+            <Box sx={{ display: 'flex', gap: 1.5, ml: 1 }}>
+              {chart.ibd_industry_group && <InfoBox label="IBD" value={chart.ibd_industry_group} />}
+              {(chart.gics_sector || info.sector) && <InfoBox label="Sector" value={chart.gics_sector || info.sector} />}
+              {(chart.gics_industry || info.industry) && <InfoBox label="Industry" value={chart.gics_industry || info.industry} />}
+            </Box>
+          )}
         </Box>
 
-        <Stack direction="row" spacing={1}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {price != null && (
+            <Chip size="small" color="primary" label={`$${Number(price).toFixed(2)}`} />
+          )}
           <AddToWatchlistMenu
             symbols={data.symbol}
             trigger={<Chip color="primary" clickable label="Add to Watchlist" />}
@@ -173,238 +254,252 @@ function StockDetails() {
               }}
             />
           )}
-        </Stack>
-      </Stack>
+        </Box>
+      </Box>
 
       {data.degraded_reasons?.length > 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
+        <Alert severity="info" sx={{ borderRadius: 0 }}>
           Workspace is partially degraded: {data.degraded_reasons.join(', ')}.
         </Alert>
       )}
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} lg={8}>
-          <Card sx={{ overflow: 'hidden' }}>
-            <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
-                Chart
+      {/* ─── Split Panel: Sidebar + Chart ─── */}
+      <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', height: 520 }}>
+        <StockMetricsSidebar
+          stockData={null}
+          fundamentals={sidebarFundamentals}
+        />
+        <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'background.paper' }}>
+          <CandlestickChart
+            symbol={data.symbol}
+            priceData={data.chart?.price_history || []}
+            height={520}
+          />
+        </Box>
+      </Box>
+
+      {/* ─── Accordion Sections ─── */}
+      <Box sx={{ mt: 1 }}>
+        {/* Decision Summary */}
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Decision Summary
+            </Typography>
+            {decision.composite_score != null && (
+              <Chip
+                size="small"
+                label={`${decision.composite_score.toFixed(1)} · ${decision.screeners_passed}/${decision.screeners_total}`}
+                sx={{ ml: 2, bgcolor: getScoreColor(decision.composite_score) || 'action.selected', color: '#fff' }}
+              />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={1.25} sx={{ mb: 2 }}>
+              <MetricChip
+                label="Composite"
+                value={decision.composite_score != null ? decision.composite_score.toFixed(1) : '-'}
+                color="primary"
+              />
+              <MetricChip label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
+              <MetricChip label="Method" value={decision.composite_method || '-'} />
+              <MetricChip label="Feature Date" value={freshness.feature_as_of_date || '-'} />
+              <MetricChip label="Breadth Date" value={freshness.breadth_date || '-'} />
+              <MetricChip label="Price History" value={freshness.has_price_history ? 'Ready' : 'Missing'} />
+            </Stack>
+            <Divider sx={{ my: 2 }} />
+            <Box sx={{ display: 'flex', gap: 4 }}>
+              <Box sx={{ flex: 1 }}>
+                <FactorList
+                  title="Top Strengths"
+                  items={decision.top_strengths}
+                  emptyText="No positive criteria available."
+                />
+              </Box>
+              <Box sx={{ flex: 1 }}>
+                <FactorList
+                  title="Top Weaknesses"
+                  items={decision.top_weaknesses}
+                  emptyText="No failing criteria were recorded."
+                />
+              </Box>
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Screener Breakdown */}
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Screener Breakdown
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={2}>
+              {data.screener_explanations?.length ? data.screener_explanations.map((screener) => (
+                <Box key={screener.screener_name}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="subtitle2" sx={{ textTransform: 'capitalize', fontWeight: 700 }}>
+                      {screener.screener_name.replaceAll('_', ' ')}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={`${screener.score.toFixed(1)} · ${screener.rating}`}
+                      color={screener.passes ? 'success' : 'default'}
+                    />
+                  </Stack>
+                  <List dense sx={{ py: 0.5 }}>
+                    {screener.criteria.slice(0, 5).map((criterion) => (
+                      <ListItem key={criterion.name} sx={{ px: 0 }}>
+                        <ListItemText
+                          primary={criterion.name}
+                          secondary={`${criterion.score.toFixed(1)} / ${criterion.max_score.toFixed(1)}`}
+                        />
+                        <Chip
+                          size="small"
+                          label={criterion.passed ? 'Pass' : 'Weak'}
+                          color={criterion.passed ? 'success' : 'warning'}
+                          variant={criterion.passed ? 'filled' : 'outlined'}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )) : (
+                <Typography variant="body2" color="text.secondary">
+                  Screener explanations are unavailable for this symbol.
+                </Typography>
+              )}
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Industry Peers */}
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Industry Peers
+            </Typography>
+            {data.peers?.length > 0 && (
+              <Chip size="small" variant="outlined" label={`${data.peers.length}`} sx={{ ml: 2 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            {data.peers?.length ? (
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Symbol</TableCell>
+                      <TableCell>Company</TableCell>
+                      <TableCell align="right">Comp</TableCell>
+                      <TableCell align="right">RS</TableCell>
+                      <TableCell align="right">Stage</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {data.peers.slice(0, 8).map((peer) => (
+                      <TableRow key={peer.symbol}>
+                        <TableCell>
+                          <Link component={RouterLink} to={`/stocks/${peer.symbol}`} underline="hover">
+                            {peer.symbol}
+                          </Link>
+                        </TableCell>
+                        <TableCell>{peer.company_name || '-'}</TableCell>
+                        <TableCell align="right">{peer.composite_score?.toFixed(1) || '-'}</TableCell>
+                        <TableCell align="right">{peer.rs_rating?.toFixed(0) || '-'}</TableCell>
+                        <TableCell align="right">{peer.stage ?? '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                No peer data is available from the latest published feature run.
               </Typography>
-              <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-                {headerChips.map((chip) => (
-                  <MetricChip key={chip.label} label={chip.label} value={chip.value} />
+            )}
+          </AccordionDetails>
+        </Accordion>
+
+        {/* Related Themes */}
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Related Themes
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            {data.themes?.length ? (
+              <Stack spacing={1.5}>
+                {data.themes.map((theme) => (
+                  <Box key={theme.theme_id}>
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5, flexWrap: 'wrap' }}>
+                      <Chip size="small" color="secondary" label={theme.display_name} />
+                      {theme.status && <Chip size="small" variant="outlined" label={theme.status} />}
+                      {theme.lifecycle_state && <Chip size="small" variant="outlined" label={theme.lifecycle_state} />}
+                    </Stack>
+                    <Typography variant="body2" color="text.secondary">
+                      Momentum {formatRatio(theme.momentum_score)} · Velocity {formatRatio(theme.mention_velocity)}x · 1M basket {formatPercent(theme.basket_return_1m)}
+                    </Typography>
+                  </Box>
                 ))}
               </Stack>
-            </Box>
-            <Box sx={{ p: 1 }}>
-              <CandlestickChart
-                symbol={data.symbol}
-                priceData={data.chart?.price_history || []}
-                height={520}
-              />
-            </Box>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
-                Decision Summary
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                This symbol is not currently linked to an active theme cluster.
               </Typography>
-              <Stack spacing={1.25}>
-                <MetricChip
-                  label="Composite"
-                  value={decision.composite_score != null ? decision.composite_score.toFixed(1) : '-'}
-                  color="primary"
-                />
-                <MetricChip label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
-                <MetricChip label="Method" value={decision.composite_method || '-'} />
-                <MetricChip label="Feature Date" value={freshness.feature_as_of_date || '-'} />
-                <MetricChip label="Breadth Date" value={freshness.breadth_date || '-'} />
-                <MetricChip label="Price History" value={freshness.has_price_history ? 'Ready' : 'Missing'} />
-              </Stack>
-              <Divider sx={{ my: 2 }} />
-              <FactorList
-                title="Top Strengths"
-                items={decision.top_strengths}
-                emptyText="No positive criteria available."
-              />
-              <Divider sx={{ my: 2 }} />
-              <FactorList
-                title="Top Weaknesses"
-                items={decision.top_weaknesses}
-                emptyText="No failing criteria were recorded."
-              />
-            </CardContent>
-          </Card>
-        </Grid>
+            )}
+          </AccordionDetails>
+        </Accordion>
 
-        <Grid item xs={12} lg={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
-                Screener Breakdown
-              </Typography>
-              <Stack spacing={2}>
-                {data.screener_explanations?.length ? data.screener_explanations.map((screener) => (
-                  <Box key={screener.screener_name}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
-                      <Typography variant="subtitle2" sx={{ textTransform: 'capitalize', fontWeight: 700 }}>
-                        {screener.screener_name.replaceAll('_', ' ')}
-                      </Typography>
-                      <Chip
-                        size="small"
-                        label={`${screener.score.toFixed(1)} · ${screener.rating}`}
-                        color={screener.passes ? 'success' : 'default'}
-                      />
-                    </Stack>
-                    <List dense sx={{ py: 0.5 }}>
-                      {screener.criteria.slice(0, 5).map((criterion) => (
-                        <ListItem key={criterion.name} sx={{ px: 0 }}>
-                          <ListItemText
-                            primary={criterion.name}
-                            secondary={`${criterion.score.toFixed(1)} / ${criterion.max_score.toFixed(1)}`}
-                          />
-                          <Chip
-                            size="small"
-                            label={criterion.passed ? 'Pass' : 'Weak'}
-                            color={criterion.passed ? 'success' : 'warning'}
-                            variant={criterion.passed ? 'filled' : 'outlined'}
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </Box>
-                )) : (
-                  <Typography variant="body2" color="text.secondary">
-                    Screener explanations are unavailable for this symbol.
-                  </Typography>
-                )}
-              </Stack>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
-                Industry Peers
-              </Typography>
-              {data.peers?.length ? (
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Symbol</TableCell>
-                        <TableCell>Company</TableCell>
-                        <TableCell align="right">Comp</TableCell>
-                        <TableCell align="right">RS</TableCell>
-                        <TableCell align="right">Stage</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {data.peers.slice(0, 8).map((peer) => (
-                        <TableRow key={peer.symbol}>
-                          <TableCell>
-                            <Link component={RouterLink} to={`/stock/${peer.symbol}`} underline="hover">
-                              {peer.symbol}
-                            </Link>
-                          </TableCell>
-                          <TableCell>{peer.company_name || '-'}</TableCell>
-                          <TableCell align="right">{peer.composite_score?.toFixed(1) || '-'}</TableCell>
-                          <TableCell align="right">{peer.rs_rating?.toFixed(0) || '-'}</TableCell>
-                          <TableCell align="right">{peer.stage ?? '-'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  No peer data is available from the latest published feature run.
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
-                Related Themes
-              </Typography>
-              {data.themes?.length ? (
-                <Stack spacing={1.5}>
-                  {data.themes.map((theme) => (
-                    <Box key={theme.theme_id}>
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5, flexWrap: 'wrap' }}>
-                        <Chip size="small" color="secondary" label={theme.display_name} />
-                        {theme.status && <Chip size="small" variant="outlined" label={theme.status} />}
-                        {theme.lifecycle_state && <Chip size="small" variant="outlined" label={theme.lifecycle_state} />}
-                      </Stack>
-                      <Typography variant="body2" color="text.secondary">
-                        Momentum {formatRatio(theme.momentum_score)} · Velocity {formatRatio(theme.mention_velocity)}x · 1M basket {formatPercent(theme.basket_return_1m)}
-                      </Typography>
-                    </Box>
-                  ))}
+        {/* Market Regime & Risk */}
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Market Regime & Risk Context
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            {regime ? (
+              <>
+                <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                  <Chip
+                    color={regime.label === 'offense' ? 'success' : regime.label === 'defense' ? 'warning' : 'default'}
+                    label={regime.label}
+                  />
+                  <MetricChip label="5D Ratio" value={formatRatio(regime.ratio_5day)} />
+                  <MetricChip label="10D Ratio" value={formatRatio(regime.ratio_10day)} />
                 </Stack>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  This symbol is not currently linked to an active theme cluster.
+                <Typography variant="body2" sx={{ mb: 2 }}>
+                  {regime.summary}
                 </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
-                Market Regime and Risk Context
+              </>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Market regime context is unavailable for this symbol.
               </Typography>
-              {regime ? (
-                <>
-                  <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                    <Chip
-                      color={regime.label === 'offense' ? 'success' : regime.label === 'defense' ? 'warning' : 'default'}
-                      label={regime.label}
-                    />
-                    <MetricChip label="5D Ratio" value={formatRatio(regime.ratio_5day)} />
-                    <MetricChip label="10D Ratio" value={formatRatio(regime.ratio_10day)} />
-                  </Stack>
-                  <Typography variant="body2" sx={{ mb: 2 }}>
-                    {regime.summary}
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Market regime context is unavailable for this symbol.
-                </Typography>
-              )}
-              <Divider sx={{ my: 2 }} />
-              <Stack spacing={1}>
-                <Typography variant="body2" color="text.secondary">
-                  Market cap: {formatLargeNumber(fundamentals.market_cap ?? info.market_cap, '$')}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  EPS growth (quarterly): {formatPercent(fundamentals.eps_growth_quarterly ?? chart.eps_growth_qq)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Revenue growth: {formatPercent(fundamentals.revenue_growth ?? chart.sales_growth_qq)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  52W range: {technicals.low_52w != null && technicals.high_52w != null
-                    ? `$${Number(technicals.low_52w).toFixed(2)} - $${Number(technicals.high_52w).toFixed(2)}`
-                    : '-'}
-                </Typography>
-              </Stack>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
+            )}
+            <Divider sx={{ my: 2 }} />
+            <Stack spacing={1}>
+              <Typography variant="body2" color="text.secondary">
+                Market cap: {formatLargeNumber(fundamentals.market_cap ?? info.market_cap, '$')}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                EPS growth (quarterly): {formatPercent(fundamentals.eps_growth_quarterly ?? chart.eps_growth_qq)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Revenue growth: {formatPercent(fundamentals.revenue_growth ?? chart.sales_growth_qq)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                52W range: {technicals.low_52w != null && technicals.high_52w != null
+                  ? `$${Number(technicals.low_52w).toFixed(2)} - $${Number(technicals.high_52w).toFixed(2)}`
+                  : '-'}
+              </Typography>
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
+      </Box>
     </Box>
   );
 }

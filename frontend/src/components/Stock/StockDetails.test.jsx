@@ -23,6 +23,10 @@ vi.mock('../common/AddToWatchlistMenu', () => ({
   default: () => <div data-testid="add-to-watchlist" />,
 }));
 
+vi.mock('../Scan/StockMetricsSidebar', () => ({
+  default: () => <div data-testid="stock-metrics-sidebar" />,
+}));
+
 describe('StockDetails', () => {
   it('renders the decision workspace from dashboard payload', async () => {
     candlestickChartPropsSpy.mockClear();
@@ -84,9 +88,9 @@ describe('StockDetails', () => {
     });
 
     renderWithProviders(
-      <MemoryRouter initialEntries={['/stock/NVDA']}>
+      <MemoryRouter initialEntries={['/stocks/NVDA']}>
         <Routes>
-          <Route path="/stock/:symbol" element={<StockDetails />} />
+          <Route path="/stocks/:ticker" element={<StockDetails />} />
         </Routes>
       </MemoryRouter>
     );
@@ -127,15 +131,17 @@ describe('StockDetails', () => {
     });
 
     renderWithProviders(
-      <MemoryRouter initialEntries={['/stock/NVDA']}>
+      <MemoryRouter initialEntries={['/stocks/NVDA']}>
         <Routes>
-          <Route path="/stock/:symbol" element={<StockDetails />} />
+          <Route path="/stocks/:ticker" element={<StockDetails />} />
         </Routes>
       </MemoryRouter>
     );
 
     expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
     expect(screen.getByText(/workspace is partially degraded/i)).toBeInTheDocument();
+    expect(screen.getByTestId('stock-metrics-sidebar')).toBeInTheDocument();
+    expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(screen.getByText('Decision Summary')).toBeInTheDocument();
     expect(screen.getByText('Market regime context is unavailable for this symbol.')).toBeInTheDocument();
   }, 10000);

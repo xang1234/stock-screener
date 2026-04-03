@@ -1,27 +1,66 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useState } from 'react';
 import {
   AppBar,
   Box,
   Button,
   Container,
+  InputBase,
   Toolbar,
   Typography,
   IconButton,
   useTheme,
 } from '@mui/material';
-import { Link as RouterLink, useLocation } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
-import SearchIcon from '@mui/icons-material/Search';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
 import DesktopBootstrapBanner from '../App/DesktopBootstrapBanner';
 import { useRuntime } from '../../contexts/RuntimeContext';
-import SymbolSearchDialog from './SymbolSearchDialog';
+
+function TickerSearch() {
+  const navigate = useNavigate();
+  const [tickerInput, setTickerInput] = useState('');
+
+  const handleTickerSubmit = (event) => {
+    if (event.key !== 'Enter') return;
+    const ticker = tickerInput.trim().toUpperCase();
+    if (!ticker) return;
+    navigate(`/stocks/${encodeURIComponent(ticker)}`);
+    setTickerInput('');
+    event.target.blur();
+  };
+
+  return (
+    <InputBase
+      value={tickerInput}
+      onChange={(e) => setTickerInput(e.target.value)}
+      onKeyDown={handleTickerSubmit}
+      placeholder="TICKER ↵"
+      size="small"
+      inputProps={{ 'aria-label': 'Go to ticker' }}
+      sx={{
+        px: 1.5,
+        py: 0.25,
+        width: 300,
+        fontSize: '15px',
+        backgroundColor: 'rgba(255,255,255,0.15)',
+        borderRadius: 1,
+        color: 'inherit',
+        '& input::placeholder': {
+          color: 'rgba(255,255,255,0.7)',
+          opacity: 1,
+          fontStyle: 'italic',
+          letterSpacing: '1px',
+        },
+      }}
+    />
+  );
+}
 
 function Layout({ children }) {
   const location = useLocation();
@@ -29,7 +68,6 @@ function Layout({ children }) {
   const colorMode = useContext(ColorModeContext);
   const { auth, desktopMode, features, isLoggingOut, logout } = useRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
 
   const navItems = [
     { path: '/', label: 'Routine' },
@@ -39,28 +77,6 @@ function Layout({ children }) {
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Chatbot' }] : []),
   ];
-
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      const targetTag = event.target?.tagName;
-      const isEditable =
-        targetTag === 'INPUT' ||
-        targetTag === 'TEXTAREA' ||
-        event.target?.isContentEditable;
-
-      if (isEditable || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-
-      if (event.key === '/') {
-        event.preventDefault();
-        setSearchOpen(true);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -75,6 +91,8 @@ function Layout({ children }) {
               <CacheStatus />
             </Box>
           )}
+          <Box sx={{ flexGrow: 1 }} />
+          <TickerSearch />
           <Box sx={{ flexGrow: 1 }} />
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
@@ -102,16 +120,6 @@ function Layout({ children }) {
               </Button>
             );
           })}
-          <IconButton
-            sx={{ ml: 1 }}
-            onClick={() => setSearchOpen(true)}
-            color="inherit"
-            title="Search symbols"
-            aria-label="Search symbols"
-            size="small"
-          >
-            <SearchIcon fontSize="small" />
-          </IconButton>
           {features.tasks && (
             <IconButton
               sx={{ ml: 1 }}
@@ -154,7 +162,6 @@ function Layout({ children }) {
       {features.themes && <PipelineProgressCard />}
 
       {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
-      <SymbolSearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
     </Box>
   );
 }
