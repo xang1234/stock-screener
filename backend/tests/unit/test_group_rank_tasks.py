@@ -198,6 +198,51 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
     )
 
 
+def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 4, 3, 0, 30, 0),
+    )
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
+    ]
+
+    monkeypatch.setattr(
+        module,
+        "IBDGroupRankService",
+        type(
+            "FakeGroupRankServiceFacade",
+            (),
+            {"get_instance": staticmethod(lambda: fake_service)},
+        ),
+    )
+
+    result = module.calculate_daily_group_rankings.run(
+        "2026-04-02",
+        force_cache_only=True,
+    )
+
+    assert result["groups_ranked"] == 1
+    assert result["cache_only"] is True
+    fake_service.calculate_group_rankings.assert_called_once_with(
+        fake_db,
+        datetime(2026, 4, 2).date(),
+        cache_only=True,
+        require_complete_cache=True,
+    )
+
+
 def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
     import app.tasks.group_rank_tasks as module
 

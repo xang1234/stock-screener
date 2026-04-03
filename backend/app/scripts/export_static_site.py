@@ -222,7 +222,10 @@ def _run_daily_refresh(
     skip_fundamentals_refresh: bool = False,
     hydrate_published_snapshot: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
-    from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
+    from app.interfaces.tasks.feature_store_tasks import (
+        build_daily_snapshot,
+        _enrich_feature_run_with_ibd_metadata,
+    )
     from app.tasks.breadth_tasks import (
         allow_same_day_breadth_warmup_bypass,
         calculate_daily_breadth,
@@ -265,11 +268,22 @@ def _run_daily_refresh(
         with allow_same_day_breadth_warmup_bypass():
             results["breadth_refresh"] = calculate_daily_breadth.run(
                 calculation_date=as_of_date.isoformat(),
+                force_cache_only=True,
             )
         results["groups_history_refresh"] = _ensure_group_rank_history(as_of_date=as_of_date)
         with allow_same_day_group_rank_warmup_bypass():
             results["groups_refresh"] = calculate_daily_group_rankings.run(
                 calculation_date=as_of_date.isoformat(),
+                force_cache_only=True,
+            )
+        feature_run_id = (
+            results.get("feature_snapshot", {}).get("run_id")
+            or results.get("feature_snapshot", {}).get("existing_run_id")
+        )
+        if feature_run_id is not None:
+            results["feature_metadata_refresh"] = _enrich_feature_run_with_ibd_metadata(
+                feature_run_id=feature_run_id,
+                ranking_date=as_of_date,
             )
 
     return results, warnings

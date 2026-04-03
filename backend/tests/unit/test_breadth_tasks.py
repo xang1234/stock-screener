@@ -84,6 +84,50 @@ def test_generate_trading_dates_skips_holidays_and_weekends(monkeypatch):
     assert skipped == 3
 
 
+def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
+    import app.tasks.breadth_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 4, 3, 0, 30, 0))
+    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda: None)
+
+    fake_price_cache = MagicMock()
+    fake_calculator = MagicMock()
+    fake_calculator.price_cache = fake_price_cache
+    fake_calculator.calculate_daily_breadth.return_value = {
+        "stocks_up_4pct": 1,
+        "stocks_down_4pct": 0,
+        "ratio_5day": 1.0,
+        "ratio_10day": 1.0,
+        "stocks_up_25pct_quarter": 1,
+        "stocks_down_25pct_quarter": 0,
+        "stocks_up_25pct_month": 1,
+        "stocks_down_25pct_month": 0,
+        "stocks_up_50pct_month": 0,
+        "stocks_down_50pct_month": 0,
+        "stocks_up_13pct_34days": 1,
+        "stocks_down_13pct_34days": 0,
+        "total_stocks_scanned": 10000,
+        "skipped_stocks": 0,
+        "cache_miss_stocks": 0,
+        "error_stocks": 0,
+    }
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: fake_calculator)
+
+    result = module.calculate_daily_breadth.run("2026-04-02", force_cache_only=True)
+
+    assert result["date"] == "2026-04-02"
+    assert result["indicators"]["stocks_up_4pct"] == 1
+    assert result["cache_only"] is True
+    fake_calculator.calculate_daily_breadth.assert_called_once_with(
+        calculation_date=date(2026, 4, 2),
+        cache_only=True,
+    )
+
+
 def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):
     import app.tasks.breadth_tasks as module
 

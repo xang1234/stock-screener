@@ -418,13 +418,23 @@ class BreadthCalculatorService:
         cache_only: bool,
     ) -> tuple[Dict[str, Optional[pd.DataFrame]], List[str]]:
         """Load batch price histories once, with optional cache misses fetched a single time."""
-        price_data_by_symbol = self.price_cache.get_many_cached_only(
-            batch_symbols,
-            period="2y",
-        )
+        if cache_only:
+            price_data_by_symbol = self.price_cache.get_many_cached_only_fresh(
+                batch_symbols,
+                period="2y",
+            )
+        else:
+            price_data_by_symbol = self.price_cache.get_many_cached_only(
+                batch_symbols,
+                period="2y",
+            )
         cache_miss_symbols: List[str] = []
 
         if cache_only:
+            for symbol in batch_symbols:
+                price_history = price_data_by_symbol.get(symbol)
+                if price_history is None or price_history.empty:
+                    cache_miss_symbols.append(symbol)
             return price_data_by_symbol, cache_miss_symbols
 
         for symbol in batch_symbols:

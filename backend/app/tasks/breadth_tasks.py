@@ -120,7 +120,7 @@ def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth')
 @serialized_data_fetch('calculate_daily_breadth')
-def calculate_daily_breadth(self, calculation_date: str = None):
+def calculate_daily_breadth(self, calculation_date: str = None, force_cache_only: bool = False):
     """
     Calculate and store daily market breadth indicators.
 
@@ -177,7 +177,7 @@ def calculate_daily_breadth(self, calculation_date: str = None):
     try:
         # Initialize breadth calculator service
         calculator = BreadthCalculatorService(db)
-        cache_only = calc_date == today_et
+        cache_only = force_cache_only or calc_date == today_et
 
         # Calculate breadth indicators
         logger.info(f"Starting breadth calculation for {calc_date}...")
@@ -191,7 +191,7 @@ def calculate_daily_breadth(self, calculation_date: str = None):
         metrics['calculation_duration_seconds'] = round(duration, 2)
 
         if cache_only:
-            if _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.get():
+            if force_cache_only or _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.get():
                 logger.info(
                     "Bypassing same-day breadth warmup metadata gate for in-process static export"
                 )
@@ -298,6 +298,7 @@ def calculate_daily_breadth(self, calculation_date: str = None):
             },
             'total_stocks_scanned': metrics['total_stocks_scanned'],
             'calculation_duration_seconds': duration,
+            'cache_only': cache_only,
             'timestamp': datetime.now().isoformat()
         }
 

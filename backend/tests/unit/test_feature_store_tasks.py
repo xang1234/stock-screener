@@ -9,14 +9,20 @@ from unittest.mock import patch
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.database import Base
 from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
+    _enrich_feature_run_with_ibd_metadata,
     _fail_stale_feature_runs,
     build_daily_snapshot,
 )
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.schemas.universe import UniverseType
+from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.models.industry import IBDGroupRank, IBDIndustryGroup
 
 
 class _FakeTask:
@@ -332,6 +338,80 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
     assert fake_use_case.received_cmd.batch_only_fundamentals is True
 
 
+def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+            IBDIndustryGroup.__table__,
+            IBDGroupRank.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with session_factory() as db:
+        db.add(
+            FeatureRun(
+                id=21,
+                as_of_date=date(2026, 4, 2),
+                run_type="daily_snapshot",
+                status="published",
+            )
+        )
+        db.add_all(
+            [
+                StockFeatureDaily(
+                    run_id=21,
+                    symbol="NVDA",
+                    as_of_date=date(2026, 4, 2),
+                    composite_score=95.0,
+                    overall_rating=5,
+                    passes_count=4,
+                    details_json={"symbol": "NVDA"},
+                ),
+                StockFeatureDaily(
+                    run_id=21,
+                    symbol="MSFT",
+                    as_of_date=date(2026, 4, 2),
+                    composite_score=88.0,
+                    overall_rating=4,
+                    passes_count=3,
+                    details_json={"symbol": "MSFT", "ibd_group_rank": 99},
+                ),
+            ]
+        )
+        db.add_all(
+            [
+                IBDIndustryGroup(symbol="NVDA", industry_group="Semiconductors"),
+                IBDIndustryGroup(symbol="MSFT", industry_group="Software"),
+                IBDGroupRank(industry_group="Semiconductors", date=date(2026, 4, 2), rank=1, avg_rs_rating=95.0),
+            ]
+        )
+        db.commit()
+
+    stats = _enrich_feature_run_with_ibd_metadata(
+        feature_run_id=21,
+        ranking_date=date(2026, 4, 2),
+        session_factory=session_factory,
+    )
+
+    with session_factory() as db:
+        nvda = db.query(StockFeatureDaily).filter_by(run_id=21, symbol="NVDA").one()
+        msft = db.query(StockFeatureDaily).filter_by(run_id=21, symbol="MSFT").one()
+
+    assert stats["updated_rows"] == 2
+    assert stats["missing_industry_rows"] == 0
+    assert stats["missing_rank_rows"] == 1
+    assert nvda.details_json["ibd_industry_group"] == "Semiconductors"
+    assert nvda.details_json["ibd_group_rank"] == 1
+    assert msft.details_json["ibd_industry_group"] == "Software"
+    assert msft.details_json["ibd_group_rank"] is None
+
+    engine.dispose()
+
+
 def test_create_auto_scan_uses_saved_run_universe_count_for_total_stocks():
     created_scan = {}
 
@@ -500,6 +580,42 @@ def test_build_daily_snapshot_includes_cleaned_stale_runs_metadata():
         result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
 
     assert result["cleaned_stale_runs"] == 3
+
+
+def test_build_daily_snapshot_enriches_published_run_metadata_after_publish():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._enrich_feature_run_with_ibd_metadata",
+        return_value={"updated_rows": 2},
+    ) as mock_enrich:
+        result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+    assert result["metadata_refresh"] == {"updated_rows": 2}
+    mock_enrich.assert_called_once_with(
+        feature_run_id=11,
+        ranking_date=date(2026, 3, 16),
+    )
 
 
 def test_fail_stale_feature_runs_uses_utc_aware_cutoff():

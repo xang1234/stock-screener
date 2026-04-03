@@ -26,7 +26,14 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
     monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
-    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: calls.append("feature_snapshot")
+            or {"run_id": 77, "kwargs": kwargs}
+        ),
+    )
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
@@ -47,6 +54,12 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         "load_from_csv",
         lambda db, csv_path=None: 10105,
     )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda *, feature_run_id, ranking_date: calls.append("feature_metadata_refresh")
+        or {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
+    )
 
     results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
@@ -59,6 +72,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         "breadth_refresh",
         "groups_history_refresh",
         "groups_refresh",
+        "feature_metadata_refresh",
     ]
     assert results["universe_refresh"]["task"] == "universe_refresh"
     assert results["ibd_seed_refresh"]["loaded"] == 10105
@@ -66,8 +80,15 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         "as_of_date_str": "2026-04-02",
         "static_daily_mode": True,
     }
-    assert results["breadth_refresh"]["kwargs"] == {"calculation_date": "2026-04-02"}
-    assert results["groups_refresh"]["kwargs"] == {"calculation_date": "2026-04-02"}
+    assert results["breadth_refresh"]["kwargs"] == {
+        "calculation_date": "2026-04-02",
+        "force_cache_only": True,
+    }
+    assert results["groups_refresh"]["kwargs"] == {
+        "calculation_date": "2026-04-02",
+        "force_cache_only": True,
+    }
+    assert results["feature_metadata_refresh"]["run_id"] == 77
 
 
 def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamentals(monkeypatch):
@@ -88,7 +109,14 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
     monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
-    monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: calls.append("feature_snapshot")
+            or {"run_id": 77, "kwargs": kwargs}
+        ),
+    )
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
@@ -115,6 +143,12 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         lambda db, allow_yahoo_hydration=False: hydrate_calls.append((db, allow_yahoo_hydration))
         or {"task": "fundamentals_hydrate"},
     )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda *, feature_run_id, ranking_date: calls.append("feature_metadata_refresh")
+        or {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
+    )
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
         skip_universe_refresh=True,
@@ -129,6 +163,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         "breadth_refresh",
         "groups_history_refresh",
         "groups_refresh",
+        "feature_metadata_refresh",
     ]
     assert hydrate_calls == [("db-session", False)]
     assert "universe_refresh" not in results
@@ -183,6 +218,11 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
         export_script.IBDIndustryService,
         "load_from_csv",
         lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **_kwargs: {"run_id": 1, "ranking_date": "2026-04-02", "updated_rows": 0},
     )
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
@@ -245,6 +285,11 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
         "load_from_csv",
         lambda db, csv_path=None: 10105,
     )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda **_kwargs: {"run_id": 1, "ranking_date": "2026-04-02", "updated_rows": 0},
+    )
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
@@ -256,6 +301,14 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     assert feature_call[1] == {
         "as_of_date_str": "2026-04-02",
         "static_daily_mode": True,
+    }
+    assert groups_call[1] == {
+        "calculation_date": "2026-04-02",
+        "force_cache_only": True,
+    }
+    assert breadth_call[1] == {
+        "calculation_date": "2026-04-02",
+        "force_cache_only": True,
     }
 
 
