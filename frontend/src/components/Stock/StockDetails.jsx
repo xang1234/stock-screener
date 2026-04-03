@@ -249,7 +249,7 @@ function StockDetails() {
       {/* ─── Split Panel: Sidebar + Chart ─── */}
       <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', height: 520 }}>
         <StockMetricsSidebar
-          stockData={data.chart?.chart_data || null}
+          stockData={(data.chart?.chart_data?.source !== 'unavailable' && data.chart?.chart_data) || null}
           fundamentals={sidebarFundamentals}
         />
         <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'background.paper' }}>
