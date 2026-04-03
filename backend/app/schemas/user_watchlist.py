@@ -1,6 +1,6 @@
 """Schemas for User-defined Watchlists"""
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Literal, Optional, List, Dict
 from datetime import datetime
 
 from .common import PriceChangeBounds
@@ -135,3 +135,20 @@ class ReorderItemsRequest(BaseModel):
 class BulkAddItemsRequest(BaseModel):
     """Request body for adding multiple symbols at once"""
     symbols: List[str]
+
+
+class WatchlistImportRequest(BaseModel):
+    """Request body for importing symbols from pasted text or CSV."""
+
+    content: str
+    format: Optional[Literal["auto", "text", "csv"]] = "auto"
+
+
+class WatchlistImportResult(BaseModel):
+    """Import result with partial-success details."""
+
+    requested_count: int
+    added: List[str]
+    skipped_existing: List[str]
+    invalid_symbols: List[str]
+    added_items: List[WatchlistItemResponse]

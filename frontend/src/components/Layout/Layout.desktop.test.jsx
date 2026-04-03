@@ -35,6 +35,10 @@ vi.mock('../App/DesktopBootstrapBanner', () => ({
   default: () => <div data-testid="bootstrap-banner" />,
 }));
 
+vi.mock('./SymbolSearchDialog', () => ({
+  default: ({ open }) => (open ? <div data-testid="symbol-search-dialog" /> : null),
+}));
+
 function renderLayout() {
   return render(
     <ThemeProvider theme={createTheme()}>
@@ -57,6 +61,7 @@ describe('Layout desktop capability gating', () => {
     expect(screen.queryByText('Chatbot')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Scheduled Tasks')).not.toBeInTheDocument();
     expect(screen.queryByTestId('cache-status')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('symbol-search-dialog')).not.toBeInTheDocument();
     expect(screen.getByTestId('bootstrap-banner')).toBeInTheDocument();
   });
 });

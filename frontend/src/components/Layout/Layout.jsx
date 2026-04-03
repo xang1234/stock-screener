@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import {
   AppBar,
   Box,
@@ -14,12 +14,14 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
+import SearchIcon from '@mui/icons-material/Search';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
 import DesktopBootstrapBanner from '../App/DesktopBootstrapBanner';
 import { useRuntime } from '../../contexts/RuntimeContext';
+import SymbolSearchDialog from './SymbolSearchDialog';
 
 function Layout({ children }) {
   const location = useLocation();
@@ -27,6 +29,7 @@ function Layout({ children }) {
   const colorMode = useContext(ColorModeContext);
   const { auth, desktopMode, features, isLoggingOut, logout } = useRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const navItems = [
     { path: '/', label: 'Routine' },
@@ -36,6 +39,28 @@ function Layout({ children }) {
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Chatbot' }] : []),
   ];
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      const targetTag = event.target?.tagName;
+      const isEditable =
+        targetTag === 'INPUT' ||
+        targetTag === 'TEXTAREA' ||
+        event.target?.isContentEditable;
+
+      if (isEditable || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      if (event.key === '/') {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -77,6 +102,16 @@ function Layout({ children }) {
               </Button>
             );
           })}
+          <IconButton
+            sx={{ ml: 1 }}
+            onClick={() => setSearchOpen(true)}
+            color="inherit"
+            title="Search symbols"
+            aria-label="Search symbols"
+            size="small"
+          >
+            <SearchIcon fontSize="small" />
+          </IconButton>
           {features.tasks && (
             <IconButton
               sx={{ ml: 1 }}
@@ -119,6 +154,7 @@ function Layout({ children }) {
       {features.themes && <PipelineProgressCard />}
 
       {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
+      <SymbolSearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
     </Box>
   );
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import app.scripts.export_static_site as export_script
@@ -32,7 +32,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     monkeypatch.setattr(
         export_script,
         "_resolve_latest_completed_us_trading_date",
-        lambda: datetime(2026, 4, 2, 16, 0).date(),
+        lambda: date(2026, 4, 2),
     )
 
     results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
@@ -77,7 +77,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     monkeypatch.setattr(
         export_script,
         "_resolve_latest_completed_us_trading_date",
-        lambda: datetime(2026, 4, 2, 16, 0).date(),
+        lambda: date(2026, 4, 2),
     )
     monkeypatch.setattr(
         export_script.provider_snapshot_service,
@@ -134,6 +134,11 @@ def test_run_daily_refresh_bypasses_smart_refresh_time_window_for_static_exports
     monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth_with_gapfill", make_task("breadth_refresh"))
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
@@ -171,6 +176,11 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth_with_gapfill", make_task("breadth_refresh"))
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
@@ -207,7 +217,7 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
     monkeypatch.setattr(
         export_script,
         "_resolve_latest_completed_us_trading_date",
-        lambda: datetime(2026, 4, 2, 16, 0).date(),
+        lambda: date(2026, 4, 2),
     )
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage

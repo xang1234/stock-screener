@@ -24,11 +24,13 @@ import {
   Box,
   Typography,
   Alert,
+  Stack,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import EditIcon from '@mui/icons-material/Edit';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import {
   getWatchlists,
@@ -40,6 +42,7 @@ import {
   removeItem,
   reorderWatchlists,
   reorderItems,
+  importItems,
 } from '../../api/userWatchlists';
 
 function UserWatchlistManager({ open, onClose, onUpdate }) {
@@ -49,7 +52,10 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   const [editingName, setEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [newSymbol, setNewSymbol] = useState('');
-  const [error, setError] = useState('');
+  const [feedback, setFeedback] = useState(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importContent, setImportContent] = useState('');
+  const [importDraftWatchlistId, setImportDraftWatchlistId] = useState(null);
 
   // Fetch watchlists
   const { data: watchlistsData, isLoading: watchlistsLoading } = useQuery({
@@ -73,11 +79,11 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     onSuccess: (newWatchlist) => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlists'] });
       setNewWatchlistName('');
-      setError('');
+      setFeedback(null);
       setSelectedWatchlistId(newWatchlist.id);
       onUpdate?.();
     },
-    onError: (err) => setError(err.response?.data?.detail || 'Failed to create watchlist'),
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to create watchlist' }),
   });
 
   const updateMutation = useMutation({
@@ -85,9 +91,10 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlists'] });
       setEditingName(false);
+      setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setError(err.response?.data?.detail || 'Failed to update watchlist'),
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to update watchlist' }),
   });
 
   const deleteMutation = useMutation({
@@ -97,9 +104,10 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       if (selectedWatchlistId === deletedId) {
         setSelectedWatchlistId(null);
       }
+      setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setError(err.response?.data?.detail || 'Failed to delete watchlist'),
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to delete watchlist' }),
   });
 
   const addItemMutation = useMutation({
@@ -107,18 +115,20 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
       setNewSymbol('');
+      setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setError(err.response?.data?.detail || 'Failed to add stock'),
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to add stock' }),
   });
 
   const removeItemMutation = useMutation({
     mutationFn: (id) => removeItem(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+      setFeedback(null);
       onUpdate?.();
     },
-    onError: (err) => setError(err.response?.data?.detail || 'Failed to remove stock'),
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to remove stock' }),
   });
 
   const reorderWatchlistsMutation = useMutation({
@@ -135,6 +145,27 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
       onUpdate?.();
     },
+  });
+
+  const importItemsMutation = useMutation({
+    mutationFn: ({ watchlistId, payload }) => importItems(watchlistId, payload),
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
+      setImportContent('');
+      setImportDialogOpen(false);
+      const parts = [
+        `Imported ${result.added.length} symbol${result.added.length === 1 ? '' : 's'}`,
+      ];
+      if (result.skipped_existing.length > 0) {
+        parts.push(`${result.skipped_existing.length} already existed`);
+      }
+      if (result.invalid_symbols.length > 0) {
+        parts.push(`${result.invalid_symbols.length} invalid`);
+      }
+      setFeedback({ severity: 'success', message: parts.join(', ') });
+      onUpdate?.();
+    },
+    onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to import symbols' }),
   });
 
   const handleCreate = () => {
@@ -174,6 +205,14 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
 
   const handleRemoveItem = (itemId) => {
     removeItemMutation.mutate(itemId);
+  };
+
+  const handleOpenImportDialog = () => {
+    if (importDraftWatchlistId !== selectedWatchlistId) {
+      setImportContent('');
+      setImportDraftWatchlistId(selectedWatchlistId);
+    }
+    setImportDialogOpen(true);
   };
 
   // Drag-drop handlers
@@ -217,9 +256,9 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>Manage Watchlists</DialogTitle>
       <DialogContent sx={{ minHeight: 450 }}>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-            {error}
+        {feedback && (
+          <Alert severity={feedback.severity} sx={{ mb: 2 }} onClose={() => setFeedback(null)}>
+            {feedback.message}
           </Alert>
         )}
 
@@ -348,7 +387,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
                 </Box>
 
                 {/* Add symbol */}
-                <Box display="flex" gap={1} mb={2}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} mb={2}>
                   <TextField
                     size="small"
                     placeholder="Add symbol (e.g., NVDA)"
@@ -366,7 +405,15 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
                   >
                     Add
                   </Button>
-                </Box>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={handleOpenImportDialog}
+                    startIcon={<UploadFileIcon />}
+                  >
+                    Import
+                  </Button>
+                </Stack>
 
                 {/* Items list with drag-drop */}
                 {watchlistData?.items && watchlistData.items.length > 0 ? (
@@ -446,6 +493,41 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       <DialogActions>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
+
+      <Dialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Import Symbols</DialogTitle>
+        <DialogContent>
+          <Typography id="watchlist-import-help" variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Paste newline, comma, tab, or CSV-formatted symbols. The importer will dedupe entries and report invalid symbols.
+          </Typography>
+          <TextField
+            autoFocus
+            multiline
+            minRows={8}
+            fullWidth
+            inputProps={{
+              'aria-label': 'Symbols to import',
+              'aria-describedby': 'watchlist-import-help',
+            }}
+            placeholder={'NVDA\nMSFT\nAAPL'}
+            value={importContent}
+            onChange={(event) => setImportContent(event.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setImportDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => importItemsMutation.mutate({
+              watchlistId: selectedWatchlistId,
+              payload: { content: importContent, format: 'auto' },
+            })}
+            disabled={!selectedWatchlistId || !importContent.trim() || importItemsMutation.isPending}
+          >
+            Import
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

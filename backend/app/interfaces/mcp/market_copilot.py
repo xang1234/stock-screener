@@ -902,49 +902,7 @@ class MarketCopilotService:
         return value if value is not None else float("-inf")
 
     def _build_stock_explanation(self, use_case: ExplainStockUseCase, item: Any) -> Any:
-        from app.domain.scanning.models import CriterionResult, ScreenerExplanation, StockExplanation
-
-        screener_explanations = []
-        for screener_name, output in item.screener_outputs.items():
-            max_scores_lookup = use_case._MAX_SCORES.get(screener_name, {})
-            criteria = []
-            for criterion_name, raw_value in output.breakdown.items():
-                if isinstance(raw_value, dict):
-                    score = float(raw_value.get("points", 0))
-                    max_score = float(raw_value.get("max_points", max_scores_lookup.get(criterion_name, 0.0)))
-                    passed = raw_value.get("passes", score > 0)
-                else:
-                    score = float(raw_value)
-                    max_score = max_scores_lookup.get(criterion_name, 0.0)
-                    passed = score > 0
-                criteria.append(
-                    CriterionResult(
-                        name=criterion_name,
-                        score=score,
-                        max_score=max_score,
-                        passed=passed,
-                    )
-                )
-            screener_explanations.append(
-                ScreenerExplanation(
-                    screener_name=screener_name,
-                    score=output.score,
-                    passes=output.passes,
-                    rating=output.rating,
-                    criteria=tuple(criteria),
-                )
-            )
-
-        return StockExplanation(
-            symbol=item.symbol,
-            composite_score=item.composite_score,
-            rating=item.rating,
-            composite_method=item.composite_method,
-            screeners_passed=item.screeners_passed,
-            screeners_total=item.screeners_total,
-            screener_explanations=tuple(screener_explanations),
-            rating_thresholds=dict(use_case._RATING_THRESHOLDS),
-        )
+        return use_case.build_explanation_from_item(item)
 
     def _compare_runs_payload(self, run_a_id: int, run_b_id: int, limit: int) -> dict[str, Any]:
         result = CompareFeatureRunsUseCase().execute(
