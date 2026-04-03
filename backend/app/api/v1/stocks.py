@@ -17,6 +17,7 @@ from ...schemas.stock import (
     StockData,
     StockDecisionDashboardResponse,
     StockInfo,
+    StockPriceHistoryPoint,
     StockSearchResult,
     StockTechnicals,
 )
@@ -39,13 +40,32 @@ def _build_data_fetcher(db: Session):
     return DataFetcher(db)
 
 
-def _get_stock_info_or_404(symbol: str):
+def _empty_stock_info(symbol: str) -> dict:
+    normalized_symbol = symbol.upper()
+    return {
+        "symbol": normalized_symbol,
+        "name": None,
+        "sector": None,
+        "industry": None,
+        "current_price": None,
+        "market_cap": None,
+    }
+
+
+def _get_stock_info_payload(symbol: str) -> dict | None:
     info = _get_yfinance_service().get_stock_info(symbol.upper())
     if not info:
-        logger.error(
-            "Failed to fetch stock info for %s - check yfinance service logs for details",
+        logger.warning(
+            "Stock info is unavailable for %s - check yfinance service logs for details",
             symbol,
         )
+        return None
+    return info
+
+
+def _get_stock_info_or_404(symbol: str):
+    info = _get_stock_info_payload(symbol)
+    if info is None:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -96,7 +116,8 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
     days = period_days.get(period, 180)
 
     cache_service = PriceCacheService.get_instance()
-    data = cache_service.get_cached_only(symbol.upper(), period="2y")
+    cache_period = "5y" if period == "5y" else "2y"
+    data = cache_service.get_cached_only(symbol.upper(), period=cache_period)
 
     if data is None or len(data) == 0:
         logger.warning("No cached data for %s", symbol)
@@ -189,7 +210,7 @@ def _build_decision_factor_records(explanation) -> tuple[list[dict], list[dict]]
                 "screener_name": screener.screener_name,
                 "criterion_name": criterion.name,
                 "score": criterion.score,
-                "max_score": criterion.max_score,
+                "max_score": max_score,
                 "passed": criterion.passed,
                 "_ratio": ratio,
             }
@@ -306,7 +327,7 @@ def _load_theme_summaries(db: Session, symbol: str) -> list[dict]:
     def _theme_sort_key(row):
         cluster, constituent, metrics = row
         return (
-            -(metrics.momentum_score or -9999),
+            -(metrics.momentum_score or -9999) if metrics else 9999,
             -(constituent.confidence or -9999),
             cluster.display_name.lower(),
         )
@@ -568,7 +589,10 @@ async def get_stock_decision_dashboard(
     symbol = symbol.upper()
     degraded_reasons: list[str] = []
 
-    info = _get_stock_info_or_404(symbol)
+    info = _get_stock_info_payload(symbol)
+    if info is None:
+        info = _empty_stock_info(symbol)
+        degraded_reasons.append("missing_stock_info")
     fundamentals = _get_stock_fundamentals_payload(symbol)
     technicals = _get_stock_technicals_payload(symbol, db)
     if fundamentals is None:
@@ -608,7 +632,8 @@ async def get_stock_decision_dashboard(
             degraded_reasons.append("missing_breadth")
 
         if feature_item is not None:
-            industry_group = feature_item.extended_fields.get("ibd_industry_group")
+            extended_fields = feature_item.extended_fields or {}
+            industry_group = extended_fields.get("ibd_industry_group")
             if industry_group:
                 peer_items = [
                     peer
@@ -697,6 +722,6 @@ async def get_stock_decision_dashboard(
     }
 
 
-@router.get("/{symbol}/history")
+@router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
 async def get_price_history(symbol: str, period: str = "6mo"):
     return _load_price_history(symbol, period)

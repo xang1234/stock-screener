@@ -14,6 +14,15 @@ def test_parse_watchlist_import_symbols_handles_text_and_dedupes():
     ]
 
 
+def test_parse_watchlist_import_symbols_skips_text_headers():
+    content = "symbol NVDA msft"
+
+    assert parse_watchlist_import_symbols(content, format_hint="text") == [
+        "NVDA",
+        "MSFT",
+    ]
+
+
 def test_parse_watchlist_import_symbols_skips_csv_headers():
     content = "symbol,name\nNVDA,NVIDIA\nMSFT,Microsoft\n"
 
@@ -29,6 +38,16 @@ def test_parse_watchlist_import_symbols_handles_tab_delimited_spreadsheet_paste(
     assert parse_watchlist_import_symbols(content) == [
         "AAPL",
         "MSFT",
+    ]
+
+
+def test_parse_watchlist_import_symbols_preserves_headerless_symbol_matrix():
+    content = "AAPL,MSFT\nNVDA"
+
+    assert parse_watchlist_import_symbols(content) == [
+        "AAPL",
+        "MSFT",
+        "NVDA",
     ]
 
 

@@ -22,6 +22,8 @@ from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.services import server_auth
 from app.wiring.bootstrap import get_uow
 
+pytestmark = pytest.mark.integration
+
 
 @pytest_asyncio.fixture
 async def client():
@@ -192,6 +194,30 @@ def _seed_dashboard_data(session):
             status="trending",
         )
     )
+    theme_without_metrics = ThemeCluster(
+        name="Edge Compute",
+        canonical_key="edge-compute",
+        display_name="Edge Compute",
+        pipeline="technical",
+        category="technology",
+        is_emerging=False,
+        is_active=True,
+        is_validated=True,
+        lifecycle_state="active",
+    )
+    session.add(theme_without_metrics)
+    session.commit()
+    session.refresh(theme_without_metrics)
+    session.add(
+        ThemeConstituent(
+            theme_cluster_id=theme_without_metrics.id,
+            symbol="NVDA",
+            confidence=0.22,
+            mention_count=2,
+            correlation_to_theme=0.11,
+            is_active=True,
+        )
+    )
     session.commit()
 
 
@@ -343,7 +369,7 @@ async def test_decision_dashboard_endpoint_returns_normalized_payload(client, se
     app.dependency_overrides[get_uow] = lambda: _FakeUow(latest_run, feature_item, feature_row, peers)
     _seed_dashboard_data(session)
 
-    monkeypatch.setattr(stocks_module, "_get_stock_info_or_404", lambda symbol: {
+    monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {
         "symbol": symbol,
         "name": "NVIDIA Corp",
         "sector": "Technology",
@@ -404,6 +430,25 @@ async def test_decision_dashboard_endpoint_reports_degraded_mode_without_feature
 
 
 @pytest.mark.asyncio
+async def test_decision_dashboard_endpoint_degrades_when_stock_info_is_unavailable(client, session, monkeypatch):
+    app.dependency_overrides[get_db] = _override_db(session)
+    app.dependency_overrides[get_uow] = lambda: _FakeUow(None)
+
+    monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: None)
+    monkeypatch.setattr(stocks_module, "_get_stock_fundamentals_payload", lambda symbol, force_refresh=False: None)
+    monkeypatch.setattr(stocks_module, "_get_stock_technicals_payload", lambda symbol, db, force_refresh=False: None)
+    monkeypatch.setattr(stocks_module, "_load_price_history", lambda symbol, period="6mo": [])
+
+    response = await client.get("/api/v1/stocks/NVDA/decision-dashboard")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["info"]["symbol"] == "NVDA"
+    assert "missing_stock_info" in payload["degraded_reasons"]
+    assert payload["info"]["name"] is None
+
+
+@pytest.mark.asyncio
 async def test_watchlist_import_endpoint_returns_partial_success(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
     watchlist = _seed_search_and_import_data(session)
@@ -411,6 +456,24 @@ async def test_watchlist_import_endpoint_returns_partial_success(client, session
     response = await client.post(
         f"/api/v1/user-watchlists/{watchlist.id}/items/import",
         json={"content": "symbol\nAAPL\nMSFT\nBAD$\nNVDA", "format": "csv"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_count"] == 4
+    assert payload["added"] == ["MSFT", "NVDA"]
+    assert payload["skipped_existing"] == ["AAPL"]
+    assert payload["invalid_symbols"] == ["BAD$"]
+
+
+@pytest.mark.asyncio
+async def test_watchlist_import_endpoint_handles_tsv_with_auto_format(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    watchlist = _seed_search_and_import_data(session)
+
+    response = await client.post(
+        f"/api/v1/user-watchlists/{watchlist.id}/items/import",
+        json={"content": "symbol\tname\nAAPL\tApple\nMSFT\tMicrosoft\nBAD$\tBroken\nNVDA\tNVIDIA", "format": "auto"},
     )
 
     assert response.status_code == 200

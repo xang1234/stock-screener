@@ -99,4 +99,44 @@ describe('StockDetails', () => {
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
   }, 10000);
+
+  it('renders degraded workspace payloads without decision or regime cards throwing', async () => {
+    getStockDecisionDashboard.mockResolvedValue({
+      symbol: 'NVDA',
+      freshness: {
+        feature_run_id: null,
+        feature_as_of_date: null,
+        feature_completed_at: null,
+        breadth_date: null,
+        has_price_history: false,
+      },
+      info: {
+        symbol: 'NVDA',
+        name: 'NVIDIA Corp',
+      },
+      fundamentals: null,
+      technicals: null,
+      chart: {
+        price_history: [],
+        chart_data: { current_price: 921.45 },
+      },
+      screener_explanations: [],
+      peers: [],
+      themes: [],
+      degraded_reasons: ['missing_explanation', 'missing_breadth'],
+    });
+
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/stock/NVDA']}>
+        <Routes>
+          <Route path="/stock/:symbol" element={<StockDetails />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
+    expect(screen.getByText(/workspace is partially degraded/i)).toBeInTheDocument();
+    expect(screen.getByText('Decision Summary')).toBeInTheDocument();
+    expect(screen.getByText('Market regime context is unavailable for this symbol.')).toBeInTheDocument();
+  }, 10000);
 });

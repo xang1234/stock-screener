@@ -44,11 +44,15 @@ def parse_watchlist_import_symbols(
     seen: set[str] = set()
     for token in tokens:
         symbol = token.strip().upper()
-        if not symbol or symbol in _HEADER_TOKENS or symbol in seen:
+        if not symbol or symbol.lower() in _HEADER_TOKENS or symbol in seen:
             continue
         seen.add(symbol)
         deduped.append(symbol)
     return deduped
+
+
+def _looks_like_symbol_token(token: str) -> bool:
+    return bool(_SYMBOL_PATTERN.match(token.strip().upper()))
 
 
 def _parse_tabular_symbols(content: str) -> list[str]:
@@ -64,11 +68,30 @@ def _parse_tabular_symbols(content: str) -> list[str]:
     if not rows:
         return []
 
-    symbols: list[str] = []
-    first_cell = rows[0][0].strip().lower() if rows[0] else ""
-    data_rows = rows[1:] if first_cell in _HEADER_TOKENS else rows
+    first_row = rows[0]
+    header_cells = [cell.strip().lower() for cell in first_row if cell.strip()]
+    has_header = any(cell in _HEADER_TOKENS for cell in header_cells)
+    symbol_column = next(
+        (index for index, cell in enumerate(first_row) if cell.strip().lower() in _HEADER_TOKENS),
+        0,
+    )
 
-    for row in data_rows:
+    symbols: list[str] = []
+    if has_header:
+        data_rows = rows[1:]
+        for row in data_rows:
+            if symbol_column >= len(row):
+                continue
+            candidate = row[symbol_column].strip()
+            if candidate:
+                symbols.append(candidate)
+        return symbols
+
+    flattened_cells = [cell.strip() for row in rows for cell in row if cell.strip()]
+    if flattened_cells and all(_looks_like_symbol_token(cell) for cell in flattened_cells):
+        return flattened_cells
+
+    for row in rows:
         if not row:
             continue
         candidate = row[0].strip()

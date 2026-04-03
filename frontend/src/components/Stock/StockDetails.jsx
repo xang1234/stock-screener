@@ -122,7 +122,18 @@ function StockDetails() {
   const technicals = data.technicals || {};
   const chart = data.chart?.chart_data || {};
   const price = info.current_price ?? technicals.current_price ?? chart.current_price;
-  const decision = data.decision_summary;
+  const decision = data.decision_summary || {
+    composite_score: null,
+    rating: null,
+    screeners_passed: 0,
+    screeners_total: 0,
+    composite_method: null,
+    top_strengths: [],
+    top_weaknesses: [],
+    freshness: data.freshness || {},
+  };
+  const freshness = decision.freshness || data.freshness || {};
+  const regime = data.regime || null;
 
   return (
     <Box>
@@ -208,9 +219,9 @@ function StockDetails() {
                 />
                 <MetricChip label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
                 <MetricChip label="Method" value={decision.composite_method || '-'} />
-                <MetricChip label="Feature Date" value={decision.freshness?.feature_as_of_date || '-'} />
-                <MetricChip label="Breadth Date" value={decision.freshness?.breadth_date || '-'} />
-                <MetricChip label="Price History" value={decision.freshness?.has_price_history ? 'Ready' : 'Missing'} />
+                <MetricChip label="Feature Date" value={freshness.feature_as_of_date || '-'} />
+                <MetricChip label="Breadth Date" value={freshness.breadth_date || '-'} />
+                <MetricChip label="Price History" value={freshness.has_price_history ? 'Ready' : 'Missing'} />
               </Stack>
               <Divider sx={{ my: 2 }} />
               <FactorList
@@ -354,17 +365,25 @@ function StockDetails() {
               <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 2 }}>
                 Market Regime and Risk Context
               </Typography>
-              <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                <Chip
-                  color={data.regime.label === 'offense' ? 'success' : data.regime.label === 'defense' ? 'warning' : 'default'}
-                  label={data.regime.label}
-                />
-                <MetricChip label="5D Ratio" value={formatRatio(data.regime.ratio_5day)} />
-                <MetricChip label="10D Ratio" value={formatRatio(data.regime.ratio_10day)} />
-              </Stack>
-              <Typography variant="body2" sx={{ mb: 2 }}>
-                {data.regime.summary}
-              </Typography>
+              {regime ? (
+                <>
+                  <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                    <Chip
+                      color={regime.label === 'offense' ? 'success' : regime.label === 'defense' ? 'warning' : 'default'}
+                      label={regime.label}
+                    />
+                    <MetricChip label="5D Ratio" value={formatRatio(regime.ratio_5day)} />
+                    <MetricChip label="10D Ratio" value={formatRatio(regime.ratio_10day)} />
+                  </Stack>
+                  <Typography variant="body2" sx={{ mb: 2 }}>
+                    {regime.summary}
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Market regime context is unavailable for this symbol.
+                </Typography>
+              )}
               <Divider sx={{ my: 2 }} />
               <Stack spacing={1}>
                 <Typography variant="body2" color="text.secondary">

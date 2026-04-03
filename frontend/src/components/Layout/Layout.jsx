@@ -107,6 +107,7 @@ function Layout({ children }) {
             onClick={() => setSearchOpen(true)}
             color="inherit"
             title="Search symbols"
+            aria-label="Search symbols"
             size="small"
           >
             <SearchIcon fontSize="small" />

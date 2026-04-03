@@ -55,6 +55,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
   const [feedback, setFeedback] = useState(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importContent, setImportContent] = useState('');
+  const [importDraftWatchlistId, setImportDraftWatchlistId] = useState(null);
 
   // Fetch watchlists
   const { data: watchlistsData, isLoading: watchlistsLoading } = useQuery({
@@ -90,6 +91,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlists'] });
       setEditingName(false);
+      setFeedback(null);
       onUpdate?.();
     },
     onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to update watchlist' }),
@@ -102,6 +104,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
       if (selectedWatchlistId === deletedId) {
         setSelectedWatchlistId(null);
       }
+      setFeedback(null);
       onUpdate?.();
     },
     onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to delete watchlist' }),
@@ -112,6 +115,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
       setNewSymbol('');
+      setFeedback(null);
       onUpdate?.();
     },
     onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to add stock' }),
@@ -121,6 +125,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
     mutationFn: (id) => removeItem(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+      setFeedback(null);
       onUpdate?.();
     },
     onError: (err) => setFeedback({ severity: 'error', message: err.response?.data?.detail || 'Failed to remove stock' }),
@@ -200,6 +205,14 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
 
   const handleRemoveItem = (itemId) => {
     removeItemMutation.mutate(itemId);
+  };
+
+  const handleOpenImportDialog = () => {
+    if (importDraftWatchlistId !== selectedWatchlistId) {
+      setImportContent('');
+      setImportDraftWatchlistId(selectedWatchlistId);
+    }
+    setImportDialogOpen(true);
   };
 
   // Drag-drop handlers
@@ -395,7 +408,7 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
                   <Button
                     variant="outlined"
                     size="small"
-                    onClick={() => setImportDialogOpen(true)}
+                    onClick={handleOpenImportDialog}
                     startIcon={<UploadFileIcon />}
                   >
                     Import

@@ -412,7 +412,12 @@ async def import_items(
 
     known_symbols = {
         row.symbol
-        for row in db.query(StockUniverse.symbol).all()
+        for row in db.query(StockUniverse.symbol)
+        .filter(
+            StockUniverse.active_filter(),
+            StockUniverse.symbol.in_(parsed_symbols),
+        )
+        .all()
         if row.symbol
     }
 
