@@ -36,7 +36,30 @@ import {
   getScoreColor,
 } from '../../utils/formatUtils';
 
-// ─── Shared helper components (matching StockMetricsSidebar visual language) ───
+const CriteriaList = ({ title, items, emptyText }) => (
+  <Box sx={{ flex: 1 }}>
+    <SectionHeader>{title}</SectionHeader>
+    {items?.length ? (
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.25 }}>
+        {items.map((item) => (
+          <Box key={`${item.screener_name}:${item.criterion_name}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+              {item.criterion_name}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                {item.score.toFixed(1)}/{item.max_score.toFixed(1)}
+              </Typography>
+              <BoolIndicator value={item.passed} />
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    ) : (
+      <Typography variant="caption" color="text.secondary">{emptyText}</Typography>
+    )}
+  </Box>
+);
 
 const MetricRow = ({ label, value, color }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -291,50 +314,8 @@ function StockDetails() {
             </Box>
             <Divider sx={{ my: 1.5 }} />
             <Box sx={{ display: 'flex', gap: 4 }}>
-              <Box sx={{ flex: 1 }}>
-                <SectionHeader>TOP STRENGTHS</SectionHeader>
-                {decision.top_strengths?.length ? (
-                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.25 }}>
-                    {decision.top_strengths.map((item) => (
-                      <Box key={`${item.screener_name}:${item.criterion_name}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-                          {item.criterion_name}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                            {item.score.toFixed(1)}/{item.max_score.toFixed(1)}
-                          </Typography>
-                          <BoolIndicator value={item.passed} />
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">No positive criteria.</Typography>
-                )}
-              </Box>
-              <Box sx={{ flex: 1 }}>
-                <SectionHeader>TOP WEAKNESSES</SectionHeader>
-                {decision.top_weaknesses?.length ? (
-                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.25 }}>
-                    {decision.top_weaknesses.map((item) => (
-                      <Box key={`${item.screener_name}:${item.criterion_name}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-                          {item.criterion_name}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                            {item.score.toFixed(1)}/{item.max_score.toFixed(1)}
-                          </Typography>
-                          <BoolIndicator value={item.passed} />
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">No failing criteria.</Typography>
-                )}
-              </Box>
+              <CriteriaList title="TOP STRENGTHS" items={decision.top_strengths} emptyText="No positive criteria." />
+              <CriteriaList title="TOP WEAKNESSES" items={decision.top_weaknesses} emptyText="No failing criteria." />
             </Box>
           </AccordionDetails>
         </Accordion>
@@ -349,7 +330,7 @@ function StockDetails() {
           <AccordionDetails>
             {data.screener_explanations?.length ? (
               <Stack spacing={1.5}>
-                {data.screener_explanations.map((screener) => (
+                {data.screener_explanations.map((screener, idx) => (
                   <Box key={screener.screener_name}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
                       <Typography variant="caption" sx={{ textTransform: 'uppercase', fontWeight: 'bold', letterSpacing: 0.5, fontSize: '0.65rem' }}>
@@ -377,7 +358,7 @@ function StockDetails() {
                         </Box>
                       ))}
                     </Box>
-                    {screener !== data.screener_explanations[data.screener_explanations.length - 1] && (
+                    {idx < data.screener_explanations.length - 1 && (
                       <Divider sx={{ mt: 1 }} />
                     )}
                   </Box>
