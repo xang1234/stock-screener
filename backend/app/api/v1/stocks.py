@@ -193,6 +193,20 @@ def _build_chart_data_payload(latest_run, item) -> dict:
         "sales_growth_qq": ef.get("sales_growth_qq"),
         "eps_growth_yy": ef.get("eps_growth_yy"),
         "sales_growth_yy": ef.get("sales_growth_yy"),
+        "canslim_score": ef.get("canslim_score"),
+        "ipo_score": ef.get("ipo_score"),
+        "custom_score": ef.get("custom_score"),
+        "volume_breakthrough_score": ef.get("volume_breakthrough_score"),
+        "beta": ef.get("beta"),
+        "beta_adj_rs": ef.get("beta_adj_rs"),
+        "rating": item.rating,
+        "screeners_run": item.screeners_run,
+        "se_setup_score": ef.get("se_setup_score"),
+        "se_pattern_primary": ef.get("se_pattern_primary"),
+        "se_pattern_confidence": ef.get("se_pattern_confidence"),
+        "se_quality_score": ef.get("se_quality_score"),
+        "se_readiness_score": ef.get("se_readiness_score"),
+        "se_setup_ready": ef.get("se_setup_ready"),
     }
 
 

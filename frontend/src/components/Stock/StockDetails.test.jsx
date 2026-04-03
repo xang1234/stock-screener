@@ -54,7 +54,7 @@ describe('StockDetails', () => {
       },
       chart: {
         price_history: [{ date: '2026-04-01', open: 900, high: 930, low: 890, close: 921.45, volume: 1000 }],
-        chart_data: { stage: 2, rs_rating: 97, eps_rating: 96, vcp_detected: true, adr_percent: 4.2, current_price: 921.45 },
+        chart_data: { stage: 2, rs_rating: 97, eps_rating: 96, vcp_detected: true, adr_percent: 4.2, current_price: 921.45, composite_score: 88.5, minervini_score: 86, company_name: 'NVIDIA Corp', rating: 'Strong Buy', screeners_run: ['minervini'] },
       },
       decision_summary: {
         composite_score: 88.5,
