@@ -401,7 +401,7 @@ function StockDetails() {
                     {data.peers.slice(0, 8).map((peer) => (
                       <TableRow key={peer.symbol}>
                         <TableCell>
-                          <Link component={RouterLink} to={`/stocks/${peer.symbol}`} underline="hover">
+                          <Link component={RouterLink} to={`/stocks/${encodeURIComponent(peer.symbol)}`} underline="hover">
                             {peer.symbol}
                           </Link>
                         </TableCell>
