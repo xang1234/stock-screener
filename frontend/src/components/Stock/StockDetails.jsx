@@ -11,9 +11,6 @@ import {
   CircularProgress,
   Divider,
   Link,
-  List,
-  ListItem,
-  ListItemText,
   Stack,
   Table,
   TableBody,
@@ -24,12 +21,14 @@ import {
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
 
 import { getStockDecisionDashboard } from '../../api/stocks';
 import CandlestickChart from '../Charts/CandlestickChart';
 import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
-import { getGroupRankColor } from '../../utils/colorUtils';
+import { getGroupRankColor, getStageColor } from '../../utils/colorUtils';
 import {
   formatLargeNumber,
   formatPercent,
@@ -37,42 +36,56 @@ import {
   getScoreColor,
 } from '../../utils/formatUtils';
 
-function MetricChip({ label, value, color = 'default' }) {
-  return (
-    <Chip
-      label={`${label}: ${value ?? '-'}`}
-      size="small"
-      color={color}
-      variant={color === 'default' ? 'outlined' : 'filled'}
-    />
-  );
-}
+const CriteriaList = ({ title, items, emptyText }) => (
+  <Box sx={{ flex: 1 }}>
+    <SectionHeader>{title}</SectionHeader>
+    {items?.length ? (
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 0.25 }}>
+        {items.map((item) => (
+          <Box key={`${item.screener_name}:${item.criterion_name}`} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+              {item.criterion_name}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
+                {item.score.toFixed(1)}/{item.max_score.toFixed(1)}
+              </Typography>
+              <BoolIndicator value={item.passed} />
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    ) : (
+      <Typography variant="caption" color="text.secondary">{emptyText}</Typography>
+    )}
+  </Box>
+);
 
-function FactorList({ title, items, emptyText }) {
-  return (
-    <Box>
-      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 700 }}>
-        {title}
-      </Typography>
-      {items?.length ? (
-        <List dense sx={{ py: 0 }}>
-          {items.map((item) => (
-            <ListItem key={`${item.screener_name}:${item.criterion_name}`} sx={{ px: 0 }}>
-              <ListItemText
-                primary={`${item.criterion_name} (${item.screener_name})`}
-                secondary={`${item.score.toFixed(1)} / ${item.max_score.toFixed(1)}`}
-              />
-            </ListItem>
-          ))}
-        </List>
-      ) : (
-        <Typography variant="body2" color="text.secondary">
-          {emptyText}
-        </Typography>
-      )}
-    </Box>
-  );
-}
+const MetricRow = ({ label, value, color }) => (
+  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+      {label}
+    </Typography>
+    <Typography variant="body2" fontWeight="medium" sx={{ color: color || 'text.primary', fontSize: '0.8rem' }}>
+      {value}
+    </Typography>
+  </Box>
+);
+
+const SectionHeader = ({ children }) => (
+  <Typography
+    variant="caption"
+    color="text.secondary"
+    sx={{ fontWeight: 'bold', letterSpacing: 0.5, fontSize: '0.65rem', mb: 0.5, display: 'block' }}
+  >
+    {children}
+  </Typography>
+);
+
+const BoolIndicator = ({ value }) => {
+  if (value) return <CheckCircleIcon sx={{ fontSize: 14, color: '#4caf50' }} />;
+  return <CancelIcon sx={{ fontSize: 14, color: '#9e9e9e' }} />;
+};
 
 function MetricBox({ label, value, bgcolor }) {
   return (
@@ -204,13 +217,8 @@ function StockDetails() {
           </Box>
 
           {groupRank != null && (
-            <MetricBox
-              label="Grp Rnk"
-              value={groupRank}
-              bgcolor={getGroupRankColor(groupRank)}
-            />
+            <MetricBox label="Grp Rnk" value={groupRank} bgcolor={getGroupRankColor(groupRank)} />
           )}
-
           {adrValue != null && (
             <MetricBox
               label="ADR"
@@ -218,7 +226,6 @@ function StockDetails() {
               bgcolor={Number(adrValue) >= 4 ? 'success.main' : Number(adrValue) >= 2 ? 'warning.main' : 'error.main'}
             />
           )}
-
           {epsRating != null && (
             <MetricBox
               label="EPS Rtg"
@@ -226,7 +233,6 @@ function StockDetails() {
               bgcolor={epsRating >= 80 ? 'success.main' : epsRating >= 50 ? 'warning.main' : 'error.main'}
             />
           )}
-
           {(chart.ibd_industry_group || info.sector || info.industry) && (
             <Box sx={{ display: 'flex', gap: 1.5, ml: 1 }}>
               {chart.ibd_industry_group && <InfoBox label="IBD" value={chart.ibd_industry_group} />}
@@ -266,11 +272,12 @@ function StockDetails() {
       {/* ─── Split Panel: Sidebar + Chart ─── */}
       <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', height: 520 }}>
         <StockMetricsSidebar
-          stockData={null}
+          stockData={(data.chart?.chart_data?.source !== 'unavailable' && data.chart?.chart_data) || null}
           fundamentals={sidebarFundamentals}
         />
         <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'background.paper' }}>
           <CandlestickChart
+            key={data.symbol}
             symbol={data.symbol}
             priceData={data.chart?.price_history || []}
             height={520}
@@ -280,6 +287,7 @@ function StockDetails() {
 
       {/* ─── Accordion Sections ─── */}
       <Box sx={{ mt: 1 }}>
+
         {/* Decision Summary */}
         <Accordion>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -295,34 +303,19 @@ function StockDetails() {
             )}
           </AccordionSummary>
           <AccordionDetails>
-            <Stack spacing={1.25} sx={{ mb: 2 }}>
-              <MetricChip
-                label="Composite"
-                value={decision.composite_score != null ? decision.composite_score.toFixed(1) : '-'}
-                color="primary"
-              />
-              <MetricChip label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
-              <MetricChip label="Method" value={decision.composite_method || '-'} />
-              <MetricChip label="Feature Date" value={freshness.feature_as_of_date || '-'} />
-              <MetricChip label="Breadth Date" value={freshness.breadth_date || '-'} />
-              <MetricChip label="Price History" value={freshness.has_price_history ? 'Ready' : 'Missing'} />
-            </Stack>
-            <Divider sx={{ my: 2 }} />
+            <SectionHeader>OVERVIEW</SectionHeader>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, mb: 2 }}>
+              <MetricRow label="Composite" value={decision.composite_score != null ? decision.composite_score.toFixed(1) : '-'} color="primary.main" />
+              <MetricRow label="Screeners" value={`${decision.screeners_passed}/${decision.screeners_total}`} />
+              <MetricRow label="Method" value={decision.composite_method || '-'} />
+              <MetricRow label="Feature Date" value={freshness.feature_as_of_date || '-'} />
+              <MetricRow label="Breadth Date" value={freshness.breadth_date || '-'} />
+              <MetricRow label="Price History" value={freshness.has_price_history ? 'Ready' : 'Missing'} />
+            </Box>
+            <Divider sx={{ my: 1.5 }} />
             <Box sx={{ display: 'flex', gap: 4 }}>
-              <Box sx={{ flex: 1 }}>
-                <FactorList
-                  title="Top Strengths"
-                  items={decision.top_strengths}
-                  emptyText="No positive criteria available."
-                />
-              </Box>
-              <Box sx={{ flex: 1 }}>
-                <FactorList
-                  title="Top Weaknesses"
-                  items={decision.top_weaknesses}
-                  emptyText="No failing criteria were recorded."
-                />
-              </Box>
+              <CriteriaList title="TOP STRENGTHS" items={decision.top_strengths} emptyText="No positive criteria." />
+              <CriteriaList title="TOP WEAKNESSES" items={decision.top_weaknesses} emptyText="No failing criteria." />
             </Box>
           </AccordionDetails>
         </Accordion>
@@ -335,42 +328,47 @@ function StockDetails() {
             </Typography>
           </AccordionSummary>
           <AccordionDetails>
-            <Stack spacing={2}>
-              {data.screener_explanations?.length ? data.screener_explanations.map((screener) => (
-                <Box key={screener.screener_name}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography variant="subtitle2" sx={{ textTransform: 'capitalize', fontWeight: 700 }}>
-                      {screener.screener_name.replaceAll('_', ' ')}
-                    </Typography>
-                    <Chip
-                      size="small"
-                      label={`${screener.score.toFixed(1)} · ${screener.rating}`}
-                      color={screener.passes ? 'success' : 'default'}
-                    />
-                  </Stack>
-                  <List dense sx={{ py: 0.5 }}>
-                    {screener.criteria.slice(0, 5).map((criterion) => (
-                      <ListItem key={criterion.name} sx={{ px: 0 }}>
-                        <ListItemText
-                          primary={criterion.name}
-                          secondary={`${criterion.score.toFixed(1)} / ${criterion.max_score.toFixed(1)}`}
-                        />
-                        <Chip
-                          size="small"
-                          label={criterion.passed ? 'Pass' : 'Weak'}
-                          color={criterion.passed ? 'success' : 'warning'}
-                          variant={criterion.passed ? 'filled' : 'outlined'}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                </Box>
-              )) : (
-                <Typography variant="body2" color="text.secondary">
-                  Screener explanations are unavailable for this symbol.
-                </Typography>
-              )}
-            </Stack>
+            {data.screener_explanations?.length ? (
+              <Stack spacing={1.5}>
+                {data.screener_explanations.map((screener, idx) => (
+                  <Box key={screener.screener_name}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                      <Typography variant="caption" sx={{ textTransform: 'uppercase', fontWeight: 'bold', letterSpacing: 0.5, fontSize: '0.65rem' }}>
+                        {screener.screener_name.replaceAll('_', ' ')}
+                      </Typography>
+                      <Chip
+                        size="small"
+                        label={`${screener.score.toFixed(1)} · ${screener.rating}`}
+                        color={screener.passes ? 'success' : 'default'}
+                        sx={{ height: 20, fontSize: '0.7rem' }}
+                      />
+                    </Box>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', columnGap: 1.5, rowGap: 0.25 }}>
+                      {screener.criteria.map((criterion) => (
+                        <Box key={criterion.name} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                            {criterion.name}
+                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography variant="caption" sx={{ fontSize: '0.7rem' }}>
+                              {criterion.score.toFixed(1)}/{criterion.max_score.toFixed(1)}
+                            </Typography>
+                            <BoolIndicator value={criterion.passed} />
+                          </Box>
+                        </Box>
+                      ))}
+                    </Box>
+                    {idx < data.screener_explanations.length - 1 && (
+                      <Divider sx={{ mt: 1 }} />
+                    )}
+                  </Box>
+                ))}
+              </Stack>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                Screener explanations are unavailable for this symbol.
+              </Typography>
+            )}
           </AccordionDetails>
         </Accordion>
 
@@ -398,7 +396,7 @@ function StockDetails() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {data.peers.slice(0, 8).map((peer) => (
+                    {data.peers.slice(0, 12).map((peer) => (
                       <TableRow key={peer.symbol}>
                         <TableCell>
                           <Link component={RouterLink} to={`/stocks/${encodeURIComponent(peer.symbol)}`} underline="hover">
@@ -408,7 +406,21 @@ function StockDetails() {
                         <TableCell>{peer.company_name || '-'}</TableCell>
                         <TableCell align="right">{peer.composite_score?.toFixed(1) || '-'}</TableCell>
                         <TableCell align="right">{peer.rs_rating?.toFixed(0) || '-'}</TableCell>
-                        <TableCell align="right">{peer.stage ?? '-'}</TableCell>
+                        <TableCell align="right">
+                          {peer.stage != null ? (
+                            <Chip
+                              label={`S${peer.stage}`}
+                              size="small"
+                              sx={{
+                                bgcolor: getStageColor(peer.stage),
+                                color: 'white',
+                                fontSize: '0.65rem',
+                                height: 18,
+                                '& .MuiChip-label': { px: 0.75 },
+                              }}
+                            />
+                          ) : '-'}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -431,20 +443,22 @@ function StockDetails() {
           </AccordionSummary>
           <AccordionDetails>
             {data.themes?.length ? (
-              <Stack spacing={1.5}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5 }}>
                 {data.themes.map((theme) => (
-                  <Box key={theme.theme_id}>
-                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5, flexWrap: 'wrap' }}>
-                      <Chip size="small" color="secondary" label={theme.display_name} />
-                      {theme.status && <Chip size="small" variant="outlined" label={theme.status} />}
-                      {theme.lifecycle_state && <Chip size="small" variant="outlined" label={theme.lifecycle_state} />}
+                  <Box key={theme.theme_id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
+                    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.5 }}>
+                      <Chip size="small" color="secondary" label={theme.display_name} sx={{ fontSize: '0.7rem', height: 20 }} />
+                      {theme.status && <Chip size="small" variant="outlined" label={theme.status} sx={{ fontSize: '0.65rem', height: 18 }} />}
                     </Stack>
-                    <Typography variant="body2" color="text.secondary">
-                      Momentum {formatRatio(theme.momentum_score)} · Velocity {formatRatio(theme.mention_velocity)}x · 1M basket {formatPercent(theme.basket_return_1m)}
-                    </Typography>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.25 }}>
+                      <MetricRow label="Momentum" value={formatRatio(theme.momentum_score)} />
+                      <MetricRow label="Velocity" value={`${formatRatio(theme.mention_velocity)}x`} />
+                      <MetricRow label="1M Basket" value={formatPercent(theme.basket_return_1m)} />
+                      {theme.lifecycle_state && <MetricRow label="Lifecycle" value={theme.lifecycle_state} />}
+                    </Box>
                   </Box>
                 ))}
-              </Stack>
+              </Box>
             ) : (
               <Typography variant="body2" color="text.secondary">
                 This symbol is not currently linked to an active theme cluster.
@@ -459,44 +473,43 @@ function StockDetails() {
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
               Market Regime & Risk Context
             </Typography>
+            {regime && (
+              <Chip
+                size="small"
+                label={regime.label}
+                color={regime.label === 'offense' ? 'success' : regime.label === 'defense' ? 'warning' : 'default'}
+                sx={{ ml: 2, height: 20, fontSize: '0.7rem' }}
+              />
+            )}
           </AccordionSummary>
           <AccordionDetails>
-            {regime ? (
-              <>
-                <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                  <Chip
-                    color={regime.label === 'offense' ? 'success' : regime.label === 'defense' ? 'warning' : 'default'}
-                    label={regime.label}
-                  />
-                  <MetricChip label="5D Ratio" value={formatRatio(regime.ratio_5day)} />
-                  <MetricChip label="10D Ratio" value={formatRatio(regime.ratio_10day)} />
-                </Stack>
-                <Typography variant="body2" sx={{ mb: 2 }}>
-                  {regime.summary}
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', columnGap: 1.5, rowGap: 0.5 }}>
+              {regime ? (
+                <>
+                  <MetricRow label="Stance" value={regime.label} />
+                  <MetricRow label="5D Ratio" value={formatRatio(regime.ratio_5day)} />
+                  <MetricRow label="10D Ratio" value={formatRatio(regime.ratio_10day)} />
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ gridColumn: '1 / -1' }}>
+                  Market regime context is unavailable for this symbol.
                 </Typography>
-              </>
-            ) : (
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Market regime context is unavailable for this symbol.
+              )}
+              <MetricRow label="Market Cap" value={formatLargeNumber(fundamentals.market_cap ?? info.market_cap, '$')} />
+              <MetricRow label="EPS Q/Q" value={formatPercent(fundamentals.eps_growth_quarterly ?? chart.eps_growth_qq)} />
+              <MetricRow label="Revenue Growth" value={formatPercent(fundamentals.revenue_growth ?? chart.sales_growth_qq)} />
+              <MetricRow
+                label="52W Range"
+                value={technicals.low_52w != null && technicals.high_52w != null
+                  ? `$${Number(technicals.low_52w).toFixed(0)}-$${Number(technicals.high_52w).toFixed(0)}`
+                  : '-'}
+              />
+            </Box>
+            {regime?.summary && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                {regime.summary}
               </Typography>
             )}
-            <Divider sx={{ my: 2 }} />
-            <Stack spacing={1}>
-              <Typography variant="body2" color="text.secondary">
-                Market cap: {formatLargeNumber(fundamentals.market_cap ?? info.market_cap, '$')}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                EPS growth (quarterly): {formatPercent(fundamentals.eps_growth_quarterly ?? chart.eps_growth_qq)}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Revenue growth: {formatPercent(fundamentals.revenue_growth ?? chart.sales_growth_qq)}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                52W range: {technicals.low_52w != null && technicals.high_52w != null
-                  ? `$${Number(technicals.low_52w).toFixed(2)} - $${Number(technicals.high_52w).toFixed(2)}`
-                  : '-'}
-              </Typography>
-            </Stack>
           </AccordionDetails>
         </Accordion>
       </Box>
