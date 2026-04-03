@@ -149,8 +149,8 @@ function UserWatchlistManager({ open, onClose, onUpdate }) {
 
   const importItemsMutation = useMutation({
     mutationFn: ({ watchlistId, payload }) => importItems(watchlistId, payload),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', variables.watchlistId] });
       setImportContent('');
       setImportDialogOpen(false);
       const parts = [

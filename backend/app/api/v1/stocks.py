@@ -113,7 +113,9 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
         "2y": 730,
         "5y": 1825,
     }
-    days = period_days.get(period, 180)
+    days = period_days.get(period)
+    if days is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported period: {period}")
 
     cache_service = PriceCacheService.get_instance()
     cache_period = "5y" if period == "5y" else "2y"
@@ -326,9 +328,11 @@ def _load_theme_summaries(db: Session, symbol: str) -> list[dict]:
 
     def _theme_sort_key(row):
         cluster, constituent, metrics = row
+        momentum_score = metrics.momentum_score if metrics and metrics.momentum_score is not None else -9999
+        confidence = constituent.confidence if constituent.confidence is not None else -9999
         return (
-            -(metrics.momentum_score or -9999) if metrics else 9999,
-            -(constituent.confidence or -9999),
+            -momentum_score,
+            -confidence,
             cluster.display_name.lower(),
         )
 

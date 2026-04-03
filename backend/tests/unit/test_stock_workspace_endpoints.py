@@ -363,6 +363,16 @@ async def test_search_stocks_endpoint_keeps_exact_match_when_query_has_many_matc
 
 
 @pytest.mark.asyncio
+async def test_price_history_endpoint_rejects_unsupported_period(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+
+    response = await client.get("/api/v1/stocks/NVDA/history", params={"period": "10y"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Unsupported period: 10y"
+
+
+@pytest.mark.asyncio
 async def test_decision_dashboard_endpoint_returns_normalized_payload(client, session, monkeypatch):
     app.dependency_overrides[get_db] = _override_db(session)
     latest_run, feature_item, feature_row, peers = _make_feature_context()
@@ -404,6 +414,62 @@ async def test_decision_dashboard_endpoint_returns_normalized_payload(client, se
     assert payload["themes"][0]["display_name"] == "AI Infrastructure"
     assert payload["regime"]["label"] == "offense"
     assert payload["degraded_reasons"] == []
+
+
+@pytest.mark.asyncio
+async def test_decision_dashboard_themes_keep_zero_scores_ahead_of_missing_values(client, session, monkeypatch):
+    app.dependency_overrides[get_db] = _override_db(session)
+    latest_run, feature_item, feature_row, peers = _make_feature_context()
+    app.dependency_overrides[get_uow] = lambda: _FakeUow(latest_run, feature_item, feature_row, peers)
+    _seed_dashboard_data(session)
+
+    zero_theme = ThemeCluster(
+        name="Zero Momentum",
+        canonical_key="zero-momentum",
+        display_name="Zero Momentum",
+        pipeline="technical",
+        category="technology",
+        is_emerging=False,
+        is_active=True,
+        is_validated=True,
+        lifecycle_state="active",
+    )
+    session.add(zero_theme)
+    session.commit()
+    session.refresh(zero_theme)
+    session.add(
+        ThemeConstituent(
+            theme_cluster_id=zero_theme.id,
+            symbol="NVDA",
+            confidence=0.0,
+            mention_count=1,
+            correlation_to_theme=0.01,
+            is_active=True,
+        )
+    )
+    session.add(
+        ThemeMetrics(
+            theme_cluster_id=zero_theme.id,
+            date=date(2026, 4, 2),
+            pipeline="technical",
+            mention_velocity=0.0,
+            basket_return_1m=0.0,
+            momentum_score=0.0,
+            status="neutral",
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {"symbol": symbol, "name": "NVIDIA Corp"})
+    monkeypatch.setattr(stocks_module, "_get_stock_fundamentals_payload", lambda symbol, force_refresh=False: None)
+    monkeypatch.setattr(stocks_module, "_get_stock_technicals_payload", lambda symbol, db, force_refresh=False: None)
+    monkeypatch.setattr(stocks_module, "_load_price_history", lambda symbol, period="6mo": [])
+
+    response = await client.get("/api/v1/stocks/NVDA/decision-dashboard")
+
+    assert response.status_code == 200
+    theme_names = [theme["display_name"] for theme in response.json()["themes"]]
+    assert theme_names.index("Zero Momentum") < theme_names.index("Edge Compute")
 
 
 @pytest.mark.asyncio
