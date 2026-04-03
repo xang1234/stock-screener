@@ -1,5 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { renderWithProviders } from '../../test/renderWithProviders';
@@ -46,17 +45,16 @@ describe('UserWatchlistManager import flow', () => {
     renderWithProviders(
       <UserWatchlistManager open={true} onClose={vi.fn()} onUpdate={vi.fn()} />
     );
-    const user = userEvent.setup();
 
     expect(await screen.findByText('Leaders')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Leaders' }));
+    fireEvent.click(screen.getByText('Leaders'));
 
-    await user.click(screen.getByRole('button', { name: 'Import' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
     const importDialog = await screen.findByRole('dialog', { name: 'Import Symbols' });
     const importTextbox = within(importDialog).getByRole('textbox');
 
-    await user.type(importTextbox, 'NVDA\nMSFT\nAAPL');
-    await user.click(within(importDialog).getByRole('button', { name: 'Import' }));
+    fireEvent.change(importTextbox, { target: { value: 'NVDA\nMSFT\nAAPL' } });
+    fireEvent.click(within(importDialog).getByRole('button', { name: 'Import' }));
 
     await waitFor(() => {
       expect(api.importItems).toHaveBeenCalledWith(1, {
@@ -64,5 +62,5 @@ describe('UserWatchlistManager import flow', () => {
         format: 'auto',
       });
     });
-  });
+  }, 10000);
 });

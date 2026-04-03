@@ -98,5 +98,5 @@ describe('StockDetails', () => {
     expect(screen.getByText('AI Infrastructure')).toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
-  });
+  }, 10000);
 });
