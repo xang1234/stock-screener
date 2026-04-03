@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,16 @@ from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.static_site_export_service import StaticSiteExportService
 from app.services.provider_snapshot_service import provider_snapshot_service
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
+from app.utils.market_hours import get_last_market_close
 
 
 def _default_output_dir() -> Path:
     return repo_root() / "frontend" / "public" / "static-data"
+
+
+def _resolve_latest_completed_us_trading_date() -> date:
+    """Return the latest completed NYSE session date for static exports."""
+    return get_last_market_close().date()
 
 
 def _run_daily_refresh(
@@ -37,6 +44,7 @@ def _run_daily_refresh(
     from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
+    as_of_date = _resolve_latest_completed_us_trading_date()
     with disable_serialized_data_fetch_lock():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:
@@ -58,7 +66,10 @@ def _run_daily_refresh(
         results["breadth_refresh"] = calculate_daily_breadth_with_gapfill.run()
         with allow_same_day_group_rank_warmup_bypass():
             results["groups_refresh"] = calculate_daily_group_rankings.run()
-        results["feature_snapshot"] = build_daily_snapshot.run(static_daily_mode=True)
+        results["feature_snapshot"] = build_daily_snapshot.run(
+            as_of_date_str=as_of_date.isoformat(),
+            static_daily_mode=True,
+        )
 
     return results, warnings
 
