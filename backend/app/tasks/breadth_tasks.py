@@ -9,6 +9,8 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 from typing import Optional
 from datetime import datetime, date, timedelta
@@ -25,6 +27,20 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+_ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
+    "allow_same_day_breadth_warmup_bypass",
+    default=False,
+)
+
+
+@contextmanager
+def allow_same_day_breadth_warmup_bypass():
+    """Allow same-day cache-only breadth runs without warmup metadata in-process."""
+    token = _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.set(True)
+    try:
+        yield
+    finally:
+        _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.reset(token)
 
 
 def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
@@ -69,6 +85,18 @@ def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optiona
             f"(cache_misses={cache_misses}, errors={errors})"
         )
 
+    return None
+
+
+def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str]:
+    """Validate cache completeness without requiring Redis warmup metadata."""
+    cache_misses = int(metrics.get("cache_miss_stocks", 0) or 0)
+    errors = int(metrics.get("error_stocks", 0) or 0)
+    if cache_misses > 0 or errors > 0:
+        return (
+            f"Cache-only breadth run is incomplete "
+            f"(cache_misses={cache_misses}, errors={errors})"
+        )
     return None
 
 
@@ -163,10 +191,16 @@ def calculate_daily_breadth(self, calculation_date: str = None):
         metrics['calculation_duration_seconds'] = round(duration, 2)
 
         if cache_only:
-            completeness_error = _validate_same_day_cache_only_breadth(
-                calculator.price_cache,
-                metrics,
-            )
+            if _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS.get():
+                logger.info(
+                    "Bypassing same-day breadth warmup metadata gate for in-process static export"
+                )
+                completeness_error = _validate_same_day_cache_only_breadth_metrics(metrics)
+            else:
+                completeness_error = _validate_same_day_cache_only_breadth(
+                    calculator.price_cache,
+                    metrics,
+                )
             if completeness_error:
                 logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
                 logger.info("=" * 60)

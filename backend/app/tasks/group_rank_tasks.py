@@ -131,7 +131,7 @@ def calculate_daily_group_rankings(self, calculation_date: str = None):
     try:
         # Initialize service
         service = IBDGroupRankService.get_instance()
-        same_day_cache_only = calculation_date is None and calc_date == today_et
+        same_day_cache_only = calc_date == today_et
 
         if same_day_cache_only:
             if _ALLOW_SAME_DAY_WARMUP_BYPASS.get():

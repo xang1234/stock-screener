@@ -331,7 +331,8 @@ class IBDGroupRankService:
     def get_current_rankings(
         self,
         db: Session,
-        limit: int = 197
+        limit: int = 197,
+        calculation_date: date | None = None,
     ) -> List[Dict]:
         """
         Get most recent group rankings with rank changes.
@@ -343,20 +344,26 @@ class IBDGroupRankService:
         Returns:
             List of groups with rankings and rank changes
         """
-        # Get most recent date with rankings
-        latest_record = db.query(IBDGroupRank).order_by(
-            desc(IBDGroupRank.date)
-        ).first()
+        if calculation_date is not None:
+            latest_date = calculation_date
+        else:
+            # Get most recent date with rankings
+            latest_record = db.query(IBDGroupRank).order_by(
+                desc(IBDGroupRank.date)
+            ).first()
 
-        if not latest_record:
-            return []
+            if not latest_record:
+                return []
 
-        latest_date = latest_record.date
+            latest_date = latest_record.date
 
         # Get all rankings for latest date
         rankings = db.query(IBDGroupRank).filter(
             IBDGroupRank.date == latest_date
         ).order_by(IBDGroupRank.rank).limit(limit).all()
+
+        if not rankings:
+            return []
 
         # Get historical dates for rank changes
         period_days = {
@@ -633,7 +640,8 @@ class IBDGroupRankService:
         self,
         db: Session,
         period: str = '1w',
-        limit: int = 20
+        limit: int = 20,
+        calculation_date: date | None = None,
     ) -> Dict:
         """
         Get groups with biggest rank changes over a period.
@@ -656,7 +664,11 @@ class IBDGroupRankService:
         days = period_days_map.get(period, 5)
 
         # Get current rankings
-        current_rankings = self.get_current_rankings(db, limit=197)
+        current_rankings = self.get_current_rankings(
+            db,
+            limit=197,
+            calculation_date=calculation_date,
+        )
 
         if not current_rankings:
             return {'period': period, 'gainers': [], 'losers': []}

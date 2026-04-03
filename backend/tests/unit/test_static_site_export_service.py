@@ -137,6 +137,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
         "as_of_date": "2026-03-31",
         "run_id": 7,
         "rows_total": 2,
+        "default_filtered_rows_total": 1,
         "chunks": [{"path": "scan/chunks/chunk-0001.json", "count": 2}],
         "preview_rows": [{"symbol": "NVDA", "composite_score": 97.5}],
     }
@@ -238,7 +239,23 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     monkeypatch.setattr(
         service,
         "_serialize_scan_row",
-        lambda row: {"symbol": f"SYM{row.index}", "composite_score": 100 - row.index},
+        lambda row: {
+            "symbol": f"SYM{row.index}",
+            "composite_score": 100 - row.index,
+            "volume": row.volume,
+        },
+    )
+    rows = [
+        SimpleNamespace(index=0, volume=150_000_000),
+        SimpleNamespace(index=1, volume=90_000_000),
+        SimpleNamespace(index=2, volume=120_000_000),
+        SimpleNamespace(index=3, volume=80_000_000),
+        SimpleNamespace(index=4, volume=300_000_000),
+    ]
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        lambda self, *_args, **_kwargs: rows,
     )
 
     with session_factory() as db:
@@ -255,10 +272,57 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
 
     assert manifest["chunk_size"] == 3
     assert manifest["rows_total"] == 5
-    assert [row["symbol"] for row in manifest["initial_rows"]] == ["SYM0", "SYM1", "SYM2", "SYM3", "SYM4"]
+    assert manifest["default_filters"] == {"minVolume": 100_000_000}
+    assert manifest["default_filtered_rows_total"] == 3
+    assert [row["symbol"] for row in manifest["initial_rows"]] == ["SYM0", "SYM2", "SYM4"]
+    assert [row["symbol"] for row in manifest["preview_rows"]] == ["SYM0", "SYM2", "SYM4"]
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
+
+
+def test_build_breadth_payload_requires_target_date(service_and_session_factory, monkeypatch):
+    service, _session_factory = service_and_session_factory
+
+    monkeypatch.setattr(
+        service._ui_snapshot_service,
+        "publish_breadth_bootstrap",
+        lambda: SimpleNamespace(
+            to_dict=lambda: {
+                "published_at": "2026-04-02T22:00:00Z",
+                "source_revision": "breadth:2026-04-02",
+                "payload": {"current": {"date": "2026-04-01"}},
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Breadth snapshot date mismatch"):
+        service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
+            generated_at="2026-04-02T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 2),
+        )
+
+
+def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
+    service, session_factory = service_and_session_factory
+
+    rankings_calls: list[tuple[int, date | None]] = []
+    movers_calls: list[tuple[str, int, date | None]] = []
+    fake_service = SimpleNamespace(
+        get_current_rankings=lambda db, limit=197, calculation_date=None: rankings_calls.append((limit, calculation_date)) or [],
+        get_rank_movers=lambda db, period="3m", limit=10, calculation_date=None: movers_calls.append((period, limit, calculation_date)) or {"period": period, "gainers": [], "losers": []},
+    )
+    monkeypatch.setattr(export_module.IBDGroupRankService, "get_instance", lambda: fake_service)
+
+    with session_factory() as db, pytest.raises(RuntimeError, match="No group rankings are available"):
+        service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
+            db=db,
+            generated_at="2026-04-02T22:00:00Z",
+            expected_as_of_date=date(2026, 4, 2),
+        )
+
+    assert rankings_calls == [(197, date(2026, 4, 2))]
+    assert movers_calls == []
 
 
 def test_export_chart_bundle_writes_top_ranked_payloads_with_sidebar_metadata(

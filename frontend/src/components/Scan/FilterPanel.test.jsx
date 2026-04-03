@@ -203,6 +203,35 @@ describe('FilterPanel', () => {
     });
   });
 
+  describe('core select filter interactions', () => {
+    it('preserves numeric values when selecting market cap and dollar volume buckets', async () => {
+      const onFilterChange = vi.fn();
+      renderWithProviders(
+        <FilterPanel {...makeProps({ onFilterChange })} />
+      );
+
+      const user = userEvent.setup();
+
+      const marketCapContainer = screen.getByText('Mkt Cap').closest('[class*="MuiGrid-item"]');
+      const marketCapSelect = within(marketCapContainer).getByRole('combobox');
+      await user.click(marketCapSelect);
+      await user.click(await screen.findByRole('option', { name: '>$1B' }));
+
+      expect(onFilterChange).toHaveBeenCalledWith(
+        expect.objectContaining({ minMarketCap: 1000000000 })
+      );
+
+      const volumeContainer = screen.getByText('Dollar Vol').closest('[class*="MuiGrid-item"]');
+      const volumeSelect = within(volumeContainer).getByRole('combobox');
+      await user.click(volumeSelect);
+      await user.click(await screen.findByRole('option', { name: '>$100M' }));
+
+      expect(onFilterChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ minVolume: 100000000 })
+      );
+    });
+  });
+
   // ── SE active filter chips ───────────────────────────────────────────
   describe('SE active filter chips', () => {
     it('shows "SE Score: >=70" chip when seSetupScore.min is set', () => {

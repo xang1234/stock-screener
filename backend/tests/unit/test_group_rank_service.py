@@ -392,3 +392,27 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
 
     assert stats["processed"] == 0
     assert stats["errors"] == 1
+
+
+def test_get_current_rankings_can_target_explicit_date():
+    service = IBDGroupRankService.get_instance()
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+
+    try:
+        _add_rank(db_session, group, date(2024, 1, 10), 5)
+        _add_rank(db_session, group, date(2024, 1, 17), 3)
+        db_session.commit()
+
+        rankings = service.get_current_rankings(
+            db_session,
+            limit=10,
+            calculation_date=date(2024, 1, 10),
+        )
+
+        assert len(rankings) == 1
+        assert rankings[0]["date"] == "2024-01-10"
+        assert rankings[0]["rank"] == 5
+    finally:
+        db_session.rollback()
+        db_session.close()

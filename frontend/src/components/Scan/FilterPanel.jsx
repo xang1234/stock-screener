@@ -87,6 +87,11 @@ function FilterPanel({
   expanded = true,
   onToggle,
   presetsEnabled = true,
+  sectionDefaultExpanded = {
+    fundamental: true,
+    technical: true,
+    rating: true,
+  },
   // Preset props
   presets = [],
   activePresetId = null,
@@ -163,7 +168,7 @@ function FilterPanel({
     }
     if (filters.minVolume != null) {
       const volLabel = VOLUME_OPTIONS.find(o => o.value === filters.minVolume)?.label || `>${filters.minVolume}`;
-      active.push({ key: 'minVolume', label: `Volume: ${volLabel}` });
+      active.push({ key: 'minVolume', label: `Dollar Vol: ${volLabel}` });
     }
     if (filters.minMarketCap != null) {
       const capLabel = MARKET_CAP_OPTIONS.find(o => o.value === filters.minMarketCap)?.label || `>${filters.minMarketCap}`;
@@ -412,7 +417,7 @@ function FilterPanel({
             title="Fundamental"
             category="fundamental"
             activeCount={fundamentalCount}
-            defaultExpanded={true}
+            defaultExpanded={sectionDefaultExpanded.fundamental ?? true}
           >
             <Grid container spacing={3}>
               <Grid item xs={12} sm={6} md={1.5}>
@@ -447,7 +452,7 @@ function FilterPanel({
               </Grid>
               <Grid item xs={6} sm={3} md={1.5}>
                 <CompactSelect
-                  label="Volume"
+                  label="Dollar Vol"
                   value={filters.minVolume}
                   options={VOLUME_OPTIONS}
                   onChange={(value) => updateFilter('minVolume', value)}
@@ -534,7 +539,7 @@ function FilterPanel({
             title="Technical"
             category="technical"
             activeCount={technicalCount}
-            defaultExpanded={true}
+            defaultExpanded={sectionDefaultExpanded.technical ?? true}
           >
             <Grid container spacing={1.5}>
               <Grid item xs={6} sm={4} md={1.5}>
@@ -771,7 +776,7 @@ function FilterPanel({
             title="Rating / Score"
             category="rating"
             activeCount={ratingCount}
-            defaultExpanded={true}
+            defaultExpanded={sectionDefaultExpanded.rating ?? true}
           >
             <Grid container spacing={1.5}>
               <Grid item xs={6} sm={4} md={1.2}>
@@ -992,6 +997,7 @@ export default memo(FilterPanel, (prevProps, nextProps) => {
     prevProps.expanded === nextProps.expanded &&
     prevProps.filterOptions === nextProps.filterOptions &&
     prevProps.presetsEnabled === nextProps.presetsEnabled &&
+    prevProps.sectionDefaultExpanded === nextProps.sectionDefaultExpanded &&
     prevProps.presets === nextProps.presets &&
     prevProps.activePresetId === nextProps.activePresetId &&
     prevProps.hasUnsavedChanges === nextProps.hasUnsavedChanges &&

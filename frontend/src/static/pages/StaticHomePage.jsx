@@ -132,6 +132,9 @@ function StaticHomePage() {
             <Typography variant="h6" gutterBottom>
               Top Scan Candidates
             </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              Default view uses dollar volume &gt; $100M.
+            </Typography>
             <TableContainer>
               <Table size="small">
                 <TableHead>
