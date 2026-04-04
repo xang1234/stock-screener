@@ -187,3 +187,16 @@ export const getStockDecisionDashboard = async (symbol) => {
   const response = await apiClient.get(`/v1/stocks/${symbol}/decision-dashboard`);
   return response.data;
 };
+
+/**
+ * Get industry/sector peers from the latest published feature run.
+ * @param {string} symbol - Stock ticker symbol
+ * @param {string} [peerType='industry'] - 'industry' or 'sector'
+ * @returns {Promise<Array>} Peer stock items
+ */
+export const getStockPeers = async (symbol, peerType = 'industry') => {
+  const response = await apiClient.get(`/v1/stocks/${symbol}/peers`, {
+    params: { peer_type: peerType },
+  });
+  return response.data;
+};

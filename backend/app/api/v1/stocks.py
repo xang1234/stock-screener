@@ -740,6 +740,42 @@ async def get_stock_decision_dashboard(
     }
 
 
+@router.get("/{symbol}/peers", response_model=list[ScanResultItem])
+async def get_stock_peers(
+    symbol: str,
+    peer_type: str = Query("industry", pattern="^(industry|sector)$"),
+    uow=Depends(get_uow),
+):
+    """Get industry/sector peers from the latest published feature run."""
+    from ...domain.scanning.models import PeerType
+
+    symbol = symbol.upper()
+    pt = PeerType(peer_type)
+
+    with uow:
+        latest_run = uow.feature_runs.get_latest_published()
+        if latest_run is None:
+            raise HTTPException(status_code=404, detail="No published feature run available")
+
+        item = uow.feature_store.get_by_symbol_for_run(
+            latest_run.id, symbol, include_sparklines=False, include_setup_payload=False,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found in latest feature run")
+
+        field_key = "ibd_industry_group" if pt == PeerType.INDUSTRY else "gics_sector"
+        group_value = (item.extended_fields or {}).get(field_key)
+        if not group_value or not str(group_value).strip():
+            return []
+
+        if pt == PeerType.INDUSTRY:
+            peers = uow.feature_store.get_peers_by_industry_for_run(latest_run.id, group_value)
+        else:
+            peers = uow.feature_store.get_peers_by_sector_for_run(latest_run.id, group_value)
+
+    return [ScanResultItem.from_domain(p) for p in peers]
+
+
 @router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
 async def get_price_history(symbol: str, period: str = "6mo"):
     return _load_price_history(symbol, period)

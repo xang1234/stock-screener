@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link as RouterLink, useParams } from 'react-router-dom';
+import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import {
   Accordion,
   AccordionDetails,
@@ -28,6 +28,7 @@ import { getStockDecisionDashboard } from '../../api/stocks';
 import CandlestickChart from '../Charts/CandlestickChart';
 import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
+import PeerComparisonModal from '../Scan/PeerComparisonModal';
 import { getGroupRankColor, getStageColor } from '../../utils/colorUtils';
 import {
   formatLargeNumber,
@@ -129,6 +130,8 @@ function InfoBox({ label, value }) {
 
 function StockDetails() {
   const { ticker: symbol } = useParams();
+  const navigate = useNavigate();
+  const [peerModalOpen, setPeerModalOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['stockDecisionDashboard', symbol],
@@ -274,6 +277,7 @@ function StockDetails() {
         <StockMetricsSidebar
           stockData={(data.chart?.chart_data?.source !== 'unavailable' && data.chart?.chart_data) || null}
           fundamentals={sidebarFundamentals}
+          onViewPeers={() => setPeerModalOpen(true)}
         />
         <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'background.paper' }}>
           <CandlestickChart
@@ -513,6 +517,16 @@ function StockDetails() {
           </AccordionDetails>
         </Accordion>
       </Box>
+
+      <PeerComparisonModal
+        open={peerModalOpen}
+        onClose={() => setPeerModalOpen(false)}
+        symbol={data.symbol}
+        onOpenChart={(sym) => {
+          setPeerModalOpen(false);
+          navigate(`/stocks/${encodeURIComponent(sym)}`);
+        }}
+      />
     </Box>
   );
 }

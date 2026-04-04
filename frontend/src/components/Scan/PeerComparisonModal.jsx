@@ -24,31 +24,22 @@ import CloseIcon from '@mui/icons-material/Close';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '../../api/client';
+import { getStockPeers } from '../../api/stocks';
 import RSSparkline from './RSSparkline';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
+import { getStageColor } from '../../utils/colorUtils';
 
 /**
- * Fetch peer stocks for a symbol
+ * Fetch peer stocks — scan-based when scanId is provided, standalone otherwise.
  */
 const fetchPeers = async (scanId, symbol) => {
-  const response = await apiClient.get(
-    `/v1/scans/${scanId}/peers/${symbol}`
-  );
-  return response.data;
+  if (scanId) {
+    const response = await apiClient.get(`/v1/scans/${scanId}/peers/${symbol}`);
+    return response.data;
+  }
+  return getStockPeers(symbol);
 };
 
-/**
- * Get color for stock stage
- */
-const getStageColor = (stage) => {
-  switch (stage) {
-    case 1: return '#9e9e9e'; // Gray
-    case 2: return '#4caf50'; // Green
-    case 3: return '#ff9800'; // Orange
-    case 4: return '#f44336'; // Red
-    default: return '#9e9e9e';
-  }
-};
 
 /**
  * Peer Comparison Modal
@@ -56,9 +47,10 @@ const getStageColor = (stage) => {
  */
 function PeerComparisonModal({ open, onClose, scanId, symbol, onOpenChart }) {
   const { data: peers, isLoading, error } = useQuery({
-    queryKey: ['peers', scanId, symbol],
+    queryKey: ['peers', scanId || 'standalone', symbol],
     queryFn: () => fetchPeers(scanId, symbol),
-    enabled: open && !!scanId && !!symbol,
+    enabled: open && !!symbol,
+    staleTime: 10 * 60 * 1000,
   });
 
   const [sortBy, setSortBy] = useState('composite_score');
