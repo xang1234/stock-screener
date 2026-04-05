@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from statistics import median
 from typing import Any
 
@@ -220,10 +220,14 @@ class ThemeAlertValidationSource:
         cutoff_date: date,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
+        cutoff_datetime = datetime.combine(cutoff_date, time.min, tzinfo=UTC)
         rows = (
             db.query(ThemeAlert, ThemeCluster.display_name)
             .outerjoin(ThemeCluster, ThemeCluster.id == ThemeAlert.theme_cluster_id)
-            .filter(ThemeAlert.alert_type.in_(THEME_ALERT_TYPES))
+            .filter(
+                ThemeAlert.alert_type.in_(THEME_ALERT_TYPES),
+                ThemeAlert.triggered_at >= cutoff_datetime,
+            )
             .order_by(ThemeAlert.triggered_at.desc(), ThemeAlert.id.desc())
             .all()
         )
