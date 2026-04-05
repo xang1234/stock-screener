@@ -61,6 +61,8 @@ describe('ValidationPage', () => {
     expect(screen.getByText('Failure Clusters')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'NVDA' })).toHaveAttribute('href', '/stocks/NVDA');
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
+    expect(screen.getByText(new Date(2026, 3, 1).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(new Date(2026, 3, 2).toLocaleDateString())).toBeInTheDocument();
   });
 
   it('updates the query when source and lookback controls change', async () => {

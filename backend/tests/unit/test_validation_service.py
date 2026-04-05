@@ -216,6 +216,43 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
     assert evaluated[0].missing_horizons == frozenset({5})
 
 
+def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only():
+    history = _history_frame(
+        date(2026, 4, 2),
+        [
+            (100, 105, 99, 104),
+            (104, 110, 102, 109),
+            (109, 112, 103, 106),
+            (106, 114, 101, 111),
+            (111, 113, 98, 112),
+            (112, 116, 110, 115),
+        ],
+    )
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+    premarket_event = RawValidationEvent(
+        symbol="NVDA",
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        source_ref="alert:premarket",
+        event_at=datetime(2026, 4, 2, 8, 0, tzinfo=UTC),
+        attributes={"symbol": "NVDA"},
+    )
+    after_open_event = RawValidationEvent(
+        symbol="NVDA",
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        source_ref="alert:after-open",
+        event_at=datetime(2026, 4, 2, 15, 0, tzinfo=UTC),
+        attributes={"symbol": "NVDA"},
+    )
+
+    evaluated, degraded = calculator.evaluate_many([premarket_event, after_open_event])
+
+    assert degraded == []
+    assert evaluated[0].entry_at == date(2026, 4, 2)
+    assert evaluated[0].entry_price == 100.0
+    assert evaluated[1].entry_at == date(2026, 4, 3)
+    assert evaluated[1].entry_price == 104.0
+
+
 def test_failure_cluster_builder_uses_source_specific_bucket_fields():
     builder = FailureClusterBuilder()
     losing_scan_event = EvaluatedValidationEvent(

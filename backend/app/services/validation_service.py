@@ -26,6 +26,7 @@ from app.schemas.validation import (
     ValidationSourceKind,
 )
 from app.services.price_cache_service import PriceCacheService
+from app.utils.market_hours import EASTERN, MARKET_OPEN_TIME, is_trading_day
 
 SCAN_PICK_TOP_N = 10
 RECENT_EVENTS_LIMIT = 25
@@ -91,6 +92,12 @@ def _event_date(value: date | datetime) -> date:
     if isinstance(value, datetime):
         return value.date()
     return value
+
+
+def _normalize_event_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return EASTERN.localize(value)
+    return value.astimezone(EASTERN)
 
 
 def _safe_upper_symbol(value: Any) -> str | None:
@@ -301,7 +308,19 @@ class PriceOutcomeCalculator:
             )
 
         event_day = pd.Timestamp(_event_date(event.event_at))
-        trading_days = history.index[history.index > event_day]
+        if isinstance(event.event_at, datetime):
+            event_dt = _normalize_event_datetime(event.event_at)
+            same_day_entry_allowed = (
+                is_trading_day(event_dt.date())
+                and event_dt.time() < MARKET_OPEN_TIME
+                and event_day in history.index
+            )
+            if same_day_entry_allowed:
+                trading_days = history.index[history.index >= event_day]
+            else:
+                trading_days = history.index[history.index > event_day]
+        else:
+            trading_days = history.index[history.index > event_day]
         if len(trading_days) == 0:
             return EvaluatedValidationEvent(
                 raw=event,
