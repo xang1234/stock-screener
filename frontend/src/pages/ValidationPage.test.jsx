@@ -6,6 +6,7 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import ValidationPage from './ValidationPage';
 
 const getValidationOverview = vi.fn();
+const formatDate = (value) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
 
 vi.mock('../api/validation', () => ({
   getValidationOverview: (...args) => getValidationOverview(...args),
@@ -61,8 +62,8 @@ describe('ValidationPage', () => {
     expect(screen.getByText('Failure Clusters')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'NVDA' })).toHaveAttribute('href', '/stocks/NVDA');
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
-    expect(screen.getByText(new Date(2026, 3, 1).toLocaleDateString())).toBeInTheDocument();
-    expect(screen.getByText(new Date(2026, 3, 2).toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(formatDate('2026-04-01'))).toBeInTheDocument();
+    expect(screen.getByText(formatDate('2026-04-02'))).toBeInTheDocument();
   });
 
   it('updates the query when source and lookback controls change', async () => {

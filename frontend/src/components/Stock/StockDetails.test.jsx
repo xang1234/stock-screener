@@ -227,4 +227,45 @@ describe('StockDetails', () => {
     expect(screen.getAllByText(/validation is partially degraded/i)).toHaveLength(3);
     expect(screen.getByText('Market regime context is unavailable for this symbol.')).toBeInTheDocument();
   }, 10000);
+
+  it('skips source breakdown sections when stock validation omits them', async () => {
+    getStockDecisionDashboard.mockResolvedValue({
+      symbol: 'NVDA',
+      info: {
+        symbol: 'NVDA',
+        name: 'NVIDIA Corp',
+      },
+      chart: {
+        price_history: [],
+        chart_data: { current_price: 921.45 },
+      },
+      screener_explanations: [],
+      peers: [],
+      themes: [],
+      degraded_reasons: [],
+    });
+    getStockValidation.mockResolvedValue({
+      symbol: 'NVDA',
+      lookback_days: 365,
+      source_breakdown: null,
+      recent_events: [],
+      failure_clusters: [],
+      freshness: {},
+      degraded_reasons: ['missing_price_cache'],
+    });
+
+    renderWithProviders(
+      <MemoryRouter initialEntries={['/stocks/NVDA']}>
+        <Routes>
+          <Route path="/stocks/:ticker" element={<StockDetails />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
+    expect(screen.getByText('Historical Validation')).toBeInTheDocument();
+    expect(screen.getByText(/validation is partially degraded/i)).toBeInTheDocument();
+    expect(screen.queryByText('Scan Picks')).not.toBeInTheDocument();
+    expect(screen.queryByText('Theme Alerts')).not.toBeInTheDocument();
+  }, 10000);
 });

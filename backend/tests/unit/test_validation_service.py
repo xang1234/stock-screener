@@ -17,6 +17,7 @@ from app.services.validation_service import (
     FailureClusterBuilder,
     PriceOutcomeCalculator,
     RawValidationEvent,
+    SCAN_PICK_TOP_N,
     ScanPickValidationSource,
     ThemeAlertValidationSource,
 )
@@ -101,7 +102,7 @@ def test_scan_pick_validation_source_limits_to_top_ten_and_breaks_ties_by_symbol
     events, degraded = source.collect(session, cutoff_date=date.today() - timedelta(days=1))
 
     assert degraded == []
-    assert [event.symbol for event in events] == sorted(symbols)[:10]
+    assert [event.symbol for event in events] == sorted(symbols)[:SCAN_PICK_TOP_N]
 
 
 def test_theme_alert_validation_source_filters_supported_types_and_expands_related_tickers(session):
@@ -251,6 +252,34 @@ def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only(
     assert evaluated[0].entry_price == 100.0
     assert evaluated[1].entry_at == date(2026, 4, 3)
     assert evaluated[1].entry_price == 104.0
+
+
+def test_price_outcome_calculator_uses_eastern_calendar_day_for_late_evening_theme_alerts():
+    history = _history_frame(
+        date(2026, 4, 2),
+        [
+            (100, 105, 99, 104),
+            (104, 110, 102, 109),
+            (109, 112, 103, 106),
+            (106, 114, 101, 111),
+            (111, 113, 98, 112),
+            (112, 116, 110, 115),
+        ],
+    )
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"NVDA": history}))
+    late_evening_event = RawValidationEvent(
+        symbol="NVDA",
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        source_ref="alert:late-evening",
+        event_at=datetime(2026, 4, 2, 0, 30, tzinfo=UTC),
+        attributes={"symbol": "NVDA"},
+    )
+
+    evaluated, degraded = calculator.evaluate_many([late_evening_event])
+
+    assert degraded == []
+    assert evaluated[0].entry_at == date(2026, 4, 2)
+    assert evaluated[0].entry_price == 100.0
 
 
 def test_failure_cluster_builder_uses_source_specific_bucket_fields():

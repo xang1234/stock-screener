@@ -307,9 +307,9 @@ class PriceOutcomeCalculator:
                 missing_horizons=frozenset({1, 5}),
             )
 
-        event_day = pd.Timestamp(_event_date(event.event_at))
         if isinstance(event.event_at, datetime):
             event_dt = _normalize_event_datetime(event.event_at)
+            event_day = pd.Timestamp(event_dt.date())
             same_day_entry_allowed = (
                 is_trading_day(event_dt.date())
                 and event_dt.time() < MARKET_OPEN_TIME
@@ -320,6 +320,7 @@ class PriceOutcomeCalculator:
             else:
                 trading_days = history.index[history.index > event_day]
         else:
+            event_day = pd.Timestamp(event.event_at)
             trading_days = history.index[history.index > event_day]
         if len(trading_days) == 0:
             return EvaluatedValidationEvent(

@@ -100,8 +100,8 @@ export function ValidationRecentEventsTable({ events, showSourceKind = true }) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {(events || []).map((event) => (
-            <TableRow key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}`}>
+          {(events || []).map((event, index) => (
+            <TableRow key={`${event.source_ref}:${event.event_at}:${event.attributes?.symbol || 'symbol'}:${index}`}>
               <TableCell>
                 {event.attributes?.symbol ? (
                   <Link component={RouterLink} to={`/stocks/${encodeURIComponent(event.attributes.symbol)}`} underline="hover">

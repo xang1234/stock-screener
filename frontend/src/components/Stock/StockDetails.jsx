@@ -575,7 +575,7 @@ function StockDetails() {
               {validationData && (
                 <Stack spacing={2}>
                   <ValidationDegradedAlert degradedReasons={validationData.degraded_reasons} />
-                  {validationData.source_breakdown.map((section) => (
+                  {(validationData.source_breakdown || []).map((section) => (
                     <Box key={section.source_kind} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
                         {section.source_kind === 'scan_pick' ? 'Scan Picks' : 'Theme Alerts'}
