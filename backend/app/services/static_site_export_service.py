@@ -54,6 +54,15 @@ class StaticSiteExportResult:
     manifest: dict[str, Any]
 
 
+class StaticSiteSectionUnavailableError(RuntimeError):
+    """Raised when an optional static-site section cannot be exported for the target date."""
+
+    def __init__(self, *, section: str, reason: str) -> None:
+        self.section = section
+        self.reason = reason
+        super().__init__(reason)
+
+
 class StaticSiteExportService:
     """Generate a static JSON bundle for the read-only frontend."""
 
@@ -92,14 +101,26 @@ class StaticSiteExportService:
                 run=latest_run,
                 rows=scan_rows,
             )
-            breadth_payload = self._build_breadth_payload(
+            breadth_payload = self._build_optional_section_payload(
+                section="breadth",
+                warnings=warnings,
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
+                build=lambda: self._build_breadth_payload(
+                    generated_at=generated_at,
+                    expected_as_of_date=latest_run.as_of_date,
+                ),
             )
-            groups_payload = self._build_groups_payload(
-                db=db,
+            groups_payload = self._build_optional_section_payload(
+                section="groups",
+                warnings=warnings,
                 generated_at=generated_at,
                 expected_as_of_date=latest_run.as_of_date,
+                build=lambda: self._build_groups_payload(
+                    db=db,
+                    generated_at=generated_at,
+                    expected_as_of_date=latest_run.as_of_date,
+                ),
             )
             home_payload = self._build_home_payload(
                 db=db,
@@ -169,6 +190,43 @@ class StaticSiteExportService:
             warnings=tuple(warnings),
             manifest=manifest,
         )
+
+    def _build_optional_section_payload(
+        self,
+        *,
+        section: str,
+        warnings: list[str],
+        generated_at: str,
+        expected_as_of_date: date,
+        build,
+    ) -> dict[str, Any]:
+        try:
+            return build()
+        except StaticSiteSectionUnavailableError as exc:
+            warnings.append(
+                f"Static {section} data unavailable for {expected_as_of_date.isoformat()}: {exc.reason}"
+            )
+            return self._build_unavailable_payload(
+                generated_at=generated_at,
+                expected_as_of_date=expected_as_of_date,
+                message=exc.reason,
+            )
+
+    @staticmethod
+    def _build_unavailable_payload(
+        *,
+        generated_at: str,
+        expected_as_of_date: date,
+        message: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "generated_at": generated_at,
+            "available": False,
+            "expected_as_of_date": expected_as_of_date.isoformat(),
+            "message": message,
+            "payload": {},
+        }
 
     def _get_latest_published_run(self, db: Session) -> FeatureRun | None:
         pointer = (
@@ -354,9 +412,12 @@ class StaticSiteExportService:
         payload = snapshot.get("payload", {})
         current_date = ((payload.get("current") or {}).get("date"))
         if current_date != expected_as_of_date.isoformat():
-            raise RuntimeError(
-                "Breadth snapshot date mismatch for static-site export: "
-                f"expected {expected_as_of_date.isoformat()}, got {current_date or 'none'}"
+            raise StaticSiteSectionUnavailableError(
+                section="breadth",
+                reason=(
+                    "No breadth snapshot is available for static-site export date "
+                    f"{expected_as_of_date.isoformat()} (latest snapshot date: {current_date or 'none'})."
+                ),
             )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
@@ -381,9 +442,12 @@ class StaticSiteExportService:
             calculation_date=expected_as_of_date,
         )
         if not rankings:
-            raise RuntimeError(
-                "No group rankings are available for static-site export date "
-                f"{expected_as_of_date.isoformat()}"
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    "No group rankings are available for static-site export date "
+                    f"{expected_as_of_date.isoformat()}."
+                ),
             )
         movers = service.get_rank_movers(
             db,
@@ -393,9 +457,12 @@ class StaticSiteExportService:
         )
         ranking_date = rankings[0]["date"]
         if ranking_date != expected_as_of_date.isoformat():
-            raise RuntimeError(
-                "Group rankings date mismatch for static-site export: "
-                f"expected {expected_as_of_date.isoformat()}, got {ranking_date}"
+            raise StaticSiteSectionUnavailableError(
+                section="groups",
+                reason=(
+                    "Group rankings are stale for static-site export date "
+                    f"{expected_as_of_date.isoformat()} (latest ranking date: {ranking_date})."
+                ),
             )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,

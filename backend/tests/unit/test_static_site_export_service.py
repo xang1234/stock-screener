@@ -17,6 +17,7 @@ from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.stock import StockPrice
 from app.services.static_site_export_service import (
     STATIC_SITE_SCHEMA_VERSION,
+    StaticSiteSectionUnavailableError,
     StaticSiteExportService,
 )
 
@@ -281,6 +282,91 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
 
 
+def test_export_marks_optional_sections_unavailable_without_aborting(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=12,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=12,
+    )
+
+    scan_manifest = {
+        "schema_version": "static-scan-v1",
+        "generated_at": "2026-04-02T22:00:00Z",
+        "as_of_date": "2026-04-02",
+        "run_id": 12,
+        "rows_total": 2,
+        "default_filtered_rows_total": 1,
+        "chunks": [{"path": "scan/chunks/chunk-0001.json", "count": 2}],
+        "preview_rows": [{"symbol": "NVDA", "composite_score": 97.5}],
+    }
+    chart_manifest = {
+        "path": "charts/index.json",
+        "limit": 200,
+        "symbols_total": 1,
+        "available": True,
+        "skipped_symbols": [],
+    }
+
+    monkeypatch.setattr(service, "_load_scan_export_source", lambda *_args, **_kwargs: ([], SimpleNamespace()))
+    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: scan_manifest)
+    monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
+    monkeypatch.setattr(
+        service,
+        "_build_breadth_payload",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            StaticSiteSectionUnavailableError(
+                section="breadth",
+                reason="No breadth snapshot is available for static-site export date 2026-04-02 (latest snapshot date: none).",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_groups_payload",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            StaticSiteSectionUnavailableError(
+                section="groups",
+                reason="No group rankings are available for static-site export date 2026-04-02.",
+            )
+        ),
+    )
+
+    output_dir = tmp_path / "static-data"
+    result = service.export(output_dir)
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
+
+    assert result.manifest == manifest
+    assert manifest["features"]["breadth"] is False
+    assert manifest["features"]["groups"] is False
+    assert len(manifest["warnings"]) == 2
+    assert breadth["available"] is False
+    assert breadth["expected_as_of_date"] == "2026-04-02"
+    assert "No breadth snapshot is available" in breadth["message"]
+    assert breadth["payload"] == {}
+    assert groups["available"] is False
+    assert groups["expected_as_of_date"] == "2026-04-02"
+    assert "No group rankings are available" in groups["message"]
+    assert groups["payload"] == {}
+    assert home["freshness"]["breadth_latest_date"] is None
+    assert home["freshness"]["groups_latest_date"] is None
+    assert home["top_groups"] == []
+
+
 def test_build_breadth_payload_requires_target_date(service_and_session_factory, monkeypatch):
     service, _session_factory = service_and_session_factory
 
@@ -296,7 +382,7 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
         ),
     )
 
-    with pytest.raises(RuntimeError, match="Breadth snapshot date mismatch"):
+    with pytest.raises(StaticSiteSectionUnavailableError, match="No breadth snapshot is available"):
         service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
             generated_at="2026-04-02T22:00:00Z",
             expected_as_of_date=date(2026, 4, 2),
@@ -314,7 +400,7 @@ def test_build_groups_payload_requires_target_date(service_and_session_factory, 
     )
     monkeypatch.setattr(export_module.IBDGroupRankService, "get_instance", lambda: fake_service)
 
-    with session_factory() as db, pytest.raises(RuntimeError, match="No group rankings are available"):
+    with session_factory() as db, pytest.raises(StaticSiteSectionUnavailableError, match="No group rankings are available"):
         service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage
             db=db,
             generated_at="2026-04-02T22:00:00Z",
