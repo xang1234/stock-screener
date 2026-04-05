@@ -143,6 +143,7 @@ class ScanPickValidationSource:
         db: Session,
         *,
         cutoff_date: date,
+        until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
         rank_expr = func.row_number().over(
@@ -182,6 +183,8 @@ class ScanPickValidationSource:
         )
         if symbol:
             query = query.filter(ranked_rows.c.symbol == symbol)
+        if until_date is not None:
+            query = query.filter(ranked_rows.c.as_of_date <= until_date)
 
         rows = query.all()
         if not rows:
@@ -218,19 +221,22 @@ class ThemeAlertValidationSource:
         db: Session,
         *,
         cutoff_date: date,
+        until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
         cutoff_datetime = datetime.combine(cutoff_date, time.min, tzinfo=UTC)
-        rows = (
+        query = (
             db.query(ThemeAlert, ThemeCluster.display_name)
             .outerjoin(ThemeCluster, ThemeCluster.id == ThemeAlert.theme_cluster_id)
             .filter(
                 ThemeAlert.alert_type.in_(THEME_ALERT_TYPES),
                 ThemeAlert.triggered_at >= cutoff_datetime,
             )
-            .order_by(ThemeAlert.triggered_at.desc(), ThemeAlert.id.desc())
-            .all()
         )
+        if until_date is not None:
+            until_datetime = datetime.combine(until_date + timedelta(days=1), time.min, tzinfo=UTC)
+            query = query.filter(ThemeAlert.triggered_at < until_datetime)
+        rows = query.order_by(ThemeAlert.triggered_at.desc(), ThemeAlert.id.desc()).all()
 
         events: list[RawValidationEvent] = []
         for alert, theme_name in rows:
@@ -460,11 +466,13 @@ class ValidationService:
         *,
         source_kind: ValidationSourceKind,
         lookback_days: int,
+        as_of_date: date | None = None,
     ) -> ValidationOverviewResponse:
         payload = self._build_source_payload(
             db,
             source_kind=source_kind,
             lookback_days=lookback_days,
+            as_of_date=as_of_date,
         )
         return ValidationOverviewResponse(
             source_kind=source_kind,
@@ -472,7 +480,7 @@ class ValidationService:
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
-            freshness=self._build_freshness(db),
+            freshness=self._build_freshness(db, as_of_date=as_of_date),
             degraded_reasons=payload["degraded_reasons"],
         )
 
@@ -482,6 +490,7 @@ class ValidationService:
         *,
         symbol: str,
         lookback_days: int,
+        as_of_date: date | None = None,
     ) -> StockValidationResponse:
         symbol = symbol.upper()
         source_breakdown: list[ValidationSourceBreakdown] = []
@@ -494,6 +503,7 @@ class ValidationService:
                 db,
                 source_kind=source_kind,
                 lookback_days=lookback_days,
+                as_of_date=as_of_date,
                 symbol=symbol,
             )
             source_breakdown.append(
@@ -520,7 +530,7 @@ class ValidationService:
             source_breakdown=source_breakdown,
             recent_events=merged_events[:RECENT_EVENTS_LIMIT],
             failure_clusters=merged_failure_clusters[:FAILURE_CLUSTERS_LIMIT],
-            freshness=self._build_freshness(db),
+            freshness=self._build_freshness(db, as_of_date=as_of_date),
             degraded_reasons=_dedupe(degraded_reasons),
         )
 
@@ -530,13 +540,16 @@ class ValidationService:
         *,
         source_kind: ValidationSourceKind,
         lookback_days: int,
+        as_of_date: date | None = None,
         symbol: str | None = None,
     ) -> dict[str, Any]:
-        cutoff_date = datetime.now(UTC).date() - timedelta(days=lookback_days)
+        effective_as_of_date = as_of_date or datetime.now(UTC).date()
+        cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
         raw_events, degraded_reasons = self._collect_raw_events(
             db,
             source_kind=source_kind,
             cutoff_date=cutoff_date,
+            until_date=effective_as_of_date,
             symbol=symbol,
         )
         evaluated_events, calculator_degraded = self._outcome_calculator.evaluate_many(raw_events)
@@ -564,11 +577,22 @@ class ValidationService:
         *,
         source_kind: ValidationSourceKind,
         cutoff_date: date,
+        until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
         if source_kind == ValidationSourceKind.SCAN_PICK:
-            return self._scan_pick_source.collect(db, cutoff_date=cutoff_date, symbol=symbol)
-        return self._theme_alert_source.collect(db, cutoff_date=cutoff_date, symbol=symbol)
+            return self._scan_pick_source.collect(
+                db,
+                cutoff_date=cutoff_date,
+                until_date=until_date,
+                symbol=symbol,
+            )
+        return self._theme_alert_source.collect(
+            db,
+            cutoff_date=cutoff_date,
+            until_date=until_date,
+            symbol=symbol,
+        )
 
     def _build_horizon_summaries(
         self,
@@ -637,17 +661,19 @@ class ValidationService:
             skipped_missing_history=skipped_missing_history,
         )
 
-    def _build_freshness(self, db: Session) -> ValidationFreshness:
-        latest_feature_as_of_date = (
-            db.query(func.max(FeatureRun.as_of_date))
-            .filter(FeatureRun.status == "published")
-            .scalar()
+    def _build_freshness(self, db: Session, *, as_of_date: date | None = None) -> ValidationFreshness:
+        feature_query = db.query(func.max(FeatureRun.as_of_date)).filter(FeatureRun.status == "published")
+        if as_of_date is not None:
+            feature_query = feature_query.filter(FeatureRun.as_of_date <= as_of_date)
+        latest_feature_as_of_date = feature_query.scalar()
+
+        alert_query = db.query(func.max(ThemeAlert.triggered_at)).filter(
+            ThemeAlert.alert_type.in_(THEME_ALERT_TYPES)
         )
-        latest_theme_alert_at = (
-            db.query(func.max(ThemeAlert.triggered_at))
-            .filter(ThemeAlert.alert_type.in_(THEME_ALERT_TYPES))
-            .scalar()
-        )
+        if as_of_date is not None:
+            cutoff = datetime.combine(as_of_date + timedelta(days=1), time.min, tzinfo=UTC)
+            alert_query = alert_query.filter(ThemeAlert.triggered_at < cutoff)
+        latest_theme_alert_at = alert_query.scalar()
         return ValidationFreshness(
             latest_feature_as_of_date=(
                 latest_feature_as_of_date.isoformat() if latest_feature_as_of_date else None
