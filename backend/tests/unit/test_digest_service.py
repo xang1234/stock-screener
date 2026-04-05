@@ -23,7 +23,11 @@ from app.services.digest_service import DigestService
 
 
 class _FakeValidationService:
+    def __init__(self) -> None:
+        self.requests: list[tuple[ValidationSourceKind, date | None]] = []
+
     def get_overview(self, db, *, source_kind, lookback_days, as_of_date=None):  # noqa: ANN001
+        self.requests.append((source_kind, as_of_date))
         if source_kind == ValidationSourceKind.SCAN_PICK:
             horizons = [
                 ValidationHorizonSummary(
@@ -360,10 +364,15 @@ def _seed_digest_data(session):
 
 def test_digest_service_builds_daily_digest_and_markdown(session):
     _seed_digest_data(session)
-    service = DigestService(validation_service=_FakeValidationService())
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
 
     payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
 
+    assert fake_validation_service.requests == [
+        (ValidationSourceKind.SCAN_PICK, date(2026, 4, 4)),
+        (ValidationSourceKind.THEME_ALERT, date(2026, 4, 4)),
+    ]
     assert payload.as_of_date == "2026-04-04"
     assert payload.market.stance == "offense"
     assert [leader.symbol for leader in payload.leaders][:2] == ["NVDA", "AVGO"]
@@ -389,10 +398,15 @@ def test_digest_service_builds_daily_digest_and_markdown(session):
 
 
 def test_digest_service_degrades_cleanly_when_sections_are_missing(session):
-    service = DigestService(validation_service=_FakeValidationService())
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
 
     payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
 
+    assert fake_validation_service.requests == [
+        (ValidationSourceKind.SCAN_PICK, date(2026, 4, 4)),
+        (ValidationSourceKind.THEME_ALERT, date(2026, 4, 4)),
+    ]
     assert payload.market.stance == "unavailable"
     assert payload.leaders == []
     assert payload.themes.leaders == []
@@ -435,10 +449,71 @@ def test_digest_service_reports_theme_alert_freshness_outside_recent_display_win
     )
     session.commit()
 
-    service = DigestService(validation_service=_FakeValidationService())
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
 
     payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
 
+    assert fake_validation_service.requests == [
+        (ValidationSourceKind.SCAN_PICK, date(2026, 4, 4)),
+        (ValidationSourceKind.THEME_ALERT, date(2026, 4, 4)),
+    ]
     assert payload.themes.recent_alerts == []
     assert payload.freshness.latest_theme_alert_at == "2026-03-20T14:00:00+00:00"
     assert "missing_recent_theme_alerts" in payload.degraded_reasons
+
+
+def test_digest_service_recent_alert_window_covers_exactly_seven_eastern_days(session):
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+    session.add(
+        ThemeMetrics(
+            theme_cluster_id=theme.id,
+            date=date(2026, 4, 4),
+            pipeline="technical",
+            mention_velocity=1.0,
+            basket_return_1m=5.0,
+            momentum_score=50.0,
+            status="stable",
+        )
+    )
+    session.add_all(
+        [
+            ThemeAlert(
+                theme_cluster_id=theme.id,
+                alert_type="breakout",
+                title="Inside window",
+                severity="info",
+                related_tickers=["NVDA"],
+                triggered_at=datetime(2026, 3, 29, 15, 0, tzinfo=UTC),
+            ),
+            ThemeAlert(
+                theme_cluster_id=theme.id,
+                alert_type="breakout",
+                title="Too old",
+                severity="info",
+                related_tickers=["AVGO"],
+                triggered_at=datetime(2026, 3, 28, 15, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    session.commit()
+
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
+
+    payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
+
+    assert fake_validation_service.requests == [
+        (ValidationSourceKind.SCAN_PICK, date(2026, 4, 4)),
+        (ValidationSourceKind.THEME_ALERT, date(2026, 4, 4)),
+    ]
+    assert [alert.title for alert in payload.themes.recent_alerts] == ["Inside window"]

@@ -474,11 +474,12 @@ class ValidationService:
         lookback_days: int,
         as_of_date: date | None = None,
     ) -> ValidationOverviewResponse:
+        effective_as_of_date = self._effective_as_of_date(as_of_date)
         payload = self._build_source_payload(
             db,
             source_kind=source_kind,
             lookback_days=lookback_days,
-            as_of_date=as_of_date,
+            as_of_date=effective_as_of_date,
         )
         return ValidationOverviewResponse(
             source_kind=source_kind,
@@ -486,7 +487,7 @@ class ValidationService:
             horizons=payload["horizons"],
             recent_events=payload["recent_events"],
             failure_clusters=payload["failure_clusters"],
-            freshness=self._build_freshness(db, as_of_date=as_of_date),
+            freshness=self._build_freshness(db, as_of_date=effective_as_of_date),
             degraded_reasons=payload["degraded_reasons"],
         )
 
@@ -499,6 +500,7 @@ class ValidationService:
         as_of_date: date | None = None,
     ) -> StockValidationResponse:
         symbol = symbol.upper()
+        effective_as_of_date = self._effective_as_of_date(as_of_date)
         source_breakdown: list[ValidationSourceBreakdown] = []
         merged_events: list[ValidationEvent] = []
         merged_failure_clusters: list[ValidationFailureCluster] = []
@@ -509,7 +511,7 @@ class ValidationService:
                 db,
                 source_kind=source_kind,
                 lookback_days=lookback_days,
-                as_of_date=as_of_date,
+                as_of_date=effective_as_of_date,
                 symbol=symbol,
             )
             source_breakdown.append(
@@ -536,9 +538,14 @@ class ValidationService:
             source_breakdown=source_breakdown,
             recent_events=merged_events[:RECENT_EVENTS_LIMIT],
             failure_clusters=merged_failure_clusters[:FAILURE_CLUSTERS_LIMIT],
-            freshness=self._build_freshness(db, as_of_date=as_of_date),
+            freshness=self._build_freshness(db, as_of_date=effective_as_of_date),
             degraded_reasons=_dedupe(degraded_reasons),
         )
+
+    def _effective_as_of_date(self, as_of_date: date | None) -> date:
+        if as_of_date is not None:
+            return as_of_date
+        return to_eastern_date(datetime.now(UTC))
 
     def _build_source_payload(
         self,
@@ -549,7 +556,7 @@ class ValidationService:
         as_of_date: date | None = None,
         symbol: str | None = None,
     ) -> dict[str, Any]:
-        effective_as_of_date = as_of_date or datetime.now(UTC).date()
+        effective_as_of_date = self._effective_as_of_date(as_of_date)
         cutoff_date = effective_as_of_date - timedelta(days=lookback_days)
         raw_events, degraded_reasons = self._collect_raw_events(
             db,

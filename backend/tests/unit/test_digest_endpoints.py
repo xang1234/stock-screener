@@ -36,9 +36,11 @@ async def client():
 
 @pytest.fixture(autouse=True)
 def _disable_server_auth():
+    original_enabled = server_auth.settings.server_auth_enabled
     server_auth.settings.server_auth_enabled = False
     app.dependency_overrides.clear()
     yield
+    server_auth.settings.server_auth_enabled = original_enabled
     app.dependency_overrides.clear()
 
 

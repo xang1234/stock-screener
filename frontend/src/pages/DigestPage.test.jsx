@@ -1,3 +1,5 @@
+import { createTheme, ThemeProvider } from '@mui/material';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -186,5 +188,65 @@ describe('DigestPage', () => {
     expect(screen.getAllByText(/no ranked themes are available/i)).toHaveLength(2);
     expect(screen.getByText(/no leader candidates are available/i)).toBeInTheDocument();
     expect(screen.getByText(/no watchlist highlights are available/i)).toBeInTheDocument();
+  });
+
+  it('keeps rendering cached digest data when a refetch fails', async () => {
+    const cachedDigest = {
+      as_of_date: '2026-04-04',
+      freshness: {},
+      market: {
+        stance: 'balanced',
+        summary: 'Cached digest remains available.',
+        breadth_metrics: {},
+      },
+      leaders: [],
+      themes: {
+        leaders: [],
+        laggards: [],
+        recent_alerts: [],
+      },
+      validation: {
+        lookback_days: 90,
+        scan_pick: {
+          source_kind: 'scan_pick',
+          horizons: [],
+          degraded_reasons: [],
+        },
+        theme_alert: {
+          source_kind: 'theme_alert',
+          horizons: [],
+          degraded_reasons: [],
+        },
+      },
+      watchlists: [],
+      risks: [],
+      degraded_reasons: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+    queryClient.setQueryData(['dailyDigest'], cachedDigest);
+    queryClient.invalidateQueries({ queryKey: ['dailyDigest'] });
+    getDailyDigest.mockRejectedValue(new Error('Network down'));
+
+    renderWithProviders(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={createTheme()}>
+          <MemoryRouter>
+            <DigestPage />
+          </MemoryRouter>
+        </ThemeProvider>
+      </QueryClientProvider>,
+      { wrapper: ({ children }) => children }
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Daily Digest' })).toBeInTheDocument();
+    expect(screen.getByText('Cached digest remains available.')).toBeInTheDocument();
+    await waitFor(() => expect(getDailyDigest).toHaveBeenCalled());
+    expect(screen.queryByText(/failed to load daily digest/i)).not.toBeInTheDocument();
   });
 });

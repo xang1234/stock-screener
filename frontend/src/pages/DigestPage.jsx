@@ -133,7 +133,7 @@ function DigestPage() {
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return <Alert severity="error">Failed to load daily digest: {error.message}</Alert>;
   }
 

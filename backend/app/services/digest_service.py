@@ -440,7 +440,9 @@ class DigestService:
             theme_laggards = [self._theme_item(metrics, cluster) for metrics, cluster in laggard_rows]
 
         recent_alert_symbols: set[str] = set()
-        alerts_cutoff, _ = eastern_day_bounds_utc(as_of_date - timedelta(days=THEME_ALERT_LOOKBACK_DAYS))
+        alerts_cutoff, _ = eastern_day_bounds_utc(
+            as_of_date - timedelta(days=THEME_ALERT_LOOKBACK_DAYS - 1)
+        )
         _, alerts_until = eastern_day_bounds_utc(as_of_date)
         alert_rows = (
             db.query(ThemeAlert, ThemeCluster.display_name)
@@ -766,4 +768,3 @@ def _serialize_temporal(value: date | datetime) -> str:
             value = value.replace(tzinfo=UTC)
         return value.isoformat()
     return value.isoformat()
-
