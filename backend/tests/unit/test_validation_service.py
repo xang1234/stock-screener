@@ -22,6 +22,9 @@ from app.services.validation_service import (
     ThemeAlertValidationSource,
 )
 
+FIXED_TODAY = date(2026, 4, 5)
+FIXED_NOW = datetime(2026, 4, 5, 14, 0, tzinfo=UTC)
+
 
 @pytest.fixture
 def session():
@@ -75,7 +78,7 @@ def _history_frame(start: date, rows: list[tuple[float, float, float, float]]):
 
 def test_scan_pick_validation_source_limits_to_top_ten_and_breaks_ties_by_symbol(session):
     run = FeatureRun(
-        as_of_date=date.today(),
+        as_of_date=FIXED_TODAY,
         run_type="daily_snapshot",
         status="published",
     )
@@ -99,7 +102,7 @@ def test_scan_pick_validation_source_limits_to_top_ten_and_breaks_ties_by_symbol
     session.commit()
 
     source = ScanPickValidationSource()
-    events, degraded = source.collect(session, cutoff_date=date.today() - timedelta(days=1))
+    events, degraded = source.collect(session, cutoff_date=FIXED_TODAY - timedelta(days=1))
 
     assert degraded == []
     assert [event.symbol for event in events] == sorted(symbols)[:SCAN_PICK_TOP_N]
@@ -125,7 +128,7 @@ def test_theme_alert_validation_source_filters_supported_types_and_expands_relat
                 title="Breakout",
                 severity="warning",
                 related_tickers=["NVDA", "AVGO"],
-                triggered_at=datetime.now(UTC),
+                triggered_at=FIXED_NOW,
             ),
             ThemeAlert(
                 theme_cluster_id=theme.id,
@@ -133,7 +136,7 @@ def test_theme_alert_validation_source_filters_supported_types_and_expands_relat
                 title="Velocity",
                 severity="critical",
                 related_tickers=["MSFT"],
-                triggered_at=datetime.now(UTC),
+                triggered_at=FIXED_NOW,
             ),
             ThemeAlert(
                 theme_cluster_id=theme.id,
@@ -141,14 +144,14 @@ def test_theme_alert_validation_source_filters_supported_types_and_expands_relat
                 title="Ignore",
                 severity="info",
                 related_tickers=["AAPL"],
-                triggered_at=datetime.now(UTC),
+                triggered_at=FIXED_NOW,
             ),
         ]
     )
     session.commit()
 
     source = ThemeAlertValidationSource()
-    events, degraded = source.collect(session, cutoff_date=date.today() - timedelta(days=7))
+    events, degraded = source.collect(session, cutoff_date=FIXED_TODAY - timedelta(days=7))
 
     assert degraded == []
     assert [(event.attributes["alert_type"], event.symbol) for event in events] == [
@@ -289,10 +292,10 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
             symbol="NVDA",
             source_kind=ValidationSourceKind.SCAN_PICK,
             source_ref="run:1",
-            event_at=date.today(),
+            event_at=FIXED_TODAY,
             attributes={"rating": "Buy", "stage": 2, "ibd_industry_group": "Semis"},
         ),
-        entry_at=date.today(),
+        entry_at=FIXED_TODAY,
         entry_price=100.0,
         return_1s_pct=-1.0,
         return_5s_pct=-3.0,
@@ -305,10 +308,10 @@ def test_failure_cluster_builder_uses_source_specific_bucket_fields():
             symbol="MSFT",
             source_kind=ValidationSourceKind.THEME_ALERT,
             source_ref="alert:1",
-            event_at=datetime.now(UTC),
+            event_at=FIXED_NOW,
             attributes={"alert_type": "breakout", "severity": "warning", "theme": "AI"},
         ),
-        entry_at=date.today(),
+        entry_at=FIXED_TODAY,
         entry_price=100.0,
         return_1s_pct=-0.5,
         return_5s_pct=-2.0,
