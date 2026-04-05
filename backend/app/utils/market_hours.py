@@ -6,7 +6,7 @@ when it closes, and if cached data is stale based on market hours.
 
 Uses pandas_market_calendars for authoritative NYSE holiday/schedule data.
 """
-from datetime import datetime, date, time, timedelta
+from datetime import UTC, datetime, date, time, timedelta
 from typing import Optional
 import pytz
 import pandas_market_calendars as mcal
@@ -43,6 +43,22 @@ def _get_trading_days_set() -> set:
 def get_eastern_now() -> datetime:
     """Get current time in US Eastern timezone."""
     return datetime.now(EASTERN)
+
+
+def to_eastern_date(dt: datetime) -> date:
+    """Normalize a datetime to Eastern and return its calendar date."""
+    if dt.tzinfo is None:
+        dt = EASTERN.localize(dt)
+    else:
+        dt = dt.astimezone(EASTERN)
+    return dt.date()
+
+
+def eastern_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
+    """Return the UTC bounds for one Eastern calendar day."""
+    start_local = EASTERN.localize(datetime.combine(day, time.min))
+    end_local = EASTERN.localize(datetime.combine(day + timedelta(days=1), time.min))
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
 
 
 def is_market_open(dt: Optional[datetime] = None) -> bool:

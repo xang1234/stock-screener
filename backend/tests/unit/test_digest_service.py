@@ -235,6 +235,30 @@ def _seed_digest_data(session):
         category="technology",
         lifecycle_state="active",
     )
+    robotics_theme = ThemeCluster(
+        name="Robotics",
+        canonical_key="robotics",
+        display_name="Robotics",
+        pipeline="technical",
+        category="industrials",
+        lifecycle_state="active",
+    )
+    cybersecurity_theme = ThemeCluster(
+        name="Cybersecurity",
+        canonical_key="cybersecurity",
+        display_name="Cybersecurity",
+        pipeline="technical",
+        category="technology",
+        lifecycle_state="active",
+    )
+    cloud_theme = ThemeCluster(
+        name="Cloud Platforms",
+        canonical_key="cloud-platforms",
+        display_name="Cloud Platforms",
+        pipeline="technical",
+        category="technology",
+        lifecycle_state="active",
+    )
     lagging_theme = ThemeCluster(
         name="Solar",
         canonical_key="solar",
@@ -243,10 +267,13 @@ def _seed_digest_data(session):
         category="energy",
         lifecycle_state="active",
     )
-    session.add_all([ai_theme, software_theme, lagging_theme])
+    session.add_all([ai_theme, software_theme, robotics_theme, cybersecurity_theme, cloud_theme, lagging_theme])
     session.commit()
     session.refresh(ai_theme)
     session.refresh(software_theme)
+    session.refresh(robotics_theme)
+    session.refresh(cybersecurity_theme)
+    session.refresh(cloud_theme)
     session.refresh(lagging_theme)
 
     session.add_all(
@@ -270,6 +297,33 @@ def _seed_digest_data(session):
                 status="trending",
             ),
             ThemeMetrics(
+                theme_cluster_id=robotics_theme.id,
+                date=date(2026, 4, 4),
+                pipeline="technical",
+                mention_velocity=1.1,
+                basket_return_1m=6.7,
+                momentum_score=66.0,
+                status="trending",
+            ),
+            ThemeMetrics(
+                theme_cluster_id=cybersecurity_theme.id,
+                date=date(2026, 4, 4),
+                pipeline="technical",
+                mention_velocity=1.0,
+                basket_return_1m=5.2,
+                momentum_score=58.0,
+                status="trending",
+            ),
+            ThemeMetrics(
+                theme_cluster_id=cloud_theme.id,
+                date=date(2026, 4, 4),
+                pipeline="technical",
+                mention_velocity=0.8,
+                basket_return_1m=2.9,
+                momentum_score=45.0,
+                status="stable",
+            ),
+            ThemeMetrics(
                 theme_cluster_id=lagging_theme.id,
                 date=date(2026, 4, 4),
                 pipeline="technical",
@@ -287,7 +341,7 @@ def _seed_digest_data(session):
             title="AI infrastructure breakout",
             severity="warning",
             related_tickers=["NVDA", "AVGO"],
-            triggered_at=datetime(2026, 4, 4, 15, 30, tzinfo=UTC),
+            triggered_at=datetime(2026, 4, 5, 1, 30, tzinfo=UTC),
         )
     )
 
@@ -317,9 +371,13 @@ def test_digest_service_builds_daily_digest_and_markdown(session):
     assert payload.themes.leaders[0].display_name == "AI Infrastructure"
     assert payload.themes.laggards[0].display_name == "Solar"
     assert payload.themes.recent_alerts[0].related_tickers == ["NVDA", "AVGO"]
+    assert {theme.theme_id for theme in payload.themes.leaders}.isdisjoint(
+        {theme.theme_id for theme in payload.themes.laggards}
+    )
     assert payload.validation.scan_pick.horizons[1].avg_return_pct == 3.6
     assert payload.watchlists[0].matched_symbols == ["NVDA"]
     assert payload.watchlists[0].alert_symbols == ["NVDA"]
+    assert payload.freshness.latest_theme_alert_at == "2026-04-05T01:30:00+00:00"
     assert "theme_alert_missing_price_cache" in payload.degraded_reasons
     assert any(risk.kind == "theme_alert_validation" for risk in payload.risks)
 
@@ -341,3 +399,46 @@ def test_digest_service_degrades_cleanly_when_sections_are_missing(session):
     assert payload.watchlists == []
     assert "missing_breadth_snapshot" in payload.degraded_reasons
     assert "missing_published_feature_run" in payload.degraded_reasons
+
+
+def test_digest_service_reports_theme_alert_freshness_outside_recent_display_window(session):
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+    session.add(
+        ThemeMetrics(
+            theme_cluster_id=theme.id,
+            date=date(2026, 4, 4),
+            pipeline="technical",
+            mention_velocity=1.0,
+            basket_return_1m=5.0,
+            momentum_score=50.0,
+            status="stable",
+        )
+    )
+    session.add(
+        ThemeAlert(
+            theme_cluster_id=theme.id,
+            alert_type="breakout",
+            title="Older alert",
+            severity="info",
+            related_tickers=["NVDA"],
+            triggered_at=datetime(2026, 3, 20, 14, 0, tzinfo=UTC),
+        )
+    )
+    session.commit()
+
+    service = DigestService(validation_service=_FakeValidationService())
+
+    payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
+
+    assert payload.themes.recent_alerts == []
+    assert payload.freshness.latest_theme_alert_at == "2026-03-20T14:00:00+00:00"
+    assert "missing_recent_theme_alerts" in payload.degraded_reasons

@@ -33,7 +33,7 @@ from app.schemas.digest import (
 from app.schemas.validation import ValidationHorizonSummary, ValidationSourceKind
 from app.services.validation_service import ValidationService
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
-from app.utils.market_hours import EASTERN
+from app.utils.market_hours import eastern_day_bounds_utc, to_eastern_date
 
 DIGEST_LEADERS_LIMIT = 5
 WATCHLIST_MATCH_LIMIT = 5
@@ -51,7 +51,6 @@ class _ThemeSectionResult:
     recent_alert_symbols: set[str]
     degraded_reasons: list[str]
     latest_metrics_date: date | None
-    latest_alert_at: datetime | None
 
 
 class DigestService:
@@ -99,11 +98,12 @@ class DigestService:
         if latest_run is None and watchlists:
             degraded_reasons.append("watchlists_missing_feature_run_context")
 
+        latest_theme_alert_at = self._load_latest_theme_alert_at(db, effective_as_of_date)
         freshness = self._build_freshness(
             latest_run=latest_run,
             breadth=breadth,
             latest_theme_metrics_date=themes_result.latest_metrics_date,
-            latest_theme_alert_at=themes_result.latest_alert_at,
+            latest_theme_alert_at=latest_theme_alert_at,
         )
 
         risks = self._build_risk_notes(
@@ -237,7 +237,7 @@ class DigestService:
             .scalar()
         )
         if latest_theme_alert_at is not None:
-            candidates.append(_to_eastern_date(latest_theme_alert_at))
+            candidates.append(to_eastern_date(latest_theme_alert_at))
 
         return max(candidates) if candidates else datetime.now(UTC).date()
 
@@ -263,6 +263,17 @@ class DigestService:
             .filter(MarketBreadth.date <= as_of_date)
             .order_by(MarketBreadth.date.desc())
             .first()
+        )
+
+    def _load_latest_theme_alert_at(self, db: Session, as_of_date: date) -> datetime | None:
+        _, alerts_until = eastern_day_bounds_utc(as_of_date)
+        return (
+            db.query(func.max(ThemeAlert.triggered_at))
+            .filter(
+                ThemeAlert.alert_type.in_(SUPPORTED_THEME_ALERT_TYPES),
+                ThemeAlert.triggered_at < alerts_until,
+            )
+            .scalar()
         )
 
     def _build_market_section(
@@ -404,6 +415,7 @@ class DigestService:
                 .limit(THEME_SECTION_LIMIT)
                 .all()
             )
+            leader_theme_ids = [cluster.id for _, cluster in leader_rows]
             laggard_rows = (
                 db.query(ThemeMetrics, ThemeCluster)
                 .join(ThemeCluster, ThemeCluster.id == ThemeMetrics.theme_cluster_id)
@@ -412,6 +424,11 @@ class DigestService:
                     ThemeCluster.is_active.is_(True),
                     ThemeMetrics.momentum_score.is_not(None),
                 )
+            )
+            if leader_theme_ids:
+                laggard_rows = laggard_rows.filter(~ThemeCluster.id.in_(leader_theme_ids))
+            laggard_rows = (
+                laggard_rows
                 .order_by(
                     ThemeMetrics.momentum_score.asc(),
                     ThemeCluster.display_name.asc(),
@@ -423,8 +440,8 @@ class DigestService:
             theme_laggards = [self._theme_item(metrics, cluster) for metrics, cluster in laggard_rows]
 
         recent_alert_symbols: set[str] = set()
-        alerts_cutoff = datetime.combine(as_of_date - timedelta(days=THEME_ALERT_LOOKBACK_DAYS), time.min, tzinfo=UTC)
-        alerts_until = datetime.combine(as_of_date + timedelta(days=1), time.min, tzinfo=UTC)
+        alerts_cutoff, _ = eastern_day_bounds_utc(as_of_date - timedelta(days=THEME_ALERT_LOOKBACK_DAYS))
+        _, alerts_until = eastern_day_bounds_utc(as_of_date)
         alert_rows = (
             db.query(ThemeAlert, ThemeCluster.display_name)
             .outerjoin(ThemeCluster, ThemeCluster.id == ThemeAlert.theme_cluster_id)
@@ -439,7 +456,6 @@ class DigestService:
             .all()
         )
         recent_alerts: list[DigestThemeAlertItem] = []
-        latest_alert_at: datetime | None = None
         for alert, theme_name in alert_rows:
             related_tickers = [
                 ticker.strip().upper()
@@ -447,8 +463,6 @@ class DigestService:
                 if isinstance(ticker, str) and ticker.strip()
             ]
             recent_alert_symbols.update(related_tickers)
-            if latest_alert_at is None or (alert.triggered_at and alert.triggered_at > latest_alert_at):
-                latest_alert_at = alert.triggered_at
             recent_alerts.append(
                 DigestThemeAlertItem(
                     alert_id=alert.id,
@@ -473,7 +487,6 @@ class DigestService:
             recent_alert_symbols=recent_alert_symbols,
             degraded_reasons=degraded_reasons,
             latest_metrics_date=latest_metrics_date,
-            latest_alert_at=latest_alert_at,
         )
 
     def _theme_item(self, metrics: ThemeMetrics, cluster: ThemeCluster) -> DigestThemeItem:
@@ -754,10 +767,3 @@ def _serialize_temporal(value: date | datetime) -> str:
         return value.isoformat()
     return value.isoformat()
 
-
-def _to_eastern_date(value: datetime) -> date:
-    if value.tzinfo is None:
-        localized = EASTERN.localize(value)
-    else:
-        localized = value.astimezone(EASTERN)
-    return localized.date()

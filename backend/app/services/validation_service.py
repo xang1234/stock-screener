@@ -26,7 +26,13 @@ from app.schemas.validation import (
     ValidationSourceKind,
 )
 from app.services.price_cache_service import PriceCacheService
-from app.utils.market_hours import EASTERN, MARKET_OPEN_TIME, is_trading_day
+from app.utils.market_hours import (
+    EASTERN,
+    MARKET_OPEN_TIME,
+    eastern_day_bounds_utc,
+    is_trading_day,
+    to_eastern_date,
+)
 
 SCAN_PICK_TOP_N = 10
 RECENT_EVENTS_LIMIT = 25
@@ -224,7 +230,7 @@ class ThemeAlertValidationSource:
         until_date: date | None = None,
         symbol: str | None = None,
     ) -> tuple[list[RawValidationEvent], list[str]]:
-        cutoff_datetime = datetime.combine(cutoff_date, time.min, tzinfo=UTC)
+        cutoff_datetime, _ = eastern_day_bounds_utc(cutoff_date)
         query = (
             db.query(ThemeAlert, ThemeCluster.display_name)
             .outerjoin(ThemeCluster, ThemeCluster.id == ThemeAlert.theme_cluster_id)
@@ -234,13 +240,13 @@ class ThemeAlertValidationSource:
             )
         )
         if until_date is not None:
-            until_datetime = datetime.combine(until_date + timedelta(days=1), time.min, tzinfo=UTC)
+            _, until_datetime = eastern_day_bounds_utc(until_date)
             query = query.filter(ThemeAlert.triggered_at < until_datetime)
         rows = query.order_by(ThemeAlert.triggered_at.desc(), ThemeAlert.id.desc()).all()
 
         events: list[RawValidationEvent] = []
         for alert, theme_name in rows:
-            if alert.triggered_at is None or alert.triggered_at.date() < cutoff_date:
+            if alert.triggered_at is None or to_eastern_date(alert.triggered_at) < cutoff_date:
                 continue
             tickers = alert.related_tickers if isinstance(alert.related_tickers, list) else []
             for ticker in tickers:
@@ -671,7 +677,7 @@ class ValidationService:
             ThemeAlert.alert_type.in_(THEME_ALERT_TYPES)
         )
         if as_of_date is not None:
-            cutoff = datetime.combine(as_of_date + timedelta(days=1), time.min, tzinfo=UTC)
+            _, cutoff = eastern_day_bounds_utc(as_of_date)
             alert_query = alert_query.filter(ThemeAlert.triggered_at < cutoff)
         latest_theme_alert_at = alert_query.scalar()
         return ValidationFreshness(
