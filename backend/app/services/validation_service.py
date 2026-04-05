@@ -337,6 +337,17 @@ class PriceOutcomeCalculator:
         entry_day = trading_days[0]
         entry_row = history.loc[entry_day]
         entry_price = float(entry_row["Open"])
+        if entry_price <= 0:
+            return EvaluatedValidationEvent(
+                raw=event,
+                entry_at=entry_day.date(),
+                entry_price=None,
+                return_1s_pct=None,
+                return_5s_pct=None,
+                mfe_5s_pct=None,
+                mae_5s_pct=None,
+                missing_horizons=frozenset({1, 5}),
+            )
         close_1s = float(entry_row["Close"])
         return_1s_pct = ((close_1s / entry_price) - 1.0) * 100.0
 

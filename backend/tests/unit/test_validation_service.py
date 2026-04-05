@@ -220,6 +220,38 @@ def test_price_outcome_calculator_marks_missing_five_session_history():
     assert evaluated[0].missing_horizons == frozenset({5})
 
 
+def test_price_outcome_calculator_degrades_zero_open_entry_prices():
+    event = RawValidationEvent(
+        symbol="MSFT",
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        source_ref="alert:zero-open",
+        event_at=date(2026, 4, 1),
+        attributes={"symbol": "MSFT"},
+    )
+    history = _history_frame(
+        date(2026, 4, 2),
+        [
+            (0, 51, 49, 50.5),
+            (50.5, 52, 50, 51),
+            (51, 53, 50.5, 52),
+            (52, 54, 51, 53),
+            (53, 55, 52, 54),
+        ],
+    )
+    calculator = PriceOutcomeCalculator(_FakePriceCache({"MSFT": history}))
+
+    evaluated, degraded = calculator.evaluate_many([event])
+
+    assert degraded == []
+    assert evaluated[0].entry_at == date(2026, 4, 2)
+    assert evaluated[0].entry_price is None
+    assert evaluated[0].return_1s_pct is None
+    assert evaluated[0].return_5s_pct is None
+    assert evaluated[0].mfe_5s_pct is None
+    assert evaluated[0].mae_5s_pct is None
+    assert evaluated[0].missing_horizons == frozenset({1, 5})
+
+
 def test_price_outcome_calculator_uses_same_day_entry_for_premarket_alerts_only():
     history = _history_frame(
         date(2026, 4, 2),
