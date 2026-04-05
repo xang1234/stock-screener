@@ -20,6 +20,7 @@ import { ColorModeContext } from './contexts/ColorModeContext';
 // Lazy loaded pages (secondary pages)
 const BreadthPage = lazy(() => import('./pages/BreadthPage'));
 const GroupRankingsPage = lazy(() => import('./pages/GroupRankingsPage'));
+const ValidationPage = lazy(() => import('./pages/ValidationPage'));
 const ThemesPage = lazy(() => import('./pages/ThemesPage'));
 const ChatbotPage = lazy(() => import('./pages/ChatbotPage'));
 
@@ -274,6 +275,7 @@ function AppShell() {
             <Route path="/scan" element={<ScanPage />} />
             <Route path="/breadth" element={<BreadthPage />} />
             <Route path="/groups" element={<GroupRankingsPage />} />
+            <Route path="/validation" element={<ValidationPage />} />
             {features.themes && <Route path="/themes" element={<ThemesPage />} />}
             {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
             <Route path="/stocks/:ticker" element={<StockDetails />} />

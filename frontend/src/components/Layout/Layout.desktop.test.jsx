@@ -54,6 +54,7 @@ describe('Layout desktop capability gating', () => {
   it('hides themes, chatbot, task controls, and cache status in desktop core mode', () => {
     renderLayout();
 
+    expect(screen.getByText('Validation')).toBeInTheDocument();
     expect(screen.queryByText('Themes')).not.toBeInTheDocument();
     expect(screen.queryByText('Chatbot')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Scheduled Tasks')).not.toBeInTheDocument();

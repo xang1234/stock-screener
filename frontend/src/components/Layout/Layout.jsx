@@ -74,6 +74,7 @@ function Layout({ children }) {
     { path: '/scan', label: 'Bulk Scanner' },
     { path: '/breadth', label: 'Market Breadth' },
     { path: '/groups', label: 'Group Rankings' },
+    { path: '/validation', label: 'Validation' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Chatbot' }] : []),
   ];

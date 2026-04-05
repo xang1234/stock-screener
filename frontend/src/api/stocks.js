@@ -189,6 +189,19 @@ export const getStockDecisionDashboard = async (symbol) => {
 };
 
 /**
+ * Get historical validation metrics for one symbol.
+ * @param {string} symbol - Stock ticker symbol
+ * @param {number} lookbackDays - Lookback window in days
+ * @returns {Promise<Object>} Validation payload
+ */
+export const getStockValidation = async (symbol, lookbackDays = 365) => {
+  const response = await apiClient.get(`/v1/stocks/${symbol}/validation`, {
+    params: { lookback_days: lookbackDays },
+  });
+  return response.data;
+};
+
+/**
  * Get industry/sector peers from the latest published feature run.
  * @param {string} symbol - Stock ticker symbol
  * @param {string} [peerType='industry'] - 'industry' or 'sector'

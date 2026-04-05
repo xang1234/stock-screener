@@ -21,11 +21,17 @@ from ...schemas.stock import (
     StockSearchResult,
     StockTechnicals,
 )
+from ...schemas.validation import StockValidationResponse
+from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
 from ...wiring.bootstrap import get_uow
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_validation_service():
+    return ValidationService()
 
 
 def _get_yfinance_service():
@@ -779,3 +785,19 @@ async def get_stock_peers(
 @router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
 async def get_price_history(symbol: str, period: str = "6mo"):
     return _load_price_history(symbol, period)
+
+
+@router.get("/{symbol}/validation", response_model=StockValidationResponse)
+async def get_stock_validation(
+    symbol: str,
+    lookback_days: int = Query(365, ge=30, le=365),
+    db: Session = Depends(get_db),
+    service: ValidationService = Depends(_get_validation_service),
+):
+    """Return deterministic historical validation metrics for one symbol."""
+
+    return service.get_stock_validation(
+        db,
+        symbol=symbol,
+        lookback_days=lookback_days,
+    )
