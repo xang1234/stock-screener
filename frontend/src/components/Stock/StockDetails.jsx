@@ -18,17 +18,25 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 
-import { getStockDecisionDashboard } from '../../api/stocks';
+import { getStockDecisionDashboard, getStockValidation } from '../../api/stocks';
 import CandlestickChart from '../Charts/CandlestickChart';
 import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import PeerComparisonModal from '../Scan/PeerComparisonModal';
+import {
+  ValidationDegradedAlert,
+  ValidationFailureClustersTable,
+  ValidationRecentEventsTable,
+  ValidationSummaryCards,
+} from '../Validation/ValidationPanels';
 import { getGroupRankColor, getStageColor } from '../../utils/colorUtils';
 import {
   formatLargeNumber,
@@ -132,10 +140,21 @@ function StockDetails() {
   const { ticker: symbol } = useParams();
   const navigate = useNavigate();
   const [peerModalOpen, setPeerModalOpen] = useState(false);
+  const [validationLookbackDays, setValidationLookbackDays] = useState(365);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['stockDecisionDashboard', symbol],
     queryFn: () => getStockDecisionDashboard(symbol),
+    enabled: Boolean(symbol),
+    staleTime: 60_000,
+  });
+  const {
+    data: validationData,
+    isLoading: isValidationLoading,
+    error: validationError,
+  } = useQuery({
+    queryKey: ['stockValidation', symbol, validationLookbackDays],
+    queryFn: () => getStockValidation(symbol, validationLookbackDays),
     enabled: Boolean(symbol),
     staleTime: 60_000,
   });
@@ -514,6 +533,76 @@ function StockDetails() {
                 {regime.summary}
               </Typography>
             )}
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Historical Validation
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={1.5}>
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  Lookback
+                </Typography>
+                <ToggleButtonGroup
+                  exclusive
+                  size="small"
+                  value={validationLookbackDays}
+                  onChange={(_, value) => value && setValidationLookbackDays(value)}
+                >
+                  <ToggleButton value={90}>90D</ToggleButton>
+                  <ToggleButton value={180}>180D</ToggleButton>
+                  <ToggleButton value={365}>365D</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+
+              {isValidationLoading && (
+                <Box display="flex" justifyContent="center" py={2}>
+                  <CircularProgress size={24} />
+                </Box>
+              )}
+
+              {validationError && (
+                <Alert severity="error">
+                  Failed to load historical validation: {validationError.message}
+                </Alert>
+              )}
+
+              {validationData && (
+                <Stack spacing={2}>
+                  <ValidationDegradedAlert degradedReasons={validationData.degraded_reasons} />
+                  {(validationData.source_breakdown || []).map((section) => (
+                    <Box key={section.source_kind} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                        {section.source_kind === 'scan_pick' ? 'Scan Picks' : 'Theme Alerts'}
+                      </Typography>
+                      <Stack spacing={1.5}>
+                        <ValidationDegradedAlert degradedReasons={section.degraded_reasons} />
+                        <ValidationSummaryCards horizons={section.horizons} />
+                      </Stack>
+                    </Box>
+                  ))}
+
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                      Recent Events
+                    </Typography>
+                    <ValidationRecentEventsTable events={validationData.recent_events} showSourceKind />
+                  </Box>
+
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                      Failure Clusters
+                    </Typography>
+                    <ValidationFailureClustersTable clusters={validationData.failure_clusters} />
+                  </Box>
+                </Stack>
+              )}
+            </Stack>
           </AccordionDetails>
         </Accordion>
       </Box>

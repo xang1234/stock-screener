@@ -1,10 +1,10 @@
-import { createTheme, ThemeProvider } from '@mui/material';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import Layout from './Layout';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
+import { renderWithProviders } from '../../test/renderWithProviders';
 
 const runtimeState = {
   desktopMode: true,
@@ -37,16 +37,14 @@ vi.mock('../App/DesktopBootstrapBanner', () => ({
 
 
 function renderLayout() {
-  return render(
-    <ThemeProvider theme={createTheme()}>
-      <ColorModeContext.Provider value={{ toggleColorMode: vi.fn(), mode: 'dark' }}>
-        <MemoryRouter initialEntries={['/']}>
-          <Layout>
-            <div>content</div>
-          </Layout>
-        </MemoryRouter>
-      </ColorModeContext.Provider>
-    </ThemeProvider>
+  return renderWithProviders(
+    <ColorModeContext.Provider value={{ toggleColorMode: vi.fn(), mode: 'dark' }}>
+      <MemoryRouter initialEntries={['/']}>
+        <Layout>
+          <div>content</div>
+        </Layout>
+      </MemoryRouter>
+    </ColorModeContext.Provider>
   );
 }
 
@@ -54,6 +52,7 @@ describe('Layout desktop capability gating', () => {
   it('hides themes, chatbot, task controls, and cache status in desktop core mode', () => {
     renderLayout();
 
+    expect(screen.getByText('Validation')).toBeInTheDocument();
     expect(screen.queryByText('Themes')).not.toBeInTheDocument();
     expect(screen.queryByText('Chatbot')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Scheduled Tasks')).not.toBeInTheDocument();
