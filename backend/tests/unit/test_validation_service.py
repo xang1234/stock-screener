@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import app.services.validation_service as validation_service_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.theme import ThemeAlert, ThemeCluster
@@ -20,6 +21,7 @@ from app.services.validation_service import (
     SCAN_PICK_TOP_N,
     ScanPickValidationSource,
     ThemeAlertValidationSource,
+    ValidationService,
 )
 
 FIXED_TODAY = date(2026, 4, 5)
@@ -159,6 +161,135 @@ def test_theme_alert_validation_source_filters_supported_types_and_expands_relat
         ("breakout", "NVDA"),
         ("breakout", "AVGO"),
     ]
+
+
+def test_theme_alert_validation_source_uses_eastern_day_bounds(session):
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+
+    session.add_all(
+        [
+            ThemeAlert(
+                theme_cluster_id=theme.id,
+                alert_type="breakout",
+                title="Late evening UTC still counts for prior Eastern day",
+                severity="warning",
+                related_tickers=["NVDA"],
+                triggered_at=datetime(2026, 4, 5, 1, 30, tzinfo=UTC),
+            ),
+            ThemeAlert(
+                theme_cluster_id=theme.id,
+                alert_type="breakout",
+                title="Next Eastern day",
+                severity="warning",
+                related_tickers=["MSFT"],
+                triggered_at=datetime(2026, 4, 5, 4, 30, tzinfo=UTC),
+            ),
+        ]
+    )
+    session.commit()
+
+    source = ThemeAlertValidationSource()
+    events, degraded = source.collect(
+        session,
+        cutoff_date=date(2026, 4, 4),
+        until_date=date(2026, 4, 4),
+    )
+
+    assert degraded == []
+    assert [event.symbol for event in events] == ["NVDA"]
+
+
+def test_validation_service_freshness_uses_eastern_day_bounds_for_theme_alerts(session):
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+
+    session.add(
+        ThemeAlert(
+            theme_cluster_id=theme.id,
+            alert_type="breakout",
+            title="Late evening UTC still counts for prior Eastern day",
+            severity="warning",
+            related_tickers=["NVDA"],
+            triggered_at=datetime(2026, 4, 5, 1, 30, tzinfo=UTC),
+        )
+    )
+    session.commit()
+
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({"NVDA": None}))
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        lookback_days=30,
+        as_of_date=date(2026, 4, 4),
+    )
+
+    assert payload.freshness.latest_theme_alert_at == "2026-04-05T01:30:00+00:00"
+    assert len(payload.recent_events) == 1
+
+
+def test_validation_service_uses_eastern_now_for_default_as_of_date(session, monkeypatch):
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 4, 5, 2, 0, tzinfo=UTC)
+
+    theme = ThemeCluster(
+        name="AI Infrastructure",
+        canonical_key="ai-infra",
+        display_name="AI Infrastructure",
+        pipeline="technical",
+        lifecycle_state="active",
+    )
+    session.add(theme)
+    session.commit()
+    session.refresh(theme)
+
+    session.add(
+        ThemeAlert(
+            theme_cluster_id=theme.id,
+            alert_type="breakout",
+            title="After Eastern midnight only",
+            severity="warning",
+            related_tickers=["NVDA"],
+            triggered_at=datetime(2026, 4, 5, 4, 30, tzinfo=UTC),
+        )
+    )
+    session.commit()
+
+    monkeypatch.setattr(validation_service_module, "datetime", _FixedDateTime)
+
+    service = ValidationService(
+        outcome_calculator=PriceOutcomeCalculator(_FakePriceCache({"NVDA": None}))
+    )
+
+    payload = service.get_overview(
+        session,
+        source_kind=ValidationSourceKind.THEME_ALERT,
+        lookback_days=30,
+    )
+
+    assert payload.recent_events == []
+    assert payload.freshness.latest_theme_alert_at is None
 
 
 def test_price_outcome_calculator_rolls_to_next_trading_session_and_computes_windows():
