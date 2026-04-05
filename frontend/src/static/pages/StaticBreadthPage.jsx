@@ -50,6 +50,10 @@ function StaticBreadthPage() {
     return <Alert severity="error">Failed to load breadth data.</Alert>;
   }
 
+  if (breadthQuery.data?.available === false) {
+    return <Alert severity="info">{breadthQuery.data?.message || 'No breadth snapshot is available.'}</Alert>;
+  }
+
   const payload = breadthQuery.data?.payload || {};
   const current = payload.current || {};
   const history = payload.history_90d || [];
