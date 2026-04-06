@@ -71,8 +71,8 @@ function Layout({ children }) {
 
   const navItems = [
     { path: '/', label: 'Routine' },
-    { path: '/scan', label: 'Bulk Scanner' },
-    { path: '/breadth', label: 'Market Breadth' },
+    { path: '/scan', label: 'Scanner' },
+    { path: '/breadth', label: 'Breadth' },
     { path: '/groups', label: 'Group Rankings' },
     { path: '/digest', label: 'Digest' },
     { path: '/validation', label: 'Validation' },
