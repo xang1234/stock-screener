@@ -428,7 +428,10 @@ class WatchlistStewardshipService:
                 if reasons:
                     status = "strengthening"
                 else:
-                    reasons.append("No material change versus the previous published run.")
+                    if previous_row is None:
+                        reasons.append("No prior published feature row is available for comparison.")
+                    else:
+                        reasons.append("No material change versus the previous published run.")
 
         return WatchlistStewardshipItem(
             symbol=symbol,

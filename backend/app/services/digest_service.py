@@ -397,10 +397,20 @@ class DigestService:
 
         def _leader_sort_key(row: StockFeatureDaily) -> tuple[Any, ...]:
             details = row.details_json or {}
-            score = float(row.composite_score) if row.composite_score is not None else float("-inf")
-            rs_rating = float(details.get("rs_rating")) if details.get("rs_rating") is not None else float("-inf")
-            eps_growth = float(details.get("eps_growth_qq")) if details.get("eps_growth_qq") is not None else float("-inf")
-            sales_growth = float(details.get("sales_growth_qq")) if details.get("sales_growth_qq") is not None else float("-inf")
+            sentinel = float("-inf")
+
+            def _safe_float(value: Any) -> float:
+                if value is None:
+                    return sentinel
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return sentinel
+
+            score = _safe_float(row.composite_score)
+            rs_rating = _safe_float(details.get("rs_rating"))
+            eps_growth = _safe_float(details.get("eps_growth_qq"))
+            sales_growth = _safe_float(details.get("sales_growth_qq"))
             leader_sort = profile_detail.digest.leader_sort
             if leader_sort == "growth_then_score":
                 return (-(eps_growth + sales_growth), -score, row.symbol)
