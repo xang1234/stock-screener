@@ -86,18 +86,23 @@ def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str
     cache_misses = int(metrics.get("cache_miss_stocks", 0) or 0)
     errors = int(metrics.get("error_stocks", 0) or 0)
     total_scanned = int(metrics.get("total_stocks_scanned", 0) or 0)
+    skipped = int(metrics.get("skipped_stocks", 0) or 0)
+    total_attempted = total_scanned + skipped + cache_misses
     if errors > 0:
         return f"Cache-only breadth run has errors (errors={errors})"
-    if total_scanned > 0 and cache_misses / total_scanned > CACHE_MISS_TOLERANCE_RATIO:
+    if total_attempted == 0:
+        return "Cache-only breadth run processed no stocks"
+    miss_ratio = cache_misses / total_attempted
+    if miss_ratio > CACHE_MISS_TOLERANCE_RATIO:
         return (
             f"Cache-only breadth run exceeds miss tolerance "
-            f"(cache_misses={cache_misses}, total={total_scanned}, "
-            f"ratio={cache_misses / total_scanned:.1%}, limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
+            f"(cache_misses={cache_misses}, total={total_attempted}, "
+            f"ratio={miss_ratio:.1%}, limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
         )
-    if cache_misses > 0 and total_scanned > 0:
+    if cache_misses > 0:
         logger.warning(
             "Cache-only breadth run has %d cache misses out of %d stocks (%.1f%%) -- within tolerance",
-            cache_misses, total_scanned, cache_misses / total_scanned * 100,
+            cache_misses, total_attempted, miss_ratio * 100,
         )
     return None
 
