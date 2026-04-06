@@ -53,6 +53,15 @@ def _details_value(row: StockFeatureDaily | None, key: str) -> Any:
     return details.get(key)
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _compute_regime_label(breadth: MarketBreadth | None, latest_run: FeatureRun | None, as_of_date: date) -> str:
     if breadth is None:
         return "unavailable"
@@ -350,17 +359,17 @@ class WatchlistStewardshipService:
         )
         current_rating = current_row.overall_rating
         previous_rating = previous_row.overall_rating if previous_row else None
-        current_stage = _details_value(current_row, "stage")
-        previous_stage = _details_value(previous_row, "stage")
+        current_stage = _float_or_none(_details_value(current_row, "stage"))
+        previous_stage = _float_or_none(_details_value(previous_row, "stage"))
         stage_delta = (
             current_stage - previous_stage
             if current_stage is not None and previous_stage is not None
             else None
         )
-        current_rs = _details_value(current_row, "rs_rating")
-        previous_rs = _details_value(previous_row, "rs_rating")
+        current_rs = _float_or_none(_details_value(current_row, "rs_rating"))
+        previous_rs = _float_or_none(_details_value(previous_row, "rs_rating"))
         rs_delta = (
-            float(current_rs) - float(previous_rs)
+            current_rs - previous_rs
             if current_rs is not None and previous_rs is not None
             else None
         )

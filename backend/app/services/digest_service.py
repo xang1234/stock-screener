@@ -389,8 +389,8 @@ class DigestService:
         candidate_rows = [
             row
             for row in rows
-            if row.composite_score is None
-            or row.composite_score >= profile_detail.digest.leader_min_composite_score
+            if row.composite_score is not None
+            and row.composite_score >= profile_detail.digest.leader_min_composite_score
         ]
         if not candidate_rows:
             candidate_rows = rows
@@ -478,8 +478,11 @@ class DigestService:
                     return float("-inf")
                 return float(value)
 
+            def _has_metric(metrics: ThemeMetrics) -> bool:
+                return getattr(metrics, metric_name, None) is not None
+
             leader_rows = sorted(
-                theme_rows,
+                [item for item in theme_rows if _has_metric(item[0])],
                 key=lambda item: (-_metric_value(item[0]), item[1].display_name.lower()),
             )[:THEME_SECTION_LIMIT]
             leader_theme_ids = {cluster.id for _, cluster in leader_rows}
@@ -490,6 +493,7 @@ class DigestService:
                     key=lambda item: (_metric_value(item[0]), item[1].display_name.lower()),
                 )
                 if item[1].id not in leader_theme_ids
+                and _has_metric(item[0])
             ][:THEME_SECTION_LIMIT]
             theme_leaders = [self._theme_item(metrics, cluster) for metrics, cluster in leader_rows]
             theme_laggards = [self._theme_item(metrics, cluster) for metrics, cluster in laggard_rows]

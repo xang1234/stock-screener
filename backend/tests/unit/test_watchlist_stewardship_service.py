@@ -232,6 +232,28 @@ def test_watchlist_stewardship_service_applies_risk_off_thresholds(session):
     assert statuses["AAPL"] == "unchanged"
 
 
+def test_watchlist_stewardship_service_tolerates_non_numeric_stage_and_rs_values(session):
+    watchlist = _seed_watchlist_stewardship_data(session)
+    latest_nvda = (
+        session.query(StockFeatureDaily)
+        .filter(StockFeatureDaily.run_id == 10, StockFeatureDaily.symbol == "NVDA")
+        .first()
+    )
+    latest_nvda.details_json["rs_rating"] = "not-a-number"
+    latest_nvda.details_json["stage"] = "bad-stage"
+    service = WatchlistStewardshipService(event_context_service=_FakeEventContextService())
+
+    payload = service.get_watchlist_stewardship(
+        session,
+        watchlist_id=watchlist.id,
+        as_of_date=date(2026, 4, 4),
+        profile="default",
+    )
+
+    nvda = next(item for item in payload.items if item.symbol == "NVDA")
+    assert nvda.rs_delta is None
+
+
 @pytest.mark.asyncio
 async def test_watchlist_stewardship_endpoint_returns_profile_aware_payload(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
