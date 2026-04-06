@@ -87,7 +87,7 @@ def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str
     errors = int(metrics.get("error_stocks", 0) or 0)
     total_scanned = int(metrics.get("total_stocks_scanned", 0) or 0)
     skipped = int(metrics.get("skipped_stocks", 0) or 0)
-    total_attempted = total_scanned + skipped + cache_misses
+    total_attempted = total_scanned + skipped
     if errors > 0:
         return f"Cache-only breadth run has errors (errors={errors})"
     if total_attempted == 0:
