@@ -31,12 +31,12 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
   const chartData = useMemo(() => {
     if (!detail?.history) return [];
     return [...detail.history].reverse().map((item) => {
-      const d = new Date(item.date);
+      const [year, month] = item.date.split('-');
       const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       return {
         date: item.date,
         rank: item.rank,
-        displayDate: `${months[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`,
+        displayDate: `${months[parseInt(month, 10) - 1]} '${year.slice(2)}`,
       };
     });
   }, [detail?.history]);
@@ -235,7 +235,7 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                         <TableRow key={row.date} hover>
                           <TableCell sx={{ fontFamily: 'monospace' }}>{row.date}</TableCell>
                           <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.rank}</TableCell>
-                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.avg_rs_rating?.toFixed(1)}</TableCell>
+                          <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.avg_rs_rating?.toFixed(1) ?? '-'}</TableCell>
                           <TableCell align="right" sx={{ fontFamily: 'monospace' }}>{row.num_stocks || '-'}</TableCell>
                         </TableRow>
                       ))}
