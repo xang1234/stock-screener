@@ -176,7 +176,7 @@ python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
   - Benchmark (SPY): 24h TTL with distributed locking to prevent thundering herd
 
 **LLM Integration** (`services/chatbot/`):
-- Multi-provider support: Groq, DeepSeek, Together AI, OpenRouter, Gemini
+- Multi-provider support: Minimax, Groq, DeepSeek, Together AI, OpenRouter, Gemini
 - Agent orchestrator with tool executor pattern
 - Research mode with web search (Tavily, Serper, DuckDuckGo)
 
@@ -245,7 +245,7 @@ const BASE_PATH = '/api/v1/user-themes';
 - `CORS_ORIGINS` - Comma-separated allowed origins (for production)
 
 **LLM routing** (optional):
-- `LLM_DEFAULT_PROVIDER` - Primary provider: groq, deepseek, together_ai, openrouter, gemini
+- `LLM_DEFAULT_PROVIDER` - Primary provider: groq, minimax, deepseek, together_ai, openrouter, gemini
 - `LLM_CHATBOT_MODEL`, `LLM_RESEARCH_MODEL` - Model overrides (LiteLLM format)
 - `LLM_FALLBACK_ENABLED` - Enable automatic provider fallback
 

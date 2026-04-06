@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     zai_api_key: str = ""  # For Z.AI GLM models via OpenAI-compatible endpoint
     zai_api_keys: str = ""  # For Z.AI GLM models (multiple keys, comma-separated)
     zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
+    minimax_api_key: str = ""  # Minimax international API
+    minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
     deepseek_api_key: str = ""  # For LLM via DeepSeek (cost-effective fallback)

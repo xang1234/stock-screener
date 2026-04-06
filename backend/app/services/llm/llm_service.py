@@ -135,6 +135,20 @@ class LLMService:
         if openrouter_key:
             os.environ["OPENROUTER_API_KEY"] = openrouter_key
 
+        # Minimax — cache resolved values for per-request use
+        self._minimax_api_key = getattr(settings, "minimax_api_key", None) or os.environ.get("MINIMAX_API_KEY")
+        self._minimax_api_base = (
+            getattr(settings, "minimax_api_base", None)
+            or os.environ.get("MINIMAX_API_BASE")
+            or "https://api.minimax.io/v1"
+        )
+        if self._minimax_api_key:
+            os.environ["MINIMAX_API_KEY"] = self._minimax_api_key
+        elif self.preset.primary.model_id.startswith("minimax/"):
+            logger.warning(
+                "MINIMAX_API_KEY not set — extraction will fall back to next provider in chain"
+            )
+
     async def completion(
         self,
         messages: List[Dict[str, Any]],
@@ -253,6 +267,11 @@ class LLMService:
         """Return True when a model should route through the Z.AI OpenAI-compatible endpoint."""
         return model.startswith("openai/glm-")
 
+    @staticmethod
+    def _is_minimax_model(model: str) -> bool:
+        """Return True when a model should route through the Minimax endpoint."""
+        return model.startswith("minimax/")
+
     def _resolve_fallback_models(self, *, primary_model: str, allow_fallbacks: bool) -> List[str]:
         """Resolve fallback models for a request, excluding duplicates of the active model."""
         if not allow_fallbacks:
@@ -289,21 +308,29 @@ class LLMService:
         provider_name, key_manager = self._get_provider_key_manager(model)
         provider_key = None
 
+        is_zai = self._is_zai_model(model)
+        is_minimax = self._is_minimax_model(model)
+
         if key_manager and len(key_manager) > 0:
             provider_key = key_manager.get_key()
-        elif self._is_zai_model(model):
+        elif is_zai:
             provider_key = getattr(settings, "zai_api_key", None) or os.environ.get("ZAI_API_KEY")
+        elif is_minimax:
+            provider_key = self._minimax_api_key
+            provider_name = "minimax"
 
         if provider_key:
             params["api_key"] = provider_key
 
-        if self._is_zai_model(model):
+        if is_zai:
             zai_base = (
                 getattr(settings, "zai_api_base", None)
                 or os.environ.get("ZAI_API_BASE")
                 or _ZAI_API_BASE_DEFAULT
             )
             params["api_base"] = zai_base
+        elif is_minimax:
+            params["api_base"] = self._minimax_api_base
 
         return provider_name, provider_key, key_manager
 

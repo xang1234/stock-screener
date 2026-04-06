@@ -66,6 +66,7 @@ from .config import (
     GROQ_LLAMA_70B,
     GROQ_MIXTRAL,
     DEEPSEEK_CHAT,
+    MINIMAX_M27,
     OLLAMA_QWEN3_14B,
     OLLAMA_LLAMA3_8B,
     OLLAMA_MISTRAL_7B,
@@ -111,6 +112,7 @@ __all__ = [
     "GROQ_LLAMA_70B",
     "GROQ_MIXTRAL",
     "DEEPSEEK_CHAT",
+    "MINIMAX_M27",
     # Local model configs (Ollama)
     "OLLAMA_QWEN3_14B",
     "OLLAMA_LLAMA3_8B",

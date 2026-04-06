@@ -107,6 +107,13 @@ ZAI_GLM_47_FLASH = ModelConfig(
     max_tokens=4000,
 )
 
+# Minimax Models (native LiteLLM support)
+MINIMAX_M27 = ModelConfig(
+    model_id="minimax/MiniMax-M2.7",
+    temperature=0.2,
+    max_tokens=4000,
+)
+
 # Together AI Models
 TOGETHER_LLAMA_70B = ModelConfig(
     model_id="together_ai/meta-llama/Llama-3-70b-chat-hf",
@@ -158,8 +165,9 @@ RESEARCH_PRESET = ModelPreset(
 
 # Theme extraction - needs structured output (JSON)
 EXTRACTION_PRESET = ModelPreset(
-    primary=ZAI_GLM_47_FLASH,
+    primary=MINIMAX_M27,
     fallbacks=[
+        ZAI_GLM_47_FLASH,
         GROQ_QWEN3_32B,
     ]
 )
@@ -202,6 +210,7 @@ PROVIDER_ENV_VARS = {
     "deepseek": "DEEPSEEK_API_KEY",
     "together_ai": "TOGETHER_API_KEY",  # Also: TOGETHERAI_API_KEY
     "openrouter": "OPENROUTER_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "ollama": "OLLAMA_API_BASE",  # Default: http://localhost:11434
@@ -213,6 +222,9 @@ PROVIDER_ENV_VARS = {
 # =============================================================================
 
 AVAILABLE_MODELS = [
+    # Cloud models (Minimax)
+    {"id": "minimax/MiniMax-M2.7", "name": "MiniMax M2.7 (Minimax)", "provider": "minimax", "category": "cloud"},
+
     # Cloud models (Z.AI)
     {"id": "openai/glm-4.7-flash", "name": "GLM-4.7-Flash (Z.AI)", "provider": "zai", "category": "cloud"},
 
