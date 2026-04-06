@@ -46,7 +46,7 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
       <DialogTitle>
         <Box display="flex" justifyContent="space-between" alignItems="center">
           <Typography variant="h6">{group}</Typography>
-          <IconButton onClick={onClose} size="small">
+          <IconButton onClick={onClose} size="small" aria-label="Close group detail">
             <CloseIcon />
           </IconButton>
         </Box>
@@ -180,7 +180,9 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                           </TableCell>
                           <TableCell align="right" sx={{
                             fontFamily: 'monospace', fontWeight: 600,
-                            color: stock.rs_rating >= 80 ? 'success.main' : stock.rs_rating <= 30 ? 'error.main' : 'text.primary',
+                            color: stock.rs_rating == null ? 'text.primary'
+                              : stock.rs_rating >= 80 ? 'success.main'
+                              : stock.rs_rating <= 30 ? 'error.main' : 'text.primary',
                           }}>
                             {stock.rs_rating?.toFixed(0) || '-'}
                           </TableCell>

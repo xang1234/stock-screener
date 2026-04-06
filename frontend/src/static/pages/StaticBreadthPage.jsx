@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -40,6 +40,17 @@ function StaticBreadthPage() {
   });
   const [timeRange, setTimeRange] = useState('1M');
 
+  const rangeDays = { '1M': 31, '3M': 90 };
+  const payload = breadthQuery.data?.payload || {};
+  const filteredChartData = useMemo(() => {
+    const allData = payload.chart_data || payload.history_90d || [];
+    return allData.slice(-(rangeDays[timeRange] || 31));
+  }, [payload.chart_data, payload.history_90d, timeRange]);
+  const filteredSpyData = useMemo(() => {
+    const allSpy = payload.spy_overlay || [];
+    return allSpy.slice(-(rangeDays[timeRange] || 31));
+  }, [payload.spy_overlay, timeRange]);
+
   if (manifestQuery.isLoading || breadthQuery.isLoading) {
     return (
       <Box display="flex" justifyContent="center" py={8}>
@@ -56,7 +67,6 @@ function StaticBreadthPage() {
     return <Alert severity="info">{breadthQuery.data?.message || 'No breadth snapshot is available.'}</Alert>;
   }
 
-  const payload = breadthQuery.data?.payload || {};
   const current = payload.current || {};
   const history = payload.history_90d || [];
 
@@ -85,8 +95,8 @@ function StaticBreadthPage() {
       </Grid>
 
       <BreadthChart
-        breadthData={payload.chart_data || []}
-        spyData={payload.spy_overlay || []}
+        breadthData={filteredChartData}
+        spyData={filteredSpyData}
         isLoading={false}
         error={null}
         timeRange={timeRange}

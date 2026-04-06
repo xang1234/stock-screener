@@ -156,7 +156,7 @@ function StaticHomePage() {
           Top Scan Candidates
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Default view uses dollar volume &gt; $100M. Click a row for details.
+          Default view uses dollar volume &gt; $100M. Click a row for chart details.
         </Typography>
         <TableContainer>
           <Table size="small">
@@ -176,8 +176,16 @@ function StaticHomePage() {
               {topResults.map((row) => (
                 <TableRow
                   key={row.symbol}
-                  hover
+                  hover={chartEnabledSymbols.has(row.symbol)}
+                  tabIndex={chartEnabledSymbols.has(row.symbol) ? 0 : -1}
                   onClick={() => handleRowClick(row.symbol)}
+                  onKeyDown={(event) => {
+                    if (!chartEnabledSymbols.has(row.symbol)) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleRowClick(row.symbol);
+                    }
+                  }}
                   sx={{ cursor: chartEnabledSymbols.has(row.symbol) ? 'pointer' : 'default' }}
                 >
                   <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>

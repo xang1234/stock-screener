@@ -125,6 +125,13 @@ function StaticGroupsPage() {
                   key={row.industry_group}
                   hover
                   onClick={() => setSelectedGroup(row.industry_group)}
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedGroup(row.industry_group);
+                    }
+                  }}
                   sx={{ cursor: 'pointer' }}
                 >
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{row.rank}</TableCell>
