@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
+import logging
 from pathlib import Path
 import shutil
 from typing import Any
@@ -24,6 +25,8 @@ from app.services.price_cache_service import PriceCacheService
 from app.services.ui_snapshot_service import UISnapshotService
 
 
+logger = logging.getLogger(__name__)
+
 STATIC_SITE_SCHEMA_VERSION = "static-site-v1"
 SCAN_BUNDLE_SCHEMA_VERSION = "static-scan-v1"
 CHART_BUNDLE_SCHEMA_VERSION = "static-charts-v1"
@@ -33,6 +36,7 @@ STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
 STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 STATIC_DEFAULT_SCAN_FILTERS = {"minVolume": 100_000_000}
+STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 
 _DEFAULT_KEY_MARKETS = (
     {"symbol": "SPY", "display_name": "S&P 500 ETF"},
@@ -464,6 +468,17 @@ class StaticSiteExportService:
                     f"{expected_as_of_date.isoformat()} (latest ranking date: {ranking_date})."
                 ),
             )
+        group_details: dict[str, Any] = {}
+        for row in rankings:
+            group_name = row["industry_group"]
+            try:
+                group_details[group_name] = service.get_group_history(
+                    db, group_name, days=STATIC_GROUP_DETAIL_HISTORY_DAYS,
+                )
+            except Exception:
+                logger.warning("Failed to export detail for group %s", group_name, exc_info=True)
+                db.rollback()
+
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
@@ -480,6 +495,7 @@ class StaticSiteExportService:
                     gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                     losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
                 ).model_dump(mode="json"),
+                "group_details": group_details,
             },
         }
 

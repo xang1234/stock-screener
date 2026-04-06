@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -14,6 +15,8 @@ import {
   Typography,
 } from '@mui/material';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import StaticGroupDetailModal from '../StaticGroupDetailModal';
+import RankChangeCell from '../../components/shared/RankChangeCell';
 
 function MoversCard({ title, rows }) {
   return (
@@ -27,6 +30,7 @@ function MoversCard({ title, rows }) {
             <TableRow>
               <TableCell>Group</TableCell>
               <TableCell align="right">Rank</TableCell>
+              <TableCell align="right">Change</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -34,6 +38,9 @@ function MoversCard({ title, rows }) {
               <TableRow key={`${title}-${row.industry_group}`}>
                 <TableCell>{row.industry_group}</TableCell>
                 <TableCell align="right">{row.rank}</TableCell>
+                <TableCell align="right">
+                  <RankChangeCell value={row.rank_change_3m} />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -51,6 +58,7 @@ function StaticGroupsPage() {
     enabled: Boolean(manifestQuery.data?.pages?.groups?.path),
     staleTime: Infinity,
   });
+  const [selectedGroup, setSelectedGroup] = useState(null);
 
   if (manifestQuery.isLoading || groupsQuery.isLoading) {
     return (
@@ -72,6 +80,7 @@ function StaticGroupsPage() {
   const rankings = payload.rankings?.rankings || [];
   const movers = payload.movers || {};
   const moversPeriod = payload.movers_period || movers.period || '3m';
+  const groupDetails = payload.group_details || {};
 
   return (
     <Box>
@@ -99,31 +108,49 @@ function StaticGroupsPage() {
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell align="right">Rank</TableCell>
+                <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
-                <TableCell align="right">Avg RS</TableCell>
-                <TableCell align="right">Stocks</TableCell>
+                <TableCell align="center">Avg RS</TableCell>
+                <TableCell align="center">Stocks</TableCell>
                 <TableCell align="right">1W</TableCell>
                 <TableCell align="right">1M</TableCell>
                 <TableCell align="right">3M</TableCell>
+                <TableCell align="right">6M</TableCell>
+                <TableCell>Top Stock</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {rankings.slice(0, 50).map((row) => (
-                <TableRow key={row.industry_group}>
-                  <TableCell align="right">{row.rank}</TableCell>
+              {rankings.map((row) => (
+                <TableRow
+                  key={row.industry_group}
+                  hover
+                  onClick={() => setSelectedGroup(row.industry_group)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{row.rank}</TableCell>
                   <TableCell>{row.industry_group}</TableCell>
-                  <TableCell align="right">{row.avg_rs_rating?.toFixed?.(1) ?? '-'}</TableCell>
-                  <TableCell align="right">{row.num_stocks}</TableCell>
-                  <TableCell align="right">{row.rank_change_1w ?? '-'}</TableCell>
-                  <TableCell align="right">{row.rank_change_1m ?? '-'}</TableCell>
-                  <TableCell align="right">{row.rank_change_3m ?? '-'}</TableCell>
+                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.avg_rs_rating?.toFixed?.(1) ?? '-'}</TableCell>
+                  <TableCell align="center" sx={{ fontFamily: 'monospace' }}>{row.num_stocks}</TableCell>
+                  <TableCell align="right"><RankChangeCell value={row.rank_change_1w} /></TableCell>
+                  <TableCell align="right"><RankChangeCell value={row.rank_change_1m} /></TableCell>
+                  <TableCell align="right"><RankChangeCell value={row.rank_change_3m} /></TableCell>
+                  <TableCell align="right"><RankChangeCell value={row.rank_change_6m} /></TableCell>
+                  <TableCell sx={{ fontWeight: 500, color: 'text.secondary', fontSize: '12px' }}>
+                    {row.top_symbol || '-'}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </TableContainer>
       </Paper>
+
+      <StaticGroupDetailModal
+        group={selectedGroup}
+        detail={selectedGroup ? groupDetails[selectedGroup] : null}
+        open={!!selectedGroup}
+        onClose={() => setSelectedGroup(null)}
+      />
     </Box>
   );
 }

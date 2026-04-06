@@ -95,6 +95,6 @@ describe('StaticGroupsPage', () => {
     expect(screen.getByText('Top Losers (3M)')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '3M' })).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
-    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('+7')).toBeInTheDocument();
   });
 });

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -37,6 +38,7 @@ function StaticBreadthPage() {
     enabled: Boolean(manifestQuery.data?.pages?.breadth?.path),
     staleTime: Infinity,
   });
+  const [timeRange, setTimeRange] = useState('1M');
 
   if (manifestQuery.isLoading || breadthQuery.isLoading) {
     return (
@@ -87,9 +89,9 @@ function StaticBreadthPage() {
         spyData={payload.spy_overlay || []}
         isLoading={false}
         error={null}
-        timeRange="1M"
-        onTimeRangeChange={() => {}}
-        availableRanges={['1M']}
+        timeRange={timeRange}
+        onTimeRangeChange={setTimeRange}
+        availableRanges={['1M', '3M']}
       />
 
       <Paper sx={{ p: 2 }}>

@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -14,6 +15,11 @@ import {
   Typography,
 } from '@mui/material';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticChartIndex } from '../chartClient';
+import PriceSparkline from '../../components/Scan/PriceSparkline';
+import RSSparkline from '../../components/Scan/RSSparkline';
+import StaticChartViewerModal from '../StaticChartViewerModal';
+import { getGroupRankColor } from '../../utils/colorUtils';
 
 const formatNumber = (value, digits = 0) => {
   if (value == null) return '-';
@@ -49,6 +55,20 @@ function StaticHomePage() {
     enabled: Boolean(manifestQuery.data?.pages?.home?.path),
     staleTime: Infinity,
   });
+  const chartIndexQuery = useStaticChartIndex(manifestQuery.data?.assets?.charts?.path);
+
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
+
+  const topResults = homeQuery.data?.scan_summary?.top_results || [];
+  const topGroups = homeQuery.data?.top_groups || [];
+
+  const chartEntries = useMemo(() => chartIndexQuery.data?.symbols || [], [chartIndexQuery.data]);
+  const chartEnabledSymbols = useMemo(() => new Set(chartEntries.map((e) => e.symbol)), [chartEntries]);
+  const navigationSymbols = useMemo(
+    () => topResults.map((r) => r.symbol).filter((s) => chartEnabledSymbols.has(s)),
+    [topResults, chartEnabledSymbols],
+  );
 
   if (manifestQuery.isLoading || homeQuery.isLoading) {
     return (
@@ -68,8 +88,13 @@ function StaticHomePage() {
 
   const home = homeQuery.data;
   const freshness = home?.freshness || {};
-  const topResults = home?.scan_summary?.top_results || [];
-  const topGroups = home?.top_groups || [];
+
+  const handleRowClick = (symbol) => {
+    if (chartEnabledSymbols.has(symbol)) {
+      setSelectedChartSymbol(symbol);
+      setChartModalOpen(true);
+    }
+  };
 
   return (
     <Box>
@@ -126,66 +151,115 @@ function StaticHomePage() {
         ))}
       </Grid>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} lg={7}>
-          <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Top Scan Candidates
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              Default view uses dollar volume &gt; $100M.
-            </Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Symbol</TableCell>
-                    <TableCell align="right">Score</TableCell>
-                    <TableCell align="right">Price</TableCell>
-                    <TableCell>Rating</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topResults.map((row) => (
-                    <TableRow key={row.symbol}>
-                      <TableCell sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
-                      <TableCell align="right">{formatNumber(row.composite_score, 1)}</TableCell>
-                      <TableCell align="right">{row.current_price != null ? `$${formatNumber(row.current_price, 2)}` : '-'}</TableCell>
-                      <TableCell>{row.rating}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Grid>
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          Top Scan Candidates
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Default view uses dollar volume &gt; $100M. Click a row for details.
+        </Typography>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell align="center">Symbol</TableCell>
+                <TableCell align="center">Score</TableCell>
+                <TableCell align="center">Price</TableCell>
+                <TableCell align="center">Rating</TableCell>
+                <TableCell align="center">Price Trend</TableCell>
+                <TableCell align="center">RS Trend</TableCell>
+                <TableCell align="center">IBD Group</TableCell>
+                <TableCell align="center">Grp Rank</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {topResults.map((row) => (
+                <TableRow
+                  key={row.symbol}
+                  hover
+                  onClick={() => handleRowClick(row.symbol)}
+                  sx={{ cursor: chartEnabledSymbols.has(row.symbol) ? 'pointer' : 'default' }}
+                >
+                  <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
+                  <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
+                  <TableCell align="center">{row.current_price != null ? `$${formatNumber(row.current_price, 2)}` : '-'}</TableCell>
+                  <TableCell align="center">{row.rating}</TableCell>
+                  <TableCell align="center">
+                    {row.price_sparkline_data ? (
+                      <Box display="flex" justifyContent="center">
+                        <PriceSparkline
+                          data={row.price_sparkline_data}
+                          trend={row.price_trend}
+                          change1d={row.price_change_1d}
+                          industry={row.ibd_industry_group}
+                          width={100}
+                          height={28}
+                        />
+                      </Box>
+                    ) : '-'}
+                  </TableCell>
+                  <TableCell align="center">
+                    {row.rs_sparkline_data ? (
+                      <Box display="flex" justifyContent="center">
+                        <RSSparkline
+                          data={row.rs_sparkline_data}
+                          trend={row.rs_trend}
+                          width={60}
+                          height={20}
+                        />
+                      </Box>
+                    ) : '-'}
+                  </TableCell>
+                  <TableCell align="center" sx={{
+                    color: 'text.secondary', fontSize: '12px',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140,
+                  }}>
+                    {row.ibd_industry_group || '-'}
+                  </TableCell>
+                  <TableCell align="center" sx={{
+                    fontFamily: 'monospace', fontWeight: row.ibd_group_rank && row.ibd_group_rank <= 20 ? 600 : 400,
+                    color: getGroupRankColor(row.ibd_group_rank),
+                  }}>
+                    {row.ibd_group_rank ?? '-'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Paper>
 
-        <Grid item xs={12} lg={5}>
-          <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h6" gutterBottom>
-              Leading Groups
-            </Typography>
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Group</TableCell>
-                    <TableCell align="right">Rank</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topGroups.map((group) => (
-                    <TableRow key={group.industry_group}>
-                      <TableCell>{group.industry_group}</TableCell>
-                      <TableCell align="right">{group.rank}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Grid>
-      </Grid>
+      <Paper sx={{ p: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          Leading Groups
+        </Typography>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Group</TableCell>
+                <TableCell align="right">Rank</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {topGroups.map((group) => (
+                <TableRow key={group.industry_group}>
+                  <TableCell>{group.industry_group}</TableCell>
+                  <TableCell align="right">{group.rank}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Paper>
+
+      <StaticChartViewerModal
+        open={chartModalOpen}
+        onClose={() => setChartModalOpen(false)}
+        initialSymbol={selectedChartSymbol}
+        chartIndex={chartIndexQuery.data}
+        navigationSymbols={navigationSymbols}
+      />
     </Box>
   );
 }

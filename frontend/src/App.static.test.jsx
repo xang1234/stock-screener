@@ -227,11 +227,11 @@ describe('App static mode', () => {
     });
   }, 10000);
 
-  it('locks the breadth view to the exported range in the static route', async () => {
+  it('offers 1M and 3M ranges on the breadth page in the static route', async () => {
     await renderStaticAppAtHash('#/breadth');
 
     expect(await screen.findByRole('heading', { name: 'Market Breadth' })).toBeInTheDocument();
     expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('1M');
-    expect(screen.getByTestId('breadth-chart-ranges')).not.toHaveTextContent('3M');
+    expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('3M');
   }, 10000);
 });
