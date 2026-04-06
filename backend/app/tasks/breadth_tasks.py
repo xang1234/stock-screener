@@ -94,7 +94,7 @@ def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str
             f"(cache_misses={cache_misses}, total={total_scanned}, "
             f"ratio={cache_misses / total_scanned:.1%}, limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
         )
-    if cache_misses > 0:
+    if cache_misses > 0 and total_scanned > 0:
         logger.warning(
             "Cache-only breadth run has %d cache misses out of %d stocks (%.1f%%) -- within tolerance",
             cache_misses, total_scanned, cache_misses / total_scanned * 100,
