@@ -113,31 +113,27 @@ function ThemeTable({ themeData, onRefresh }) {
                 {/* Subgroup Header Row */}
                 <TableRow
                   sx={{
-                    bgcolor: (theme) => theme.palette.mode === 'dark'
-                      ? 'rgba(31, 151, 244, 0.22)'
-                      : 'rgba(31, 151, 244, 0.18)',
+                    bgcolor: '#1F97F4',
+                    color: '#fff',
                     cursor: 'pointer',
                     '&:hover': {
-                      bgcolor: (theme) => theme.palette.mode === 'dark'
-                        ? 'rgba(31, 151, 244, 0.32)'
-                        : 'rgba(31, 151, 244, 0.28)',
+                      bgcolor: '#3AA3F6',
                     },
                   }}
                   onClick={() => toggleGroup(subgroup.id, isCollapsed)}
                 >
                   <TableCell sx={{ p: 0, px: 0.5, width: 28 }}>
-                    <IconButton size="small" sx={{ p: 0.25 }}>
+                    <IconButton size="small" sx={{ p: 0.25, color: 'inherit' }}>
                       {isCollapsed ? <ExpandMoreIcon fontSize="small" /> : <ExpandLessIcon fontSize="small" />}
                     </IconButton>
                   </TableCell>
-                  <TableCell colSpan={4 + PRICE_PERIODS.length} sx={{ py: 0.5 }}>
-                    <Typography variant="subtitle2" fontWeight={600}>
+                  <TableCell colSpan={4 + PRICE_PERIODS.length} sx={{ py: 0.5, color: 'inherit' }}>
+                    <Typography variant="subtitle2" fontWeight={600} color="inherit">
                       {subgroup.name}
                       <Typography
                         component="span"
                         variant="caption"
-                        color="text.secondary"
-                        sx={{ ml: 1 }}
+                        sx={{ ml: 1, color: 'rgba(255, 255, 255, 0.8)' }}
                       >
                         ({subgroup.stocks.length} stocks)
                       </Typography>
