@@ -157,6 +157,8 @@ class WatchlistStewardshipService:
 
         stewardship_items: list[WatchlistStewardshipItem] = []
         for item in items:
+            if not item.symbol:
+                continue
             symbol = item.symbol.upper()
             current_row = latest_rows.get(symbol)
             previous_row = previous_rows.get(symbol)
@@ -342,7 +344,7 @@ class WatchlistStewardshipService:
                 previous_composite_score=_round_or_none(previous_row.composite_score if previous_row else None),
                 score_delta=None,
                 current_rs_rating=None,
-                previous_rs_rating=_round_or_none(_details_value(previous_row, "rs_rating")),
+                previous_rs_rating=_round_or_none(_float_or_none(_details_value(previous_row, "rs_rating"))),
                 rs_delta=None,
                 next_earnings_date=None,
                 days_until_earnings=None,
