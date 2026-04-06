@@ -54,6 +54,8 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -120,6 +122,8 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -178,6 +182,8 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
@@ -236,6 +242,8 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY:-}
       - ZAI_API_KEYS=${ZAI_API_KEYS:-}
       - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}

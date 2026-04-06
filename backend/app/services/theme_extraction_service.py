@@ -183,7 +183,7 @@ class ThemeExtractionService:
         "models/gemini-2.5-flash",
     ]
     DEFAULT_EXTRACTION_MAX_TOKENS = 2000
-    ZAI_EXTRACTION_MAX_TOKENS = 4000
+    HIGH_EXTRACTION_MAX_TOKENS = 4000
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
     TICKER_FALSE_POSITIVES = {
         "A", "I", "AI", "CEO", "CFO", "IPO", "ETF", "NYSE", "SEC", "FDA",
@@ -496,14 +496,13 @@ class ThemeExtractionService:
         # Use configured model if set
         model_override = self.configured_model if self.configured_model else None
         active_model = model_override or self.llm.preset.primary.model_id
-        # Keep Z.AI as the primary model for every extraction request, but allow the
-        # shared LLM service to fall through to Groq if a single request exhausts its
-        # Z.AI retries. The next request still starts from Z.AI because the active
-        # model selection here is unchanged.
+        # Minimax M2.7 is the primary extraction model, with Z.AI and Groq as
+        # fallbacks. Each request starts from the primary; fallbacks only activate
+        # if the primary exhausts its retries for that single request.
         allow_fallbacks = True
         max_tokens = (
-            self.ZAI_EXTRACTION_MAX_TOKENS
-            if LLMService._is_zai_model(active_model)
+            self.HIGH_EXTRACTION_MAX_TOKENS
+            if LLMService._is_minimax_model(active_model) or LLMService._is_zai_model(active_model)
             else self.DEFAULT_EXTRACTION_MAX_TOKENS
         )
 

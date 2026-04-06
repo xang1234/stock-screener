@@ -23,11 +23,14 @@ def _llm_json_response(payload: str):
     )
 
 
-def test_extraction_preset_defaults_to_zai_glm_flash() -> None:
+def test_extraction_preset_defaults_to_minimax_m27() -> None:
     preset = get_preset_for_use_case("extraction")
 
-    assert preset.primary.model_id == "openai/glm-4.7-flash"
-    assert [model.model_id for model in preset.fallbacks] == ["groq/qwen/qwen3-32b"]
+    assert preset.primary.model_id == "minimax/MiniMax-M2.7"
+    assert [model.model_id for model in preset.fallbacks] == [
+        "openai/glm-4.7-flash",
+        "groq/qwen/qwen3-32b",
+    ]
 
 
 def test_apply_provider_overrides_injects_zai_api_key_and_base(monkeypatch) -> None:
@@ -85,13 +88,13 @@ def test_try_generate_litellm_enables_fallbacks_for_configured_zai_model() -> No
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] == "openai/glm-4.7-flash"
     assert kwargs["allow_fallbacks"] is True
-    assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
+    assert kwargs["max_tokens"] == ThemeExtractionService.HIGH_EXTRACTION_MAX_TOKENS
 
 
-def test_try_generate_litellm_enables_fallbacks_for_default_zai_model() -> None:
+def test_try_generate_litellm_enables_fallbacks_for_default_minimax_model() -> None:
     service = ThemeExtractionService.__new__(ThemeExtractionService)
     service.llm = SimpleNamespace(
-        preset=SimpleNamespace(primary=SimpleNamespace(model_id="openai/glm-4.7-flash")),
+        preset=SimpleNamespace(primary=SimpleNamespace(model_id="minimax/MiniMax-M2.7")),
         completion=AsyncMock(return_value=_llm_json_response("[]")),
     )
     service.pipeline_config = None
@@ -103,7 +106,7 @@ def test_try_generate_litellm_enables_fallbacks_for_default_zai_model() -> None:
     kwargs = service.llm.completion.await_args.kwargs
     assert kwargs["model"] is None
     assert kwargs["allow_fallbacks"] is True
-    assert kwargs["max_tokens"] == ThemeExtractionService.ZAI_EXTRACTION_MAX_TOKENS
+    assert kwargs["max_tokens"] == ThemeExtractionService.HIGH_EXTRACTION_MAX_TOKENS
 
 
 def test_try_generate_litellm_keeps_default_token_budget_for_non_zai_model() -> None:
@@ -123,14 +126,14 @@ def test_try_generate_litellm_keeps_default_token_budget_for_non_zai_model() -> 
     assert kwargs["max_tokens"] == ThemeExtractionService.DEFAULT_EXTRACTION_MAX_TOKENS
 
 
-def test_resolve_fallback_models_uses_qwen_for_non_zai_override() -> None:
+def test_resolve_fallback_models_uses_full_chain_for_non_preset_override() -> None:
     service = LLMService.__new__(LLMService)
     service.preset = get_preset_for_use_case("extraction")
 
     assert service._resolve_fallback_models(
         primary_model="deepseek/deepseek-chat",
         allow_fallbacks=True,
-    ) == ["groq/qwen/qwen3-32b"]
+    ) == ["openai/glm-4.7-flash", "groq/qwen/qwen3-32b"]
 
 
 def test_resolve_fallback_models_dedupes_primary_model() -> None:
@@ -140,4 +143,4 @@ def test_resolve_fallback_models_dedupes_primary_model() -> None:
     assert service._resolve_fallback_models(
         primary_model="groq/qwen/qwen3-32b",
         allow_fallbacks=True,
-    ) == []
+    ) == ["openai/glm-4.7-flash"]

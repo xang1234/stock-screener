@@ -16,6 +16,7 @@ At least one LLM provider key is required for the AI chatbot. Scanning and other
 | Together AI | `TOGETHER_API_KEY` | [api.together.xyz](https://api.together.xyz) | Wide model selection |
 | OpenRouter | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) | 100+ models, unified billing |
 | Z.AI | `ZAI_API_KEY` | [platform.z.ai](https://platform.z.ai) | GLM models |
+| Minimax | `MINIMAX_API_KEY` | [platform.minimax.io](https://platform.minimax.io) | Default for theme extraction |
 
 Multiple keys for load balancing: `GROQ_API_KEYS=key1,key2,key3` (comma-separated).
 
@@ -38,7 +39,7 @@ Enables research mode in the chatbot.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_DEFAULT_PROVIDER` | `groq` | Primary provider: groq, zai, deepseek, together_ai, openrouter, gemini |
+| `LLM_DEFAULT_PROVIDER` | `groq` | Primary provider: groq, minimax, zai, deepseek, together_ai, openrouter, gemini |
 | `LLM_CHATBOT_MODEL` | `groq/qwen-qwen3-32b` | Model for chatbot (LiteLLM format: provider/model) |
 | `LLM_RESEARCH_MODEL` | `groq/qwen-qwen3-32b` | Model for research agents |
 | `LLM_FALLBACK_ENABLED` | `true` | Enable automatic fallback to other providers on failure |
