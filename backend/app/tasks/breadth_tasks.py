@@ -27,6 +27,7 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only breadth runs
 _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_breadth_warmup_bypass",
     default=False,
@@ -77,25 +78,26 @@ def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optiona
         except ValueError:
             return "Cache warmup metadata timestamp is invalid"
 
-    cache_misses = int(metrics.get("cache_miss_stocks", 0) or 0)
-    errors = int(metrics.get("error_stocks", 0) or 0)
-    if cache_misses > 0 or errors > 0:
-        return (
-            f"Cache-only breadth run is incomplete "
-            f"(cache_misses={cache_misses}, errors={errors})"
-        )
-
-    return None
+    return _validate_same_day_cache_only_breadth_metrics(metrics)
 
 
 def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str]:
     """Validate cache completeness without requiring Redis warmup metadata."""
     cache_misses = int(metrics.get("cache_miss_stocks", 0) or 0)
     errors = int(metrics.get("error_stocks", 0) or 0)
-    if cache_misses > 0 or errors > 0:
+    total_scanned = int(metrics.get("total_stocks_scanned", 0) or 0)
+    if errors > 0:
+        return f"Cache-only breadth run has errors (errors={errors})"
+    if total_scanned > 0 and cache_misses / total_scanned > CACHE_MISS_TOLERANCE_RATIO:
         return (
-            f"Cache-only breadth run is incomplete "
-            f"(cache_misses={cache_misses}, errors={errors})"
+            f"Cache-only breadth run exceeds miss tolerance "
+            f"(cache_misses={cache_misses}, total={total_scanned}, "
+            f"ratio={cache_misses / total_scanned:.1%}, limit={CACHE_MISS_TOLERANCE_RATIO:.0%})"
+        )
+    if cache_misses > 0:
+        logger.warning(
+            "Cache-only breadth run has %d cache misses out of %d stocks (%.1f%%) -- within tolerance",
+            cache_misses, total_scanned, cache_misses / total_scanned * 100,
         )
     return None
 

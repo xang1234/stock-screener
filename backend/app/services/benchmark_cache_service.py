@@ -176,6 +176,7 @@ class BenchmarkCacheService:
             }
 
             df = pd.DataFrame(data)
+            df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
 
             logger.debug(f"Retrieved SPY {period} from database ({len(df)} rows)")

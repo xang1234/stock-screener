@@ -22,6 +22,7 @@ from .benchmark_cache_service import BenchmarkCacheService
 from ..scanners.criteria.relative_strength import RelativeStrengthCalculator
 
 logger = logging.getLogger(__name__)
+CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only group ranking runs
 
 
 class IncompleteGroupRankingCacheError(RuntimeError):
@@ -104,11 +105,19 @@ class IBDGroupRankService:
             )
         )
 
-        if require_complete_cache and (
-            not prefetch_stats.get("spy_cached")
-            or prefetch_stats.get("cache_miss_symbols", 0) > 0
-        ):
-            raise IncompleteGroupRankingCacheError(prefetch_stats)
+        if require_complete_cache:
+            if not prefetch_stats.get("spy_cached"):
+                raise IncompleteGroupRankingCacheError(prefetch_stats)
+            cache_miss_symbols = prefetch_stats.get("cache_miss_symbols", 0)
+            target_symbols = prefetch_stats.get("target_symbols", 0)
+            miss_ratio = cache_miss_symbols / target_symbols if target_symbols > 0 else 0.0
+            if miss_ratio > CACHE_MISS_TOLERANCE_RATIO:
+                raise IncompleteGroupRankingCacheError(prefetch_stats)
+            if cache_miss_symbols > 0:
+                logger.warning(
+                    "Cache-only group ranking run has %d cache misses out of %d symbols (%.1f%%) -- within tolerance",
+                    cache_miss_symbols, target_symbols, miss_ratio * 100,
+                )
 
         if spy_data is None or spy_data.empty:
             logger.error("Failed to get SPY benchmark data")
