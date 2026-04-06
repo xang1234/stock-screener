@@ -387,7 +387,7 @@ class WatchlistStewardshipService:
         if current_rating is not None and current_rating <= config.exit_rating_max:
             reasons.append("Overall rating has slipped into exit-risk territory.")
         if score_delta is not None and score_delta <= config.exit_score_delta_max:
-            reasons.append(f"Composite score dropped {score_delta:.1f} points.")
+            reasons.append(f"Composite score dropped {abs(score_delta):.1f} points.")
         if stage_delta is not None and stage_delta <= config.exit_stage_delta_max:
             reasons.append("Stage quality deteriorated materially.")
         if (
@@ -401,7 +401,7 @@ class WatchlistStewardshipService:
             status = "exit_risk"
         else:
             if score_delta is not None and score_delta <= config.deteriorating_score_delta_max:
-                reasons.append(f"Composite score slipped {score_delta:.1f} points.")
+                reasons.append(f"Composite score slipped {abs(score_delta):.1f} points.")
             if (
                 current_rating is not None
                 and previous_rating is not None
@@ -409,7 +409,7 @@ class WatchlistStewardshipService:
             ):
                 reasons.append("Overall rating dropped at least one tier.")
             if rs_delta is not None and rs_delta <= config.deteriorating_rs_delta_max:
-                reasons.append(f"RS rating faded {rs_delta:.1f} points.")
+                reasons.append(f"RS rating faded {abs(rs_delta):.1f} points.")
             if theme_support == "lost":
                 reasons.append("Recent theme-alert support disappeared.")
             if reasons:
