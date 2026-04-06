@@ -20,6 +20,7 @@ from app.schemas.validation import (
     ValidationSourceKind,
 )
 from app.services.digest_service import DigestService
+from app.services.strategy_profile_service import StrategyProfileService
 
 
 class _FakeValidationService:
@@ -441,6 +442,22 @@ def test_digest_service_applies_profile_specific_leader_selection(session):
 
     assert [leader.symbol for leader in default_payload.leaders] == ["NVDA", "AVGO", "MSFT", "NOW"]
     assert [leader.symbol for leader in risk_off_payload.leaders] == ["NVDA", "AVGO", "MSFT"]
+
+
+def test_digest_service_falls_back_when_profile_theme_sort_is_invalid(session, caplog):
+    _seed_digest_data(session)
+    profile_service = StrategyProfileService()
+    profile_service._registry["default"].digest.theme_sort = "not_a_real_metric"
+    service = DigestService(
+        validation_service=_FakeValidationService(),
+        profile_service=profile_service,
+    )
+
+    with caplog.at_level("WARNING"):
+        payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="default")
+
+    assert payload.themes.leaders[0].display_name == "AI Infrastructure"
+    assert "Unknown digest theme_sort 'not_a_real_metric'" in caplog.text
 
 
 def test_digest_service_degrades_cleanly_when_sections_are_missing(session):

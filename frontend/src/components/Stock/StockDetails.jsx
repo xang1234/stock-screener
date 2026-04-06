@@ -587,8 +587,8 @@ function StockDetails() {
                 <SectionHeader>PREFERRED SETUPS</SectionHeader>
                 {regimeActions.preferred_setups?.length ? (
                   <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                    {regimeActions.preferred_setups.map((setup) => (
-                      <Chip key={setup} label={setup} size="small" variant="outlined" />
+                    {regimeActions.preferred_setups.map((setup, index) => (
+                      <Chip key={`${setup}-${index}`} label={setup} size="small" variant="outlined" />
                     ))}
                   </Stack>
                 ) : (
@@ -602,8 +602,8 @@ function StockDetails() {
                 <SectionHeader>CAUTION FLAGS</SectionHeader>
                 {regimeActions.caution_flags?.length ? (
                   <Stack spacing={0.5}>
-                    {regimeActions.caution_flags.map((flag) => (
-                      <Typography key={flag} variant="caption" color="text.secondary">
+                    {regimeActions.caution_flags.map((flag, index) => (
+                      <Typography key={`${flag}-${index}`} variant="caption" color="text.secondary">
                         {flag}
                       </Typography>
                     ))}
@@ -619,8 +619,8 @@ function StockDetails() {
                 <SectionHeader>EVENT NOTES</SectionHeader>
                 {eventRisk.notes?.length ? (
                   <Stack spacing={0.5}>
-                    {eventRisk.notes.map((note) => (
-                      <Typography key={note} variant="caption" color="text.secondary">
+                    {eventRisk.notes.map((note, index) => (
+                      <Typography key={`${note}-${index}`} variant="caption" color="text.secondary">
                         {note}
                       </Typography>
                     ))}

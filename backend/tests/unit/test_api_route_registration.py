@@ -17,3 +17,4 @@ def test_collection_routes_support_slash_and_no_slash_forms():
     assert "/api/v1/filter-presets" in paths
     assert "/api/v1/filter-presets/" in paths
     assert "/api/v1/strategy-profiles" in paths
+    assert "/api/v1/strategy-profiles/" in paths

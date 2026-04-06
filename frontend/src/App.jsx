@@ -221,9 +221,7 @@ function App() {
 
   const appShell = STATIC_SITE_MODE ? <StaticAppShell /> : (
     <RuntimeProvider>
-      <StrategyProfileProvider>
-        <AppShell />
-      </StrategyProfileProvider>
+      <AppShell />
     </RuntimeProvider>
   );
 
@@ -291,11 +289,17 @@ function AppShell() {
     </Router>
   );
 
+  const routedApp = (
+    <StrategyProfileProvider>
+      {appRoutes}
+    </StrategyProfileProvider>
+  );
+
   if (features.themes) {
-    return <PipelineProvider>{appRoutes}</PipelineProvider>;
+    return <PipelineProvider>{routedApp}</PipelineProvider>;
   }
 
-  return appRoutes;
+  return routedApp;
 }
 
 export default App;

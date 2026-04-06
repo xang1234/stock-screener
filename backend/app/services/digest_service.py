@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+import logging
 from typing import Any
 
 from sqlalchemy import case, func
@@ -44,6 +45,9 @@ THEME_ALERT_LIMIT = 5
 THEME_ALERT_LOOKBACK_DAYS = 7
 VALIDATION_LOOKBACK_DAYS = 90
 SUPPORTED_THEME_ALERT_TYPES = ("breakout", "velocity_spike")
+DEFAULT_THEME_SORT_METRIC = "momentum_score"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -458,6 +462,15 @@ class DigestService:
                 .all()
             )
             metric_name = profile_detail.digest.theme_sort
+            valid_metric_names = set(ThemeMetrics.__table__.columns.keys())
+            if metric_name not in valid_metric_names:
+                logger.warning(
+                    "Unknown digest theme_sort '%s' for profile '%s'; falling back to '%s'",
+                    metric_name,
+                    profile_detail.profile,
+                    DEFAULT_THEME_SORT_METRIC,
+                )
+                metric_name = DEFAULT_THEME_SORT_METRIC
 
             def _metric_value(metrics: ThemeMetrics) -> float:
                 value = getattr(metrics, metric_name, None)

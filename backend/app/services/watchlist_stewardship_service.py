@@ -172,7 +172,7 @@ class WatchlistStewardshipService:
         stewardship_items.sort(
             key=lambda item: (
                 status_priority.get(item.status, len(status_priority)),
-                -(item.current_composite_score or -1),
+                -(item.current_composite_score if item.current_composite_score is not None else -1),
                 item.symbol,
             )
         )
