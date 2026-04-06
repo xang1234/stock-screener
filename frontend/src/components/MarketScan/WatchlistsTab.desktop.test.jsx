@@ -16,9 +16,16 @@ vi.mock('../../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
 }));
 
+vi.mock('../../contexts/StrategyProfileContext', () => ({
+  useStrategyProfile: () => ({
+    activeProfile: 'default',
+  }),
+}));
+
 vi.mock('../../api/userWatchlists', () => ({
   getWatchlists: vi.fn().mockResolvedValue({ watchlists: [] }),
   getWatchlistData: vi.fn(),
+  getWatchlistStewardship: vi.fn(),
 }));
 
 vi.mock('./WatchlistTable', () => ({

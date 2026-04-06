@@ -21,6 +21,8 @@ from ...schemas.stock import (
     StockSearchResult,
     StockTechnicals,
 )
+from ...services.stock_event_context_service import StockEventContextService
+from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
@@ -32,6 +34,14 @@ router = APIRouter()
 
 def _get_validation_service():
     return ValidationService()
+
+
+def _get_stock_event_context_service():
+    return StockEventContextService()
+
+
+def _get_strategy_profile_service():
+    return StrategyProfileService()
 
 
 def _get_yfinance_service():
@@ -605,12 +615,16 @@ async def get_chart_data(
 @router.get("/{symbol}/decision-dashboard", response_model=StockDecisionDashboardResponse)
 async def get_stock_decision_dashboard(
     symbol: str,
+    profile: str | None = Query(None),
     db: Session = Depends(get_db),
     uow=Depends(get_uow),
+    event_context_service: StockEventContextService = Depends(_get_stock_event_context_service),
+    profile_service: StrategyProfileService = Depends(_get_strategy_profile_service),
 ):
     """Get a normalized stock decision workspace payload."""
 
     symbol = symbol.upper()
+    resolved_profile = profile_service.get_profile(profile or DEFAULT_PROFILE)
     degraded_reasons: list[str] = []
 
     info = _get_stock_info_payload(symbol)
@@ -723,6 +737,16 @@ async def get_stock_decision_dashboard(
         }
     )
 
+    regime = _build_regime_payload(breadth, latest_run)
+    event_risk, regime_actions = event_context_service.build(
+        db,
+        symbol=symbol,
+        as_of_date=latest_run.as_of_date if latest_run and latest_run.as_of_date else None,
+        regime_label=regime.get("label"),
+        profile=resolved_profile.profile,
+        fundamentals=fundamentals,
+    )
+
     return {
         "symbol": symbol,
         "as_of_date": latest_run.as_of_date.isoformat() if latest_run and latest_run.as_of_date else None,
@@ -741,7 +765,9 @@ async def get_stock_decision_dashboard(
             for peer in peer_items
         ],
         "themes": themes,
-        "regime": _build_regime_payload(breadth, latest_run),
+        "regime": regime,
+        "event_risk": event_risk,
+        "regime_actions": regime_actions,
         "degraded_reasons": sorted(set(degraded_reasons)),
     }
 

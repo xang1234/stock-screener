@@ -397,6 +397,52 @@ def test_digest_service_builds_daily_digest_and_markdown(session):
     assert "## Validation Snapshot" in markdown
 
 
+def test_digest_service_applies_profile_specific_leader_selection(session):
+    _seed_digest_data(session)
+    run = session.query(FeatureRun).filter(FeatureRun.as_of_date == date(2026, 4, 4)).first()
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol="NOW",
+            as_of_date=run.as_of_date,
+            composite_score=79.0,
+            overall_rating=4,
+            passes_count=1,
+            details_json={
+                "company_name": "ServiceNow",
+                "ibd_industry_group": "Software",
+                "screeners_run": ["minervini"],
+                "screeners_passed": 1,
+                "screeners_total": 1,
+                "composite_method": "weighted_average",
+                "details": {
+                    "screeners": {
+                        "minervini": {
+                            "score": 79,
+                            "passes": True,
+                            "rating": "Buy",
+                            "breakdown": {
+                                "rs_rating": {"points": 18, "max_points": 20, "passes": True},
+                            },
+                        }
+                    }
+                },
+            },
+        )
+    )
+    session.add(StockUniverse(symbol="NOW", name="ServiceNow", sector="Technology", industry="Software", is_active=True, status="active"))
+    session.commit()
+
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
+
+    default_payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="default")
+    risk_off_payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="risk_off")
+
+    assert [leader.symbol for leader in default_payload.leaders] == ["NVDA", "AVGO", "MSFT", "NOW"]
+    assert [leader.symbol for leader in risk_off_payload.leaders] == ["NVDA", "AVGO", "MSFT"]
+
+
 def test_digest_service_degrades_cleanly_when_sections_are_missing(session):
     fake_validation_service = _FakeValidationService()
     service = DigestService(validation_service=fake_validation_service)

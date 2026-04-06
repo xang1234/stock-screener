@@ -31,6 +31,7 @@ from app.schemas.digest import (
     DigestWatchlistHighlight,
 )
 from app.schemas.validation import ValidationHorizonSummary, ValidationSourceKind
+from app.services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
 from app.services.validation_service import ValidationService
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
 from app.utils.market_hours import eastern_day_bounds_utc, to_eastern_date
@@ -56,16 +57,24 @@ class _ThemeSectionResult:
 class DigestService:
     """Build JSON and markdown daily digests from cached application state."""
 
-    def __init__(self, *, validation_service: ValidationService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        validation_service: ValidationService | None = None,
+        profile_service: StrategyProfileService | None = None,
+    ) -> None:
         self._validation_service = validation_service or ValidationService()
+        self._profile_service = profile_service or StrategyProfileService()
 
     def get_daily_digest(
         self,
         db: Session,
         *,
         as_of_date: date | None = None,
+        profile: str | None = None,
     ) -> DailyDigestResponse:
         effective_as_of_date = self._resolve_as_of_date(db, as_of_date)
+        profile_detail = self._profile_service.get_profile(profile or DEFAULT_PROFILE)
         degraded_reasons: list[str] = []
 
         latest_run = self._load_latest_feature_run(db, effective_as_of_date)
@@ -81,10 +90,18 @@ class DigestService:
         if latest_run is None:
             degraded_reasons.append("missing_published_feature_run")
 
-        leaders, leader_degraded = self._build_leaders(db, latest_run)
+        leaders, leader_degraded = self._build_leaders(
+            db,
+            latest_run,
+            profile_detail=profile_detail,
+        )
         degraded_reasons.extend(leader_degraded)
 
-        themes_result = self._build_theme_section(db, effective_as_of_date)
+        themes_result = self._build_theme_section(
+            db,
+            effective_as_of_date,
+            profile_detail=profile_detail,
+        )
         degraded_reasons.extend(themes_result.degraded_reasons)
 
         validation = self._build_validation_section(db, effective_as_of_date)
@@ -111,6 +128,7 @@ class DigestService:
             leaders=leaders,
             validation=validation["section"],
             degraded_reasons=_dedupe(degraded_reasons),
+            profile_detail=profile_detail,
         )
 
         return DailyDigestResponse(
@@ -337,6 +355,8 @@ class DigestService:
         self,
         db: Session,
         latest_run: FeatureRun | None,
+        *,
+        profile_detail,
     ) -> tuple[list[DigestLeaderItem], list[str]]:
         if latest_run is None:
             return [], ["missing_leader_candidates"]
@@ -349,7 +369,7 @@ class DigestService:
                 StockFeatureDaily.composite_score.desc(),
                 StockFeatureDaily.symbol.asc(),
             )
-            .limit(DIGEST_LEADERS_LIMIT)
+            .limit(max(profile_detail.digest.leader_limit * 4, DIGEST_LEADERS_LIMIT))
             .all()
         )
         if not rows:
@@ -362,8 +382,30 @@ class DigestService:
             .all()
         }
 
+        candidate_rows = [
+            row
+            for row in rows
+            if row.composite_score is None
+            or row.composite_score >= profile_detail.digest.leader_min_composite_score
+        ]
+        if not candidate_rows:
+            candidate_rows = rows
+
+        def _leader_sort_key(row: StockFeatureDaily) -> tuple[Any, ...]:
+            details = row.details_json or {}
+            score = float(row.composite_score) if row.composite_score is not None else float("-inf")
+            rs_rating = float(details.get("rs_rating")) if details.get("rs_rating") is not None else float("-inf")
+            eps_growth = float(details.get("eps_growth_qq")) if details.get("eps_growth_qq") is not None else float("-inf")
+            sales_growth = float(details.get("sales_growth_qq")) if details.get("sales_growth_qq") is not None else float("-inf")
+            leader_sort = profile_detail.digest.leader_sort
+            if leader_sort == "growth_then_score":
+                return (-(eps_growth + sales_growth), -score, row.symbol)
+            if leader_sort == "rs_then_score":
+                return (-rs_rating, -score, row.symbol)
+            return (-score, -rs_rating, row.symbol)
+
         leaders: list[DigestLeaderItem] = []
-        for row in rows:
+        for row in sorted(candidate_rows, key=_leader_sort_key)[: profile_detail.digest.leader_limit]:
             feature_row = FeatureRow(
                 run_id=row.run_id,
                 symbol=row.symbol,
@@ -387,7 +429,13 @@ class DigestService:
             )
         return leaders, []
 
-    def _build_theme_section(self, db: Session, as_of_date: date) -> _ThemeSectionResult:
+    def _build_theme_section(
+        self,
+        db: Session,
+        as_of_date: date,
+        *,
+        profile_detail,
+    ) -> _ThemeSectionResult:
         degraded_reasons: list[str] = []
         latest_metrics_date = (
             db.query(func.max(ThemeMetrics.date))
@@ -400,42 +448,36 @@ class DigestService:
         if latest_metrics_date is None:
             degraded_reasons.append("missing_theme_metrics")
         else:
-            leader_rows = (
+            theme_rows = (
                 db.query(ThemeMetrics, ThemeCluster)
                 .join(ThemeCluster, ThemeCluster.id == ThemeMetrics.theme_cluster_id)
                 .filter(
                     ThemeMetrics.date == latest_metrics_date,
                     ThemeCluster.is_active.is_(True),
                 )
-                .order_by(
-                    case((ThemeMetrics.momentum_score.is_(None), 1), else_=0),
-                    ThemeMetrics.momentum_score.desc(),
-                    ThemeCluster.display_name.asc(),
-                )
-                .limit(THEME_SECTION_LIMIT)
                 .all()
             )
-            leader_theme_ids = [cluster.id for _, cluster in leader_rows]
-            laggard_rows = (
-                db.query(ThemeMetrics, ThemeCluster)
-                .join(ThemeCluster, ThemeCluster.id == ThemeMetrics.theme_cluster_id)
-                .filter(
-                    ThemeMetrics.date == latest_metrics_date,
-                    ThemeCluster.is_active.is_(True),
-                    ThemeMetrics.momentum_score.is_not(None),
+            metric_name = profile_detail.digest.theme_sort
+
+            def _metric_value(metrics: ThemeMetrics) -> float:
+                value = getattr(metrics, metric_name, None)
+                if value is None:
+                    return float("-inf")
+                return float(value)
+
+            leader_rows = sorted(
+                theme_rows,
+                key=lambda item: (-_metric_value(item[0]), item[1].display_name.lower()),
+            )[:THEME_SECTION_LIMIT]
+            leader_theme_ids = {cluster.id for _, cluster in leader_rows}
+            laggard_rows = [
+                item
+                for item in sorted(
+                    theme_rows,
+                    key=lambda item: (_metric_value(item[0]), item[1].display_name.lower()),
                 )
-            )
-            if leader_theme_ids:
-                laggard_rows = laggard_rows.filter(~ThemeCluster.id.in_(leader_theme_ids))
-            laggard_rows = (
-                laggard_rows
-                .order_by(
-                    ThemeMetrics.momentum_score.asc(),
-                    ThemeCluster.display_name.asc(),
-                )
-                .limit(THEME_SECTION_LIMIT)
-                .all()
-            )
+                if item[1].id not in leader_theme_ids
+            ][:THEME_SECTION_LIMIT]
             theme_leaders = [self._theme_item(metrics, cluster) for metrics, cluster in leader_rows]
             theme_laggards = [self._theme_item(metrics, cluster) for metrics, cluster in laggard_rows]
 
@@ -630,6 +672,7 @@ class DigestService:
         leaders: list[DigestLeaderItem],
         validation: DigestValidationSection,
         degraded_reasons: list[str],
+        profile_detail,
     ) -> list[DigestRiskNote]:
         notes: list[DigestRiskNote] = []
 
@@ -652,8 +695,14 @@ class DigestService:
 
         scan_pick_five = _find_horizon(validation.scan_pick.horizons, 5)
         if scan_pick_five and (
-            (scan_pick_five.avg_return_pct is not None and scan_pick_five.avg_return_pct <= 0)
-            or (scan_pick_five.positive_rate is not None and scan_pick_five.positive_rate < 0.5)
+            (
+                scan_pick_five.avg_return_pct is not None
+                and scan_pick_five.avg_return_pct <= profile_detail.digest.weak_validation_avg_return_floor
+            )
+            or (
+                scan_pick_five.positive_rate is not None
+                and scan_pick_five.positive_rate < profile_detail.digest.weak_validation_positive_rate_floor
+            )
         ):
             notes.append(
                 DigestRiskNote(
@@ -665,8 +714,14 @@ class DigestService:
 
         theme_alert_five = _find_horizon(validation.theme_alert.horizons, 5)
         if theme_alert_five and (
-            (theme_alert_five.avg_return_pct is not None and theme_alert_five.avg_return_pct <= 0)
-            or (theme_alert_five.positive_rate is not None and theme_alert_five.positive_rate < 0.5)
+            (
+                theme_alert_five.avg_return_pct is not None
+                and theme_alert_five.avg_return_pct <= profile_detail.digest.weak_validation_avg_return_floor
+            )
+            or (
+                theme_alert_five.positive_rate is not None
+                and theme_alert_five.positive_rate < profile_detail.digest.weak_validation_positive_rate_floor
+            )
         ):
             notes.append(
                 DigestRiskNote(

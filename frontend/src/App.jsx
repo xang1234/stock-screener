@@ -15,6 +15,7 @@ import DesktopSetupScreen from './components/App/DesktopSetupScreen';
 import ServerLoginScreen from './components/App/ServerLoginScreen';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
+import { StrategyProfileProvider } from './contexts/StrategyProfileContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
 
 // Lazy loaded pages (secondary pages)
@@ -220,7 +221,9 @@ function App() {
 
   const appShell = STATIC_SITE_MODE ? <StaticAppShell /> : (
     <RuntimeProvider>
-      <AppShell />
+      <StrategyProfileProvider>
+        <AppShell />
+      </StrategyProfileProvider>
     </RuntimeProvider>
   );
 

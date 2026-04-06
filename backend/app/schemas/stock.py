@@ -145,6 +145,33 @@ class StockRegimeSummary(BaseModel):
     feature_run_stale: bool = False
 
 
+class StockEventRiskSummary(BaseModel):
+    """Upcoming earnings and ownership-derived event context."""
+
+    next_earnings_date: Optional[str] = None
+    days_until_earnings: Optional[int] = None
+    earnings_window_risk: str = "safe"
+    recent_earnings_count: int = 0
+    beat_count_last_4: int = 0
+    miss_count_last_4: int = 0
+    avg_post_earnings_gap_pct: Optional[float] = None
+    avg_post_earnings_5s_return_pct: Optional[float] = None
+    institutional_ownership_current: Optional[float] = None
+    institutional_ownership_delta_90d: Optional[float] = None
+    notes: List[str]
+
+
+class StockRegimeActions(BaseModel):
+    """Profile-aware action guidance based on regime and event context."""
+
+    stance: str
+    sizing_guidance: str
+    avoid_new_entries: bool = False
+    preferred_setups: List[str]
+    caution_flags: List[str]
+    summary: str
+
+
 class StockDecisionDashboardResponse(BaseModel):
     """Full stock decision workspace payload."""
 
@@ -160,4 +187,6 @@ class StockDecisionDashboardResponse(BaseModel):
     peers: List[ScanResultItem]
     themes: List[StockThemeSummary]
     regime: StockRegimeSummary
+    event_risk: StockEventRiskSummary
+    regime_actions: StockRegimeActions
     degraded_reasons: List[str]

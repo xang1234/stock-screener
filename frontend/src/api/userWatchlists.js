@@ -70,6 +70,16 @@ export const getWatchlistData = async (watchlistId) => {
   return response.data;
 };
 
+export const getWatchlistStewardship = async (watchlistId, profile, asOfDate) => {
+  const response = await apiClient.get(`${BASE_PATH}/${watchlistId}/stewardship`, {
+    params: {
+      ...(profile ? { profile } : {}),
+      ...(asOfDate ? { as_of_date: asOfDate } : {}),
+    },
+  });
+  return response.data;
+};
+
 // ================= Items =================
 
 /**

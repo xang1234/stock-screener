@@ -46,10 +46,10 @@ def _disable_server_auth():
 
 class _FakeDigestService:
     def __init__(self):
-        self.requested_dates: list[date | None] = []
+        self.requested_dates: list[tuple[date | None, str | None]] = []
 
-    def get_daily_digest(self, db, *, as_of_date=None):  # noqa: ANN001
-        self.requested_dates.append(as_of_date)
+    def get_daily_digest(self, db, *, as_of_date=None, profile=None):  # noqa: ANN001
+        self.requested_dates.append((as_of_date, profile))
         return DailyDigestResponse(
             as_of_date="2026-04-04",
             freshness=DigestFreshness(
@@ -111,13 +111,13 @@ async def test_daily_digest_endpoint_returns_payload_and_passes_date_query(clien
     app.dependency_overrides[_get_digest_service] = lambda: fake_service
     app.dependency_overrides[get_db] = lambda: iter([None])
 
-    response = await client.get("/api/v1/digest/daily", params={"as_of_date": "2026-04-03"})
+    response = await client.get("/api/v1/digest/daily", params={"as_of_date": "2026-04-03", "profile": "growth"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["as_of_date"] == "2026-04-04"
     assert payload["leaders"][0]["symbol"] == "NVDA"
-    assert fake_service.requested_dates == [date(2026, 4, 3)]
+    assert fake_service.requested_dates == [(date(2026, 4, 3), "growth")]
 
 
 @pytest.mark.asyncio
@@ -126,8 +126,9 @@ async def test_daily_digest_markdown_endpoint_returns_text(client):
     app.dependency_overrides[_get_digest_service] = lambda: fake_service
     app.dependency_overrides[get_db] = lambda: iter([None])
 
-    response = await client.get("/api/v1/digest/daily/markdown")
+    response = await client.get("/api/v1/digest/daily/markdown", params={"profile": "momentum"})
 
     assert response.status_code == 200
     assert response.text.startswith("# Daily Digest (2026-04-04)")
     assert response.headers["content-type"].startswith("text/plain")
+    assert fake_service.requested_dates == [(None, "momentum")]

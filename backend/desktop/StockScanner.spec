@@ -21,6 +21,7 @@ api_route_modules = [
     "app.api.v1.user_watchlists",
     "app.api.v1.validation",
     "app.api.v1.digest",
+    "app.api.v1.strategy_profiles",
     "app.api.v1.ticker_validation",
     "app.api.v1.filter_presets",
     "app.api.v1.features",

@@ -14,6 +14,19 @@ vi.mock('../../api/stocks', () => ({
   getStockValidation: (...args) => getStockValidation(...args),
 }));
 
+vi.mock('../../contexts/StrategyProfileContext', () => ({
+  useStrategyProfile: () => ({
+    activeProfile: 'default',
+    activeProfileDetail: {
+      profile: 'default',
+      stock_action: {
+        strengths_title: 'Top Strengths',
+        weaknesses_title: 'Top Weaknesses',
+      },
+    },
+  }),
+}));
+
 vi.mock('../Charts/CandlestickChart', () => ({
   default: (props) => {
     candlestickChartPropsSpy(props);
@@ -86,6 +99,27 @@ describe('StockDetails', () => {
       peers: [{ symbol: 'AVGO', company_name: 'Broadcom', composite_score: 82.1, rs_rating: 93, stage: 2 }],
       themes: [{ theme_id: 1, display_name: 'AI Infrastructure', momentum_score: 81.2, mention_velocity: 1.8, basket_return_1m: 12.4, status: 'trending', lifecycle_state: 'active' }],
       regime: { label: 'offense', summary: 'Current stance: offense.', ratio_5day: 1.6, ratio_10day: 1.3 },
+      event_risk: {
+        next_earnings_date: '2026-04-09',
+        days_until_earnings: 7,
+        earnings_window_risk: 'caution',
+        recent_earnings_count: 4,
+        beat_count_last_4: 3,
+        miss_count_last_4: 1,
+        avg_post_earnings_gap_pct: 2.4,
+        avg_post_earnings_5s_return_pct: 4.8,
+        institutional_ownership_current: 67.1,
+        institutional_ownership_delta_90d: 1.2,
+        notes: ['Earnings remain inside the caution window.'],
+      },
+      regime_actions: {
+        stance: 'offense',
+        sizing_guidance: 'half',
+        avoid_new_entries: false,
+        preferred_setups: ['Stage 2 breakouts'],
+        caution_flags: ['Earnings are inside the caution window.'],
+        summary: 'Default profile favors half sizing while earnings are near.',
+      },
       degraded_reasons: [],
     });
     getStockValidation.mockResolvedValue({
@@ -152,6 +186,7 @@ describe('StockDetails', () => {
     expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
     expect(screen.getByText('NVIDIA Corp')).toBeInTheDocument();
     expect(screen.getByText('Decision Summary')).toBeInTheDocument();
+    expect(screen.getByText('Event Risk & Action Plan')).toBeInTheDocument();
     expect(screen.getByText('Historical Validation')).toBeInTheDocument();
     expect(screen.getByText('Industry Peers')).toBeInTheDocument();
     expect(screen.getByText('AI Infrastructure')).toBeInTheDocument();
@@ -223,6 +258,7 @@ describe('StockDetails', () => {
     expect(screen.getByTestId('stock-metrics-sidebar')).toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(screen.getByText('Decision Summary')).toBeInTheDocument();
+    expect(screen.getByText('Event Risk & Action Plan')).toBeInTheDocument();
     expect(screen.getByText('Historical Validation')).toBeInTheDocument();
     expect(screen.getAllByText(/validation is partially degraded/i)).toHaveLength(3);
     expect(screen.getByText('Market regime context is unavailable for this symbol.')).toBeInTheDocument();
@@ -263,6 +299,7 @@ describe('StockDetails', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'NVDA' })).toBeInTheDocument();
+    expect(screen.getByText('Event Risk & Action Plan')).toBeInTheDocument();
     expect(screen.getByText('Historical Validation')).toBeInTheDocument();
     expect(screen.getByText(/validation is partially degraded/i)).toBeInTheDocument();
     expect(screen.queryByText('Scan Picks')).not.toBeInTheDocument();

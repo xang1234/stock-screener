@@ -19,6 +19,15 @@ vi.mock('../../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
 }));
 
+vi.mock('../../contexts/StrategyProfileContext', () => ({
+  useStrategyProfile: () => ({
+    activeProfile: 'default',
+    activeProfileDetail: { profile: 'default', label: 'Default' },
+    profiles: [{ profile: 'default', label: 'Default' }],
+    setActiveProfile: vi.fn(),
+  }),
+}));
+
 vi.mock('../PipelineProgressCard', () => ({
   default: () => <div data-testid="pipeline-card" />,
 }));
@@ -54,6 +63,7 @@ describe('Layout desktop capability gating', () => {
 
     expect(screen.getByText('Digest')).toBeInTheDocument();
     expect(screen.getByText('Validation')).toBeInTheDocument();
+    expect(screen.getByLabelText('Profile')).toBeInTheDocument();
     expect(screen.queryByText('Themes')).not.toBeInTheDocument();
     expect(screen.queryByText('Chatbot')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Scheduled Tasks')).not.toBeInTheDocument();

@@ -2,15 +2,13 @@
  * Watchlists Tab Component
  *
  * Main tab for user-defined watchlists display.
- * Features:
- * - Watchlist toggle buttons to switch between watchlists
- * - Settings icon to open WatchlistManager modal
- * - Renders WatchlistTable for selected watchlist
  */
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  Alert,
   Box,
+  Chip,
   Typography,
   IconButton,
   CircularProgress,
@@ -22,20 +20,22 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
-import { getWatchlists, getWatchlistData } from '../../api/userWatchlists';
+import { getWatchlists, getWatchlistData, getWatchlistStewardship } from '../../api/userWatchlists';
 import WatchlistTable from './WatchlistTable';
 import UserWatchlistManager from './UserWatchlistManager';
 import WatchlistChartModal from './WatchlistChartModal';
 import { useRuntime } from '../../contexts/RuntimeContext';
+import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 function WatchlistsTab() {
   const { bootstrap, bootstrapIncomplete } = useRuntime();
+  const { activeProfile } = useStrategyProfile();
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
 
-  // Fetch list of watchlists for toggle
   const {
     data: watchlistsData,
     isLoading: watchlistsLoading,
@@ -45,19 +45,14 @@ function WatchlistsTab() {
     queryFn: getWatchlists,
   });
 
-  const watchlists = useMemo(
-    () => watchlistsData?.watchlists || [],
-    [watchlistsData]
-  );
+  const watchlists = useMemo(() => watchlistsData?.watchlists || [], [watchlistsData]);
 
-  // Auto-select first watchlist if none selected
   useEffect(() => {
     if (!selectedWatchlistId && watchlists.length > 0) {
       setSelectedWatchlistId(watchlists[0].id);
     }
   }, [watchlists, selectedWatchlistId]);
 
-  // Fetch selected watchlist data with sparklines
   const {
     data: watchlistData,
     isLoading: dataLoading,
@@ -68,16 +63,52 @@ function WatchlistsTab() {
     enabled: !!selectedWatchlistId,
   });
 
+  const {
+    data: stewardshipData,
+    isLoading: stewardshipLoading,
+    error: stewardshipError,
+    refetch: refetchStewardship,
+  } = useQuery({
+    queryKey: ['userWatchlistStewardship', selectedWatchlistId, activeProfile],
+    queryFn: () => getWatchlistStewardship(selectedWatchlistId, activeProfile),
+    enabled: !!selectedWatchlistId,
+  });
+
+  const stewardshipBySymbol = useMemo(
+    () => Object.fromEntries((stewardshipData?.items || []).map((item) => [item.symbol, item])),
+    [stewardshipData]
+  );
+  const stewardshipOrder = useMemo(
+    () => Object.fromEntries((stewardshipData?.items || []).map((item, index) => [item.symbol, index])),
+    [stewardshipData]
+  );
+
+  const filteredWatchlistData = useMemo(() => {
+    if (!watchlistData) {
+      return null;
+    }
+    const filteredItems = [...(watchlistData.items || [])]
+      .filter((item) => statusFilter === 'all' || stewardshipBySymbol[item.symbol]?.status === statusFilter)
+      .sort((left, right) => {
+        const leftIndex = stewardshipOrder[left.symbol] ?? Number.MAX_SAFE_INTEGER;
+        const rightIndex = stewardshipOrder[right.symbol] ?? Number.MAX_SAFE_INTEGER;
+        return leftIndex - rightIndex;
+      });
+    return { ...watchlistData, items: filteredItems };
+  }, [statusFilter, stewardshipBySymbol, stewardshipOrder, watchlistData]);
+
   const handleRefresh = () => {
     refetchWatchlists();
     if (selectedWatchlistId) {
       refetchData();
+      refetchStewardship();
     }
   };
 
-  const handleWatchlistChange = (event, newWatchlistId) => {
+  const handleWatchlistChange = (_, newWatchlistId) => {
     if (newWatchlistId !== null) {
       setSelectedWatchlistId(newWatchlistId);
+      setStatusFilter('all');
     }
   };
 
@@ -102,7 +133,6 @@ function WatchlistsTab() {
     URL.revokeObjectURL(url);
   };
 
-  // Extract symbols array from watchlist items for navigation
   const watchlistSymbols = watchlistData?.items?.map((item) => item.symbol) || [];
 
   if (watchlistsLoading) {
@@ -115,7 +145,6 @@ function WatchlistsTab() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header with watchlist toggle and settings */}
       <Box
         sx={{
           display: 'flex',
@@ -127,7 +156,6 @@ function WatchlistsTab() {
           borderColor: 'divider',
         }}
       >
-        {/* Watchlist Toggle */}
         <Box display="flex" alignItems="center" gap={2}>
           <Typography variant="subtitle2" color="text.secondary">
             Watchlist:
@@ -156,7 +184,6 @@ function WatchlistsTab() {
           )}
         </Box>
 
-        {/* Actions */}
         <Box display="flex" alignItems="center" gap={0.5}>
           <Tooltip title="Download watchlist as CSV">
             <span>
@@ -182,14 +209,53 @@ function WatchlistsTab() {
         </Box>
       </Box>
 
-      {/* Watchlist Table */}
       <Box sx={{ flex: 1, overflow: 'auto' }}>
         {dataLoading ? (
           <Box display="flex" justifyContent="center" py={4}>
             <CircularProgress />
           </Box>
         ) : watchlistData ? (
-          <WatchlistTable watchlistData={watchlistData} onRefresh={handleRefresh} onOpenChart={handleOpenChart} />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {stewardshipError && (
+              <Alert severity="warning">
+                Stewardship context is unavailable: {stewardshipError.message}
+              </Alert>
+            )}
+            {stewardshipData && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                  {['strengthening', 'unchanged', 'deteriorating', 'exit_risk', 'missing_from_run'].map((status) => (
+                    <Chip
+                      key={status}
+                      size="small"
+                      variant="outlined"
+                      label={`${status.replaceAll('_', ' ')}: ${stewardshipData.summary_counts?.[status] ?? 0}`}
+                    />
+                  ))}
+                </Box>
+                <ToggleButtonGroup
+                  size="small"
+                  value={statusFilter}
+                  exclusive
+                  onChange={(_, value) => value && setStatusFilter(value)}
+                >
+                  <ToggleButton value="all">All</ToggleButton>
+                  <ToggleButton value="strengthening">Strengthening</ToggleButton>
+                  <ToggleButton value="unchanged">Unchanged</ToggleButton>
+                  <ToggleButton value="deteriorating">Deteriorating</ToggleButton>
+                  <ToggleButton value="exit_risk">Exit Risk</ToggleButton>
+                  <ToggleButton value="missing_from_run">Missing</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+            )}
+            <WatchlistTable
+              watchlistData={filteredWatchlistData}
+              stewardshipBySymbol={stewardshipBySymbol}
+              stewardshipLoading={stewardshipLoading}
+              onRefresh={handleRefresh}
+              onOpenChart={handleOpenChart}
+            />
+          </Box>
         ) : watchlists.length === 0 ? (
           <Box textAlign="center" py={4}>
             <Typography color="text.secondary" gutterBottom>
@@ -206,10 +272,8 @@ function WatchlistsTab() {
         ) : null}
       </Box>
 
-      {/* Watchlist Manager Modal */}
       <UserWatchlistManager open={managerOpen} onClose={() => setManagerOpen(false)} onUpdate={handleRefresh} />
 
-      {/* Chart Viewer Modal */}
       <WatchlistChartModal
         open={chartModalOpen}
         onClose={() => setChartModalOpen(false)}
