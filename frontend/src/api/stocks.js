@@ -183,8 +183,10 @@ export const searchStocks = async (query, limit = 8) => {
  * @param {string} symbol - Stock ticker symbol
  * @returns {Promise<Object>} Decision dashboard payload
  */
-export const getStockDecisionDashboard = async (symbol) => {
-  const response = await apiClient.get(`/v1/stocks/${symbol}/decision-dashboard`);
+export const getStockDecisionDashboard = async (symbol, profile) => {
+  const response = await apiClient.get(`/v1/stocks/${symbol}/decision-dashboard`, {
+    params: profile ? { profile } : undefined,
+  });
   return response.data;
 };
 

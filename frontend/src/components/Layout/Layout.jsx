@@ -4,7 +4,11 @@ import {
   Box,
   Button,
   Container,
+  FormControl,
   InputBase,
+  InputLabel,
+  MenuItem,
+  Select,
   Toolbar,
   Typography,
   IconButton,
@@ -21,6 +25,7 @@ import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
 import DesktopBootstrapBanner from '../App/DesktopBootstrapBanner';
 import { useRuntime } from '../../contexts/RuntimeContext';
+import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 function TickerSearch() {
   const navigate = useNavigate();
@@ -67,6 +72,7 @@ function Layout({ children }) {
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
   const { auth, desktopMode, features, isLoggingOut, logout } = useRuntime();
+  const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const navItems = [
@@ -95,6 +101,35 @@ function Layout({ children }) {
           )}
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
+          <Box sx={{ ml: 1.5, minWidth: 150 }}>
+            <FormControl size="small" fullWidth variant="outlined">
+              <InputLabel id="strategy-profile-label" sx={{ color: 'rgba(255,255,255,0.8)' }}>
+                Profile
+              </InputLabel>
+              <Select
+                labelId="strategy-profile-label"
+                value={activeProfile}
+                label="Profile"
+                onChange={(event) => setActiveProfile(event.target.value)}
+                sx={{
+                  color: 'inherit',
+                  backgroundColor: 'rgba(255,255,255,0.12)',
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'rgba(255,255,255,0.35)',
+                  },
+                  '& .MuiSvgIcon-root': {
+                    color: 'inherit',
+                  },
+                }}
+              >
+                {(profiles.length ? profiles : [{ profile: activeProfile, label: activeProfileDetail?.label || activeProfile }]).map((profile) => (
+                  <MenuItem key={profile.profile} value={profile.profile}>
+                    {profile.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
           <Box sx={{ flexGrow: 1 }} />
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;

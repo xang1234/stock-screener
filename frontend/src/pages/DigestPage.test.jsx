@@ -18,6 +18,19 @@ vi.mock('../api/digest', () => ({
   getDailyDigestMarkdown: (...args) => getDailyDigestMarkdown(...args),
 }));
 
+vi.mock('../contexts/StrategyProfileContext', () => ({
+  useStrategyProfile: () => ({
+    activeProfile: 'default',
+    activeProfileDetail: {
+      profile: 'default',
+      label: 'Default',
+      digest: {
+        section_order: ['market', 'leaders', 'themes', 'validation', 'watchlists', 'risks'],
+      },
+    },
+  }),
+}));
+
 describe('DigestPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();

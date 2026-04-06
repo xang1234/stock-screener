@@ -18,6 +18,12 @@ vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
 }));
 
+vi.mock('../contexts/StrategyProfileContext', () => ({
+  useStrategyProfile: () => ({
+    activeProfileDetail: null,
+  }),
+}));
+
 vi.mock('../hooks/useFilterPresets', () => ({
   useFilterPresets: () => ({
     presets: [],

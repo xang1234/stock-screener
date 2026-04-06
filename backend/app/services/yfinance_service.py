@@ -7,7 +7,7 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 import yfinance as yf
 import pandas as pd
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -285,6 +285,43 @@ class YFinanceService:
         except Exception as e:
             logger.error(f"Error fetching earnings history for {symbol}: {e}")
             return None
+
+    def get_upcoming_earnings_dates(self, symbol: str, limit: int = 4) -> List[date]:
+        """
+        Get upcoming earnings dates from yfinance.
+
+        Args:
+            symbol: Stock ticker symbol
+            limit: Maximum number of upcoming earnings rows to inspect
+
+        Returns:
+            List of upcoming earnings dates normalized to Python dates
+        """
+        try:
+            from .rate_limiter import rate_limiter
+            from ..config import settings
+
+            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+
+            ticker = yf.Ticker(symbol)
+            earnings_dates = ticker.earnings_dates
+            if earnings_dates is None or earnings_dates.empty:
+                return []
+
+            normalized = earnings_dates.reset_index()
+            result: List[date] = []
+            for row in normalized.head(limit).to_dict("records"):
+                raw_value = row.get("Earnings Date") or row.get("index") or row.get("Date")
+                if raw_value is None:
+                    continue
+                timestamp = pd.Timestamp(raw_value)
+                if pd.isna(timestamp):
+                    continue
+                result.append(timestamp.date())
+            return sorted({value for value in result})
+        except Exception as e:
+            logger.error(f"Error fetching earnings dates for {symbol}: {e}")
+            return []
 
     def get_quarterly_growth(self, symbol: str) -> Optional[Dict]:
         """

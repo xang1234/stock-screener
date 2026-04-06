@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ...database import get_db
 from ...schemas.digest import DailyDigestResponse
 from ...services.digest_service import DigestService
+from ...services.strategy_profile_service import DEFAULT_PROFILE
 
 router = APIRouter()
 
@@ -22,21 +23,23 @@ def _get_digest_service() -> DigestService:
 @router.get("/daily", response_model=DailyDigestResponse)
 async def get_daily_digest(
     as_of_date: date | None = Query(None),
+    profile: str = Query(DEFAULT_PROFILE),
     db: Session = Depends(get_db),
     service: DigestService = Depends(_get_digest_service),
 ):
     """Return the deterministic daily digest payload."""
 
-    return service.get_daily_digest(db, as_of_date=as_of_date)
+    return service.get_daily_digest(db, as_of_date=as_of_date, profile=profile)
 
 
 @router.get("/daily/markdown", response_class=PlainTextResponse)
 async def get_daily_digest_markdown(
     as_of_date: date | None = Query(None),
+    profile: str = Query(DEFAULT_PROFILE),
     db: Session = Depends(get_db),
     service: DigestService = Depends(_get_digest_service),
 ):
     """Render the daily digest as markdown using the same normalized payload."""
 
-    payload = service.get_daily_digest(db, as_of_date=as_of_date)
+    payload = service.get_daily_digest(db, as_of_date=as_of_date, profile=profile)
     return PlainTextResponse(service.render_markdown(payload))

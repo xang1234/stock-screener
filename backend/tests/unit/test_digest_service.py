@@ -20,6 +20,7 @@ from app.schemas.validation import (
     ValidationSourceKind,
 )
 from app.services.digest_service import DigestService
+from app.services.strategy_profile_service import StrategyProfileService
 
 
 class _FakeValidationService:
@@ -395,6 +396,120 @@ def test_digest_service_builds_daily_digest_and_markdown(session):
     assert "## Leaders" in markdown
     assert "**NVDA**" in markdown
     assert "## Validation Snapshot" in markdown
+
+
+def test_digest_service_applies_profile_specific_leader_selection(session):
+    _seed_digest_data(session)
+    run = session.query(FeatureRun).filter(FeatureRun.as_of_date == date(2026, 4, 4)).first()
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol="NOW",
+            as_of_date=run.as_of_date,
+            composite_score=79.0,
+            overall_rating=4,
+            passes_count=1,
+            details_json={
+                "company_name": "ServiceNow",
+                "ibd_industry_group": "Software",
+                "screeners_run": ["minervini"],
+                "screeners_passed": 1,
+                "screeners_total": 1,
+                "composite_method": "weighted_average",
+                "details": {
+                    "screeners": {
+                        "minervini": {
+                            "score": 79,
+                            "passes": True,
+                            "rating": "Buy",
+                            "breakdown": {
+                                "rs_rating": {"points": 18, "max_points": 20, "passes": True},
+                            },
+                        }
+                    }
+                },
+            },
+        )
+    )
+    session.add(StockUniverse(symbol="NOW", name="ServiceNow", sector="Technology", industry="Software", is_active=True, status="active"))
+    session.commit()
+
+    fake_validation_service = _FakeValidationService()
+    service = DigestService(validation_service=fake_validation_service)
+
+    default_payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="default")
+    risk_off_payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="risk_off")
+
+    assert [leader.symbol for leader in default_payload.leaders] == ["NVDA", "AVGO", "MSFT", "NOW"]
+    assert [leader.symbol for leader in risk_off_payload.leaders] == ["NVDA", "AVGO", "MSFT"]
+
+
+def test_digest_service_falls_back_to_ranked_rows_when_threshold_excludes_scored_rows(session):
+    _seed_digest_data(session)
+    run = session.query(FeatureRun).filter(FeatureRun.as_of_date == date(2026, 4, 4)).first()
+    session.add(
+        StockFeatureDaily(
+            run_id=run.id,
+            symbol="NULL",
+            as_of_date=run.as_of_date,
+            composite_score=None,
+            overall_rating=3,
+            passes_count=1,
+            details_json={
+                "company_name": "Null Score Inc",
+                "ibd_industry_group": "Software",
+                "screeners_run": ["minervini"],
+                "screeners_passed": 1,
+                "screeners_total": 1,
+                "composite_method": "weighted_average",
+                "details": {"screeners": {"minervini": {"score": None, "passes": True, "rating": "Hold"}}},
+            },
+        )
+    )
+    session.commit()
+
+    profile_service = StrategyProfileService()
+    profile_service._registry["risk_off"].digest.leader_min_composite_score = 99.0
+    service = DigestService(
+        validation_service=_FakeValidationService(),
+        profile_service=profile_service,
+    )
+
+    payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="risk_off")
+
+    assert [leader.symbol for leader in payload.leaders] == ["NVDA", "AVGO", "MSFT"]
+
+
+def test_digest_service_falls_back_when_profile_theme_sort_is_invalid(session, caplog):
+    _seed_digest_data(session)
+    profile_service = StrategyProfileService()
+    profile_service._registry["default"].digest.theme_sort = "not_a_real_metric"
+    service = DigestService(
+        validation_service=_FakeValidationService(),
+        profile_service=profile_service,
+    )
+
+    with caplog.at_level("WARNING"):
+        payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4), profile="default")
+
+    assert payload.themes.leaders[0].display_name == "AI Infrastructure"
+    assert "Unknown digest theme_sort 'not_a_real_metric'" in caplog.text
+
+
+def test_digest_service_excludes_null_theme_metrics_from_leaders_and_laggards(session):
+    _seed_digest_data(session)
+    theme = session.query(ThemeCluster).filter(ThemeCluster.display_name == "Solar").first()
+    metrics = session.query(ThemeMetrics).filter(ThemeMetrics.theme_cluster_id == theme.id).first()
+    metrics.momentum_score = None
+    session.commit()
+
+    service = DigestService(validation_service=_FakeValidationService())
+    payload = service.get_daily_digest(session, as_of_date=date(2026, 4, 4))
+
+    leader_names = [item.display_name for item in payload.themes.leaders]
+    laggard_names = [item.display_name for item in payload.themes.laggards]
+    assert "Solar" not in leader_names
+    assert "Solar" not in laggard_names
 
 
 def test_digest_service_degrades_cleanly_when_sections_are_missing(session):

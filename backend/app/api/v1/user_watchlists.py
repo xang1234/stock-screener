@@ -4,7 +4,9 @@ Handles CRUD operations and data retrieval for watchlists and items.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,14 +26,20 @@ from ...schemas.user_watchlist import (
     ReorderWatchlistsRequest, ReorderItemsRequest,
     BulkAddItemsRequest,
     WatchlistImportRequest, WatchlistImportResult,
+    WatchlistStewardshipResponse,
 )
 from ...services.watchlist_import_service import (
     parse_watchlist_import_symbols,
     split_import_results,
 )
+from ...services.watchlist_stewardship_service import WatchlistStewardshipService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_watchlist_stewardship_service() -> WatchlistStewardshipService:
+    return WatchlistStewardshipService()
 
 
 def _is_duplicate_watchlist_symbol_error(exc: IntegrityError) -> bool:
@@ -189,6 +197,29 @@ async def get_watchlist_data(watchlist_id: int, db: Session = Depends(get_db)):
         items=items_response,
         price_change_bounds=price_change_bounds
     )
+
+
+@router.get("/{watchlist_id}/stewardship", response_model=WatchlistStewardshipResponse)
+async def get_watchlist_stewardship(
+    watchlist_id: int,
+    as_of_date: date | None = Query(None),
+    profile: str | None = Query(None),
+    db: Session = Depends(get_db),
+    service: WatchlistStewardshipService = Depends(_get_watchlist_stewardship_service),
+):
+    """Get deterministic stewardship for one watchlist."""
+
+    try:
+        return service.get_watchlist_stewardship(
+            db,
+            watchlist_id=watchlist_id,
+            as_of_date=as_of_date,
+            profile=profile,
+        )
+    except ValueError as exc:
+        if str(exc) == "watchlist_not_found":
+            raise HTTPException(status_code=404, detail="Watchlist not found") from exc
+        raise
 
 
 def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:

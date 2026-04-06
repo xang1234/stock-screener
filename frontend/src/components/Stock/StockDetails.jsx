@@ -44,6 +44,7 @@ import {
   formatRatio,
   getScoreColor,
 } from '../../utils/formatUtils';
+import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 const CriteriaList = ({ title, items, emptyText }) => (
   <Box sx={{ flex: 1 }}>
@@ -139,12 +140,13 @@ function InfoBox({ label, value }) {
 function StockDetails() {
   const { ticker: symbol } = useParams();
   const navigate = useNavigate();
+  const { activeProfile, activeProfileDetail } = useStrategyProfile();
   const [peerModalOpen, setPeerModalOpen] = useState(false);
   const [validationLookbackDays, setValidationLookbackDays] = useState(365);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['stockDecisionDashboard', symbol],
-    queryFn: () => getStockDecisionDashboard(symbol),
+    queryKey: ['stockDecisionDashboard', symbol, activeProfile],
+    queryFn: () => getStockDecisionDashboard(symbol, activeProfile),
     enabled: Boolean(symbol),
     staleTime: 60_000,
   });
@@ -205,6 +207,17 @@ function StockDetails() {
   };
   const freshness = decision.freshness || data.freshness || {};
   const regime = data.regime || null;
+  const eventRisk = data.event_risk || { notes: [] };
+  const regimeActions = data.regime_actions || {
+    stance: regime?.label || 'unavailable',
+    sizing_guidance: 'probe',
+    avoid_new_entries: false,
+    preferred_setups: [],
+    caution_flags: [],
+    summary: 'Action guidance is unavailable.',
+  };
+  const strengthsTitle = activeProfileDetail?.stock_action?.strengths_title || 'Top Strengths';
+  const weaknessesTitle = activeProfileDetail?.stock_action?.weaknesses_title || 'Top Weaknesses';
 
   const adrValue = chart.adr_percent;
   const epsRating = chart.eps_rating;
@@ -337,8 +350,8 @@ function StockDetails() {
             </Box>
             <Divider sx={{ my: 1.5 }} />
             <Box sx={{ display: 'flex', gap: 4 }}>
-              <CriteriaList title="TOP STRENGTHS" items={decision.top_strengths} emptyText="No positive criteria." />
-              <CriteriaList title="TOP WEAKNESSES" items={decision.top_weaknesses} emptyText="No failing criteria." />
+              <CriteriaList title={strengthsTitle.toUpperCase()} items={decision.top_strengths} emptyText="No positive criteria." />
+              <CriteriaList title={weaknessesTitle.toUpperCase()} items={decision.top_weaknesses} emptyText="No failing criteria." />
             </Box>
           </AccordionDetails>
         </Accordion>
@@ -533,6 +546,92 @@ function StockDetails() {
                 {regime.summary}
               </Typography>
             )}
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Event Risk & Action Plan
+            </Typography>
+            <Chip
+              size="small"
+              sx={{ ml: 2, height: 20, fontSize: '0.7rem' }}
+              color={eventRisk.earnings_window_risk === 'imminent' ? 'error' : eventRisk.earnings_window_risk === 'caution' ? 'warning' : 'default'}
+              label={eventRisk.earnings_window_risk || 'safe'}
+            />
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={1.5}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', columnGap: 1.5, rowGap: 0.5 }}>
+                <MetricRow label="Next Earnings" value={eventRisk.next_earnings_date || '-'} />
+                <MetricRow label="Days Until" value={eventRisk.days_until_earnings ?? '-'} />
+                <MetricRow label="Window Risk" value={eventRisk.earnings_window_risk || '-'} />
+                <MetricRow label="Beat Count (4)" value={eventRisk.beat_count_last_4 ?? 0} />
+                <MetricRow label="Miss Count (4)" value={eventRisk.miss_count_last_4 ?? 0} />
+                <MetricRow label="Recent Earnings" value={eventRisk.recent_earnings_count ?? 0} />
+                <MetricRow label="Avg Gap" value={formatPercent(eventRisk.avg_post_earnings_gap_pct)} />
+                <MetricRow label="Avg 5S Return" value={formatPercent(eventRisk.avg_post_earnings_5s_return_pct)} />
+                <MetricRow label="Inst Ownership" value={formatPercent(eventRisk.institutional_ownership_current)} />
+                <MetricRow label="Inst Δ 90D" value={formatPercent(eventRisk.institutional_ownership_delta_90d)} />
+                <MetricRow label="Sizing" value={regimeActions.sizing_guidance} />
+                <MetricRow label="Avoid New Entries" value={regimeActions.avoid_new_entries ? 'Yes' : 'No'} />
+              </Box>
+
+              <Box>
+                <SectionHeader>ACTION PLAN</SectionHeader>
+                <Typography variant="body2">{regimeActions.summary}</Typography>
+              </Box>
+
+              <Box>
+                <SectionHeader>PREFERRED SETUPS</SectionHeader>
+                {regimeActions.preferred_setups?.length ? (
+                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    {regimeActions.preferred_setups.map((setup, index) => (
+                      <Chip key={`${setup}-${index}`} label={setup} size="small" variant="outlined" />
+                    ))}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    No setup guidance is available.
+                  </Typography>
+                )}
+              </Box>
+
+              <Box>
+                <SectionHeader>CAUTION FLAGS</SectionHeader>
+                {regimeActions.caution_flags?.length ? (
+                  <Stack spacing={0.5}>
+                    {regimeActions.caution_flags.map((flag, index) => (
+                      <Typography key={`${flag}-${index}`} variant="caption" color="text.secondary">
+                        {flag}
+                      </Typography>
+                    ))}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    No active caution flags.
+                  </Typography>
+                )}
+              </Box>
+
+              <Box>
+                <SectionHeader>EVENT NOTES</SectionHeader>
+                {eventRisk.notes?.length ? (
+                  <Stack spacing={0.5}>
+                    {eventRisk.notes.map((note, index) => (
+                      <Typography key={`${note}-${index}`} variant="caption" color="text.secondary">
+                        {note}
+                      </Typography>
+                    ))}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    No additional event-risk notes.
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
           </AccordionDetails>
         </Accordion>
 

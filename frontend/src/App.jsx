@@ -15,6 +15,7 @@ import DesktopSetupScreen from './components/App/DesktopSetupScreen';
 import ServerLoginScreen from './components/App/ServerLoginScreen';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
+import { StrategyProfileProvider } from './contexts/StrategyProfileContext';
 import { ColorModeContext } from './contexts/ColorModeContext';
 
 // Lazy loaded pages (secondary pages)
@@ -288,11 +289,17 @@ function AppShell() {
     </Router>
   );
 
+  const routedApp = (
+    <StrategyProfileProvider>
+      {appRoutes}
+    </StrategyProfileProvider>
+  );
+
   if (features.themes) {
-    return <PipelineProvider>{appRoutes}</PipelineProvider>;
+    return <PipelineProvider>{routedApp}</PipelineProvider>;
   }
 
-  return appRoutes;
+  return routedApp;
 }
 
 export default App;

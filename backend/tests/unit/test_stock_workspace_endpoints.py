@@ -120,6 +120,33 @@ class _FakeUow:
         return False
 
 
+class _FakeEventContextService:
+    def build(self, db, *, symbol, as_of_date=None, regime_label=None, profile=None, fundamentals=None):  # noqa: ANN001
+        return (
+            {
+                "next_earnings_date": "2026-04-09",
+                "days_until_earnings": 7,
+                "earnings_window_risk": "caution",
+                "recent_earnings_count": 4,
+                "beat_count_last_4": 3,
+                "miss_count_last_4": 1,
+                "avg_post_earnings_gap_pct": 2.4,
+                "avg_post_earnings_5s_return_pct": 4.8,
+                "institutional_ownership_current": 67.1,
+                "institutional_ownership_delta_90d": 1.2,
+                "notes": ["Earnings remain inside the caution window."],
+            },
+            {
+                "stance": regime_label or "offense",
+                "sizing_guidance": "half",
+                "avoid_new_entries": False,
+                "preferred_setups": ["Stage 2 breakouts"],
+                "caution_flags": ["Earnings are inside the caution window."],
+                "summary": "Default profile favors half sizing while earnings are near.",
+            },
+        )
+
+
 def _override_db(session):
     def _yield_db():
         try:
@@ -378,6 +405,7 @@ async def test_decision_dashboard_endpoint_returns_normalized_payload(client, se
     app.dependency_overrides[get_db] = _override_db(session)
     latest_run, feature_item, feature_row, peers = _make_feature_context()
     app.dependency_overrides[get_uow] = lambda: _FakeUow(latest_run, feature_item, feature_row, peers)
+    app.dependency_overrides[stocks_module._get_stock_event_context_service] = lambda: _FakeEventContextService()
     _seed_dashboard_data(session)
 
     monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {
@@ -414,6 +442,8 @@ async def test_decision_dashboard_endpoint_returns_normalized_payload(client, se
     assert payload["peers"][0]["symbol"] == "AVGO"
     assert payload["themes"][0]["display_name"] == "AI Infrastructure"
     assert payload["regime"]["label"] == "offense"
+    assert payload["event_risk"]["earnings_window_risk"] == "caution"
+    assert payload["regime_actions"]["sizing_guidance"] == "half"
     assert payload["degraded_reasons"] == []
 
 
@@ -422,6 +452,7 @@ async def test_decision_dashboard_themes_keep_zero_scores_ahead_of_missing_value
     app.dependency_overrides[get_db] = _override_db(session)
     latest_run, feature_item, feature_row, peers = _make_feature_context()
     app.dependency_overrides[get_uow] = lambda: _FakeUow(latest_run, feature_item, feature_row, peers)
+    app.dependency_overrides[stocks_module._get_stock_event_context_service] = lambda: _FakeEventContextService()
     _seed_dashboard_data(session)
 
     zero_theme = ThemeCluster(
@@ -477,6 +508,7 @@ async def test_decision_dashboard_themes_keep_zero_scores_ahead_of_missing_value
 async def test_decision_dashboard_endpoint_reports_degraded_mode_without_feature_run(client, session, monkeypatch):
     app.dependency_overrides[get_db] = _override_db(session)
     app.dependency_overrides[get_uow] = lambda: _FakeUow(None)
+    app.dependency_overrides[stocks_module._get_stock_event_context_service] = lambda: _FakeEventContextService()
 
     monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {
         "symbol": symbol,
@@ -500,6 +532,7 @@ async def test_decision_dashboard_endpoint_reports_degraded_mode_without_feature
 async def test_decision_dashboard_endpoint_degrades_when_stock_info_is_unavailable(client, session, monkeypatch):
     app.dependency_overrides[get_db] = _override_db(session)
     app.dependency_overrides[get_uow] = lambda: _FakeUow(None)
+    app.dependency_overrides[stocks_module._get_stock_event_context_service] = lambda: _FakeEventContextService()
 
     monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: None)
     monkeypatch.setattr(stocks_module, "_get_stock_fundamentals_payload", lambda symbol, force_refresh=False: None)

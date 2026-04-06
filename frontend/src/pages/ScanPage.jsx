@@ -41,6 +41,7 @@ import { buildFilterParams, getStableFilterKey } from '../utils/filterUtils';
 import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../api/priceHistory';
 import { useFilterPresets } from '../hooks/useFilterPresets';
 import { useRuntime } from '../contexts/RuntimeContext';
+import { useStrategyProfile } from '../contexts/StrategyProfileContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import { formatScanDropdownLabel } from '../utils/scanLabel';
 import { buildDefaultScanFilters } from '../features/scan/defaultFilters';
@@ -58,7 +59,8 @@ const DEFAULT_FILTER_KEY = getStableFilterKey(buildDefaultScanFilters());
 
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
-  const scanDefaultsAppliedRef = useRef(false);
+  const { activeProfileDetail } = useStrategyProfile();
+  const scanDefaultsAppliedRef = useRef(null);
   // Scan state
   const [currentScanId, setCurrentScanId] = useState(null);
   const [scanStatus, setScanStatus] = useState(null);
@@ -113,17 +115,21 @@ function ScanPage() {
   const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
 
   useEffect(() => {
-    if (!runtimeReady || scanDefaultsAppliedRef.current) {
+    if (!runtimeReady) {
       return;
     }
-    const nextDefaults = scanDefaults ?? DEFAULT_SCAN_DEFAULTS;
+    const nextDefaults = activeProfileDetail?.scan_defaults ?? scanDefaults ?? DEFAULT_SCAN_DEFAULTS;
+    const profileKey = activeProfileDetail?.profile || 'runtime-default';
+    if (scanDefaultsAppliedRef.current === profileKey) {
+      return;
+    }
     setUniverse(nextDefaults.universe ?? DEFAULT_SCAN_DEFAULTS.universe);
     setIncludeVcp(nextDefaults.criteria?.include_vcp ?? DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
     setSelectedScreeners(nextDefaults.screeners ?? DEFAULT_SCAN_DEFAULTS.screeners);
     setCompositeMethod(nextDefaults.composite_method ?? DEFAULT_SCAN_DEFAULTS.composite_method);
     setCustomFilters(nextDefaults.criteria?.custom_filters ?? DEFAULT_SCAN_DEFAULTS.criteria.custom_filters);
-    scanDefaultsAppliedRef.current = true;
-  }, [runtimeReady, scanDefaults]);
+    scanDefaultsAppliedRef.current = profileKey;
+  }, [runtimeReady, scanDefaults, activeProfileDetail]);
 
   const applyScanBootstrapSnapshot = useCallback((snapshot, requestedScanId = null) => {
     const payload = snapshot?.payload ?? {};

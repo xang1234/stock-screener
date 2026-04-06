@@ -152,3 +152,53 @@ class WatchlistImportResult(BaseModel):
     skipped_existing: List[str]
     invalid_symbols: List[str]
     added_items: List[WatchlistItemResponse]
+
+
+class WatchlistStewardshipFreshness(BaseModel):
+    """Freshness metadata for watchlist stewardship."""
+
+    latest_feature_as_of_date: Optional[str] = None
+    previous_feature_as_of_date: Optional[str] = None
+    latest_theme_alert_at: Optional[str] = None
+    breadth_date: Optional[str] = None
+
+
+class WatchlistStewardshipSummaryCounts(BaseModel):
+    """Status counts for one watchlist."""
+
+    all: int = 0
+    strengthening: int = 0
+    unchanged: int = 0
+    deteriorating: int = 0
+    exit_risk: int = 0
+    missing_from_run: int = 0
+
+
+class WatchlistStewardshipItem(BaseModel):
+    """Stewardship summary for one watchlist symbol."""
+
+    symbol: str
+    company_name: Optional[str] = None
+    status: Literal["strengthening", "unchanged", "deteriorating", "exit_risk", "missing_from_run"]
+    current_composite_score: Optional[float] = None
+    previous_composite_score: Optional[float] = None
+    score_delta: Optional[float] = None
+    current_rs_rating: Optional[float] = None
+    previous_rs_rating: Optional[float] = None
+    rs_delta: Optional[float] = None
+    next_earnings_date: Optional[str] = None
+    days_until_earnings: Optional[int] = None
+    theme_support: Optional[str] = None
+    reasons: List[str] = []
+
+
+class WatchlistStewardshipResponse(BaseModel):
+    """Full stewardship payload for one watchlist."""
+
+    watchlist_id: int
+    watchlist_name: str
+    as_of_date: Optional[str] = None
+    freshness: WatchlistStewardshipFreshness
+    summary_counts: WatchlistStewardshipSummaryCounts
+    items: List[WatchlistStewardshipItem]
+    degraded_reasons: List[str]
