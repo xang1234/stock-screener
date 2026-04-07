@@ -636,6 +636,11 @@ class IBDGroupRankService:
                     'sales_growth_yy': r.sales_growth_yy,
                     'composite_score': r.composite_score,
                     'stage': r.stage,
+                    'price_sparkline_data': r.price_sparkline_data,
+                    'price_trend': r.price_trend,
+                    'price_change_1d': r.price_change_1d,
+                    'rs_sparkline_data': r.rs_sparkline_data,
+                    'rs_trend': r.rs_trend,
                 })
 
             logger.info(f"Found {len(stocks)} stocks for group {industry_group}")

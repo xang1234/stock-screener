@@ -64,6 +64,11 @@ class ConstituentStock(BaseModel):
     sales_growth_yy: Optional[float] = Field(None, description="Sales growth year-over-year %")
     composite_score: Optional[float] = Field(None, description="Composite screener score")
     stage: Optional[int] = Field(None, description="Weinstein stage (1-4)")
+    price_sparkline_data: Optional[list] = Field(None, description="30-day normalized price trend")
+    price_trend: Optional[int] = Field(None, description="Price trend: -1=down, 0=flat, 1=up")
+    price_change_1d: Optional[float] = Field(None, description="1-day price change %")
+    rs_sparkline_data: Optional[list] = Field(None, description="30-day RS ratio trend")
+    rs_trend: Optional[int] = Field(None, description="RS trend: -1=declining, 0=flat, 1=improving")
 
 
 class GroupDetailResponse(BaseModel):

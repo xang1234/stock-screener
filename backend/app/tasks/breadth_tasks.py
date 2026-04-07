@@ -27,7 +27,7 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
-CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only breadth runs
+CACHE_MISS_TOLERANCE_RATIO = 0.10  # Allow up to 10% — breadth scans the full universe including delisted tickers
 _ALLOW_SAME_DAY_BREADTH_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_breadth_warmup_bypass",
     default=False,
