@@ -844,7 +844,8 @@ class MarketCopilotService:
                 movers={"gainers": [], "losers": []},
             )
 
-        ranking_date = rankings[0].get("date")
+        ranking_date_str = rankings[0].get("date")
+        ranking_date = date.fromisoformat(ranking_date_str) if ranking_date_str else None
         top_rankings = [
             {
                 "industry_group": r["industry_group"],
@@ -870,7 +871,7 @@ class MarketCopilotService:
                 "Use find_candidates with industry_group filter to drill into a top-ranked group.",
                 "Use explain_symbol for the top_symbol in a leading group.",
             ],
-            freshness=self._freshness(as_of_date=ranking_date, ibd_group_ranks=str(ranking_date)),
+            freshness=self._freshness(as_of_date=ranking_date, ibd_group_ranks=ranking_date_str or ""),
             rankings=top_rankings,
             movers={
                 "period": movers.get("period", args.period),
@@ -929,6 +930,7 @@ class MarketCopilotService:
                     "current_price": row.current_price,
                 }
 
+        run_date = run.as_of_date if run is not None else None
         facts = [
             self._fact("symbol", stock.symbol, "stock_universe"),
             self._fact("name", stock.name, "stock_universe"),
@@ -936,7 +938,7 @@ class MarketCopilotService:
         ]
         citations = [self._citation("stock_universe", stock.symbol, f"stock_universe:{stock.symbol}")]
         if technicals:
-            facts.append(self._fact("composite_score", technicals["composite_score"], "feature_runs", technicals["as_of_date"]))
+            facts.append(self._fact("composite_score", technicals["composite_score"], "feature_runs", run_date))
 
         return self._envelope(
             f"{stock.symbol} ({stock.name}) — {stock.sector} / {stock.industry}."
@@ -945,9 +947,9 @@ class MarketCopilotService:
             citations=citations,
             next_actions=["Use explain_symbol for a detailed breakdown." if technicals else "Run a feature snapshot to get technicals."],
             freshness=self._freshness(
-                as_of_date=technicals["as_of_date"] if technicals else None,
+                as_of_date=run_date,
                 stock_universe="current",
-                **({"feature_run": technicals["as_of_date"]} if technicals else {}),
+                **({"feature_run": run_date.isoformat()} if run_date else {}),
             ),
             stock=stock_info,
             technicals=technicals,
@@ -999,23 +1001,25 @@ class MarketCopilotService:
             service = DigestService()
             digest = service.get_daily_digest(db, as_of_date=args.as_of_date)
 
+        digest_date = date.fromisoformat(digest.as_of_date) if digest.as_of_date else None
+
         return self._envelope(
             f"Daily digest as of {digest.as_of_date}. "
             f"Market stance: {digest.market.stance}. "
             f"{len(digest.leaders)} leaders, {len(digest.risks)} risk notes.",
             facts=[
                 self._fact("as_of_date", digest.as_of_date, "digest"),
-                self._fact("market_stance", digest.market.stance, "digest", digest.as_of_date),
-                self._fact("leader_count", len(digest.leaders), "digest", digest.as_of_date),
+                self._fact("market_stance", digest.market.stance, "digest", digest_date),
+                self._fact("leader_count", len(digest.leaders), "digest", digest_date),
             ],
-            citations=[self._citation("digest", "Daily Digest", f"digest:{digest.as_of_date}", digest.as_of_date)],
+            citations=[self._citation("digest", "Daily Digest", f"digest:{digest.as_of_date}", digest_date)],
             next_actions=[
                 "Use find_candidates to drill into the leaders list.",
                 "Use theme_state for deeper theme analysis.",
             ],
             freshness=self._freshness(
-                as_of_date=digest.as_of_date,
-                digest=str(digest.as_of_date),
+                as_of_date=digest_date,
+                digest=digest.as_of_date or "",
                 **{k: v for k, v in {
                     "feature_run": digest.freshness.latest_feature_as_of_date,
                     "market_breadth": digest.freshness.latest_breadth_date,
