@@ -150,3 +150,37 @@ class WatchlistAddArgs(BaseModel):
         if not normalized:
             raise ValueError("symbols must include at least one non-empty ticker")
         return normalized
+
+
+class GroupRankingsArgs(BaseModel):
+    """Arguments for group_rankings."""
+
+    limit: int = Field(20, ge=1, le=197)
+    period: Literal["1w", "1m", "3m", "6m"] = "1w"
+
+
+class StockLookupArgs(BaseModel):
+    """Arguments for stock_lookup."""
+
+    symbol: str = Field(..., min_length=1, max_length=10)
+    include_technicals: bool = False
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol must contain at least one non-whitespace character")
+        return normalized
+
+
+class BreadthSnapshotArgs(BaseModel):
+    """Arguments for breadth_snapshot."""
+
+    days: int = Field(5, ge=1, le=30)
+
+
+class DailyDigestArgs(BaseModel):
+    """Arguments for daily_digest."""
+
+    as_of_date: date | None = None
