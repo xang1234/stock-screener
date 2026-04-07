@@ -129,16 +129,18 @@ class TestMcpHttpTransport:
         original_server = http_mod._server
         http_mod._server = test_server
 
-        # Build an isolated app with only the MCP router — avoids dependency
-        # on app.main's import-time MCP_HTTP_ENABLED gate.
-        test_app = FastAPI()
-        test_app.include_router(mcp_router, prefix="/mcp")
+        try:
+            # Build an isolated app with only the MCP router — avoids dependency
+            # on app.main's import-time MCP_HTTP_ENABLED gate.
+            test_app = FastAPI()
+            test_app.include_router(mcp_router, prefix="/mcp")
 
-        transport = httpx.ASGITransport(app=test_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            yield client
-
-        http_mod._server = original_server
+            transport = httpx.ASGITransport(app=test_app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                yield client
+        finally:
+            http_mod._server = original_server
+            test_engine.dispose()
 
     async def test_initialize_returns_capabilities(self, client):
         resp = await client.post(

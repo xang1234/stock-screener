@@ -496,8 +496,16 @@ app.include_router(api_router, prefix="/api/v1")
 
 # Mount MCP Streamable HTTP transport (JSON-RPC over HTTP)
 if settings.mcp_http_enabled:
+    from fastapi import Depends
+
     from .interfaces.mcp import mcp_router
-    app.include_router(mcp_router, prefix="/mcp")
+    from .services.server_auth import require_server_session
+
+    app.include_router(
+        mcp_router,
+        prefix="/mcp",
+        dependencies=[Depends(require_server_session)],
+    )
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

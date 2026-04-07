@@ -864,7 +864,7 @@ class MarketCopilotService:
             f"Showing {args.period} movers ({len(movers.get('gainers', []))} gainers, {len(movers.get('losers', []))} losers).",
             facts=[
                 self._fact("ranking_date", str(ranking_date), "ibd_group_ranks"),
-                self._fact("total_groups", len(rankings), "ibd_group_ranks"),
+                self._fact("returned_groups", len(rankings), "ibd_group_ranks"),
                 self._fact("top_group", rankings[0]["industry_group"], "ibd_group_ranks", ranking_date),
             ],
             citations=[self._citation("ibd_group_ranks", "Group Rankings", f"ibd_group_ranks:{ranking_date}", ranking_date)],
