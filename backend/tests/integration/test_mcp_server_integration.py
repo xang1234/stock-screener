@@ -102,36 +102,39 @@ class TestMcpHttpTransport:
 
     @pytest_asyncio.fixture()
     async def client(self, tmp_path):
-        """Create an httpx client backed by the FastAPI app with seeded test data."""
+        """Create an httpx client with an isolated FastAPI app and seeded test data."""
+        from types import SimpleNamespace
+
+        from fastapi import FastAPI
+
+        from app.interfaces.mcp.http_transport import mcp_router
+        from app.interfaces.mcp.market_copilot import MarketCopilotService
+        from app.interfaces.mcp.server import MarketCopilotMcpServer
+        import app.interfaces.mcp.http_transport as http_mod
+
         database_path = tmp_path / "mcp-http.sqlite3"
         database_url = f"sqlite:///{database_path}"
 
         session_factory, test_engine = create_mcp_test_session_factory(database_url)
         seed_market_copilot_data(session_factory)
 
-        # Patch SessionLocal and settings before importing the http_transport module
-        # so the lazy singleton picks up the test database.
-        import app.interfaces.mcp.http_transport as http_mod
-
-        from app.interfaces.mcp.market_copilot import MarketCopilotService
-        from app.interfaces.mcp.server import MarketCopilotMcpServer
-        from types import SimpleNamespace
-
         test_settings = SimpleNamespace(
             mcp_server_name="test-mcp-http",
             mcp_watchlist_writes_enabled=False,
-            mcp_http_enabled=True,
         )
         test_service = MarketCopilotService(session_factory, test_settings)
         test_server = MarketCopilotMcpServer(test_service, transport=None)
 
-        # Override the lazy singleton
+        # Override the lazy singleton so the router uses our test server
         original_server = http_mod._server
         http_mod._server = test_server
 
-        from app.main import app
+        # Build an isolated app with only the MCP router — avoids dependency
+        # on app.main's import-time MCP_HTTP_ENABLED gate.
+        test_app = FastAPI()
+        test_app.include_router(mcp_router, prefix="/mcp")
 
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=test_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
 
@@ -207,6 +210,12 @@ class TestMcpHttpTransport:
         )
         body = resp.json()
         assert body["error"]["code"] == -32700
+
+    async def test_non_dict_body_returns_invalid_request(self, client):
+        resp = await client.post("/mcp/", json=[1, 2, 3])
+        body = resp.json()
+        assert body["error"]["code"] == -32600
+        assert "not array" in body["error"]["message"]
 
     async def test_delete_returns_200(self, client):
         resp = await client.delete("/mcp/")

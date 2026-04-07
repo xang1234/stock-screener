@@ -95,7 +95,12 @@ class MarketCopilotMcpServer:
 
     def dispatch(self, message: dict[str, Any]) -> dict[str, Any] | None:
         """Dispatch a JSON-RPC message and return the response (or None for notifications)."""
-        return self._handle_message(message)
+        if not isinstance(message, dict):
+            return self._error_response(None, -32600, "Invalid Request")
+        try:
+            return self._handle_message(message)
+        except Exception:
+            return self._error_response(message.get("id"), -32603, "Internal error")
 
     def _handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         method = message.get("method")

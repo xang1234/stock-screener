@@ -48,13 +48,24 @@ async def mcp_post(request: Request) -> Response:
     instance, and returns the JSON-RPC response.
     """
     try:
-        body: dict[str, Any] = await request.json()
+        body = await request.json()
     except Exception:
         return JSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": None,
                 "error": {"code": -32700, "message": "Parse error: invalid JSON"},
+            },
+            status_code=200,
+            media_type="application/json",
+        )
+
+    if not isinstance(body, dict):
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid Request: expected a JSON object, not array or scalar"},
             },
             status_code=200,
             media_type="application/json",

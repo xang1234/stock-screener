@@ -846,6 +846,7 @@ class MarketCopilotService:
 
         ranking_date_str = rankings[0].get("date")
         ranking_date = date.fromisoformat(ranking_date_str) if ranking_date_str else None
+        rank_change_key = f"rank_change_{args.period}"
         top_rankings = [
             {
                 "industry_group": r["industry_group"],
@@ -853,7 +854,7 @@ class MarketCopilotService:
                 "avg_rs_rating": r.get("avg_rs_rating"),
                 "num_stocks": r.get("num_stocks"),
                 "top_symbol": r.get("top_symbol"),
-                "rank_change_1w": r.get("rank_change_1w"),
+                "rank_change": r.get(rank_change_key),
             }
             for r in rankings
         ]

@@ -168,7 +168,10 @@ class StockLookupArgs(BaseModel):
     @field_validator("symbol")
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
-        return value.strip().upper()
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol must contain at least one non-whitespace character")
+        return normalized
 
 
 class BreadthSnapshotArgs(BaseModel):
