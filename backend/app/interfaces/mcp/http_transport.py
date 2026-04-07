@@ -7,9 +7,11 @@ same ``MarketCopilotMcpServer`` that powers the stdio transport.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from app.config import settings
@@ -25,13 +27,16 @@ mcp_router = APIRouter(tags=["mcp"])
 # Lazy singleton — created on first request so the router can be imported at
 # module level without requiring a live database connection.
 _server: MarketCopilotMcpServer | None = None
+_server_lock = threading.Lock()
 
 
 def _get_server() -> MarketCopilotMcpServer:
     global _server
     if _server is None:
-        service = MarketCopilotService(SessionLocal, settings)
-        _server = MarketCopilotMcpServer(service, transport=None)
+        with _server_lock:
+            if _server is None:
+                service = MarketCopilotService(SessionLocal, settings)
+                _server = MarketCopilotMcpServer(service, transport=None)
     return _server
 
 
@@ -56,7 +61,7 @@ async def mcp_post(request: Request) -> Response:
         )
 
     server = _get_server()
-    response = server._handle_message(body)
+    response = await run_in_threadpool(server.dispatch, body)
 
     if response is None:
         # Notification — no response required per JSON-RPC spec.

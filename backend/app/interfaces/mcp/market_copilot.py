@@ -829,7 +829,7 @@ class MarketCopilotService:
         from app.services.ibd_group_rank_service import IBDGroupRankService
 
         with self._session_scope() as db:
-            service = IBDGroupRankService()
+            service = IBDGroupRankService.get_instance()
             rankings = service.get_current_rankings(db, limit=args.limit)
             movers = service.get_rank_movers(db, period=args.period, limit=min(args.limit, 10))
 
@@ -886,6 +886,7 @@ class MarketCopilotService:
                 .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
                 .first()
             )
+            run = self._latest_published_run(db) if args.include_technicals else None
 
         if stock is None:
             return self._envelope(
@@ -904,32 +905,29 @@ class MarketCopilotService:
             "sector": stock.sector,
             "industry": stock.industry,
             "market_cap": stock.market_cap,
-            "exchange": getattr(stock, "exchange", None),
+            "exchange": stock.exchange,
         }
 
         technicals = None
-        if args.include_technicals:
-            with self._session_scope() as db:
-                run = self._latest_published_run(db)
-            if run is not None:
-                with self._uow_scope() as uow:
-                    row = uow.feature_store.get_by_symbol_for_run(
-                        run.id,
-                        args.symbol,
-                        include_sparklines=False,
-                        include_setup_payload=False,
-                    )
-                if row is not None:
-                    extended = getattr(row, "extended_fields", {}) or {}
-                    technicals = {
-                        "run_id": run.id,
-                        "as_of_date": run.as_of_date.isoformat(),
-                        "composite_score": row.composite_score,
-                        "overall_rating": row.rating,
-                        "rs_rating": extended.get("rs_rating"),
-                        "stage": extended.get("stage"),
-                        "current_price": row.current_price,
-                    }
+        if run is not None:
+            with self._uow_scope() as uow:
+                row = uow.feature_store.get_by_symbol_for_run(
+                    run.id,
+                    args.symbol,
+                    include_sparklines=False,
+                    include_setup_payload=False,
+                )
+            if row is not None:
+                extended = getattr(row, "extended_fields", {}) or {}
+                technicals = {
+                    "run_id": run.id,
+                    "as_of_date": run.as_of_date.isoformat(),
+                    "composite_score": row.composite_score,
+                    "overall_rating": row.rating,
+                    "rs_rating": extended.get("rs_rating"),
+                    "stage": extended.get("stage"),
+                    "current_price": row.current_price,
+                }
 
         facts = [
             self._fact("symbol", stock.symbol, "stock_universe"),
@@ -1001,8 +999,6 @@ class MarketCopilotService:
             service = DigestService()
             digest = service.get_daily_digest(db, as_of_date=args.as_of_date)
 
-        digest_data = digest.model_dump(mode="json")
-
         return self._envelope(
             f"Daily digest as of {digest.as_of_date}. "
             f"Market stance: {digest.market.stance}. "
@@ -1026,7 +1022,7 @@ class MarketCopilotService:
                     "theme_metrics": digest.freshness.latest_theme_metrics_date,
                 }.items() if v is not None},
             ),
-            digest=digest_data,
+            digest=digest.model_dump(mode="json"),
         )
 
     def _find_candidates_for_run(self, run_id: int, args: FindCandidatesArgs) -> list[dict[str, Any]]:
