@@ -26,6 +26,8 @@ import {
   ReferenceLine,
 } from 'recharts';
 import RankChangeCell from '../components/shared/RankChangeCell';
+import PriceSparkline from '../components/Scan/PriceSparkline';
+import RSSparkline from '../components/Scan/RSSparkline';
 
 function StaticGroupDetailModal({ group, detail, open, onClose }) {
   const chartData = useMemo(() => {
@@ -160,6 +162,8 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                     <TableHead>
                       <TableRow>
                         <TableCell>Sym</TableCell>
+                        <TableCell align="center" sx={{ p: '2px' }}>Price 30d</TableCell>
+                        <TableCell align="center" sx={{ p: '2px' }}>RS 30d</TableCell>
                         <TableCell align="right">Price</TableCell>
                         <TableCell align="right">RS</TableCell>
                         <TableCell align="right">1M</TableCell>
@@ -175,6 +179,24 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                       {detail.stocks.map((stock) => (
                         <TableRow key={stock.symbol} hover>
                           <TableCell sx={{ fontWeight: 600 }}>{stock.symbol}</TableCell>
+                          <TableCell align="center" sx={{ p: '2px' }}>
+                            <PriceSparkline
+                              data={stock.price_sparkline_data}
+                              trend={stock.price_trend}
+                              change1d={stock.price_change_1d}
+                              width={80}
+                              height={22}
+                              showChange={false}
+                            />
+                          </TableCell>
+                          <TableCell align="center" sx={{ p: '2px' }}>
+                            <RSSparkline
+                              data={stock.rs_sparkline_data}
+                              trend={stock.rs_trend}
+                              width={60}
+                              height={20}
+                            />
+                          </TableCell>
                           <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
                             {stock.price?.toFixed(2) || '-'}
                           </TableCell>
