@@ -23,7 +23,6 @@ import { ColorModeContext } from '../../contexts/ColorModeContext';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
-import DesktopBootstrapBanner from '../App/DesktopBootstrapBanner';
 import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
@@ -71,7 +70,7 @@ function Layout({ children }) {
   const location = useLocation();
   const theme = useTheme();
   const colorMode = useContext(ColorModeContext);
-  const { auth, desktopMode, features, isLoggingOut, logout } = useRuntime();
+  const { auth, features, isLoggingOut, logout } = useRuntime();
   const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -94,11 +93,9 @@ function Layout({ children }) {
           <Typography variant="subtitle1" component="div" sx={{ fontWeight: 600 }}>
             STOCK SCANNER
           </Typography>
-          {!desktopMode && (
-            <Box sx={{ ml: 2 }}>
-              <CacheStatus />
-            </Box>
-          )}
+          <Box sx={{ ml: 2 }}>
+            <CacheStatus />
+          </Box>
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
           <Box sx={{ ml: 1.5, minWidth: 150 }}>
@@ -192,7 +189,6 @@ function Layout({ children }) {
       </AppBar>
 
       <Container maxWidth="xl" sx={{ mt: 1, mb: 1, flex: 1 }}>
-        <DesktopBootstrapBanner />
         {children}
       </Container>
 

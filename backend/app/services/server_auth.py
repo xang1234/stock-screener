@@ -26,7 +26,7 @@ class ServerAuthStatus:
 
 def server_auth_required() -> bool:
     """Return True when server-mode auth should be enforced."""
-    return bool(not settings.desktop_mode and settings.server_auth_enabled)
+    return bool(settings.server_auth_enabled)
 
 
 def server_auth_configured() -> bool:

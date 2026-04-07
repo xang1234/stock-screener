@@ -18,7 +18,7 @@ async def client():
 async def test_server_auth_status_reports_required_and_unauthenticated(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
@@ -39,7 +39,7 @@ async def test_server_auth_status_reports_required_and_unauthenticated(client, m
 async def test_protected_route_requires_login_and_accepts_session_cookie(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
@@ -61,7 +61,7 @@ async def test_config_route_accepts_admin_key_without_server_session(client, mon
     from app.api.v1 import config as config_api
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "server-secret")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
@@ -87,7 +87,7 @@ async def test_config_route_accepts_admin_key_without_server_session(client, mon
 async def test_protected_route_returns_503_when_auth_required_but_not_configured(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "")
     monkeypatch.setattr(server_auth.settings, "admin_api_key", "")
@@ -103,7 +103,7 @@ async def test_protected_route_returns_503_when_auth_required_but_not_configured
 async def test_admin_api_key_does_not_authenticate_general_server_routes(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "server-secret")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
@@ -118,7 +118,7 @@ async def test_admin_api_key_does_not_authenticate_general_server_routes(client,
 async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "")
@@ -133,7 +133,7 @@ async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkey
 async def test_login_cookie_does_not_trust_forwarded_proto_header(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
@@ -153,7 +153,7 @@ async def test_login_cookie_does_not_trust_forwarded_proto_header(client, monkey
 async def test_login_cookie_can_be_forced_secure_with_explicit_setting(client, monkeypatch):
     from app.services import server_auth
 
-    monkeypatch.setattr(server_auth.settings, "desktop_mode", False)
+
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")

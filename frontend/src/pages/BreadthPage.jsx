@@ -81,7 +81,7 @@ const sentimentBg = {
 };
 
 function BreadthPage() {
-  const { bootstrap, bootstrapIncomplete, runtimeReady, uiSnapshots } = useRuntime();
+  const { runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
@@ -204,24 +204,12 @@ function BreadthPage() {
     setSelectedTab(newValue);
   };
 
-  const isBootstrapMissingData = bootstrapIncomplete && errorCurrent?.response?.status === 404;
-
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
-      </Container>
-    );
-  }
-
-  if (isBootstrapMissingData) {
-    return (
-      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
-        <Alert severity="info">
-          {bootstrap?.message || 'Market breadth is still being prepared for this desktop install.'}
-        </Alert>
       </Container>
     );
   }

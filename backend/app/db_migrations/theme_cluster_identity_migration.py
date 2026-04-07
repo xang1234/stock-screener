@@ -10,9 +10,7 @@ from sqlalchemy import text
 
 from ..infra.db.portability import (
     column_names,
-    column_not_null_map,
     index_defs,
-    is_sqlite,
     table_names,
 )
 from ..models.theme import ThemeCluster
@@ -172,19 +170,7 @@ def _get_index_defs(conn) -> list[dict[str, Any]]:
 
 
 def _needs_table_rebuild(conn) -> bool:
-    if not is_sqlite(conn):
-        return False
-    columns = _get_table_columns(conn)
-    if "canonical_key" not in columns or "display_name" not in columns:
-        return True
-
-    not_null_map = _get_table_not_null_map(conn)
-    if not not_null_map.get("pipeline", False):
-        return True
-
-    indexes = _get_index_defs(conn)
-    has_global_name_unique = any(idx["unique"] and idx["columns"] == ["name"] for idx in indexes)
-    return has_global_name_unique
+    return False
 
 
 def _build_migrated_rows(conn) -> list[dict[str, Any]]:
@@ -310,74 +296,11 @@ def _resolve_pipeline_key_duplicates(
 
 
 def _create_theme_clusters_table(conn, table_name: str) -> None:
-    if not is_sqlite(conn):
-        if table_name != TABLE_NAME:
-            raise RuntimeError("temporary theme cluster rebuild tables are SQLite-only")
-        ThemeCluster.__table__.create(bind=conn, checkfirst=True)
-        return
-    conn.execute(
-        text(
-            f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                canonical_key TEXT NOT NULL,
-                display_name TEXT NOT NULL,
-                aliases JSON,
-                description TEXT,
-                pipeline TEXT NOT NULL DEFAULT 'technical',
-                category TEXT,
-                is_emerging BOOLEAN DEFAULT 1,
-                first_seen_at DATETIME,
-                last_seen_at DATETIME,
-                discovery_source TEXT,
-                is_active BOOLEAN DEFAULT 1,
-                is_validated BOOLEAN DEFAULT 0,
-                created_at DATETIME DEFAULT (CURRENT_TIMESTAMP),
-                updated_at DATETIME DEFAULT (CURRENT_TIMESTAMP)
-            )
-            """
-        )
-    )
+    ThemeCluster.__table__.create(bind=conn, checkfirst=True)
 
 
 def _rebuild_theme_clusters_table(conn, rows: list[dict[str, Any]]) -> None:
-    if not is_sqlite(conn):
-        return
-    old_table = TABLE_NAME
-    new_table = f"{TABLE_NAME}__new"
-
-    conn.execute(text(f"DROP TABLE IF EXISTS {new_table}"))
-    _create_theme_clusters_table(conn, new_table)
-
-    if rows:
-        conn.execute(
-            text(
-                f"""
-                INSERT INTO {new_table} (
-                    id, name, canonical_key, display_name, aliases, description, pipeline, category,
-                    is_emerging, first_seen_at, last_seen_at, discovery_source, is_active,
-                    is_validated, created_at, updated_at
-                ) VALUES (
-                    :id, :name, :canonical_key, :display_name, :aliases, :description, :pipeline, :category,
-                    :is_emerging, :first_seen_at, :last_seen_at, :discovery_source, :is_active,
-                    :is_validated, :created_at, :updated_at
-                )
-                """
-            ),
-            rows,
-        )
-
-    conn.execute(text("PRAGMA foreign_keys=OFF"))
-    try:
-        conn.execute(text(f"DROP TABLE {old_table}"))
-        conn.execute(text(f"ALTER TABLE {new_table} RENAME TO {old_table}"))
-    finally:
-        conn.execute(text("PRAGMA foreign_keys=ON"))
-
-
-def _get_table_not_null_map(conn) -> dict[str, bool]:
-    return column_not_null_map(conn, TABLE_NAME)
+    return
 
 
 def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
@@ -413,8 +336,6 @@ def _backfill_identity_columns(conn, rows: list[dict[str, Any]]) -> int:
 
 
 def _ensure_unique_index(conn) -> None:
-    if is_sqlite(conn):
-        conn.execute(text(f"DROP INDEX IF EXISTS {UNIQUE_INDEX_NAME}"))
     conn.execute(
         text(
             f"""

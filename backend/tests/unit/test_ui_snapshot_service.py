@@ -9,8 +9,6 @@ import sqlite3
 from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
-from app.db_migrations.universe_lifecycle_migration import migrate_universe_lifecycle
-from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
 from app.models.industry import IBDGroupRank
@@ -24,7 +22,7 @@ from app.services.ui_snapshot_service import UISnapshotService, _force_forget_sn
 def test_ui_snapshot_service_marks_outdated_pointer_reads_as_stale_and_prunes_old_revisions():
     engine = create_engine("sqlite:///:memory:")
     Session = sessionmaker(bind=engine)
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
 
     service = UISnapshotService(Session)
 
@@ -130,8 +128,7 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
             StockUniverse.__table__,
         ],
     )
-    migrate_ui_view_snapshot_tables(engine)
-    migrate_universe_lifecycle(engine)
+    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -170,8 +167,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
             StockUniverse.__table__,
         ],
     )
-    migrate_ui_view_snapshot_tables(engine)
-    migrate_universe_lifecycle(engine)
+    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -201,7 +197,7 @@ def test_publish_scan_bootstrap_serializes_trigger_source_on_recent_scans():
 def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -213,7 +209,7 @@ def test_publish_groups_bootstrap_returns_none_when_no_rankings_exist():
 
 def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -246,7 +242,7 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
 def test_publish_groups_bootstrap_serializes_rankings_when_available():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     service = UISnapshotService(Session)
 
@@ -279,7 +275,7 @@ def test_publish_groups_bootstrap_serializes_rankings_when_available():
 def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():
     engine = create_engine("sqlite:///:memory:")
     Session = sessionmaker(bind=engine)
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
     service = UISnapshotService(Session)
 
     with Session() as db:
@@ -315,7 +311,7 @@ def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():
 def test_ui_snapshot_service_resets_corrupt_cache_tables_and_retries():
     engine = create_engine("sqlite:///:memory:")
     Session = sessionmaker(bind=engine)
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
     service = UISnapshotService(Session)
 
     with Session() as db:
@@ -361,7 +357,7 @@ def test_ui_snapshot_service_resets_corrupt_cache_tables_and_retries():
 
 def test_force_forget_snapshot_tables_removes_snapshot_schema_entries():
     engine = create_engine("sqlite:///:memory:")
-    migrate_ui_view_snapshot_tables(engine)
+    Base.metadata.create_all(engine)
 
     with engine.begin() as conn:
         _force_forget_snapshot_tables(conn)

@@ -235,9 +235,10 @@ class UISnapshotService:
         with _SNAPSHOT_SCHEMA_LOCK:
             if _SNAPSHOT_SCHEMA_READY:
                 return
-            from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+            from app.models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 
-            migrate_ui_view_snapshot_tables(self._engine)
+            UIViewSnapshot.__table__.create(bind=self._engine, checkfirst=True)
+            UIViewSnapshotPointer.__table__.create(bind=self._engine, checkfirst=True)
             _SNAPSHOT_SCHEMA_READY = True
 
     def _run_with_storage_recovery(self, fn):
@@ -255,7 +256,7 @@ class UISnapshotService:
     def _reset_corrupt_snapshot_storage(self, exc: Exception) -> None:
         """Drop and recreate rebuildable UI snapshot cache tables after corruption."""
         logger.warning(
-            "Resetting UI snapshot cache tables after SQLite corruption signature: %s",
+            "Resetting UI snapshot cache tables after database corruption signature: %s",
             exc,
         )
         global _SNAPSHOT_SCHEMA_READY
@@ -263,21 +264,12 @@ class UISnapshotService:
             if self._engine is None:
                 return
             with self._engine.begin() as conn:
-                try:
-                    _drop_snapshot_tables(conn)
-                except Exception as reset_exc:
-                    if not is_corruption_error(reset_exc):
-                        raise
-                    logger.warning(
-                        "Normal UI snapshot table drop failed due to SQLite corruption; "
-                        "forcing schema cleanup: %s",
-                        reset_exc,
-                    )
-                    _force_forget_snapshot_tables(conn)
+                _drop_snapshot_tables(conn)
             _SNAPSHOT_SCHEMA_READY = False
-            from app.db_migrations.ui_view_snapshot_migration import migrate_ui_view_snapshot_tables
+            from app.models.ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 
-            migrate_ui_view_snapshot_tables(self._engine)
+            UIViewSnapshot.__table__.create(bind=self._engine, checkfirst=True)
+            UIViewSnapshotPointer.__table__.create(bind=self._engine, checkfirst=True)
             _SNAPSHOT_SCHEMA_READY = True
 
     def _get_snapshot(
@@ -865,42 +857,16 @@ def _json_safe(value: Any) -> Any:
 
 def _drop_snapshot_tables(conn) -> None:
     """Drop rebuildable UI snapshot cache tables using normal DDL."""
-    from ..infra.db.portability import is_sqlite
+    from ..infra.db.portability import is_postgres
 
-    if is_sqlite(conn):
-        conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers"))
-        conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots"))
-        return
-
-    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshot_pointers CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS ui_view_snapshots CASCADE"))
+    cascade = " CASCADE" if is_postgres(conn) else ""
+    conn.execute(text(f"DROP TABLE IF EXISTS ui_view_snapshot_pointers{cascade}"))
+    conn.execute(text(f"DROP TABLE IF EXISTS ui_view_snapshots{cascade}"))
 
 
 def _force_forget_snapshot_tables(conn) -> None:
-    """Remove UI snapshot cache tables from sqlite_master when normal DDL can't read them."""
-    from ..infra.db.portability import is_sqlite
-
-    if not is_sqlite(conn):
-        _drop_snapshot_tables(conn)
-        return
-
-    conn.execute(text("PRAGMA foreign_keys=OFF"))
-    conn.execute(text("PRAGMA writable_schema=ON"))
-    try:
-        conn.execute(
-            text(
-                """
-                DELETE FROM sqlite_master
-                WHERE name IN ('ui_view_snapshots', 'ui_view_snapshot_pointers')
-                   OR tbl_name IN ('ui_view_snapshots', 'ui_view_snapshot_pointers')
-                """
-            )
-        )
-        current_version = conn.execute(text("PRAGMA schema_version")).scalar() or 0
-        conn.execute(text(f"PRAGMA schema_version = {int(current_version) + 1}"))
-    finally:
-        conn.execute(text("PRAGMA writable_schema=OFF"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+    """Force-drop UI snapshot cache tables (alias for _drop)."""
+    _drop_snapshot_tables(conn)
 
 
 def _safe_publish(action: str, *, view_key: str, variant_key: str, source_revision: str | None = None, fn) -> dict[str, Any] | None:

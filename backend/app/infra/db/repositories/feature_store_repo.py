@@ -7,7 +7,6 @@ from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
@@ -27,7 +26,7 @@ from app.infra.db.models.feature_store import (
     FeatureRunUniverseSymbol,
     StockFeatureDaily,
 )
-from app.infra.db.portability import is_postgres, json_text
+from app.infra.db.portability import json_text
 from app.infra.serialization import convert_numpy_types
 from app.infra.query.feature_store_query import (
     apply_filters,
@@ -40,8 +39,7 @@ _BATCH_SIZE = 500
 
 
 def _upsert_stmt(session: Session, values: list[dict[str, Any]]):
-    insert_fn = pg_insert if is_postgres(session) else sqlite_insert
-    stmt = insert_fn(StockFeatureDaily).values(values)
+    stmt = pg_insert(StockFeatureDaily).values(values)
     return stmt.on_conflict_do_update(
         index_elements=["run_id", "symbol"],
         set_={

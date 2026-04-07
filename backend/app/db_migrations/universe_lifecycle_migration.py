@@ -12,9 +12,6 @@ from ..database import is_corruption_error
 from ..infra.db.portability import (
     column_names,
     index_defs,
-    is_sqlite,
-    sql_bool_literal,
-    sql_timestamp_type,
     table_names,
 )
 from ..models.stock_universe import StockUniverseStatusEvent
@@ -139,7 +136,7 @@ def _derive_lifecycle_status(
 def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     """Backfill lifecycle data row-by-row to avoid brittle full-table text scans."""
     full_metadata_backfill = "status" not in columns
-    active_true = sql_bool_literal(True, conn)
+    active_true = 'TRUE'
     select_columns = [
         "id",
         f"COALESCE(is_active, {active_true}) AS legacy_is_active",
@@ -283,7 +280,7 @@ def migrate_universe_lifecycle(engine) -> None:
 
         legacy_columns = _get_columns(conn, "stock_universe")
 
-        timestamp_type = sql_timestamp_type(conn)
+        timestamp_type = 'TIMESTAMP'
         add_columns = {
             "status": "ALTER TABLE stock_universe ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "status_reason": "ALTER TABLE stock_universe ADD COLUMN status_reason TEXT",
@@ -303,25 +300,7 @@ def migrate_universe_lifecycle(engine) -> None:
 
         _backfill_stock_universe_rows(conn, legacy_columns)
 
-        if is_sqlite(conn):
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE IF NOT EXISTS stock_universe_status_events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol TEXT NOT NULL,
-                        old_status TEXT,
-                        new_status TEXT NOT NULL,
-                        trigger_source TEXT NOT NULL,
-                        reason TEXT,
-                        payload_json TEXT,
-                        created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP)
-                    )
-                    """
-                )
-            )
-        else:
-            StockUniverseStatusEvent.__table__.create(bind=conn, checkfirst=True)
+        StockUniverseStatusEvent.__table__.create(bind=conn, checkfirst=True)
         _ensure_index(
             conn,
             table_name="stock_universe_status_events",

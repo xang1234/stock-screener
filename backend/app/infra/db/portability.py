@@ -1,11 +1,10 @@
-"""Shared database portability helpers for SQLite and PostgreSQL."""
+"""Shared database portability helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import Float as SAFloat, Text, cast, func, inspect as sa_inspect
+from sqlalchemy import Float as SAFloat, Text, cast, inspect as sa_inspect
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.orm import Query, Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -54,10 +53,6 @@ def dialect_name(bind_or_session: BindLike | None = None) -> str:
     if isinstance(bind, str):
         return make_url(bind).get_backend_name()
     return bind.dialect.name
-
-
-def is_sqlite(bind_or_session: BindLike | None = None) -> bool:
-    return dialect_name(bind_or_session) == "sqlite"
 
 
 def is_postgres(bind_or_session: BindLike | None = None) -> bool:
@@ -138,48 +133,19 @@ def trigger_names(bind_or_conn: BindLike, table_name: str) -> set[str]:
     bind = _resolve_bind(bind_or_conn)
     if isinstance(bind, str):
         return set()
-    if is_sqlite(bind):
-        rows = bind.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name = ?",
-            (table_name,),
-        )
-        return {row[0] for row in rows.fetchall()}
-    if is_postgres(bind):
-        rows = bind.exec_driver_sql(
-            """
-            SELECT tgname
-            FROM pg_trigger
-            JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid
-            JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid
-            WHERE pg_trigger.tgisinternal = false
-              AND pg_namespace.nspname = current_schema()
-              AND pg_class.relname = %s
-            """,
-            (table_name,),
-        ).fetchall()
-        return {row[0] for row in rows}
-    return set()
-
-
-def sqlite_json_path(path_segments: Iterable[str]) -> str:
-    parts = [segment for segment in path_segments if segment]
-    if not parts:
-        return "$"
-    return "$." + ".".join(parts)
-
-
-def sql_timestamp_type(bind_or_session: BindLike | None = None) -> str:
-    return "TIMESTAMP" if is_postgres(bind_or_session) else "DATETIME"
-
-
-def sql_json_type(bind_or_session: BindLike | None = None) -> str:
-    return "JSON" if is_postgres(bind_or_session) else "JSON"
-
-
-def sql_bool_literal(value: bool, bind_or_session: BindLike | None = None) -> str:
-    if is_postgres(bind_or_session):
-        return "TRUE" if value else "FALSE"
-    return "1" if value else "0"
+    rows = bind.exec_driver_sql(
+        """
+        SELECT tgname
+        FROM pg_trigger
+        JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid
+        JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid
+        WHERE pg_trigger.tgisinternal = false
+          AND pg_namespace.nspname = current_schema()
+          AND pg_class.relname = %s
+        """,
+        (table_name,),
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def json_text(
@@ -188,14 +154,12 @@ def json_text(
     *,
     bind_or_session: BindLike | None = None,
 ) -> ColumnElement:
-    if is_postgres(bind_or_session):
-        expr = column
-        for segment in path_segments[:-1]:
-            expr = expr[segment]
-        if not path_segments:
-            return cast(column, Text)
-        return expr.op("->>")(path_segments[-1])
-    return func.json_extract(column, sqlite_json_path(path_segments))
+    expr = column
+    for segment in path_segments[:-1]:
+        expr = expr[segment]
+    if not path_segments:
+        return cast(column, Text)
+    return expr.op("->>")(path_segments[-1])
 
 
 def json_number(
@@ -216,4 +180,4 @@ def json_bool(
     *,
     bind_or_session: BindLike | None = None,
 ) -> ColumnElement:
-    return func.json_extract(column, sqlite_json_path(path_segments))
+    return json_text(column, path_segments, bind_or_session=bind_or_session)
