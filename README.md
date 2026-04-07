@@ -119,7 +119,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 - **Market breadth** dashboard with StockBee-style indicators and historical trends
 - **197 IBD industry groups** ranked by relative strength with movers and constituent analysis
 - **Watchlists** with RS/price sparklines, multi-period change bars, and drag-and-drop organization
-- **MCP integration** for AI copilot workflows with 8 tools ([details](docs/MCP_INTEGRATION.md))
+- **MCP integration** for AI copilot workflows with 12 tools via stdio and Streamable HTTP ([details](docs/MCP_INTEGRATION.md))
 - **TradingView-style charts** with candlestick OHLC and technical overlays
 - **CSV export** for scan results
 - **Dark and light mode** UI

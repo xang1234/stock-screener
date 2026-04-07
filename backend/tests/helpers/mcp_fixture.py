@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
+from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
 from app.models.task_execution import TaskExecutionHistory
@@ -28,6 +29,7 @@ _TABLES = (
     ThemeAlert,
     MarketBreadth,
     TaskExecutionHistory,
+    IBDGroupRank,
 )
 
 
@@ -216,15 +218,75 @@ def seed_market_copilot_data(session_factory: sessionmaker) -> None:
             )
         )
 
-        session.add(
-            MarketBreadth(
-                date=date(2026, 3, 29),
-                stocks_up_4pct=128,
-                stocks_down_4pct=34,
-                ratio_5day=1.82,
-                ratio_10day=1.54,
-                total_stocks_scanned=4081,
-            )
+        session.add_all(
+            [
+                MarketBreadth(
+                    date=date(2026, 3, 29),
+                    stocks_up_4pct=128,
+                    stocks_down_4pct=34,
+                    ratio_5day=1.82,
+                    ratio_10day=1.54,
+                    total_stocks_scanned=4081,
+                ),
+                MarketBreadth(
+                    date=date(2026, 3, 28),
+                    stocks_up_4pct=112,
+                    stocks_down_4pct=41,
+                    ratio_5day=1.70,
+                    ratio_10day=1.48,
+                    total_stocks_scanned=4075,
+                ),
+                MarketBreadth(
+                    date=date(2026, 3, 27),
+                    stocks_up_4pct=98,
+                    stocks_down_4pct=52,
+                    ratio_5day=1.55,
+                    ratio_10day=1.42,
+                    total_stocks_scanned=4070,
+                ),
+            ]
+        )
+
+        # IBD Group Rankings (2 groups, 2 dates for mover calculation)
+        session.add_all(
+            [
+                IBDGroupRank(
+                    industry_group="Semiconductors",
+                    date=date(2026, 3, 29),
+                    rank=1,
+                    avg_rs_rating=91.0,
+                    num_stocks=25,
+                    top_symbol="NVDA",
+                    top_rs_rating=95.0,
+                ),
+                IBDGroupRank(
+                    industry_group="Cybersecurity",
+                    date=date(2026, 3, 29),
+                    rank=2,
+                    avg_rs_rating=87.0,
+                    num_stocks=15,
+                    top_symbol="PANW",
+                    top_rs_rating=91.0,
+                ),
+                IBDGroupRank(
+                    industry_group="Semiconductors",
+                    date=date(2026, 3, 22),
+                    rank=3,
+                    avg_rs_rating=85.0,
+                    num_stocks=25,
+                    top_symbol="NVDA",
+                    top_rs_rating=92.0,
+                ),
+                IBDGroupRank(
+                    industry_group="Cybersecurity",
+                    date=date(2026, 3, 22),
+                    rank=5,
+                    avg_rs_rating=80.0,
+                    num_stocks=15,
+                    top_symbol="PANW",
+                    top_rs_rating=87.0,
+                ),
+            ]
         )
         session.add_all(
             [

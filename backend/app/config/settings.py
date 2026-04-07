@@ -256,6 +256,7 @@ class Settings(BaseSettings):
     # Hermes / MCP integration
     mcp_server_name: str = "stockscreen-market-copilot"
     mcp_watchlist_writes_enabled: bool = False
+    mcp_http_enabled: bool = True
 
     @field_validator('cache_warm_hour')
     @classmethod

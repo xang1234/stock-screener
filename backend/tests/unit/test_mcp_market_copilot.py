@@ -44,6 +44,10 @@ def test_lists_expected_tools(read_only_service):
         "theme_state",
         "task_status",
         "watchlist_add",
+        "group_rankings",
+        "stock_lookup",
+        "breadth_snapshot",
+        "daily_digest",
     }
 
 
@@ -177,6 +181,70 @@ def test_watchlist_add_writes_when_enabled(session_factory):
     snapshot = _tool_payload(service.call_tool("watchlist_snapshot", {"watchlist": "Leaders"}))
     symbols = [row["symbol"] for row in snapshot["items"]]
     assert symbols == ["NVDA", "MSFT"]
+
+
+def test_stock_lookup_returns_universe_info(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("stock_lookup", {"symbol": "nvda"}))
+
+    assert payload["stock"]["symbol"] == "NVDA"
+    assert payload["stock"]["name"] == "NVIDIA Corporation"
+    assert payload["stock"]["sector"] == "Information Technology"
+    assert payload["technicals"] is None
+
+
+def test_stock_lookup_with_technicals(read_only_service):
+    payload = _tool_payload(
+        read_only_service.call_tool(
+            "stock_lookup",
+            {"symbol": "NVDA", "include_technicals": True},
+        )
+    )
+
+    assert payload["stock"]["symbol"] == "NVDA"
+    assert payload["technicals"] is not None
+    assert payload["technicals"]["composite_score"] == 92.0
+    assert payload["technicals"]["rs_rating"] == 95
+
+
+def test_stock_lookup_unknown_symbol(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("stock_lookup", {"symbol": "ZZZZ"}))
+
+    assert payload["stock"] is None
+    assert "not found" in payload["summary"]
+
+
+def test_breadth_snapshot_returns_multiple_days(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("breadth_snapshot", {"days": 5}))
+
+    assert len(payload["snapshots"]) == 3  # only 3 seeded
+    assert payload["snapshots"][0]["date"] == "2026-03-29"
+    assert payload["snapshots"][1]["date"] == "2026-03-28"
+
+
+def test_breadth_snapshot_default_days(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("breadth_snapshot", {}))
+
+    assert len(payload["snapshots"]) >= 1
+    assert payload["facts"][0]["key"] == "latest_date"
+
+
+def test_group_rankings_returns_rankings(read_only_service):
+    payload = _tool_payload(
+        read_only_service.call_tool("group_rankings", {"limit": 10, "period": "1w"})
+    )
+
+    assert len(payload["rankings"]) == 2
+    assert payload["rankings"][0]["industry_group"] == "Semiconductors"
+    assert payload["rankings"][0]["rank"] == 1
+
+
+def test_daily_digest_returns_envelope(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("daily_digest", {}))
+
+    assert "digest" in payload
+    assert payload["digest"]["as_of_date"] is not None
+    assert payload["digest"]["market"]["stance"] is not None
+    assert "Daily digest" in payload["summary"]
 
 
 def test_invalid_sort_field_returns_tool_error(read_only_service):

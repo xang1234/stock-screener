@@ -402,6 +402,7 @@ def _is_reserved_frontend_path(path: str) -> bool:
         "livez",
         "readyz",
         "health",
+        "mcp",
     )
     return any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in reserved_prefixes)
 
@@ -492,6 +493,11 @@ async def health_check():
 # Include API routers
 from .api.v1.router import router as api_router
 app.include_router(api_router, prefix="/api/v1")
+
+# Mount MCP Streamable HTTP transport (JSON-RPC over HTTP)
+if settings.mcp_http_enabled:
+    from .interfaces.mcp import mcp_router
+    app.include_router(mcp_router, prefix="/mcp")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

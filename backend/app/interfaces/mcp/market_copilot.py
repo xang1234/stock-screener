@@ -26,11 +26,15 @@ from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase, 
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
 
 from .models import (
+    BreadthSnapshotArgs,
     CandidateFilters,
     CompareFeatureRunsArgs,
+    DailyDigestArgs,
     ExplainSymbolArgs,
     FindCandidatesArgs,
+    GroupRankingsArgs,
     MarketOverviewArgs,
+    StockLookupArgs,
     TaskStatusArgs,
     ThemeStateArgs,
     ToolCitation,
@@ -125,6 +129,30 @@ class MarketCopilotService:
                     description="Add symbols to an existing watchlist when MCP watchlist writes are explicitly enabled.",
                     args_model=WatchlistAddArgs,
                     handler=self._watchlist_add,
+                ),
+                ToolSpec(
+                    name="group_rankings",
+                    description="Get current IBD industry group rankings and biggest rank movers over a configurable period (1w, 1m, 3m, 6m).",
+                    args_model=GroupRankingsArgs,
+                    handler=self._group_rankings,
+                ),
+                ToolSpec(
+                    name="stock_lookup",
+                    description="Look up a stock by symbol and return universe info, fundamentals, and optionally RS rating and stage from the latest feature run.",
+                    args_model=StockLookupArgs,
+                    handler=self._stock_lookup,
+                ),
+                ToolSpec(
+                    name="breadth_snapshot",
+                    description="Return recent market breadth snapshots (up/down 4%+ counts and ratios) for the last N trading days.",
+                    args_model=BreadthSnapshotArgs,
+                    handler=self._breadth_snapshot,
+                ),
+                ToolSpec(
+                    name="daily_digest",
+                    description="Return the full daily digest including market stance, leaders, themes, watchlist highlights, and risk notes.",
+                    args_model=DailyDigestArgs,
+                    handler=self._daily_digest,
                 ),
             )
         }
@@ -795,6 +823,210 @@ class MarketCopilotService:
             added=added,
             skipped=skipped,
             writes_enabled=True,
+        )
+
+    def _group_rankings(self, args: GroupRankingsArgs) -> ToolEnvelope:
+        from app.services.ibd_group_rank_service import IBDGroupRankService
+
+        with self._session_scope() as db:
+            service = IBDGroupRankService()
+            rankings = service.get_current_rankings(db, limit=args.limit)
+            movers = service.get_rank_movers(db, period=args.period, limit=min(args.limit, 10))
+
+        if not rankings:
+            return self._envelope(
+                "No IBD group ranking data is available.",
+                facts=[],
+                citations=[],
+                next_actions=["Run a group ranking calculation before using group_rankings."],
+                freshness=self._freshness(),
+                rankings=[],
+                movers={"gainers": [], "losers": []},
+            )
+
+        ranking_date = rankings[0].get("date")
+        top_rankings = [
+            {
+                "industry_group": r["industry_group"],
+                "rank": r["rank"],
+                "avg_rs_rating": r.get("avg_rs_rating"),
+                "num_stocks": r.get("num_stocks"),
+                "top_symbol": r.get("top_symbol"),
+                "rank_change_1w": r.get("rank_change_1w"),
+            }
+            for r in rankings
+        ]
+
+        return self._envelope(
+            f"Top {len(top_rankings)} IBD group rankings as of {ranking_date}. "
+            f"Showing {args.period} movers ({len(movers.get('gainers', []))} gainers, {len(movers.get('losers', []))} losers).",
+            facts=[
+                self._fact("ranking_date", str(ranking_date), "ibd_group_ranks"),
+                self._fact("total_groups", len(rankings), "ibd_group_ranks"),
+                self._fact("top_group", rankings[0]["industry_group"], "ibd_group_ranks", ranking_date),
+            ],
+            citations=[self._citation("ibd_group_ranks", "Group Rankings", f"ibd_group_ranks:{ranking_date}", ranking_date)],
+            next_actions=[
+                "Use find_candidates with industry_group filter to drill into a top-ranked group.",
+                "Use explain_symbol for the top_symbol in a leading group.",
+            ],
+            freshness=self._freshness(as_of_date=ranking_date, ibd_group_ranks=str(ranking_date)),
+            rankings=top_rankings,
+            movers={
+                "period": movers.get("period", args.period),
+                "gainers": movers.get("gainers", []),
+                "losers": movers.get("losers", []),
+            },
+        )
+
+    def _stock_lookup(self, args: StockLookupArgs) -> ToolEnvelope:
+        with self._session_scope() as db:
+            stock = (
+                db.query(StockUniverse)
+                .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
+                .first()
+            )
+
+        if stock is None:
+            return self._envelope(
+                f"Symbol {args.symbol!r} was not found in the active stock universe.",
+                facts=[],
+                citations=[],
+                next_actions=["Verify the ticker symbol or check if it was delisted."],
+                freshness=self._freshness(),
+                stock=None,
+                technicals=None,
+            )
+
+        stock_info = {
+            "symbol": stock.symbol,
+            "name": stock.name,
+            "sector": stock.sector,
+            "industry": stock.industry,
+            "market_cap": stock.market_cap,
+            "exchange": getattr(stock, "exchange", None),
+        }
+
+        technicals = None
+        if args.include_technicals:
+            with self._session_scope() as db:
+                run = self._latest_published_run(db)
+            if run is not None:
+                with self._uow_scope() as uow:
+                    row = uow.feature_store.get_by_symbol_for_run(
+                        run.id,
+                        args.symbol,
+                        include_sparklines=False,
+                        include_setup_payload=False,
+                    )
+                if row is not None:
+                    extended = getattr(row, "extended_fields", {}) or {}
+                    technicals = {
+                        "run_id": run.id,
+                        "as_of_date": run.as_of_date.isoformat(),
+                        "composite_score": row.composite_score,
+                        "overall_rating": row.rating,
+                        "rs_rating": extended.get("rs_rating"),
+                        "stage": extended.get("stage"),
+                        "current_price": row.current_price,
+                    }
+
+        facts = [
+            self._fact("symbol", stock.symbol, "stock_universe"),
+            self._fact("name", stock.name, "stock_universe"),
+            self._fact("sector", stock.sector, "stock_universe"),
+        ]
+        citations = [self._citation("stock_universe", stock.symbol, f"stock_universe:{stock.symbol}")]
+        if technicals:
+            facts.append(self._fact("composite_score", technicals["composite_score"], "feature_runs", technicals["as_of_date"]))
+
+        return self._envelope(
+            f"{stock.symbol} ({stock.name}) — {stock.sector} / {stock.industry}."
+            + (f" Score {technicals['composite_score']}, RS {technicals['rs_rating']}, Stage {technicals['stage']}." if technicals else ""),
+            facts=facts,
+            citations=citations,
+            next_actions=["Use explain_symbol for a detailed breakdown." if technicals else "Run a feature snapshot to get technicals."],
+            freshness=self._freshness(
+                as_of_date=technicals["as_of_date"] if technicals else None,
+                stock_universe="current",
+                **({"feature_run": technicals["as_of_date"]} if technicals else {}),
+            ),
+            stock=stock_info,
+            technicals=technicals,
+        )
+
+    def _breadth_snapshot(self, args: BreadthSnapshotArgs) -> ToolEnvelope:
+        with self._session_scope() as db:
+            rows = (
+                db.query(MarketBreadth)
+                .order_by(desc(MarketBreadth.date))
+                .limit(args.days)
+                .all()
+            )
+
+        if not rows:
+            return self._envelope(
+                "No market breadth data is available.",
+                facts=[],
+                citations=[],
+                next_actions=["Run a breadth calculation to populate breadth data."],
+                freshness=self._freshness(),
+                snapshots=[],
+            )
+
+        snapshots = [self._breadth_record(row) for row in rows]
+        latest = rows[0]
+
+        return self._envelope(
+            f"Market breadth for the last {len(snapshots)} trading days. "
+            f"Latest ({latest.date.isoformat()}): {latest.stocks_up_4pct} up 4%+, {latest.stocks_down_4pct} down 4%+, "
+            f"5-day ratio {latest.ratio_5day}.",
+            facts=[
+                self._fact("latest_date", latest.date.isoformat(), "market_breadth", latest.date),
+                self._fact("days_returned", len(snapshots), "market_breadth"),
+                self._fact("latest_ratio_5day", latest.ratio_5day, "market_breadth", latest.date),
+            ],
+            citations=[self._citation("market_breadth", "Breadth Data", f"market_breadth:{latest.date.isoformat()}", latest.date)],
+            next_actions=[
+                "Use market_overview for a fuller picture including feature runs and alerts.",
+            ],
+            freshness=self._freshness(as_of_date=latest.date, market_breadth=str(latest.date)),
+            snapshots=snapshots,
+        )
+
+    def _daily_digest(self, args: DailyDigestArgs) -> ToolEnvelope:
+        from app.services.digest_service import DigestService
+
+        with self._session_scope() as db:
+            service = DigestService()
+            digest = service.get_daily_digest(db, as_of_date=args.as_of_date)
+
+        digest_data = digest.model_dump(mode="json")
+
+        return self._envelope(
+            f"Daily digest as of {digest.as_of_date}. "
+            f"Market stance: {digest.market.stance}. "
+            f"{len(digest.leaders)} leaders, {len(digest.risks)} risk notes.",
+            facts=[
+                self._fact("as_of_date", digest.as_of_date, "digest"),
+                self._fact("market_stance", digest.market.stance, "digest", digest.as_of_date),
+                self._fact("leader_count", len(digest.leaders), "digest", digest.as_of_date),
+            ],
+            citations=[self._citation("digest", "Daily Digest", f"digest:{digest.as_of_date}", digest.as_of_date)],
+            next_actions=[
+                "Use find_candidates to drill into the leaders list.",
+                "Use theme_state for deeper theme analysis.",
+            ],
+            freshness=self._freshness(
+                as_of_date=digest.as_of_date,
+                digest=str(digest.as_of_date),
+                **{k: v for k, v in {
+                    "feature_run": digest.freshness.latest_feature_as_of_date,
+                    "market_breadth": digest.freshness.latest_breadth_date,
+                    "theme_metrics": digest.freshness.latest_theme_metrics_date,
+                }.items() if v is not None},
+            ),
+            digest=digest_data,
         )
 
     def _find_candidates_for_run(self, run_id: int, args: FindCandidatesArgs) -> list[dict[str, Any]]:
