@@ -27,6 +27,38 @@ from ..services.theme_content_recovery_service import (
 
 logger = logging.getLogger(__name__)
 
+_CONTENT_ITEMS_CSV_HEADER = [
+    "ID",
+    "Title",
+    "Content",
+    "URL",
+    "Themes",
+    "Sentiment",
+    "Tickers",
+    "Published Date",
+    "Source Type",
+    "Source Name",
+    "Author",
+    "Processing Status",
+]
+
+
+def _content_item_csv_row(item: ContentItemWithThemesResponse) -> list[object]:
+    return [
+        item.id,
+        item.title or "",
+        item.content or "",
+        item.url or "",
+        "; ".join(theme.name for theme in item.themes),
+        item.primary_sentiment or "",
+        "; ".join(item.tickers),
+        item.published_at.strftime("%Y-%m-%d %H:%M") if item.published_at else "",
+        item.source_type or "",
+        item.source_name or "",
+        item.author or "",
+        item.processing_status or "",
+    ]
+
 
 def _build_content_items_browser_base_query(
     db: Session,
@@ -205,6 +237,7 @@ def _fetch_content_items_with_themes(
             mentions_by_content[content_id] = {
                 "themes": [],
                 "sentiments": [],
+                "sentiment_counts": {},
                 "tickers": set(),
             }
 
@@ -214,6 +247,8 @@ def _fetch_content_items_with_themes(
                 mentions_by_content[content_id]["themes"].append(theme_ref)
 
         if mention.sentiment:
+            sentiment_counts = mentions_by_content[content_id]["sentiment_counts"]
+            sentiment_counts[mention.sentiment] = sentiment_counts.get(mention.sentiment, 0) + 1
             if mention.sentiment not in mentions_by_content[content_id]["sentiments"]:
                 mentions_by_content[content_id]["sentiments"].append(mention.sentiment)
 
@@ -224,15 +259,13 @@ def _fetch_content_items_with_themes(
     for content in content_items:
         mention_data = mentions_by_content.get(
             content.id,
-            {"themes": [], "sentiments": [], "tickers": set()},
+            {"themes": [], "sentiments": [], "sentiment_counts": {}, "tickers": set()},
         )
 
         sentiments_list = mention_data["sentiments"]
         primary_sentiment = None
-        if sentiments_list:
-            sentiment_counts = {}
-            for sentiment_entry in sentiments_list:
-                sentiment_counts[sentiment_entry] = sentiment_counts.get(sentiment_entry, 0) + 1
+        sentiment_counts = mention_data["sentiment_counts"]
+        if sentiment_counts:
             primary_sentiment = max(sentiment_counts, key=sentiment_counts.get)
 
         items.append(
@@ -383,41 +416,34 @@ def render_content_items_csv(items: list[ContentItemWithThemesResponse]) -> tupl
     """Render content browser items as UTF-8 BOM CSV bytes and filename."""
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(
-        [
-            "ID",
-            "Title",
-            "Content",
-            "URL",
-            "Themes",
-            "Sentiment",
-            "Tickers",
-            "Published Date",
-            "Source Type",
-            "Source Name",
-            "Author",
-            "Processing Status",
-        ]
-    )
+    writer.writerow(_CONTENT_ITEMS_CSV_HEADER)
 
     for item in items:
-        writer.writerow(
-            [
-                item.id,
-                item.title or "",
-                item.content or "",
-                item.url or "",
-                "; ".join(theme.name for theme in item.themes),
-                item.primary_sentiment or "",
-                "; ".join(item.tickers),
-                item.published_at.strftime("%Y-%m-%d %H:%M") if item.published_at else "",
-                item.source_type or "",
-                item.source_name or "",
-                item.author or "",
-                item.processing_status or "",
-            ]
-        )
+        writer.writerow(_content_item_csv_row(item))
 
     csv_bytes = b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")
     filename = f"theme_articles_{datetime.utcnow().strftime('%Y%m%d')}.csv"
     return csv_bytes, filename
+
+
+def render_content_items_csv_chunk(
+    items: list[ContentItemWithThemesResponse],
+    *,
+    include_header: bool,
+    include_bom: bool,
+) -> bytes:
+    """Render a CSV chunk for streaming exports without buffering the full dataset."""
+    if not items and not include_header:
+        return b""
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    if include_header:
+        writer.writerow(_CONTENT_ITEMS_CSV_HEADER)
+    for item in items:
+        writer.writerow(_content_item_csv_row(item))
+
+    chunk = buf.getvalue().encode("utf-8")
+    if include_bom:
+        return b"\xef\xbb\xbf" + chunk
+    return chunk

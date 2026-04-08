@@ -75,7 +75,10 @@ async def test_export_content_items_includes_processing_status_column(
     monkeypatch: pytest.MonkeyPatch,
     client,
 ):
-    def _mock_fetch(*_args, **_kwargs):
+    captured_kwargs: list[dict[str, object]] = []
+
+    def _mock_fetch(*_args, **kwargs):
+        captured_kwargs.append(kwargs)
         return (
             [
                 ContentItemWithThemesResponse(
@@ -108,6 +111,77 @@ async def test_export_content_items_includes_processing_status_column(
     csv_text = response.content.decode("utf-8-sig")
     assert "Processing Status" in csv_text.splitlines()[0]
     assert "in_progress" in csv_text
+    assert captured_kwargs[0]["limit"] == 500
+    assert captured_kwargs[0]["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_export_content_items_streams_multiple_pages(
+    monkeypatch: pytest.MonkeyPatch,
+    client,
+):
+    calls: list[tuple[int, int]] = []
+
+    def _mock_fetch(*_args, **kwargs):
+        offset = int(kwargs["offset"])
+        limit = int(kwargs["limit"])
+        calls.append((offset, limit))
+        if offset == 0:
+            return (
+                [
+                    ContentItemWithThemesResponse(
+                        id=201,
+                        title="Page one",
+                        content="Body one",
+                        url="https://example.com/one",
+                        source_type="news",
+                        source_name="Example Source",
+                        author="Author one",
+                        published_at=datetime(2026, 3, 1, 11, 0, 0),
+                        themes=[],
+                        sentiments=[],
+                        primary_sentiment=None,
+                        tickers=[],
+                        processing_status="processed",
+                    )
+                ],
+                2,
+            )
+        if offset == 1:
+            return (
+                [
+                    ContentItemWithThemesResponse(
+                        id=202,
+                        title="Page two",
+                        content="Body two",
+                        url="https://example.com/two",
+                        source_type="news",
+                        source_name="Example Source",
+                        author="Author two",
+                        published_at=datetime(2026, 3, 1, 11, 5, 0),
+                        themes=[],
+                        sentiments=[],
+                        primary_sentiment=None,
+                        tickers=[],
+                        processing_status="processed",
+                    )
+                ],
+                2,
+            )
+        return ([], 2)
+
+    monkeypatch.setattr("app.api.v1.themes._fetch_content_items_with_themes", _mock_fetch)
+
+    response = await client.get(
+        "/api/v1/themes/content/export",
+        params={"pipeline": "fundamental", "source_type": "news"},
+    )
+
+    assert response.status_code == 200
+    csv_text = response.content.decode("utf-8-sig")
+    assert "Page one" in csv_text
+    assert "Page two" in csv_text
+    assert calls == [(0, 500), (1, 500)]
 
 
 @pytest.mark.asyncio
@@ -230,8 +304,10 @@ def test_theme_content_recovery_retries_after_reindex_without_reset(
 
 def test_theme_content_recovery_does_not_reset_for_non_resettable_corruption(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     reset_calls = {"count": 0, "reindex": 0}
+    caplog.set_level("ERROR")
 
     class _DummySession:
         def __enter__(self):
@@ -264,6 +340,7 @@ def test_theme_content_recovery_does_not_reset_for_non_resettable_corruption(
 
     assert reset_calls["reindex"] == 1
     assert reset_calls["count"] == 0
+    assert "check_db_integrity.py --repair" in caplog.text
 
 
 @pytest.mark.asyncio

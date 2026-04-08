@@ -349,6 +349,9 @@ async def create_theme_from_cluster(
         name=name,
         description=description,
     )
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+
+    safe_publish_themes_bootstrap_variants(getattr(cluster, "pipeline", None))
     return {
         "status": "created",
         "theme_id": cluster.id,
@@ -405,5 +408,7 @@ async def deactivate_theme(
 
     cluster.is_active = False
     db.commit()
-    return {"status": "deactivated", "theme": cluster.display_name}
+    from ...services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 
+    safe_publish_themes_bootstrap_variants(cluster.pipeline)
+    return {"status": "deactivated", "theme": cluster.display_name}

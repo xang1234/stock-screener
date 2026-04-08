@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -20,7 +19,7 @@ from ...services.theme_pipeline_state_service import (
     compute_pipeline_observability,
     compute_pipeline_state_health,
 )
-from ...theme_platform.content_browser_queries import render_content_items_csv
+from ...theme_platform.content_browser_queries import render_content_items_csv_chunk
 from .themes_common import _VALID_THEME_PIPELINES, resolve_source_ids_for_pipeline
 
 logger = logging.getLogger(__name__)
@@ -43,16 +42,28 @@ async def run_pipeline_async(
     from ...models.theme import ThemePipelineRun
     from ...tasks.theme_discovery_tasks import run_full_pipeline
 
-    run_id = str(uuid.uuid4())
-    task = run_full_pipeline.delay(run_id=run_id, pipeline=pipeline, lookback_days=lookback_days)
+    if pipeline is not None and pipeline not in _VALID_THEME_PIPELINES:
+        raise HTTPException(status_code=400, detail="pipeline must be technical, fundamental, or omitted")
 
+    run_id = str(uuid.uuid4())
     pipeline_run = ThemePipelineRun(
         run_id=run_id,
-        task_id=task.id,
         pipeline=pipeline,
-        status="queued",
+        status="created",
     )
     db.add(pipeline_run)
+    db.commit()
+
+    try:
+        task = run_full_pipeline.delay(run_id=run_id, pipeline=pipeline, lookback_days=lookback_days)
+    except Exception as exc:
+        pipeline_run.status = "failed"
+        pipeline_run.error_message = f"Failed to queue pipeline task: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail="Failed to queue theme discovery pipeline") from exc
+
+    pipeline_run.task_id = task.id
+    pipeline_run.status = "queued"
     db.commit()
 
     pipeline_desc = pipeline if pipeline else "both (technical + fundamental)"
@@ -291,20 +302,48 @@ async def export_content_items(
         raise HTTPException(status_code=400, detail="pipeline must be technical or fundamental")
 
     themes_api = _themes_api_module()
-    items, _total = themes_api._fetch_content_items_with_themes_with_recovery(
-        db,
-        search=search,
-        source_type=source_type,
-        sentiment=sentiment,
-        date_from=date_from,
-        date_to=date_to,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        pipeline=pipeline,
-    )
-    csv_bytes, filename = render_content_items_csv(items)
+    page_size = 500
+
+    def _csv_stream():
+        offset = 0
+        include_header = True
+        include_bom = True
+
+        while True:
+            items, total = themes_api._fetch_content_items_with_themes_with_recovery(
+                db,
+                search=search,
+                source_type=source_type,
+                sentiment=sentiment,
+                date_from=date_from,
+                date_to=date_to,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                limit=page_size,
+                offset=offset,
+                pipeline=pipeline,
+            )
+
+            chunk = render_content_items_csv_chunk(
+                items,
+                include_header=include_header,
+                include_bom=include_bom,
+            )
+            if chunk:
+                yield chunk
+
+            if not items:
+                break
+
+            include_header = False
+            include_bom = False
+            offset += len(items)
+            if offset >= total:
+                break
+
+    filename = f"theme_articles_{datetime.utcnow().strftime('%Y%m%d')}.csv"
     return StreamingResponse(
-        io.BytesIO(csv_bytes),
+        _csv_stream(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

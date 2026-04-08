@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -27,15 +28,25 @@ def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
     if not url:
         return provided_type or "news"
 
-    url_lower = url.lower()
+    raw_url = url.strip()
+    url_lower = raw_url.lower()
 
-    if "twitter.com" in url_lower or "x.com" in url_lower or url_lower.startswith("@"):
+    if url_lower.startswith("@"):
         return "twitter"
-    if "reddit.com" in url_lower or url_lower.startswith("r/"):
+    if url_lower.startswith("r/"):
         return "reddit"
-    if "substack.com" in url_lower:
-        return "substack"
-    if url_lower.endswith("/feed") or url_lower.endswith(".rss") or url_lower.endswith(".xml"):
+
+    # Parse hostnames to avoid broad substring matches like "examplex.com".
+    parsed = urlparse(raw_url if "://" in raw_url else f"https://{raw_url}")
+    hostname = (parsed.hostname or "").lower().strip(".")
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+
+    if hostname in {"twitter.com", "x.com"} or hostname.endswith(".twitter.com") or hostname.endswith(".x.com"):
+        return "twitter"
+    if hostname == "reddit.com" or hostname.endswith(".reddit.com"):
+        return "reddit"
+    if hostname == "substack.com" or hostname.endswith(".substack.com"):
         return "substack"
 
     return provided_type or "news"

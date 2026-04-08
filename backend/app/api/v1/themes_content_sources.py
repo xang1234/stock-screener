@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
@@ -100,17 +99,11 @@ async def list_content_sources(
     sources = query.order_by(ContentSource.priority.desc()).all()
 
     if pipeline:
-        filtered_sources = []
-        for source in sources:
-            source_pipelines = source.pipelines or ["technical", "fundamental"]
-            if isinstance(source_pipelines, str):
-                try:
-                    source_pipelines = json.loads(source_pipelines)
-                except Exception:
-                    source_pipelines = ["technical", "fundamental"]
-            if pipeline in source_pipelines:
-                filtered_sources.append(source)
-        sources = filtered_sources
+        sources = [
+            source
+            for source in sources
+            if pipeline in normalize_pipelines(source.pipelines)
+        ]
 
     return [ContentSourceResponse.model_validate(source) for source in sources]
 
@@ -248,7 +241,7 @@ async def run_ingestion(
 @router.post("/extract", response_model=ExtractionResponse)
 async def run_extraction(
     limit: int = Query(50, ge=1, le=200, description="Max items to process"),
-    pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$", description="Pipeline: technical or fundamental"),
     db: Session = Depends(get_db),
 ):
     """Extract themes from unprocessed content using LLM."""
@@ -262,7 +255,7 @@ async def run_extraction(
 
 @router.post("/calculate-metrics")
 async def calculate_theme_metrics(
-    pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
+    pipeline: str = Query("technical", pattern="^(technical|fundamental)$", description="Pipeline: technical or fundamental"),
     db: Session = Depends(get_db),
 ):
     """Calculate/update metrics for all active themes in a pipeline."""
@@ -283,4 +276,3 @@ async def validate_all_themes(
     service = ThemeCorrelationService(db)
     result = service.run_full_validation(min_correlation)
     return result
-
