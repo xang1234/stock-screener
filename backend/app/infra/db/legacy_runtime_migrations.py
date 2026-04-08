@@ -13,9 +13,7 @@ from ...db_migrations.theme_cluster_identity_migration import (
     verify_theme_cluster_identity_schema,
 )
 from ...db_migrations.theme_lifecycle_migration import (
-    LIFECYCLE_INDEX,
     THEME_TABLE,
-    TRANSITION_IDX,
     TRANSITION_TABLE,
     migrate_theme_lifecycle,
 )
@@ -264,13 +262,13 @@ def _verify_theme_lifecycle_schema(engine: Engine) -> dict[str, Any]:
         engine,
         table_name=THEME_TABLE,
         required_columns=_THEME_LIFECYCLE_REQUIRED_COLUMNS,
-        required_indexes={LIFECYCLE_INDEX},
+        required_indexes={_index("lifecycle_state")},
     )
     transition = _verify_columns_and_indexes(
         engine,
         table_name=TRANSITION_TABLE,
         required_columns=set(),
-        required_indexes={TRANSITION_IDX},
+        required_indexes={_index("theme_cluster_id", "transitioned_at")},
     )
     verification = {
         "theme_clusters": base,

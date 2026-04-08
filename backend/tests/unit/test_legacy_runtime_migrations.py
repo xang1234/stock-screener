@@ -9,6 +9,7 @@ from app.infra.db.legacy_runtime_migrations import (
     _THEME_MERGE_SAFETY_REQUIRED_COLUMNS,
     _THEME_MERGE_SAFETY_REQUIRED_INDEXES,
     _verify_columns_and_indexes,
+    _verify_theme_lifecycle_schema,
 )
 from app.infra.db.portability import index_defs
 
@@ -150,4 +151,60 @@ def test_universe_index_ensure_reuses_equivalent_existing_indexes():
     assert "idx_scans_universe_type" not in indexes
     assert "idx_scans_universe_exchange" not in indexes
     assert "idx_scans_universe_index" not in indexes
+    engine.dispose()
+
+
+def test_verify_theme_lifecycle_schema_accepts_equivalent_index_shapes():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE theme_clusters (
+                    id INTEGER PRIMARY KEY,
+                    lifecycle_state TEXT,
+                    lifecycle_state_updated_at TEXT,
+                    lifecycle_state_metadata TEXT,
+                    candidate_since_at TEXT,
+                    activated_at TEXT,
+                    dormant_at TEXT,
+                    reactivated_at TEXT,
+                    retired_at TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE INDEX custom_theme_lifecycle_state
+                ON theme_clusters(lifecycle_state)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE theme_lifecycle_transitions (
+                    id INTEGER PRIMARY KEY,
+                    theme_cluster_id INTEGER,
+                    transitioned_at TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE INDEX custom_theme_transition_lookup
+                ON theme_lifecycle_transitions(theme_cluster_id, transitioned_at)
+                """
+            )
+        )
+
+    verification = _verify_theme_lifecycle_schema(engine)
+
+    assert verification["ok"] is True
+    assert verification["theme_clusters"]["missing_indexes"] == []
+    assert verification["theme_lifecycle_transitions"]["missing_indexes"] == []
     engine.dispose()
