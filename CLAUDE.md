@@ -176,7 +176,7 @@ python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
   - Benchmark (SPY): 24h TTL with distributed locking to prevent thundering herd
 
 **LLM Integration** (`services/chatbot/`):
-- Supported provider path: Groq for chatbot/research, Minimax for primary theme extraction, Z.AI fallback
+- Supported provider path: Groq for chatbot/research, Minimax for primary theme extraction/merge, Z.AI fallback for extraction/merge
 - Agent orchestrator with tool executor pattern
 - Research mode with web search (Tavily, Serper)
 
@@ -229,7 +229,7 @@ const BASE_PATH = '/api/v1/user-themes';
 **Required for chatbot** (at least one supported LLM provider):
 - `GROQ_API_KEY`, `GROQ_API_KEYS` - Groq (fast inference, free tier)
 - `MINIMAX_API_KEY` - Minimax (primary theme extraction)
-- `ZAI_API_KEY`, `ZAI_API_KEYS` - Z.AI (theme extraction fallback)
+- `ZAI_API_KEY`, `ZAI_API_KEYS` - Z.AI (theme extraction/merge fallback)
 
 **Web search** (enables research mode):
 - `TAVILY_API_KEY`, `SERPER_API_KEY`
@@ -243,7 +243,7 @@ const BASE_PATH = '/api/v1/user-themes';
 - `CORS_ORIGINS` - Comma-separated allowed origins (for production)
 
 **LLM routing** (optional):
-- `LLM_DEFAULT_PROVIDER` - Primary provider: groq, minimax, zai
+- `LLM_DEFAULT_PROVIDER` - Optional override for sanctioned primary paths (Groq chatbot/research, Minimax extraction/merge)
 - `LLM_CHATBOT_MODEL`, `LLM_RESEARCH_MODEL` - Model overrides (LiteLLM format)
 - `LLM_FALLBACK_ENABLED` - Enable automatic provider fallback
 

@@ -30,9 +30,16 @@ class PriceCacheWarmupStore:
             return None
         try:
             meta_json = self._redis_client.get(self._metadata_key)
-            if meta_json:
-                return json.loads(meta_json)
-            return None
+            if not meta_json:
+                return None
+            metadata = json.loads(meta_json)
+            if not isinstance(metadata, dict):
+                self._logger.warning(
+                    "Ignoring malformed warmup metadata payload for key=%s",
+                    self._metadata_key,
+                )
+                return None
+            return metadata
         except Exception as exc:
             self._logger.error("Error getting warmup metadata: %s", exc)
             return None
@@ -124,9 +131,16 @@ class PriceCacheWarmupStore:
     def complete_warmup_heartbeat(self, status: str = "completed") -> None:
         if not self._redis_client:
             return
+        terminal_status = status if status in {"completed", "failed"} else "completed"
+        if terminal_status != status:
+            self._logger.warning("Unsupported warmup terminal status %s; defaulting to completed", status)
         try:
+            previous = self.get_heartbeat_info() or {}
             heartbeat = {
-                "status": status,
+                "current": previous.get("current"),
+                "total": previous.get("total"),
+                "percent": 100.0 if terminal_status == "completed" else previous.get("percent"),
+                "status": terminal_status,
                 "completed_at": datetime.now().isoformat(),
             }
             self._redis_client.setex(self._heartbeat_key, 3600, json.dumps(heartbeat))

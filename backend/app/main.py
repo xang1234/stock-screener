@@ -125,6 +125,15 @@ async def trigger_ui_snapshot_rebuild_on_startup():
             error_code="ui_snapshot_rebuild_failed",
             level=logging.WARNING,
         )
+    except Exception as exc:
+        _log_critical_error(
+            message="Unexpected error rebuilding UI snapshots during startup",
+            exc=exc,
+            event="startup_ui_snapshot_rebuild_failed",
+            path="main.trigger_ui_snapshot_rebuild_on_startup",
+            error_code="ui_snapshot_rebuild_unexpected",
+            level=logging.WARNING,
+        )
 
 
 def initialize_runtime() -> None:
