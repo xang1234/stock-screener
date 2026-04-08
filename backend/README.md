@@ -5,7 +5,7 @@ and Custom stock screening with a Feature Store, AI chatbot, and market analysis
 
 > Full project overview and screenshots: [Root README](../README.md)
 > Frontend docs: [Frontend README](../frontend/README.md)
-> Deployment guides: [Docker](../docs/INSTALL_DOCKER.md) | [macOS](../docs/INSTALL_MACOS.md) | [Windows](../docs/INSTALL_WINDOWS.md)
+> Deployment guide: [Docker](../docs/INSTALL_DOCKER.md)
 > Reference: [Architecture](../docs/ARCHITECTURE.md) | [Environment Variables](../docs/ENVIRONMENT.md)
 
 ## Setup
@@ -25,13 +25,11 @@ pip install -e ../xui-reader
 python -m playwright install chromium
 ```
 
-For the desktop/local Windows bundle, install `requirements-desktop.txt` instead and use the packager files under [desktop](./desktop/README.md).
-
 ### 3. Configure Environment
 
 ```bash
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL (absolute path) and at least one LLM API key
+# Edit .env — at minimum set DATABASE_URL (PostgreSQL) and at least one LLM API key
 ```
 
 ### 4. Start Redis
@@ -72,7 +70,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## API Reference
 
-Interactive docs available at:
+Interactive docs are disabled by default when server auth is enabled. For trusted local development, set `SERVER_EXPOSE_API_DOCS=true` in `backend/.env` and use:
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
 
@@ -110,7 +108,7 @@ Interactive docs available at:
 | data-fetch | `data_fetch_status.py` | Data fetch lock monitoring |
 | ticker-validation | `ticker_validation.py` | Ticker symbol validation |
 
-All routes are under `/api/v1/`. Exact paths visible in [Swagger UI](http://localhost:8000/docs).
+All routes are under `/api/v1/`. Exact paths are visible in Swagger only when `SERVER_EXPOSE_API_DOCS=true`.
 
 ## Architecture
 
@@ -185,13 +183,13 @@ SPY benchmark refresh uses distributed locking to prevent thundering herd on cac
 
 ### LLM Integration
 
-Multi-provider support (Groq, DeepSeek, Together AI, OpenRouter, Gemini) with an agent orchestrator and tool executor pattern. Research mode integrates web search via Tavily, Serper, or DuckDuckGo.
+Supported provider path is Groq for chatbot/research, Minimax for primary theme extraction, Gemini as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
 
 Located in `services/chatbot/` and `services/llm/`.
 
 ## Database
 
-Local development and desktop mode default to SQLite at `data/stockscanner.db` (project root). Docker deployments use PostgreSQL via `DATABASE_URL`, while still mounting `./data` for non-app-db state such as `xui-reader` config/session data and the Celery beat schedule file.
+The supported database is PostgreSQL in both local development and Docker deployments. The shared `./data` mount remains for non-database state such as `xui-reader` config/session data, caches, and the Celery beat schedule file.
 
 ### Tables by Category
 
@@ -216,7 +214,7 @@ Local development and desktop mode default to SQLite at `data/stockscanner.db` (
 **System:**
 `app_settings`, `task_execution_history`, `ticker_validation_log`, `document_cache`, `document_chunks`
 
-Migrations in `app/db_migrations/` — idempotent, run on startup.
+Schema changes are versioned under `alembic/` and applied via Alembic. Legacy idempotent scripts remain under `app/db_migrations/` only for one-shot manual reconciliation of older installs.
 
 ## Code Structure
 
@@ -263,7 +261,7 @@ app/
 ```bash
 pytest                                         # All tests
 pytest tests/unit/                             # Unit only
-pytest tests/integration/ -m integration       # Integration (needs running server)
+pytest tests/integration/ -m integration       # Integration (in-process ASGI client where available)
 pytest tests/unit/test_minervini_scanner.py -v # Specific file
 ```
 

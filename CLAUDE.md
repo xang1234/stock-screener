@@ -167,7 +167,7 @@ python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
 - `data_fetch` queue: API calls (1 worker, serialized to respect rate limits)
 - All external API tasks route to `data_fetch` to prevent rate limit violations
 
-**Redis Caching Strategy** (three-tier: Redis → SQLite → API):
+**Redis Caching Strategy** (three-tier: Redis → PostgreSQL → API):
 - DB 0: Celery broker
 - DB 1: Celery results (24h TTL, auto-cleanup)
 - DB 2: Application cache via shared connection pool (`services/redis_pool.py`)
@@ -176,9 +176,9 @@ python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
   - Benchmark (SPY): 24h TTL with distributed locking to prevent thundering herd
 
 **LLM Integration** (`services/chatbot/`):
-- Multi-provider support: Minimax, Groq, DeepSeek, Together AI, OpenRouter, Gemini
+- Supported provider path: Groq for chatbot/research, Minimax for primary theme extraction, Gemini fallback, optional Z.AI alternate
 - Agent orchestrator with tool executor pattern
-- Research mode with web search (Tavily, Serper, DuckDuckGo)
+- Research mode with web search (Tavily, Serper)
 
 ### Frontend Structure
 - **React 18** with Vite
@@ -226,12 +226,11 @@ const BASE_PATH = '/api/v1/user-themes';
 **Local development**: `backend/.env` (see `backend/.env.example`)
 **Docker deployment**: `.env.docker` in project root (see `.env.docker.example`)
 
-**Required for chatbot** (at least one LLM provider):
+**Required for chatbot** (at least one supported LLM provider):
 - `GROQ_API_KEY`, `GROQ_API_KEYS` - Groq (fast inference, free tier)
 - `GEMINI_API_KEY` / `GOOGLE_API_KEY` - Google Gemini (theme extraction)
-- `DEEPSEEK_API_KEY` - DeepSeek (cost-effective fallback)
-- `TOGETHER_API_KEY` - Together AI (wide model selection)
-- `OPENROUTER_API_KEY` - OpenRouter (100+ models)
+- `MINIMAX_API_KEY` - Minimax (primary theme extraction)
+- `ZAI_API_KEY`, `ZAI_API_KEYS` - Z.AI (optional alternate provider)
 
 **Web search** (enables research mode):
 - `TAVILY_API_KEY`, `SERPER_API_KEY`
@@ -240,29 +239,26 @@ const BASE_PATH = '/api/v1/user-themes';
 - `ALPHA_VANTAGE_API_KEY` - Fundamental data (25 req/day free tier)
 
 **Infrastructure**:
-- `DATABASE_URL` - **Must use absolute path** (e.g., `sqlite:////Users/admin/StockScreenClaude/data/stockscanner.db`)
+- `DATABASE_URL` - PostgreSQL connection string (e.g., `postgresql://user:pass@localhost/stockscanner`)
 - `REDIS_HOST`, `CELERY_BROKER_URL` - Redis/Celery configuration
 - `CORS_ORIGINS` - Comma-separated allowed origins (for production)
 
 **LLM routing** (optional):
-- `LLM_DEFAULT_PROVIDER` - Primary provider: groq, minimax, deepseek, together_ai, openrouter, gemini
+- `LLM_DEFAULT_PROVIDER` - Primary provider: groq, minimax, zai, gemini
 - `LLM_CHATBOT_MODEL`, `LLM_RESEARCH_MODEL` - Model overrides (LiteLLM format)
 - `LLM_FALLBACK_ENABLED` - Enable automatic provider fallback
 
 ## Database
 
 **CRITICAL: Database Location**
-- **Production database**: `data/stockscanner.db` (project root) - 2.7GB with all stock data, chat history, themes
-- **DO NOT** create or use databases in `backend/data/`, `frontend/data/`, or any other location
-- The `.env` file uses an **absolute path** to prevent working-directory issues:
-  ```
-  DATABASE_URL=sqlite:////Users/admin/StockScreenClaude/data/stockscanner.db
-  ```
-- If you see an empty database or missing data, verify `DATABASE_URL` points to the correct absolute path
+- **Supported database**: PostgreSQL referenced by `DATABASE_URL`
+- `docker-data/postgres/` holds the Docker Postgres data directory
+- `data/` remains for non-database state such as xui-reader config, caches, backups, and Celery beat state
+- If you see an empty database or missing data, verify `DATABASE_URL` points to the intended PostgreSQL instance
 
-**Valid database files:**
-- `data/stockscanner.db` - Main application database (KEEP)
-- `backend/celerybeat-schedule.db` - Celery Beat scheduler state (KEEP)
+**Persistent data paths:**
+- `docker-data/postgres/` - PostgreSQL data directory (Docker)
+- `backend/celerybeat-schedule.db` - Celery Beat scheduler state (legacy local path)
 
 **Key tables:**
 - `stock_prices`, `stock_fundamentals`, `stock_universe` - Core stock data
@@ -272,7 +268,7 @@ const BASE_PATH = '/api/v1/user-themes';
 - `signals` - Technical signal detections
 - `chat_sessions`, `chat_messages` - Chatbot conversation history
 
-Migrations in `backend/migrations/`. SQLite for both development and Docker deployment.
+Migrations are versioned under `backend/alembic/`. PostgreSQL is the supported database for development and Docker deployment.
 
 ## Screening Methodologies
 

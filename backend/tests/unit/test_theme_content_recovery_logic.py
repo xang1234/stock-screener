@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.exc import DatabaseError
 
 import app.api.v1.themes as themes_api
+import app.services.theme_content_recovery_service as recovery_service
 
 
 def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
@@ -27,14 +28,14 @@ def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
         def begin(self):
             return _DummyBegin()
 
-    monkeypatch.setattr(themes_api, "engine", _DummyEngine())
-    monkeypatch.setattr(themes_api, "_drop_theme_content_tables", lambda conn: calls.append("drop"))
+    monkeypatch.setattr(recovery_service, "engine", _DummyEngine())
+    monkeypatch.setattr(recovery_service, "drop_theme_content_tables", lambda conn: calls.append("drop"))
     monkeypatch.setattr(
-        themes_api,
-        "_rewind_theme_content_source_cursors",
+        recovery_service,
+        "rewind_theme_content_source_cursors",
         lambda conn: calls.append("rewind"),
     )
-    monkeypatch.setattr(themes_api, "_recreate_theme_content_tables", lambda: calls.append("recreate"))
+    monkeypatch.setattr(recovery_service, "recreate_theme_content_tables", lambda: calls.append("recreate"))
 
     themes_api._reset_corrupt_theme_content_storage(
         DatabaseError(

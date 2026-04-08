@@ -12,7 +12,6 @@ import csv
 import io
 import logging
 from collections import Counter, defaultdict
-from threading import Lock
 from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Header, Request
 from fastapi.responses import StreamingResponse
@@ -119,6 +118,14 @@ from ...services.theme_discovery_service import ThemeDiscoveryService
 from ...services.theme_correlation_service import ThemeCorrelationService
 from ...services.theme_merging_service import ThemeMergingService
 from ...services.theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
+from ...services.theme_content_recovery_service import (
+    attempt_reindex_theme_content_storage as _attempt_reindex_theme_content_storage,
+    drop_theme_content_tables as _drop_theme_content_tables,
+    force_forget_theme_content_tables as _force_forget_theme_content_tables,
+    recreate_theme_content_tables as _recreate_theme_content_tables,
+    reset_corrupt_theme_content_storage as _reset_corrupt_theme_content_storage,
+    rewind_theme_content_source_cursors as _rewind_theme_content_source_cursors,
+)
 from ...services.theme_pipeline_state_service import (
     compute_pipeline_observability,
     compute_pipeline_state_health,
@@ -132,19 +139,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _VALID_THEME_PIPELINES = {"technical", "fundamental"}
-_THEME_CONTENT_STORAGE_LOCK = Lock()
-_THEME_CONTENT_RESET_LOOKBACK_DAYS = 365
-_THEME_CONTENT_STORAGE_TABLES = (
-    "content_item_pipeline_state",
-    "theme_mentions",
-    "content_items",
-)
-_THEME_CONTENT_REINDEX_TARGETS = (
-    "content_items",
-    "content_sources",
-    "theme_mentions",
-    "content_item_pipeline_state",
-)
 
 
 def detect_source_type_from_url(url: str, provided_type: str | None) -> str:
@@ -1292,31 +1286,6 @@ def _fetch_content_items_with_themes_with_recovery(
             _reset_corrupt_theme_content_storage(retry_exc)
             with SessionLocal() as reset_retry_db:
                 return _fetch_content_items_with_themes(reset_retry_db, **kwargs)
-
-
-def _attempt_reindex_theme_content_storage(exc: Exception) -> bool:
-    """Try to repair theme browser read paths by rebuilding relevant indexes."""
-    logger.warning(
-        "Attempting REINDEX for theme content browser after corruption signature: %s",
-        exc,
-    )
-    try:
-        with _THEME_CONTENT_STORAGE_LOCK:
-            with engine.begin() as conn:
-                for target in _THEME_CONTENT_REINDEX_TARGETS:
-                    conn.execute(text(f'REINDEX TABLE "{target}"'))
-    except Exception as reindex_exc:
-        if not is_corruption_error(reindex_exc):
-            raise
-        logger.warning(
-            "REINDEX did not clear theme content browser corruption: %s",
-            reindex_exc,
-        )
-        return False
-    logger.warning("REINDEX completed for theme content browser recovery")
-    return True
-
-
 def _corruption_targets_theme_content_storage(
     *,
     source_type: Optional[str] = None,
@@ -1397,57 +1366,6 @@ def _corruption_targets_theme_content_storage(
                 return True
             raise
     return False
-
-
-def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
-    """Drop and recreate rebuildable theme content tables after database corruption."""
-    logger.warning(
-        "Resetting theme content storage after database corruption signature: %s",
-        exc,
-    )
-    with _THEME_CONTENT_STORAGE_LOCK:
-        with engine.begin() as conn:
-            _drop_theme_content_tables(conn)
-        with engine.begin() as conn:
-            _rewind_theme_content_source_cursors(conn)
-        _recreate_theme_content_tables()
-
-
-def _drop_theme_content_tables(conn) -> None:
-    """Drop rebuildable theme content storage tables using normal DDL."""
-    from ...infra.db.portability import is_postgres
-
-    cascade = " CASCADE" if is_postgres(conn) else ""
-    conn.execute(text(f"DROP TABLE IF EXISTS content_item_pipeline_state{cascade}"))
-    conn.execute(text(f"DROP TABLE IF EXISTS theme_mentions{cascade}"))
-    conn.execute(text(f"DROP TABLE IF EXISTS content_items{cascade}"))
-
-
-def _force_forget_theme_content_tables(conn) -> None:
-    """Force-drop theme content storage tables (alias for _drop)."""
-    _drop_theme_content_tables(conn)
-
-
-def _recreate_theme_content_tables() -> None:
-    """Recreate theme content storage tables after a corruption reset."""
-    ContentItem.__table__.create(bind=engine, checkfirst=True)
-    ThemeMention.__table__.create(bind=engine, checkfirst=True)
-    ContentItemPipelineState.__table__.create(bind=engine, checkfirst=True)
-
-
-def _rewind_theme_content_source_cursors(conn) -> None:
-    """Rewind content-source cursors so the next normal poll repopulates dropped article history."""
-    rewind_at = datetime.utcnow() - timedelta(days=_THEME_CONTENT_RESET_LOOKBACK_DAYS)
-    conn.execute(
-        text(
-            """
-            UPDATE content_sources
-            SET last_fetched_at = :rewind_at,
-                total_items_fetched = 0
-            """
-        ),
-        {"rewind_at": rewind_at},
-    )
 
 
 @router.get("/content", response_model=ContentItemsListResponse)

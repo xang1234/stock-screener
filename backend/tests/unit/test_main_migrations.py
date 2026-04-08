@@ -1,29 +1,41 @@
-"""Focused tests for startup migration runner behavior."""
+"""Focused tests for runtime Alembic bootstrap behavior."""
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
-from app.main import (
-    run_theme_relationships_migration,
-    run_universe_lifecycle_migration,
-)
+from app.infra.db.migrations import migrate_database_to_head
 
 
-def test_run_theme_relationships_migration_is_fatal_on_error():
-    with patch(
-        "app.db_migrations.theme_relationships_migration.migrate_theme_relationships",
-        side_effect=RuntimeError("migration failed"),
-    ):
-        with pytest.raises(RuntimeError, match="migration failed"):
-            run_theme_relationships_migration()
+def test_migrate_database_to_head_stamps_existing_schema_without_alembic_version():
+    class _Engine:
+        url = "postgresql://test"
+
+    engine = _Engine()
+    with patch("app.infra.db.migrations._has_alembic_version_table", return_value=False), patch(
+        "app.infra.db.migrations._has_user_tables", return_value=True
+    ), patch("app.infra.db.migrations._alembic_config", return_value=object()), patch(
+        "app.infra.db.migrations.command.stamp"
+    ) as stamp, patch("app.infra.db.migrations.command.upgrade") as upgrade:
+        action = migrate_database_to_head(engine)
+
+    assert action == "stamped"
+    stamp.assert_called_once()
+    upgrade.assert_not_called()
 
 
-def test_run_universe_lifecycle_migration_is_fatal_on_error():
-    with patch(
-        "app.db_migrations.universe_lifecycle_migration.migrate_universe_lifecycle",
-        side_effect=RuntimeError("migration failed"),
-    ):
-        with pytest.raises(RuntimeError, match="migration failed"):
-            run_universe_lifecycle_migration()
+def test_migrate_database_to_head_upgrades_new_schema():
+    class _Engine:
+        url = "postgresql://test"
+
+    engine = _Engine()
+    with patch("app.infra.db.migrations._has_alembic_version_table", return_value=False), patch(
+        "app.infra.db.migrations._has_user_tables", return_value=False
+    ), patch("app.infra.db.migrations._alembic_config", return_value=object()), patch(
+        "app.infra.db.migrations.command.stamp"
+    ) as stamp, patch("app.infra.db.migrations.command.upgrade") as upgrade:
+        action = migrate_database_to_head(engine)
+
+    assert action == "upgraded"
+    stamp.assert_not_called()
+    upgrade.assert_called_once()

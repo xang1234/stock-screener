@@ -11,13 +11,16 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DatabaseError
 
 import app.api.v1.themes as themes_api
+import app.services.theme_content_recovery_service as recovery_service
 from app.main import app
 from app.models.theme import ContentSource
 from app.schemas.theme import ContentItemWithThemesResponse
+from app.services import server_auth
 
 
 @pytest_asyncio.fixture
-async def client():
+async def client(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -531,4 +534,4 @@ def test_rewind_theme_content_source_cursors_rewinds_fetch_window():
     rewind_at = datetime.fromisoformat(str(row[0]))
     assert row[1] == 0
     assert rewind_at <= now
-    assert (now - rewind_at).days >= themes_api._THEME_CONTENT_RESET_LOOKBACK_DAYS - 1
+    assert (now - rewind_at).days >= recovery_service._THEME_CONTENT_RESET_LOOKBACK_DAYS - 1
