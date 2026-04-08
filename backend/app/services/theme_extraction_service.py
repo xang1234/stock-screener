@@ -16,7 +16,7 @@ from typing import Optional
 
 import numpy as np
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
@@ -1116,6 +1116,7 @@ Example themes for this pipeline: {examples_str}
             ProviderRateLimitServiceError,
             ProviderQuotaServiceError,
             LLMError,
+            SQLAlchemyError,
             ValueError,
             TypeError,
             RuntimeError,

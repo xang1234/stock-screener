@@ -153,6 +153,7 @@ class ThemeMergingService:
                 if is_model_supported_for_use_case(model_id=candidate_model, use_case="merge"):
                     self.merge_model_id = candidate_model
                 else:
+                    self.merge_model_id = self.DEFAULT_MERGE_MODEL
                     logger.warning(
                         "Unsupported persisted merge model %s; falling back to %s",
                         candidate_model,
