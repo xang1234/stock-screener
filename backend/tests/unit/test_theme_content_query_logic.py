@@ -163,3 +163,78 @@ def test_pipeline_mode_defaults_missing_state_to_pending():
     finally:
         db.close()
 
+
+def test_primary_sentiment_uses_actual_mention_frequency():
+    db = _build_session()
+    try:
+        _newest_id, older_id = _seed_fundamental_twitter_data(db)
+
+        # Add extra mention rows to make bearish the dominant sentiment.
+        target_content = db.query(ContentItem).filter(ContentItem.id == older_id).first()
+        assert target_content is not None
+        cluster = db.query(ThemeCluster).first()
+        assert cluster is not None
+
+        db.add_all(
+            [
+                ThemeMention(
+                    content_item_id=older_id,
+                    source_type="twitter",
+                    source_name="@fund_source",
+                    raw_theme="Memory Pricing",
+                    canonical_theme="Memory Pricing",
+                    theme_cluster_id=cluster.id,
+                    pipeline="fundamental",
+                    tickers=["MU"],
+                    ticker_count=1,
+                    sentiment="bearish",
+                    confidence=0.8,
+                    excerpt="Bearish update 1",
+                    mentioned_at=target_content.published_at,
+                ),
+                ThemeMention(
+                    content_item_id=older_id,
+                    source_type="twitter",
+                    source_name="@fund_source",
+                    raw_theme="Memory Pricing",
+                    canonical_theme="Memory Pricing",
+                    theme_cluster_id=cluster.id,
+                    pipeline="fundamental",
+                    tickers=["MU"],
+                    ticker_count=1,
+                    sentiment="bearish",
+                    confidence=0.79,
+                    excerpt="Bearish update 2",
+                    mentioned_at=target_content.published_at,
+                ),
+                ThemeMention(
+                    content_item_id=older_id,
+                    source_type="twitter",
+                    source_name="@fund_source",
+                    raw_theme="Memory Pricing",
+                    canonical_theme="Memory Pricing",
+                    theme_cluster_id=cluster.id,
+                    pipeline="fundamental",
+                    tickers=["MU"],
+                    ticker_count=1,
+                    sentiment="bullish",
+                    confidence=0.75,
+                    excerpt="Bullish update",
+                    mentioned_at=target_content.published_at,
+                ),
+            ]
+        )
+        db.commit()
+
+        items, total = _fetch_content_items_with_themes(
+            db,
+            source_type="twitter",
+            pipeline="fundamental",
+            limit=10,
+            offset=0,
+        )
+        assert total == 2
+        older_item = next(item for item in items if item.id == older_id)
+        assert older_item.primary_sentiment == "bearish"
+    finally:
+        db.close()
