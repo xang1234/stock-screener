@@ -24,8 +24,6 @@ class Settings(BaseSettings):
 
     # API Keys
     alpha_vantage_api_key: str = ""
-    gemini_api_key: str = ""  # For theme extraction via Google Gemini
-    google_api_key: str = ""  # Alternative name for Gemini API key
     zai_api_key: str = ""  # For Z.AI GLM models via OpenAI-compatible endpoint
     zai_api_keys: str = ""  # For Z.AI GLM models (multiple keys, comma-separated)
     zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
@@ -33,9 +31,6 @@ class Settings(BaseSettings):
     minimax_api_base: str = "https://api.minimax.io/v1"  # Minimax OpenAI-compatible base URL
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
-    deepseek_api_key: str = ""  # For LLM via DeepSeek (cost-effective fallback)
-    together_api_key: str = ""  # For LLM via Together AI (wide model selection)
-    openrouter_api_key: str = ""  # For LLM via OpenRouter (100+ models, unified billing)
     twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
     xui_enabled: bool = True  # Enable xui-reader ingestion for twitter sources
     xui_config_path: str = str(_PROJECT_ROOT / "data" / "xui-reader" / "config.toml")
@@ -56,11 +51,11 @@ class Settings(BaseSettings):
     serper_api_key: str = ""  # For web search in chatbot (fallback)
 
     # LLM Routing Configuration
-    llm_default_provider: str = "groq"  # Primary provider: groq, zai, deepseek, together_ai, openrouter
-    llm_chatbot_model: str = "groq/qwen-qwen3-32b"  # Model for chatbot (LiteLLM format)
-    llm_research_model: str = "groq/qwen-qwen3-32b"  # Model for research agents
+    llm_default_provider: str = "groq"  # Supported providers: groq, minimax, zai
+    llm_chatbot_model: str = "groq/qwen/qwen3-32b"  # Model for chatbot (LiteLLM format)
+    llm_research_model: str = "groq/qwen/qwen3-32b"  # Model for research agents
     llm_fallback_enabled: bool = True  # Enable automatic fallback to other providers
-    llm_fallback_models: str = "groq/llama-3.3-70b-versatile,deepseek/deepseek-chat,together_ai/meta-llama/Llama-3-70b-chat-hf"
+    llm_fallback_models: str = "groq/llama-3.3-70b-versatile"
 
     # Runtime profile
     feature_themes: bool = True

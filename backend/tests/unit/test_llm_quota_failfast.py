@@ -40,9 +40,9 @@ async def test_call_with_fallbacks_continues_to_non_groq_after_groq_quota() -> N
 
     result = await service._call_with_fallbacks(
         params={"model": "groq/qwen/qwen3-32b"},
-        fallbacks=["deepseek/deepseek-chat"],
+        fallbacks=["openai/glm-4.7-flash"],
         num_retries=0,
     )
 
-    assert result["model"] == "deepseek/deepseek-chat"
-    assert calls == ["groq/qwen/qwen3-32b", "deepseek/deepseek-chat"]
+    assert result["model"] == "openai/glm-4.7-flash"
+    assert calls == ["groq/qwen/qwen3-32b", "openai/glm-4.7-flash"]

@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 from ..database import SessionLocal
 from ..models.stock import StockFundamental
 from ..config import settings
+from .errors import CacheRefreshError
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
@@ -175,8 +176,20 @@ class FundamentalsCacheService:
                             return enriched
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
-            except Exception as e:
-                logger.warning(f"Redis read error for {symbol}: {e}")
+            except (pickle.PickleError, TypeError, ValueError, RuntimeError, OSError) as exc:
+                logger.warning(
+                    "Redis read error for %s fundamentals: %s",
+                    symbol,
+                    exc,
+                    extra={
+                        "event": "cache_refresh_failed",
+                        "path": "fundamentals_cache_service.get_fundamentals",
+                        "pipeline": None,
+                        "run_id": None,
+                        "symbol": symbol,
+                        "error_code": "fundamentals_cache_redis_read_failed",
+                    },
+                )
 
         # Try database (slower but persistent)
         cached_data, last_update = self._get_from_database(symbol)
@@ -405,8 +418,24 @@ class FundamentalsCacheService:
 
             return fundamentals
 
-        except Exception as e:
-            logger.error(f"Error fetching fundamentals for {symbol}: {e}", exc_info=True)
+        except (RuntimeError, ValueError, TypeError, OSError) as exc:
+            error = CacheRefreshError(
+                f"Fundamentals refresh failed for {symbol}: {exc}",
+                error_code="fundamentals_cache_refresh_failed",
+            )
+            logger.error(
+                "%s",
+                error,
+                extra={
+                    "event": "cache_refresh_failed",
+                    "path": "fundamentals_cache_service._fetch_and_cache",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": symbol,
+                    "error_code": error.error_code,
+                },
+                exc_info=exc,
+            )
             return None
 
     def _store_in_redis(self, symbol: str, data: Dict) -> None:

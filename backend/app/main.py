@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
 from .database import engine
@@ -19,10 +20,38 @@ from .services.redis_pool import get_redis_client
 logger = logging.getLogger(__name__)
 
 
+def _log_critical_error(
+    *,
+    message: str,
+    exc: Exception,
+    event: str,
+    path: str,
+    error_code: str,
+    level: int = logging.ERROR,
+    pipeline: str | None = None,
+    run_id: str | None = None,
+    symbol: str | None = None,
+) -> None:
+    """Emit structured critical-path logs for startup/auth/cache/theme operations."""
+    logger.log(
+        level,
+        message,
+        extra={
+            "event": event,
+            "path": path,
+            "pipeline": pipeline,
+            "run_id": run_id,
+            "symbol": symbol,
+            "error_code": error_code,
+        },
+        exc_info=exc,
+    )
+
+
 def _redacted_database_url(database_url: str) -> str:
     try:
         return make_url(database_url).render_as_string(hide_password=True)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return "<invalid>"
 
 
@@ -57,9 +86,16 @@ async def trigger_gapfill_on_startup():
             extra={"task_id": task.id, "max_days": max_days, "queue": "data_fetch"},
         )
 
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError, OSError) as exc:
         # Don't block startup if gap-fill dispatch fails
-        logger.exception("Failed to dispatch IBD group rankings gap-fill task during startup")
+        _log_critical_error(
+            message="Failed to dispatch IBD group rankings gap-fill task during startup",
+            exc=exc,
+            event="startup_gapfill_dispatch_failed",
+            path="main.trigger_gapfill_on_startup",
+            error_code="gapfill_dispatch_failed",
+            level=logging.WARNING,
+        )
 
 
 async def trigger_ui_snapshot_rebuild_on_startup():
@@ -70,8 +106,15 @@ async def trigger_ui_snapshot_rebuild_on_startup():
         await asyncio.sleep(0)
         await asyncio.to_thread(safe_publish_all_bootstraps)
         logger.info("UI snapshot bootstrap rebuild dispatched")
-    except Exception:
-        logger.exception("Failed to rebuild UI snapshots during startup")
+    except (ImportError, RuntimeError, OSError) as exc:
+        _log_critical_error(
+            message="Failed to rebuild UI snapshots during startup",
+            exc=exc,
+            event="startup_ui_snapshot_rebuild_failed",
+            path="main.trigger_ui_snapshot_rebuild_on_startup",
+            error_code="ui_snapshot_rebuild_failed",
+            level=logging.WARNING,
+        )
 
 
 def initialize_runtime() -> None:
@@ -184,8 +227,15 @@ async def readiness():
         else:
             checks["database"] = "error: required tables missing"
             healthy = False
-    except Exception as exc:
-        logger.warning("Database readiness probe failed", exc_info=exc)
+    except (SQLAlchemyError, OSError, RuntimeError, ValueError) as exc:
+        _log_critical_error(
+            message="Database readiness probe failed",
+            exc=exc,
+            event="readiness_check_failed",
+            path="/readyz",
+            error_code="readiness_database_check_failed",
+            level=logging.WARNING,
+        )
         checks["database"] = f"error: {type(exc).__name__}"
         healthy = False
 
@@ -199,8 +249,15 @@ async def readiness():
             checks["redis"] = "ok"
         else:
             checks["redis"] = "warning: unavailable"
-    except Exception as exc:
-        logger.warning("Redis readiness probe failed", exc_info=exc)
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_critical_error(
+            message="Redis readiness probe failed",
+            exc=exc,
+            event="readiness_check_failed",
+            path="/readyz",
+            error_code="readiness_redis_check_failed",
+            level=logging.WARNING,
+        )
         checks["redis"] = f"warning: {type(exc).__name__}"
 
     status_code = 200 if healthy else 503

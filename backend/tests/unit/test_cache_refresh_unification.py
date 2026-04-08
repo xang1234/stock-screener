@@ -329,6 +329,9 @@ def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
 @pytest.mark.asyncio
 async def test_warm_all_returns_already_running_when_refresh_active(client, monkeypatch):
     from app.api.v1 import cache as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
     mock_lock.get_current_task.return_value = {
@@ -354,6 +357,9 @@ async def test_warm_all_returns_already_running_when_refresh_active(client, monk
 @pytest.mark.asyncio
 async def test_warm_all_queues_full_smart_refresh_when_idle(client, monkeypatch):
     from app.api.v1 import cache as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
     mock_lock.get_current_task.return_value = None
@@ -377,6 +383,9 @@ async def test_warm_all_queues_full_smart_refresh_when_idle(client, monkeypatch)
 @pytest.mark.asyncio
 async def test_refresh_endpoint_queues_requested_mode(client, monkeypatch):
     from app.api.v1 import cache as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
     mock_lock.get_current_task.return_value = None

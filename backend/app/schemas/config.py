@@ -1,6 +1,6 @@
 """Pydantic schemas for application configuration API endpoints."""
 
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +9,7 @@ class LLMModelUpdate(BaseModel):
     """Request body for updating LLM model selection."""
 
     model_id: str
-    use_case: str = "extraction"  # "extraction" or "merge"
+    use_case: Literal["extraction", "merge"] = "extraction"
 
 
 class OllamaSettings(BaseModel):
@@ -21,11 +21,11 @@ class OllamaSettings(BaseModel):
 class LLMConfigResponse(BaseModel):
     """Response for LLM configuration."""
 
-    extraction: dict
-    merge: dict
+    extraction: dict[str, Any]
+    merge: dict[str, Any]
     ollama_status: str
     ollama_api_base: str
-    available_models: list
+    available_models: list[dict[str, Any]]
 
 
 class ThemePolicyMatcherConfig(BaseModel):

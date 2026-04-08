@@ -132,6 +132,7 @@ function ModelSettingsModal({ open, onClose }) {
   // Group models by provider/category
   const cloudModels = config?.available_models?.filter(m => m.category === 'cloud') || [];
   const localModels = config?.available_models?.filter(m => m.category === 'local') || [];
+  const hasLocalModels = localModels.length > 0;
 
   // Get current model info
   const currentModelInfo = config?.extraction?.model_info;
@@ -230,13 +231,14 @@ function ModelSettingsModal({ open, onClose }) {
                   </MenuItem>
                 ))}
 
-                {/* Local Models */}
-                <MenuItem disabled>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <ComputerIcon fontSize="small" color="primary" />
-                    <Typography variant="caption" fontWeight="bold">LOCAL MODELS (OLLAMA)</Typography>
-                  </Box>
-                </MenuItem>
+                {hasLocalModels && (
+                  <MenuItem disabled>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <ComputerIcon fontSize="small" color="primary" />
+                      <Typography variant="caption" fontWeight="bold">LOCAL MODELS (OLLAMA)</Typography>
+                    </Box>
+                  </MenuItem>
+                )}
                 {localModels.map((model) => (
                   <MenuItem key={model.id} value={model.id}>
                     <Box display="flex" alignItems="center" justifyContent="space-between" width="100%">
@@ -248,75 +250,79 @@ function ModelSettingsModal({ open, onClose }) {
               </Select>
             </FormControl>
 
-            <Divider sx={{ my: 3 }} />
+            {hasLocalModels && (
+              <>
+                <Divider sx={{ my: 3 }} />
 
-            {/* Ollama Configuration */}
-            <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <ComputerIcon color="primary" />
-              Ollama Configuration
-            </Typography>
-
-            <Box display="flex" alignItems="center" gap={1} mb={2}>
-              <Typography variant="body2" color="text.secondary">Status:</Typography>
-              <Chip
-                icon={config?.ollama_status === 'connected' ? <CheckCircleIcon /> : <ErrorIcon />}
-                label={STATUS_LABELS[config?.ollama_status] || 'Unknown'}
-                size="small"
-                color={STATUS_COLORS[config?.ollama_status] || 'default'}
-              />
-            </Box>
-
-            <Box display="flex" gap={1} mb={2}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Ollama API URL"
-                value={ollamaApiBase}
-                onChange={(e) => setOllamaApiBase(e.target.value)}
-                placeholder="http://localhost:11434"
-                helperText="Default: http://localhost:11434"
-              />
-              <Button
-                variant="outlined"
-                onClick={handleOllamaUpdate}
-                disabled={updateOllamaMutation.isPending}
-              >
-                {updateOllamaMutation.isPending ? <CircularProgress size={20} /> : 'Test'}
-              </Button>
-            </Box>
-
-            {/* Installed Ollama Models */}
-            {config?.ollama_status === 'connected' && ollamaModelsData?.models?.length > 0 && (
-              <Box>
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Installed Models ({ollamaModelsData.models.length})
+                {/* Ollama Configuration */}
+                <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ComputerIcon color="primary" />
+                  Ollama Configuration
                 </Typography>
-                <Box display="flex" flexWrap="wrap" gap={0.5}>
-                  {ollamaModelsData.models.map((model) => (
-                    <Chip
-                      key={model.id}
-                      label={model.name}
-                      size="small"
-                      variant="outlined"
-                      onClick={() => handleModelChange(model.id)}
-                      sx={{ cursor: 'pointer' }}
-                    />
-                  ))}
+
+                <Box display="flex" alignItems="center" gap={1} mb={2}>
+                  <Typography variant="body2" color="text.secondary">Status:</Typography>
+                  <Chip
+                    icon={config?.ollama_status === 'connected' ? <CheckCircleIcon /> : <ErrorIcon />}
+                    label={STATUS_LABELS[config?.ollama_status] || 'Unknown'}
+                    size="small"
+                    color={STATUS_COLORS[config?.ollama_status] || 'default'}
+                  />
                 </Box>
-              </Box>
-            )}
 
-            {config?.ollama_status === 'disconnected' && (
-              <Alert severity="info" sx={{ mt: 2 }}>
-                <Typography variant="body2">
-                  To use local models, install and run Ollama:
-                </Typography>
-                <Typography variant="caption" component="div" sx={{ mt: 1, fontFamily: 'monospace' }}>
-                  1. Install: curl -fsSL https://ollama.com/install.sh | sh<br />
-                  2. Pull a model: ollama pull llama3.1:8b<br />
-                  3. Start server: ollama serve
-                </Typography>
-              </Alert>
+                <Box display="flex" gap={1} mb={2}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="Ollama API URL"
+                    value={ollamaApiBase}
+                    onChange={(e) => setOllamaApiBase(e.target.value)}
+                    placeholder="http://localhost:11434"
+                    helperText="Default: http://localhost:11434"
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={handleOllamaUpdate}
+                    disabled={updateOllamaMutation.isPending}
+                  >
+                    {updateOllamaMutation.isPending ? <CircularProgress size={20} /> : 'Test'}
+                  </Button>
+                </Box>
+
+                {/* Installed Ollama Models */}
+                {config?.ollama_status === 'connected' && ollamaModelsData?.models?.length > 0 && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                      Installed Models ({ollamaModelsData.models.length})
+                    </Typography>
+                    <Box display="flex" flexWrap="wrap" gap={0.5}>
+                      {ollamaModelsData.models.map((model) => (
+                        <Chip
+                          key={model.id}
+                          label={model.name}
+                          size="small"
+                          variant="outlined"
+                          onClick={() => handleModelChange(model.id)}
+                          sx={{ cursor: 'pointer' }}
+                        />
+                      ))}
+                    </Box>
+                  </Box>
+                )}
+
+                {config?.ollama_status === 'disconnected' && (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    <Typography variant="body2">
+                      To use local models, install and run Ollama:
+                    </Typography>
+                    <Typography variant="caption" component="div" sx={{ mt: 1, fontFamily: 'monospace' }}>
+                      1. Install: curl -fsSL https://ollama.com/install.sh | sh<br />
+                      2. Pull a model: ollama pull llama3.1:8b<br />
+                      3. Start server: ollama serve
+                    </Typography>
+                  </Alert>
+                )}
+              </>
             )}
           </>
         )}
