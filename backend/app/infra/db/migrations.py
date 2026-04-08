@@ -10,6 +10,8 @@ from alembic.config import Config
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
+from .legacy_runtime_migrations import reconcile_legacy_runtime_schema
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -22,6 +24,13 @@ def _alembic_config(database_url: str) -> Config:
     config.set_main_option("script_location", str(_ALEMBIC_SCRIPT_LOCATION))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+def _engine_database_url(engine: Engine) -> str:
+    url = engine.url
+    if hasattr(url, "render_as_string"):
+        return url.render_as_string(hide_password=False)
+    return str(url)
 
 
 def _has_user_tables(engine: Engine) -> bool:
@@ -37,15 +46,17 @@ def _has_alembic_version_table(engine: Engine) -> bool:
 
 
 def migrate_database_to_head(engine: Engine, revision: str = "head") -> str:
-    """Upgrade new databases and stamp existing pre-Alembic schemas."""
-    config = _alembic_config(str(engine.url))
+    """Upgrade new databases and reconcile pre-Alembic schemas before upgrade."""
+    config = _alembic_config(_engine_database_url(engine))
     has_version_table = _has_alembic_version_table(engine)
     has_user_tables = _has_user_tables(engine)
 
     if has_user_tables and not has_version_table:
-        logger.info("Stamping existing schema with Alembic revision %s", revision)
-        command.stamp(config, revision)
-        return "stamped"
+        logger.info("Reconciling legacy pre-Alembic schema before upgrade to %s", revision)
+        reconcile_legacy_runtime_schema(engine)
+        logger.info("Legacy schema reconciliation completed; running Alembic upgrade to %s", revision)
+        command.upgrade(config, revision)
+        return "reconciled"
 
     logger.info("Running Alembic upgrade to revision %s", revision)
     command.upgrade(config, revision)
