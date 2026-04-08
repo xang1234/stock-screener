@@ -39,6 +39,7 @@ from ..models.theme import (
 )
 from ..theme_platform.contracts import MergeActionResult
 from .llm import LLMService, LLMError
+from .llm.config import is_model_supported_for_use_case
 from .errors import ThemeMergeConflictError
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
@@ -148,11 +149,15 @@ class ThemeMergingService:
         try:
             setting = self.db.query(AppSetting).filter(AppSetting.key == "llm_merge_model").first()
             if setting and setting.value:
-                self.merge_model_id = setting.value
-            if self.merge_model_id.startswith("ollama"):
-                ollama_setting = self.db.query(AppSetting).filter(AppSetting.key == "ollama_api_base").first()
-                if ollama_setting and ollama_setting.value:
-                    os.environ["OLLAMA_API_BASE"] = ollama_setting.value
+                candidate_model = setting.value.strip()
+                if is_model_supported_for_use_case(model_id=candidate_model, use_case="merge"):
+                    self.merge_model_id = candidate_model
+                else:
+                    logger.warning(
+                        "Unsupported persisted merge model %s; falling back to %s",
+                        candidate_model,
+                        self.DEFAULT_MERGE_MODEL,
+                    )
             logger.info("Theme merge verification configured model: %s", self.merge_model_id)
         except (SQLAlchemyError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Could not load merge model setting; using default %s (%s)", self.merge_model_id, exc)
@@ -160,7 +165,7 @@ class ThemeMergingService:
     def _init_llm_client(self) -> None:
         """Initialize LLMService for verification"""
         try:
-            self.llm = LLMService(use_case="extraction")
+            self.llm = LLMService(use_case="merge")
             logger.info("LLMService initialized for theme merging (model=%s)", self.merge_model_id)
         except (LLMError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"LLMService initialization failed: {e}")
