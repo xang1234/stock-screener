@@ -1,5 +1,74 @@
+x-backend-build: &backend-build
+  context: .
+  dockerfile: backend/Dockerfile
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
+  POSTGRES_DB: ${POSTGRES_DB:-stockscanner}
+  POSTGRES_USER: ${POSTGRES_USER:-stockscanner}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockscanner}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  API_HOST: 0.0.0.0
+  API_PORT: "8000"
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:80,http://frontend}
+  SERVER_AUTH_PASSWORD: ${SERVER_AUTH_PASSWORD:?Set SERVER_AUTH_PASSWORD in your Docker environment}
+  SERVER_AUTH_SESSION_SECRET: ${SERVER_AUTH_SESSION_SECRET:-}
+  SERVER_AUTH_SECURE_COOKIE: ${SERVER_AUTH_SECURE_COOKIE:-false}
+  SERVER_EXPOSE_API_DOCS: ${SERVER_EXPOSE_API_DOCS:-false}
+  ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+  ZAI_API_KEY: ${ZAI_API_KEY:-}
+  ZAI_API_KEYS: ${ZAI_API_KEYS:-}
+  ZAI_API_BASE: ${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
+  MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+  MINIMAX_API_BASE: ${MINIMAX_API_BASE:-https://api.minimax.io/v1}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  GROQ_API_KEYS: ${GROQ_API_KEYS:-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  XUI_ENABLED: ${XUI_ENABLED:-false}
+  XUI_CONFIG_PATH: ${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
+  XUI_PROFILE: ${XUI_PROFILE:-default}
+  XUI_LIMIT_PER_SOURCE: ${XUI_LIMIT_PER_SOURCE:-50}
+  XUI_NEW_ONLY: ${XUI_NEW_ONLY:-true}
+  XUI_CHECKPOINT_MODE: ${XUI_CHECKPOINT_MODE:-auto}
+  XUI_BRIDGE_ENABLED: ${XUI_BRIDGE_ENABLED:-false}
+  XUI_BRIDGE_ALLOWED_ORIGINS: ${XUI_BRIDGE_ALLOWED_ORIGINS:-http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173}
+  XUI_BRIDGE_CHALLENGE_TTL_SECONDS: ${XUI_BRIDGE_CHALLENGE_TTL_SECONDS:-120}
+  XUI_BRIDGE_MAX_COOKIES: ${XUI_BRIDGE_MAX_COOKIES:-300}
+  TWITTER_REQUEST_DELAY: ${TWITTER_REQUEST_DELAY:-5.0}
+  LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-groq}
+  LLM_CHATBOT_MODEL: ${LLM_CHATBOT_MODEL:-}
+  LLM_RESEARCH_MODEL: ${LLM_RESEARCH_MODEL:-}
+  LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
+
+x-celery-env: &celery-env
+  <<: *app-env
+  TZ: ${CELERY_TIMEZONE:-America/New_York}
+  CELERY_TIMEZONE: ${CELERY_TIMEZONE:-America/New_York}
+
+x-worker-common: &worker-common
+  build: *backend-build
+  environment:
+    <<: *celery-env
+    HOME: /app/data
+  volumes:
+    - ./data:/app/data
+  depends_on:
+    backend:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  stop_grace_period: 30s
+  restart: unless-stopped
+
 services:
-  # Redis (Celery broker + cache)
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
@@ -12,13 +81,12 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # PostgreSQL (authoritative app database for Docker deployments)
   postgres:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
+      POSTGRES_DB: ${POSTGRES_DB:-stockscanner}
+      POSTGRES_USER: ${POSTGRES_USER:-stockscanner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockscanner}
     volumes:
       - ./docker-data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -28,60 +96,10 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # FastAPI Backend
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    build: *backend-build
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - SERVER_AUTH_PASSWORD=${SERVER_AUTH_PASSWORD:?Set SERVER_AUTH_PASSWORD in your Docker environment}
-      - SERVER_AUTH_SESSION_SECRET=${SERVER_AUTH_SESSION_SECRET:-}
-      - SERVER_AUTH_SECURE_COOKIE=${SERVER_AUTH_SECURE_COOKIE:-false}
-      # CORS - configurable for production, defaults to localhost for dev
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80,http://frontend}
-      # API Keys (from .env or .env.docker)
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - ZAI_API_KEY=${ZAI_API_KEY:-}
-      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
-      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
-      - SERPER_API_KEY=${SERPER_API_KEY:-}
-      # XUI Twitter ingestion
-      - XUI_ENABLED=${XUI_ENABLED:-true}
-      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
-      - XUI_PROFILE=${XUI_PROFILE:-default}
-      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
-      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
-      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
-      - XUI_BRIDGE_ENABLED=${XUI_BRIDGE_ENABLED:-true}
-      - XUI_BRIDGE_ALLOWED_ORIGINS=${XUI_BRIDGE_ALLOWED_ORIGINS:-http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173}
-      - XUI_BRIDGE_CHALLENGE_TTL_SECONDS=${XUI_BRIDGE_CHALLENGE_TTL_SECONDS:-120}
-      - XUI_BRIDGE_MAX_COOKIES=${XUI_BRIDGE_MAX_COOKIES:-300}
-      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
-      # LLM Routing (optional overrides)
-      - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
-      - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
-      - LLM_RESEARCH_MODEL=${LLM_RESEARCH_MODEL:-}
-      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
+      <<: *app-env
     volumes:
       - ./data:/app/data
     depends_on:
@@ -98,216 +116,28 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  # Celery Worker - General Queue
   celery-worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q celery -n general@%h
-    environment:
-      # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
-      - HOME=/app/data
-      - TZ=${CELERY_TIMEZONE:-America/New_York}
-      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      # API Keys
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - ZAI_API_KEY=${ZAI_API_KEY:-}
-      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
-      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
-      - SERPER_API_KEY=${SERPER_API_KEY:-}
-      # XUI Twitter ingestion
-      - XUI_ENABLED=${XUI_ENABLED:-true}
-      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
-      - XUI_PROFILE=${XUI_PROFILE:-default}
-      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
-      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
-      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
-      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
-      # LLM Routing
-      - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
-      - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
-      - LLM_RESEARCH_MODEL=${LLM_RESEARCH_MODEL:-}
-      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      backend:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    stop_grace_period: 30s
-    restart: unless-stopped
 
-  # Celery Worker - Data Fetch Queue (serialized; keeps xui-reader single-writer)
   celery-datafetch:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
-    environment:
-      # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
-      - HOME=/app/data
-      - TZ=${CELERY_TIMEZONE:-America/New_York}
-      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      # API Keys
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - ZAI_API_KEY=${ZAI_API_KEY:-}
-      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
-      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
-      - SERPER_API_KEY=${SERPER_API_KEY:-}
-      # XUI Twitter ingestion
-      - XUI_ENABLED=${XUI_ENABLED:-true}
-      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
-      - XUI_PROFILE=${XUI_PROFILE:-default}
-      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
-      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
-      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
-      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
-      # LLM Routing
-      - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
-      - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
-      - LLM_RESEARCH_MODEL=${LLM_RESEARCH_MODEL:-}
-      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      backend:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    stop_grace_period: 30s
-    restart: unless-stopped
 
-  # Celery Worker - User Scans Queue (isolated from maintenance jobs)
   celery-userscans:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans -n userscans@%h
-    environment:
-      # Set HOME for yfinance cache (writes to /app/data/.cache/py-yfinance)
-      - HOME=/app/data
-      - TZ=${CELERY_TIMEZONE:-America/New_York}
-      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      # API Keys
-      - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY:-}
-      - ZAI_API_KEY=${ZAI_API_KEY:-}
-      - ZAI_API_KEYS=${ZAI_API_KEYS:-}
-      - ZAI_API_BASE=${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_API_KEYS=${GROQ_API_KEYS:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
-      - SERPER_API_KEY=${SERPER_API_KEY:-}
-      # XUI Twitter ingestion
-      - XUI_ENABLED=${XUI_ENABLED:-true}
-      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
-      - XUI_PROFILE=${XUI_PROFILE:-default}
-      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
-      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
-      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
-      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
-      # LLM Routing
-      - LLM_DEFAULT_PROVIDER=${LLM_DEFAULT_PROVIDER:-groq}
-      - LLM_CHATBOT_MODEL=${LLM_CHATBOT_MODEL:-}
-      - LLM_RESEARCH_MODEL=${LLM_RESEARCH_MODEL:-}
-      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      backend:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    stop_grace_period: 30s
-    restart: unless-stopped
 
-  # Celery Beat Scheduler
   celery-beat:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    build: *backend-build
     command: sh -c "rm -f /app/data/celerybeat-schedule && celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule"
     environment:
-      - TZ=${CELERY_TIMEZONE:-America/New_York}
-      - CELERY_TIMEZONE=${CELERY_TIMEZONE:-America/New_York}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
-      # XUI Twitter ingestion
-      - XUI_ENABLED=${XUI_ENABLED:-true}
-      - XUI_CONFIG_PATH=${XUI_CONFIG_PATH:-/app/data/xui-reader/config.toml}
-      - XUI_PROFILE=${XUI_PROFILE:-default}
-      - XUI_LIMIT_PER_SOURCE=${XUI_LIMIT_PER_SOURCE:-50}
-      - XUI_NEW_ONLY=${XUI_NEW_ONLY:-true}
-      - XUI_CHECKPOINT_MODE=${XUI_CHECKPOINT_MODE:-auto}
-      - TWITTER_REQUEST_DELAY=${TWITTER_REQUEST_DELAY:-5.0}
+      <<: *celery-env
     volumes:
       - ./data:/app/data
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -315,14 +145,13 @@ services:
     stop_grace_period: 15s
     restart: unless-stopped
 
-  # PostgreSQL backup - daily pg_dump to the shared data volume
   db-backup:
     image: postgres:16-alpine
     entrypoint: /bin/sh
     environment:
-      - PGPASSWORD=${POSTGRES_PASSWORD:-stockscanner}
-      - POSTGRES_DB=${POSTGRES_DB:-stockscanner}
-      - POSTGRES_USER=${POSTGRES_USER:-stockscanner}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-stockscanner}
+      POSTGRES_DB: ${POSTGRES_DB:-stockscanner}
+      POSTGRES_USER: ${POSTGRES_USER:-stockscanner}
     command:
       - -c
       - |
@@ -378,17 +207,23 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # Frontend (React served by nginx)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=/api
+        VITE_API_URL: /api
     ports:
       - "80:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/nginx-health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped
 
 volumes:

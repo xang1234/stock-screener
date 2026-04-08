@@ -1,6 +1,6 @@
 # Stock Scanner
 
-A professional stock screening platform with 6 screening methodologies, AI-powered research, theme discovery from social and news feeds, and real-time market breadth analysis. Runs as a Docker stack, native macOS app, or Windows desktop application.
+A professional stock screening platform with multi-methodology scans, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
 
@@ -19,7 +19,7 @@ Run Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, and Custom scans
 
 ### AI Research Chatbot
 
-6 LLM providers (Groq, DeepSeek, Together AI, OpenRouter, Gemini, Z.AI) with web search research mode, persistent conversation history, and tool-augmented investigation.
+Groq-powered research chat with optional Tavily/Serper web search, persistent conversation history, and tool-augmented investigation.
 
 ![Chatbot](docs/screenshots/chatbot.png)
 *AI chatbot with conversation sidebar and research tools*
@@ -65,18 +65,6 @@ docker-compose up
 
 Full guide with homelab, VPS, and GHCR deployment options: **[Docker Deployment](docs/INSTALL_DOCKER.md)**
 
-### macOS Desktop
-
-Download `StockScanner.dmg` from [GitHub Releases](../../releases), drag to Applications, and launch.
-
-Full guide: **[macOS Installation](docs/INSTALL_MACOS.md)**
-
-### Windows Desktop
-
-Download `StockScanner-Setup.exe` from [GitHub Releases](../../releases) and run the installer.
-
-Full guide: **[Windows Installation](docs/INSTALL_WINDOWS.md)**
-
 ### From Source (Contributors)
 
 See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend + Celery setup.
@@ -87,12 +75,10 @@ The AI chatbot requires at least one LLM provider API key. Scanning and all othe
 
 | Provider | Env Var | Free Tier | Notes |
 |----------|---------|-----------|-------|
-| Groq | `GROQ_API_KEY` | Yes | Fast inference, recommended to start |
-| Gemini | `GEMINI_API_KEY` | Yes | Also used for theme extraction |
-| DeepSeek | `DEEPSEEK_API_KEY` | No | Cost-effective fallback |
-| Together AI | `TOGETHER_API_KEY` | No | Wide model selection |
-| OpenRouter | `OPENROUTER_API_KEY` | No | 100+ models |
-| Z.AI | `ZAI_API_KEY` | No | GLM models |
+| Groq | `GROQ_API_KEY` | Yes | Supported default for chatbot and research |
+| Gemini | `GEMINI_API_KEY` | Yes | Supported extraction fallback |
+| Minimax | `MINIMAX_API_KEY` | No | Supported primary theme-extraction provider |
+| Z.AI | `ZAI_API_KEY` | No | Optional alternate provider |
 
 Optional web search keys (`TAVILY_API_KEY`, `SERPER_API_KEY`) enable the chatbot's research mode.
 
@@ -114,7 +100,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 - **6 screening methodologies** with composite scoring (Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, Custom)
 - **80+ configurable filters** with saved presets across fundamental, technical, and rating categories
-- **AI chatbot** with 6 LLM providers, web search research mode, and persistent conversations
+- **AI chatbot** with Groq-first routing, web search research mode, and persistent conversations
 - **Theme discovery** from RSS, Twitter/X, and news sources with AI clustering and lifecycle tracking
 - **Market breadth** dashboard with StockBee-style indicators and historical trends
 - **197 IBD industry groups** ranked by relative strength with movers and constituent analysis
@@ -123,7 +109,6 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 - **TradingView-style charts** with candlestick OHLC and technical overlays
 - **CSV export** for scan results
 - **Dark and light mode** UI
-- **Desktop apps** for macOS (.dmg) and Windows (.exe) with bundled data
 - **Docker deployment** with PostgreSQL, auto-HTTPS, and GHCR image releases
 
 ## Documentation
@@ -131,8 +116,6 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 | Guide | Audience |
 |-------|----------|
 | [Docker Deployment](docs/INSTALL_DOCKER.md) | Server, homelab, VPS users |
-| [macOS Installation](docs/INSTALL_MACOS.md) | macOS desktop users |
-| [Windows Installation](docs/INSTALL_WINDOWS.md) | Windows desktop users |
 | [Development Guide](docs/DEVELOPMENT.md) | Contributors, developers |
 | [Architecture](docs/ARCHITECTURE.md) | Understanding the system design |
 | [Environment Variables](docs/ENVIRONMENT.md) | Configuration reference |
@@ -143,7 +126,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 ## Tech Stack
 
-**Backend:** FastAPI, SQLAlchemy, Celery, Redis, PostgreSQL / SQLite
+**Backend:** FastAPI, SQLAlchemy, Alembic, Celery, Redis, PostgreSQL
 **Frontend:** React 18, Vite, Material-UI, TanStack Query / Table, Recharts
 **Data:** yfinance, Finviz, Alpha Vantage, SEC EDGAR, xui-reader (Twitter/X)
 

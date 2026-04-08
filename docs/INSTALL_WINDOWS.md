@@ -1,5 +1,7 @@
 # Windows Installation
 
+> Archived deployment path: Windows desktop packaging is no longer part of the supported mainline deployment model. Keep this guide only for historical reference while the repository converges on the server-only path.
+
 Three options for running StockScreenClaude on Windows, from simplest to most flexible.
 
 ## Option 1: Download the Installer (Recommended)

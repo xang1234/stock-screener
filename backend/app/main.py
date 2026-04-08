@@ -1,101 +1,29 @@
-"""
-Main FastAPI application entry point.
-"""
+"""Main FastAPI application entry point."""
+
 import asyncio
 import json
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
+from sqlalchemy.engine import make_url
 
 from .config import settings
-from .database import init_db, engine
+from .database import engine
+from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
 
+logger = logging.getLogger(__name__)
 
-def run_universe_migration():
-    """
-    Run idempotent universe schema migration on startup.
 
-    Adds structured universe columns (universe_key, universe_type, etc.)
-    to the scans table and backfills existing rows. Replaces the old
-    destructive cleanup that deleted scans with 'nyse', 'nasdaq', 'sp500'.
-    """
-    from .db_migrations.universe_migration import migrate_scan_universe_schema_and_backfill
-
+def _redacted_database_url(database_url: str) -> str:
     try:
-        migrate_scan_universe_schema_and_backfill(engine)
-    except Exception as e:
-        print(f"Warning: Universe migration failed (non-fatal): {e}")
-
-
-def run_theme_pipeline_state_migration():
-    """
-    Run idempotent Theme pipeline-state schema migration on startup.
-
-    Creates content_item_pipeline_state and supporting indexes used by
-    pipeline-scoped extraction/reprocessing orchestration.
-    """
-    from .db_migrations.theme_pipeline_state_migration import migrate_theme_pipeline_state
-
-    try:
-        migrate_theme_pipeline_state(engine)
-    except Exception as e:
-        print(f"Warning: Theme pipeline-state migration failed (non-fatal): {e}")
-
-
-def run_theme_cluster_identity_migration():
-    """
-    Run idempotent Theme cluster identity migration on startup.
-
-    Adds canonical_key/display_name and enforces pipeline-scoped uniqueness
-    for theme cluster identity.
-    """
-    from .db_migrations.theme_cluster_identity_migration import migrate_theme_cluster_identity
-
-    migrate_theme_cluster_identity(engine)
-
-
-def run_theme_lifecycle_migration():
-    """
-    Run idempotent theme lifecycle migration on startup.
-
-    Adds lifecycle state/timestamp fields and transition audit table.
-    """
-    from .db_migrations.theme_lifecycle_migration import migrate_theme_lifecycle
-
-    migrate_theme_lifecycle(engine)
-
-
-def run_theme_relationships_migration():
-    """
-    Run idempotent theme relationships migration on startup.
-
-    Creates non-destructive semantic relationship edges between theme clusters.
-    """
-    from .db_migrations.theme_relationships_migration import migrate_theme_relationships
-
-    migrate_theme_relationships(engine)
-
-
-def run_theme_merge_suggestion_safety_migration():
-    """
-    Run idempotent merge-suggestion safety migration on startup.
-
-    Adds canonical pair identity columns and strict approval idempotency fields.
-    """
-    from .db_migrations.theme_merge_suggestion_safety_migration import migrate_theme_merge_suggestion_safety
-
-    migrate_theme_merge_suggestion_safety(engine)
-
-
-def run_universe_lifecycle_migration():
-    """Run idempotent stock universe lifecycle migration on startup."""
-    from .db_migrations.universe_lifecycle_migration import migrate_universe_lifecycle
-
-    migrate_universe_lifecycle(engine)
+        return make_url(database_url).render_as_string(hide_password=True)
+    except Exception:
+        return "<invalid>"
 
 
 async def trigger_gapfill_on_startup():
@@ -124,13 +52,14 @@ async def trigger_gapfill_on_startup():
             kwargs={'max_days': max_days},
             queue='data_fetch'
         )
-        print(f"IBD Group Rankings gap-fill task dispatched: {task.id}")
-        print(f"  Looking back {max_days} days for gaps")
-        print(f"  Routed to 'data_fetch' queue for serialization")
+        logger.info(
+            "IBD Group Rankings gap-fill task dispatched",
+            extra={"task_id": task.id, "max_days": max_days, "queue": "data_fetch"},
+        )
 
-    except Exception as e:
+    except Exception:
         # Don't block startup if gap-fill dispatch fails
-        print(f"Warning: Failed to dispatch gap-fill task: {e}")
+        logger.exception("Failed to dispatch IBD group rankings gap-fill task during startup")
 
 
 async def trigger_ui_snapshot_rebuild_on_startup():
@@ -140,29 +69,22 @@ async def trigger_ui_snapshot_rebuild_on_startup():
 
         await asyncio.sleep(0)
         await asyncio.to_thread(safe_publish_all_bootstraps)
-        print("UI snapshot bootstrap rebuild dispatched")
-    except Exception as e:
-        print(f"Warning: Failed to rebuild UI snapshots on startup: {e}")
+        logger.info("UI snapshot bootstrap rebuild dispatched")
+    except Exception:
+        logger.exception("Failed to rebuild UI snapshots during startup")
 
 
 def initialize_runtime() -> None:
     """Run the synchronous runtime initialization."""
-    print("Starting Stock Scanner API...")
-    print(f"Database: {settings.database_url}")
-    print(f"CORS origins: {settings.cors_origins_list}")
-
-    # Initialize database
-    init_db()
-    print("Database initialized")
-
-    # Legacy data migrations — safe to remove once all deployments have run them
-    run_universe_migration()
-    run_theme_pipeline_state_migration()
-    run_theme_cluster_identity_migration()
-    run_theme_lifecycle_migration()
-    run_theme_relationships_migration()
-    run_theme_merge_suggestion_safety_migration()
-    run_universe_lifecycle_migration()
+    logger.info(
+        "Starting Stock Scanner API",
+        extra={
+            "database_url": _redacted_database_url(settings.database_url),
+            "cors_origins": settings.cors_origins_list,
+        },
+    )
+    action = migrate_database_to_head(engine)
+    logger.info("Database schema ready", extra={"migration_action": action})
 
 
 @asynccontextmanager
@@ -181,17 +103,28 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    print("Shutting down Stock Scanner API...")
+    logger.info("Shutting down Stock Scanner API")
     engine.dispose()
-    print("Database connections closed")
+    logger.info("Database connections closed")
 
 
-# Create FastAPI application
+def _docs_enabled() -> bool:
+    return settings.server_expose_api_docs
+
+
+_docs_url = "/docs" if _docs_enabled() else None
+_redoc_url = "/redoc" if _docs_enabled() else None
+_openapi_url = "/openapi.json" if _docs_enabled() else None
+
+
 app = FastAPI(
     title="Stock Scanner API",
     description="CANSLIM + Minervini stock scanner with industry group analysis",
     version="0.1.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 
 # Configure CORS
@@ -209,13 +142,15 @@ _READINESS_TABLES = ("scans", "scan_results", "stock_universe")
 @app.get("/")
 async def root():
     """Return API information."""
-    return {
+    payload = {
         "name": "Stock Scanner API",
         "version": "0.1.0",
         "description": "CANSLIM + Minervini stock scanner",
-        "docs": "/docs",
-        "status": "running"
+        "status": "running",
     }
+    if _docs_url is not None:
+        payload["docs"] = _docs_url
+    return payload
 
 
 @app.get("/livez")
@@ -249,8 +184,9 @@ async def readiness():
         else:
             checks["database"] = "error: required tables missing"
             healthy = False
-    except Exception as e:
-        checks["database"] = f"error: {type(e).__name__}"
+    except Exception as exc:
+        logger.warning("Database readiness probe failed", exc_info=exc)
+        checks["database"] = f"error: {type(exc).__name__}"
         healthy = False
 
     # Redis check — soft dependency (degraded, not unhealthy)
@@ -263,8 +199,9 @@ async def readiness():
             checks["redis"] = "ok"
         else:
             checks["redis"] = "warning: unavailable"
-    except Exception as e:
-        checks["redis"] = f"warning: {type(e).__name__}"
+    except Exception as exc:
+        logger.warning("Redis readiness probe failed", exc_info=exc)
+        checks["redis"] = f"warning: {type(exc).__name__}"
 
     status_code = 200 if healthy else 503
     status_label = "ok" if healthy else "unhealthy"

@@ -1,6 +1,6 @@
 # Docker Deployment
 
-Docker is the recommended deployment method for servers, homelabs, and VPS hosting. The project uses a layered Docker Compose architecture with composable overlays for different scenarios.
+Docker is the supported deployment method for servers, homelabs, and VPS hosting. The project uses a layered Docker Compose architecture with composable overlays for different scenarios.
 
 Docker deployments use **PostgreSQL** as the application database. The shared `./data` mount handles non-database state (xui-reader config, Celery beat schedule, caches).
 
@@ -16,7 +16,7 @@ Zero-config local deployment:
 ```bash
 # 1. Set up environment (required for chatbot/LLM features)
 cp .env.docker.example .env
-# Edit .env: Set SERVER_AUTH_PASSWORD and add your API keys (GROQ_API_KEY, GEMINI_API_KEY, etc.)
+# Edit .env: Set SERVER_AUTH_PASSWORD and add your API keys (GROQ_API_KEY, MINIMAX_API_KEY, etc.)
 
 # 2. Start all services
 docker-compose up
@@ -149,34 +149,18 @@ PostgreSQL backups are automatically written by the `db-backup` service via `pg_
 pg_restore -d <database> <dump-file>
 ```
 
-### SQLite-to-PostgreSQL Cutover
+### Legacy Pre-Alembic Upgrade Path
 
-One-time migration for existing Docker deployments:
+Older installs that already have a populated PostgreSQL schema but no `alembic_version` marker should run the one-shot reconciliation script before the first post-upgrade boot:
+
+Use the same Compose file stack you deployed with for both commands below. Examples:
+- Local/default stack: `docker-compose ...`
+- Production overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml ...`
+- HTTPS overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml ...`
 
 ```bash
-# 1. Stop backend, workers, and beat so SQLite is quiescent
-docker-compose stop backend celery-worker celery-datafetch celery-userscans celery-beat
-
-# 2. Take a final SQLite backup
-sqlite3 data/stockscanner.db ".backup 'data/backups/stockscanner_final_pre_pg.db'"
-
-# 3. Start PostgreSQL only
-docker-compose up -d postgres
-
-# 4. Prepare schema against PostgreSQL
-docker-compose run --rm backend python -c "from app.database import init_db; init_db()"
-
-# 5. Import data into PostgreSQL
-docker-compose run --rm \
-  -e SQLITE_DB_PATH=/app/data/stockscanner.db \
-  backend \
-  python scripts/migrate_sqlite_to_postgres.py --source /app/data/stockscanner.db
-
-# 6. Start backend first and smoke test the API
-docker-compose up -d backend
-
-# 7. Start workers and beat after API validation passes
-docker-compose up -d celery-worker celery-datafetch celery-userscans celery-beat frontend db-backup
+docker-compose run --rm backend python scripts/run_legacy_runtime_migrations.py
+docker-compose run --rm backend alembic upgrade head
 ```
 
 Fresh installs now auto-seed `ibd_industry_groups` from the bundled canonical CSV on backend startup when the table is empty.
@@ -207,4 +191,5 @@ sudo chown -R 1000:1000 ./data
 docker-compose ps          # Check service status
 docker-compose logs backend # Check backend logs
 curl http://localhost:8000/readyz  # Direct health check
+curl http://localhost/nginx-health # Frontend/nginx health check
 ```

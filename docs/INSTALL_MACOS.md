@@ -1,5 +1,7 @@
 # macOS Installation
 
+> Archived deployment path: macOS desktop packaging is no longer part of the supported mainline deployment model. Keep this guide only for historical reference while the repository converges on the server-only path.
+
 Two options for running StockScreenClaude on macOS: download the pre-built DMG or build from source.
 
 ## Option 1: Download the DMG (Recommended)

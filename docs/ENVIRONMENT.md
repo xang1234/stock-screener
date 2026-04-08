@@ -12,9 +12,6 @@ At least one LLM provider key is required for the AI chatbot. Scanning and other
 |----------|---------|---------|-------|
 | Groq | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Fast inference, free tier (recommended to start) |
 | Google Gemini | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Used for theme extraction |
-| DeepSeek | `DEEPSEEK_API_KEY` | [platform.deepseek.com](https://platform.deepseek.com) | Cost-effective fallback |
-| Together AI | `TOGETHER_API_KEY` | [api.together.xyz](https://api.together.xyz) | Wide model selection |
-| OpenRouter | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) | 100+ models, unified billing |
 | Z.AI | `ZAI_API_KEY` | [platform.z.ai](https://platform.z.ai) | GLM models |
 | Minimax | `MINIMAX_API_KEY` | [platform.minimax.io](https://platform.minimax.io) | Default for theme extraction |
 
@@ -39,7 +36,7 @@ Enables research mode in the chatbot.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_DEFAULT_PROVIDER` | `groq` | Primary provider: groq, minimax, zai, deepseek, together_ai, openrouter, gemini |
+| `LLM_DEFAULT_PROVIDER` | `groq` | Primary provider: groq, minimax, zai, gemini |
 | `LLM_CHATBOT_MODEL` | `groq/qwen-qwen3-32b` | Model for chatbot (LiteLLM format: provider/model) |
 | `LLM_RESEARCH_MODEL` | `groq/qwen-qwen3-32b` | Model for research agents |
 | `LLM_FALLBACK_ENABLED` | `true` | Enable automatic fallback to other providers on failure |
@@ -47,22 +44,14 @@ Enables research mode in the chatbot.
 
 ## Database
 
-### Local Development (SQLite)
+### PostgreSQL
 
-| Variable | Example | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:////Users/you/StockScreenClaude/data/stockscanner.db` | **Must use absolute path** (4 slashes: `sqlite:///` + `/absolute/path`) |
-
-The SQLite database lives at `data/stockscanner.db` in the project root. Do not create databases in `backend/data/` or other subdirectories.
-
-### Docker (PostgreSQL)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_DB` | `stockscanner` | Database name |
-| `POSTGRES_USER` | `stockscanner` | Database user |
-| `POSTGRES_PASSWORD` | `stockscanner` | Database password |
-| `DATABASE_URL` | `postgresql://stockscanner:stockscanner@postgres:5432/stockscanner` | Full connection string |
+| Variable | Local Default | Docker Default | Description |
+|----------|---------------|----------------|-------------|
+| `POSTGRES_DB` | `stockscanner` | `stockscanner` | Database name |
+| `POSTGRES_USER` | `stockscanner` | `stockscanner` | Database user |
+| `POSTGRES_PASSWORD` | `stockscanner` | `stockscanner` | Database password |
+| `DATABASE_URL` | `postgresql://stockscanner:stockscanner@localhost:5432/stockscanner` | `postgresql://stockscanner:stockscanner@postgres:5432/stockscanner` | Full connection string |
 
 ## Redis / Celery
 
@@ -84,6 +73,7 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 | `SERVER_AUTH_PASSWORD` | (empty) | Required for browser login in server/Docker deployments |
 | `SERVER_AUTH_SESSION_SECRET` | (empty) | Optional cookie-signing secret; defaults to `SERVER_AUTH_PASSWORD` |
 | `SERVER_AUTH_SECURE_COOKIE` | `false` | Force Secure auth cookies; set `true` when TLS terminates at a trusted HTTPS proxy |
+| `SERVER_EXPOSE_API_DOCS` | `false` | Keep `/docs`, `/redoc`, and `/openapi.json` disabled unless you explicitly need them |
 | `ADMIN_API_KEY` | (empty) | Required for `/api/v1/config/*` endpoints |
 
 ## Docker Deployment
@@ -101,24 +91,17 @@ The SQLite database lives at `data/stockscanner.db` in the project root. Do not 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `XUI_ENABLED` | `true` | Enable Twitter/X ingestion |
+| `XUI_ENABLED` | `false` | Enable Twitter/X ingestion |
 | `XUI_CONFIG_PATH` | Platform app-data dir locally; `/app/data/xui-reader/config.toml` in Docker | Path to xui-reader config |
 | `XUI_PROFILE` | `default` | xui-reader auth profile |
 | `XUI_LIMIT_PER_SOURCE` | `50` | Max items per source fetch |
 | `XUI_NEW_ONLY` | `true` | Only fetch new items |
 | `XUI_CHECKPOINT_MODE` | `auto` | Checkpoint behavior |
-| `XUI_BRIDGE_ENABLED` | `true` | Enable browser session bridge |
+| `XUI_BRIDGE_ENABLED` | `false` | Enable browser session bridge |
 | `XUI_BRIDGE_ALLOWED_ORIGINS` | See `.env.example` | Allowed CORS origins for bridge |
 | `XUI_BRIDGE_CHALLENGE_TTL_SECONDS` | `120` | Challenge TTL |
 | `XUI_BRIDGE_MAX_COOKIES` | `300` | Max cookies to accept |
 | `TWITTER_REQUEST_DELAY` | `5.0` | Delay between fetches (seconds) |
-
-## Desktop-Specific Overrides
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DESKTOP_BOOTSTRAP_REFRESH_UNIVERSE` | `false` | Enable heavy universe refresh on first launch |
-| `DESKTOP_BOOTSTRAP_FUNDAMENTALS_LIMIT` | `0` | Number of stocks to warm fundamentals for |
 
 ## MCP Server
 

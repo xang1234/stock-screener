@@ -7,12 +7,12 @@ migration preserves those scans by backfilling them with proper typed fields.
 
 Safe to run on every startup — detects existing columns and skips if present.
 """
-import hashlib
 import json
+import hashlib
 import logging
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names
+from ..infra.db.portability import column_names, index_defs
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,12 @@ def migrate_scan_universe_schema_and_backfill(engine) -> None:
         # Step 1: Detect existing columns
         existing_columns = _get_existing_columns(conn)
         columns_added = _add_missing_columns(conn, existing_columns)
+        indexes_ensured = _ensure_indexes(conn)
 
-        if columns_added:
+        if columns_added or indexes_ensured:
             conn.commit()
             logger.info(f"Added {columns_added} new columns to scans table")
+            logger.info(f"Ensured {indexes_ensured} universe indexes on scans table")
 
         # Step 2: Backfill rows where universe_key IS NULL
         backfilled = _backfill_universe_fields(conn)
@@ -82,22 +84,30 @@ def _add_missing_columns(conn, existing_columns: set) -> int:
             logger.info(f"Added column scans.{col_name} ({col_type})")
             added += 1
 
-    # Add indexes for new columns (CREATE INDEX IF NOT EXISTS is safe)
-    if added > 0:
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_scans_universe_key ON scans(universe_key)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_scans_universe_type ON scans(universe_type)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_scans_universe_exchange ON scans(universe_exchange)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_scans_universe_index ON scans(universe_index)"
-        ))
-
     return added
+
+
+def _ensure_indexes(conn) -> int:
+    """Ensure the structured universe indexes exist even on partially migrated schemas."""
+    required_indexes = {
+        "idx_scans_universe_key": ("universe_key",),
+        "idx_scans_universe_type": ("universe_type",),
+        "idx_scans_universe_exchange": ("universe_exchange",),
+        "idx_scans_universe_index": ("universe_index",),
+    }
+    existing_indexes = {
+        tuple(index.get("columns") or [])
+        for index in index_defs(conn, "scans")
+        if index.get("columns")
+    }
+    created = 0
+    for index_name, columns in required_indexes.items():
+        if columns in existing_indexes:
+            continue
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON scans({columns[0]})"))
+        existing_indexes.add(columns)
+        created += 1
+    return created
 
 
 def _backfill_universe_fields(conn) -> int:

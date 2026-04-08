@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     server_auth_cookie_name: str = "stockscanner_session"
     server_auth_session_ttl_hours: int = 24
     server_auth_secure_cookie: bool = False
+    server_expose_api_docs: bool = False
 
     # Admin API key (required for config endpoints)
     admin_api_key: str = ""
