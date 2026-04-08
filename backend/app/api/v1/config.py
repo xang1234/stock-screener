@@ -256,8 +256,18 @@ async def get_llm_config(
         DEFAULT_MODEL_BY_USE_CASE["merge"],
     )
     if not is_model_supported_for_use_case(model_id=extraction_model_id, use_case="extraction"):
+        logger.warning(
+            "Unsupported persisted extraction model %s; falling back to %s",
+            extraction_model_id,
+            DEFAULT_MODEL_BY_USE_CASE["extraction"],
+        )
         extraction_model_id = DEFAULT_MODEL_BY_USE_CASE["extraction"]
     if not is_model_supported_for_use_case(model_id=merge_model_id, use_case="merge"):
+        logger.warning(
+            "Unsupported persisted merge model %s; falling back to %s",
+            merge_model_id,
+            DEFAULT_MODEL_BY_USE_CASE["merge"],
+        )
         merge_model_id = DEFAULT_MODEL_BY_USE_CASE["merge"]
     ollama_api_base = get_setting(db, "ollama_api_base", "http://localhost:11434")
 

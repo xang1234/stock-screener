@@ -30,6 +30,13 @@ def test_extraction_preset_defaults_to_minimax_m27() -> None:
     assert [model.model_id for model in preset.fallbacks] == ["openai/glm-4.7-flash"]
 
 
+def test_merge_preset_defaults_to_minimax_m27() -> None:
+    preset = get_preset_for_use_case("merge")
+
+    assert preset.primary.model_id == "minimax/MiniMax-M2.7"
+    assert [model.model_id for model in preset.fallbacks] == ["openai/glm-4.7-flash"]
+
+
 def test_apply_provider_overrides_injects_zai_api_key_and_base(monkeypatch) -> None:
     monkeypatch.setattr(settings, "zai_api_key", "test-zai-key")
     monkeypatch.setattr(settings, "zai_api_base", "https://api.z.ai/api/paas/v4")

@@ -61,7 +61,7 @@ class PriceCacheWarmupStore:
                 "status": "running",
                 "current": current,
                 "total": total,
-                "percent": percent or round((current / total) * 100, 1) if total > 0 else 0,
+                "percent": percent if percent is not None else (round((current / total) * 100, 1) if total > 0 else 0),
                 "updated_at": datetime.now().isoformat(),
             }
             self._redis_client.setex(self._heartbeat_key, 3600, json.dumps(heartbeat))

@@ -51,7 +51,7 @@ def _log_critical_error(
 def _redacted_database_url(database_url: str) -> str:
     try:
         return make_url(database_url).render_as_string(hide_password=True)
-    except (TypeError, ValueError, AttributeError):
+    except (TypeError, ValueError, AttributeError, SQLAlchemyError):
         return "<invalid>"
 
 
@@ -94,6 +94,16 @@ async def trigger_gapfill_on_startup():
             event="startup_gapfill_dispatch_failed",
             path="main.trigger_gapfill_on_startup",
             error_code="gapfill_dispatch_failed",
+            level=logging.WARNING,
+        )
+    except Exception as exc:
+        # Keep startup resilient even when Celery broker/client raises unexpected errors.
+        _log_critical_error(
+            message="Unexpected error dispatching IBD group rankings gap-fill task during startup",
+            exc=exc,
+            event="startup_gapfill_dispatch_failed",
+            path="main.trigger_gapfill_on_startup",
+            error_code="gapfill_dispatch_unexpected",
             level=logging.WARNING,
         )
 
@@ -238,6 +248,17 @@ async def readiness():
         )
         checks["database"] = f"error: {type(exc).__name__}"
         healthy = False
+    except Exception as exc:
+        _log_critical_error(
+            message="Unexpected database readiness probe failure",
+            exc=exc,
+            event="readiness_check_failed",
+            path="/readyz",
+            error_code="readiness_database_check_unexpected",
+            level=logging.WARNING,
+        )
+        checks["database"] = f"error: {type(exc).__name__}"
+        healthy = False
 
     # Redis check — soft dependency (degraded, not unhealthy)
     try:
@@ -256,6 +277,16 @@ async def readiness():
             event="readiness_check_failed",
             path="/readyz",
             error_code="readiness_redis_check_failed",
+            level=logging.WARNING,
+        )
+        checks["redis"] = f"warning: {type(exc).__name__}"
+    except Exception as exc:
+        _log_critical_error(
+            message="Unexpected Redis readiness probe failure",
+            exc=exc,
+            event="readiness_check_failed",
+            path="/readyz",
+            error_code="readiness_redis_check_unexpected",
             level=logging.WARNING,
         )
         checks["redis"] = f"warning: {type(exc).__name__}"

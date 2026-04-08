@@ -74,6 +74,11 @@ EXTRACTION_PRESET = ModelPreset(
     fallbacks=[ZAI_GLM_47_FLASH],
 )
 
+MERGE_PRESET = ModelPreset(
+    primary=MINIMAX_M27,
+    fallbacks=[ZAI_GLM_47_FLASH],
+)
+
 REPORT_PRESET = ModelPreset(
     primary=GROQ_QWEN3_32B,
     fallbacks=[GROQ_LLAMA_70B],
@@ -155,6 +160,7 @@ def get_preset_for_use_case(use_case: str) -> ModelPreset:
         "chatbot": CHATBOT_PRESET,
         "research": RESEARCH_PRESET,
         "extraction": EXTRACTION_PRESET,
+        "merge": MERGE_PRESET,
         "report": REPORT_PRESET,
         "compression": COMPRESSION_PRESET,
     }

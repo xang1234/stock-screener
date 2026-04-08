@@ -183,7 +183,7 @@ SPY benchmark refresh uses distributed locking to prevent thundering herd on cac
 
 ### LLM Integration
 
-Supported provider path is Groq for chatbot/research, Minimax for primary theme extraction, Gemini as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
+Supported provider path is Groq for chatbot/research, Minimax for primary theme extraction, Z.AI as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
 
 Located in `services/chatbot/` and `services/llm/`.
 

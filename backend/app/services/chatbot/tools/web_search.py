@@ -46,6 +46,15 @@ class WebSearchTool:
         self._serper_api_key = (getattr(settings, "serper_api_key", "") or "").strip()
         self._timeout = httpx.Timeout(12.0, connect=6.0)
 
+    @staticmethod
+    def _normalize_max_results(value: Any, default: int = 5) -> int:
+        """Coerce tool-call max_results values to a bounded integer."""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = default
+        return max(1, min(parsed, 10))
+
     async def search(
         self,
         query: str,
@@ -92,7 +101,27 @@ class WebSearchTool:
         max_results: int,
         search_type: SearchType,
     ) -> SearchEnvelope:
+        max_results = self._normalize_max_results(max_results)
         provider_error: Exception | None = None
+
+        if not self._tavily_api_key and not self._serper_api_key:
+            logger.error(
+                "Web search providers are not configured",
+                extra={
+                    "event": "chatbot_web_search_unavailable",
+                    "path": "chatbot.tools.web_search",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": None,
+                    "error_code": "web_search_no_providers_configured",
+                },
+            )
+            return self._format_results(
+                query=query,
+                provider="unavailable",
+                raw_results=[],
+                search_type=search_type,
+            )
 
         if self._tavily_api_key:
             try:

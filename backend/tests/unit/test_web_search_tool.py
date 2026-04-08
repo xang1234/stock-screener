@@ -70,3 +70,34 @@ async def test_web_search_returns_empty_when_no_providers_configured(monkeypatch
     assert result["provider"] == "unavailable"
     assert result["results"] == []
     assert result["references"] == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_normalizes_string_max_results(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tavily_api_key", "tavily-test")
+    monkeypatch.setattr(settings, "serper_api_key", "")
+    tool = WebSearchTool()
+
+    async def _fake_tavily(*, query: str, max_results: int, search_type: str):
+        assert max_results == 5
+        return [{"title": "Macro", "url": "https://example.com/macro", "content": "Macro update"}]
+
+    monkeypatch.setattr(tool, "_search_tavily", _fake_tavily)
+
+    result = await tool.search("macro", max_results="5")
+
+    assert result["provider"] == "tavily"
+    assert result["total_results"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_search_logs_when_no_providers_configured(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(settings, "tavily_api_key", "")
+    monkeypatch.setattr(settings, "serper_api_key", "")
+    tool = WebSearchTool()
+
+    with caplog.at_level("ERROR"):
+        result = await tool.search("macro")
+
+    assert result["provider"] == "unavailable"
+    assert any("Web search providers are not configured" in message for message in caplog.messages)

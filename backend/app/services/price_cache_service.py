@@ -457,7 +457,7 @@ class PriceCacheService:
 
             return data
 
-        except (ImportError, RuntimeError, ValueError, TypeError, OSError) as exc:
+        except Exception as exc:
             error = CacheRefreshError(
                 f"Full cache refresh failed for {symbol}: {exc}",
                 error_code="price_cache_full_refresh_failed",
@@ -569,7 +569,7 @@ class PriceCacheService:
 
             return merged_data
 
-        except (ImportError, RuntimeError, ValueError, TypeError, OSError) as exc:
+        except Exception as exc:
             error = CacheRefreshError(
                 f"Incremental cache refresh failed for {symbol}: {exc}",
                 error_code="price_cache_incremental_refresh_failed",

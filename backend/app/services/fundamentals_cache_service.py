@@ -190,6 +190,21 @@ class FundamentalsCacheService:
                         "error_code": "fundamentals_cache_redis_read_failed",
                     },
                 )
+            except Exception as exc:
+                logger.warning(
+                    "Unexpected Redis read error for %s fundamentals: %s",
+                    symbol,
+                    exc,
+                    extra={
+                        "event": "cache_refresh_failed",
+                        "path": "fundamentals_cache_service.get_fundamentals",
+                        "pipeline": None,
+                        "run_id": None,
+                        "symbol": symbol,
+                        "error_code": "fundamentals_cache_redis_read_unexpected",
+                    },
+                    exc_info=True,
+                )
 
         # Try database (slower but persistent)
         cached_data, last_update = self._get_from_database(symbol)
@@ -418,7 +433,7 @@ class FundamentalsCacheService:
 
             return fundamentals
 
-        except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        except Exception as exc:
             error = CacheRefreshError(
                 f"Fundamentals refresh failed for {symbol}: {exc}",
                 error_code="fundamentals_cache_refresh_failed",
