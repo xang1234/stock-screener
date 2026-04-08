@@ -71,118 +71,6 @@ jobs:
       - name: Test
         run: cd frontend && npm run test:run
 
-  windows-desktop:
-    name: Windows Desktop Bundle
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements-desktop.txt
-
-      - name: Install frontend dependencies
-        run: cd frontend && npm ci
-
-      - name: Build frontend for desktop bundle
-        run: cd frontend && npm run build
-        env:
-          VITE_API_URL: /api
-
-      - name: Install desktop dependencies
-        run: pip install -r backend/requirements-desktop.txt
-
-      - name: Build desktop bundle
-        run: pyinstaller backend/desktop/StockScanner.spec --noconfirm --clean
-
-      - name: Launch desktop bundle and run smoke test
-        shell: pwsh
-        run: |
-          $stdout = Join-Path $env:RUNNER_TEMP "desktop-bundle.stdout.log"
-          $stderr = Join-Path $env:RUNNER_TEMP "desktop-bundle.stderr.log"
-          $process = $null
-          $smokeExitCode = 0
-          $launchFailed = $false
-
-          try {
-            $process = Start-Process -FilePath "dist/StockScanner/StockScanner.exe" `
-              -ArgumentList "--no-browser","--port","8765" `
-              -RedirectStandardOutput $stdout `
-              -RedirectStandardError $stderr `
-              -PassThru
-
-            Start-Sleep -Seconds 5
-            if ($process.HasExited) {
-              $launchFailed = $true
-              Write-Host "Desktop bundle exited during launch"
-            } else {
-              python backend/desktop/smoke_test.py --base-url http://127.0.0.1:8765
-              $smokeExitCode = $LASTEXITCODE
-            }
-
-            if ($launchFailed -or $smokeExitCode -ne 0) {
-              if (Test-Path $stdout) {
-                Write-Host "Desktop bundle stdout:"
-                Get-Content $stdout
-              }
-              if (Test-Path $stderr) {
-                Write-Host "Desktop bundle stderr:"
-                Get-Content $stderr
-              }
-            }
-          } finally {
-            if ($process -and -not $process.HasExited) {
-              & "dist/StockScanner/StockScanner.exe" --stop
-              Start-Sleep -Seconds 2
-            }
-            if ($process -and -not $process.HasExited) {
-              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            }
-          }
-
-          if ($launchFailed) {
-            exit 1
-          }
-          exit $smokeExitCode
-
-      - name: Stop desktop bundle
-        if: always()
-        shell: pwsh
-        run: |
-          if (Test-Path "dist/StockScanner/StockScanner.exe") {
-            & "dist/StockScanner/StockScanner.exe" --stop
-          }
-
-      - name: Build Windows installer
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          choco install innosetup --yes --no-progress
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" backend\desktop\windows_installer.iss
-
-      - name: Upload installer artifact
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: dist/installer/StockScanner-Setup.exe
-
-      - name: Upload portable bundle artifact
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-portable
-          path: dist/StockScanner/
-
   publish-images:
     name: Publish Docker Images
     needs: [backend, frontend]
@@ -261,32 +149,14 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [backend, frontend, windows-desktop, publish-images]
+    needs: [backend, frontend, publish-images]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download installer artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-installer
-          path: release/
-
-      - name: Download portable artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-portable
-          path: portable/
-
-      - name: Zip portable bundle
-        run: cd portable && zip -r ../release/StockScanner-Portable.zip .
-
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            release/StockScanner-Setup.exe
-            release/StockScanner-Portable.zip

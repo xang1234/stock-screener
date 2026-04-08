@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""  # For LLM via OpenRouter (100+ models, unified billing)
     twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
     xui_enabled: bool = True  # Enable xui-reader ingestion for twitter sources
-    xui_config_path: str = ""
+    xui_config_path: str = str(_PROJECT_ROOT / "data" / "xui-reader" / "config.toml")
     xui_profile: str = "default"
     xui_limit_per_source: int = 50
     xui_new_only: bool = True

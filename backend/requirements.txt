@@ -1,1 +1,2 @@
 -r requirements-server.txt
+-r requirements-test.txt
