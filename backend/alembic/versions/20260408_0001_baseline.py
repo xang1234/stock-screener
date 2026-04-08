@@ -965,7 +965,7 @@ def upgrade() -> None:
         sa.Column('status', sa.String(length=20), nullable=True),
         sa.Column('task_id', sa.String(length=100), nullable=True),
         sa.Column('idempotency_key', sa.String(length=64), nullable=True),
-        sa.Column('trigger_source', sa.String(length=20), nullable=False, server_default=sa.text('manual')),
+        sa.Column('trigger_source', sa.String(length=20), nullable=False, server_default='manual'),
         sa.Column('feature_run_id', sa.Integer(), sa.ForeignKey('feature_runs.id'), nullable=True),
         sa.Column('started_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
