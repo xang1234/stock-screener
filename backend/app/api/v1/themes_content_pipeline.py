@@ -20,7 +20,6 @@ from ...services.theme_pipeline_state_service import (
     compute_pipeline_observability,
     compute_pipeline_state_health,
 )
-from ...tasks.theme_discovery_tasks import run_full_pipeline
 from ...theme_platform.content_browser_queries import render_content_items_csv
 from .themes_common import _VALID_THEME_PIPELINES, resolve_source_ids_for_pipeline
 
@@ -42,6 +41,7 @@ async def run_pipeline_async(
 ):
     """Start full theme discovery pipeline asynchronously."""
     from ...models.theme import ThemePipelineRun
+    from ...tasks.theme_discovery_tasks import run_full_pipeline
 
     run_id = str(uuid.uuid4())
     task = run_full_pipeline.delay(run_id=run_id, pipeline=pipeline, lookback_days=lookback_days)

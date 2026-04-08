@@ -158,6 +158,13 @@ def _fetch_content_items_with_themes_with_recovery(db, **kwargs):
                 retry_exc,
             )
             if not _corruption_targets_theme_content_storage(**kwargs):
+                logger.error(
+                    "Theme content browser detected database corruption outside rebuildable "
+                    "theme-content storage. Run backend/scripts/check_db_integrity.py --repair "
+                    "or restore the latest valid backup. Initial error: %s. Retry error: %s",
+                    exc,
+                    retry_exc,
+                )
                 raise
             _reset_corrupt_theme_content_storage(retry_exc)
             with SessionLocal() as reset_retry_db:
