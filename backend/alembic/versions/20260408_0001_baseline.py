@@ -23,7 +23,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('ix_app_settings_category', 'app_settings', ['category'])
-    op.create_index('ix_app_settings_id', 'app_settings', ['id'])
     op.create_index('ix_app_settings_key', 'app_settings', ['key'], unique=True)
 
     op.create_table('chatbot_folders',
@@ -34,7 +33,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_chatbot_folders_id', 'chatbot_folders', ['id'])
 
     op.create_table('content_items',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -54,7 +52,6 @@ def upgrade() -> None:
         sa.UniqueConstraint('source_type', 'external_id', name='uix_source_external_id'),
     )
     op.create_index('idx_content_unprocessed', 'content_items', ['is_processed', 'published_at'])
-    op.create_index('ix_content_items_id', 'content_items', ['id'])
     op.create_index('ix_content_items_is_processed', 'content_items', ['is_processed'])
     op.create_index('ix_content_items_published_at', 'content_items', ['published_at'])
     op.create_index('ix_content_items_source_id', 'content_items', ['source_id'])
@@ -75,7 +72,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('source_type', 'url', name='uix_source_type_url'),
     )
-    op.create_index('ix_content_sources_id', 'content_sources', ['id'])
     op.create_index('ix_content_sources_source_type', 'content_sources', ['source_type'])
 
     op.create_table('document_cache',
@@ -102,8 +98,6 @@ def upgrade() -> None:
     op.create_index('idx_document_cache_cik', 'document_cache', ['cik'])
     op.create_index('idx_document_cache_symbol', 'document_cache', ['symbol'])
     op.create_index('idx_document_cache_type', 'document_cache', ['document_type'])
-    op.create_index('ix_document_cache_id', 'document_cache', ['id'])
-    op.create_index('ix_document_cache_symbol', 'document_cache', ['symbol'])
 
     op.create_table('feature_runs',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False, autoincrement=True),
@@ -126,7 +120,6 @@ def upgrade() -> None:
     op.create_index('ix_feature_runs_correlation_id', 'feature_runs', ['correlation_id'])
     op.create_index('ix_feature_runs_date_status', 'feature_runs', ['as_of_date', 'status'])
     op.create_index('ix_feature_runs_exact_lookup', 'feature_runs', ['status', 'universe_hash', 'input_hash', 'published_at'])
-    op.create_index('ix_feature_runs_id', 'feature_runs', ['id'])
     op.create_index('ix_feature_runs_status', 'feature_runs', ['status'])
 
     op.create_table('filter_presets',
@@ -140,7 +133,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_filter_presets_id', 'filter_presets', ['id'])
     op.create_index('ix_filter_presets_name', 'filter_presets', ['name'], unique=True)
 
     op.create_table('ibd_group_ranks',
@@ -159,10 +151,8 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('industry_group', 'date', name='uix_ibd_group_rank_date'),
     )
-    op.create_index('idx_ibd_group_rank_date', 'ibd_group_ranks', ['industry_group', 'date'])
     op.create_index('idx_ibd_rank_by_date', 'ibd_group_ranks', ['date', 'rank'])
     op.create_index('ix_ibd_group_ranks_date', 'ibd_group_ranks', ['date'])
-    op.create_index('ix_ibd_group_ranks_id', 'ibd_group_ranks', ['id'])
     op.create_index('ix_ibd_group_ranks_industry_group', 'ibd_group_ranks', ['industry_group'])
 
     op.create_table('ibd_industry_groups',
@@ -173,8 +163,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('idx_ibd_industry_group', 'ibd_industry_groups', ['industry_group'])
-    op.create_index('ix_ibd_industry_groups_id', 'ibd_industry_groups', ['id'])
-    op.create_index('ix_ibd_industry_groups_industry_group', 'ibd_industry_groups', ['industry_group'])
     op.create_index('ix_ibd_industry_groups_symbol', 'ibd_industry_groups', ['symbol'], unique=True)
 
     op.create_table('industries',
@@ -187,9 +175,7 @@ def upgrade() -> None:
         sa.UniqueConstraint('sector_name', 'industry', name='uix_sector_industry'),
     )
     op.create_index('idx_sector', 'industries', ['sector_name'])
-    op.create_index('ix_industries_id', 'industries', ['id'])
     op.create_index('ix_industries_industry', 'industries', ['industry'])
-    op.create_index('ix_industries_sector_name', 'industries', ['sector_name'])
 
     op.create_table('industry_performance',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -206,9 +192,7 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('industry', 'date', name='uix_industry_date'),
     )
-    op.create_index('idx_industry_date', 'industry_performance', ['industry', 'date'])
     op.create_index('ix_industry_performance_date', 'industry_performance', ['date'])
-    op.create_index('ix_industry_performance_id', 'industry_performance', ['id'])
     op.create_index('ix_industry_performance_industry', 'industry_performance', ['industry'])
 
     op.create_table('institutional_ownership_history',
@@ -245,8 +229,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('idx_breadth_date', 'market_breadth', ['date'])
-    op.create_index('ix_market_breadth_date', 'market_breadth', ['date'], unique=True)
-    op.create_index('ix_market_breadth_id', 'market_breadth', ['id'])
 
     op.create_table('market_status',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -259,7 +241,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('ix_market_status_date', 'market_status', ['date'], unique=True)
-    op.create_index('ix_market_status_id', 'market_status', ['id'])
 
     op.create_table('prompt_presets',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -270,7 +251,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_prompt_presets_id', 'prompt_presets', ['id'])
     op.create_index('ix_prompt_presets_name', 'prompt_presets', ['name'], unique=True)
 
     op.create_table('provider_snapshot_runs',
@@ -290,7 +270,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_provider_snapshot_runs_key_created', 'provider_snapshot_runs', ['snapshot_key', 'created_at'])
     op.create_index('idx_provider_snapshot_runs_key_status', 'provider_snapshot_runs', ['snapshot_key', 'status'])
-    op.create_index('ix_provider_snapshot_runs_id', 'provider_snapshot_runs', ['id'])
     op.create_index('ix_provider_snapshot_runs_snapshot_key', 'provider_snapshot_runs', ['snapshot_key'])
     op.create_index('ix_provider_snapshot_runs_status', 'provider_snapshot_runs', ['status'])
 
@@ -305,7 +284,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('list_name', 'symbol', name='uix_list_symbol'),
     )
-    op.create_index('ix_scan_watchlist_id', 'scan_watchlist', ['id'])
     op.create_index('ix_scan_watchlist_list_name', 'scan_watchlist', ['list_name'])
 
     op.create_table('sector_rotation',
@@ -319,9 +297,7 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('sector', 'date', name='uix_sector_date'),
     )
-    op.create_index('idx_sector_date', 'sector_rotation', ['sector', 'date'])
     op.create_index('ix_sector_rotation_date', 'sector_rotation', ['date'])
-    op.create_index('ix_sector_rotation_id', 'sector_rotation', ['id'])
     op.create_index('ix_sector_rotation_sector', 'sector_rotation', ['sector'])
 
     op.create_table('stock_fundamentals',
@@ -418,7 +394,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('ix_stock_fundamentals_finviz_snapshot_revision', 'stock_fundamentals', ['finviz_snapshot_revision'])
-    op.create_index('ix_stock_fundamentals_id', 'stock_fundamentals', ['id'])
     op.create_index('ix_stock_fundamentals_symbol', 'stock_fundamentals', ['symbol'], unique=True)
 
     op.create_table('stock_industry',
@@ -431,7 +406,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('idx_sector_industry', 'stock_industry', ['sector', 'industry'])
-    op.create_index('ix_stock_industry_id', 'stock_industry', ['id'])
     op.create_index('ix_stock_industry_industry', 'stock_industry', ['industry'])
     op.create_index('ix_stock_industry_sector', 'stock_industry', ['sector'])
     op.create_index('ix_stock_industry_symbol', 'stock_industry', ['symbol'], unique=True)
@@ -449,9 +423,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('symbol', 'date', name='uix_symbol_date'),
     )
-    op.create_index('idx_symbol_date', 'stock_prices', ['symbol', 'date'])
     op.create_index('ix_stock_prices_date', 'stock_prices', ['date'])
-    op.create_index('ix_stock_prices_id', 'stock_prices', ['id'])
     op.create_index('ix_stock_prices_symbol', 'stock_prices', ['symbol'])
 
     op.create_table('stock_technicals',
@@ -471,7 +443,6 @@ def upgrade() -> None:
         sa.Column('vcp_score', sa.Float(), nullable=True),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_stock_technicals_id', 'stock_technicals', ['id'])
     op.create_index('ix_stock_technicals_symbol', 'stock_technicals', ['symbol'], unique=True)
 
     op.create_table('stock_universe',
@@ -501,7 +472,6 @@ def upgrade() -> None:
     op.create_index('idx_universe_sector_active', 'stock_universe', ['sector', 'is_active'])
     op.create_index('idx_universe_status_active', 'stock_universe', ['status', 'is_active'])
     op.create_index('ix_stock_universe_exchange', 'stock_universe', ['exchange'])
-    op.create_index('ix_stock_universe_id', 'stock_universe', ['id'])
     op.create_index('ix_stock_universe_is_active', 'stock_universe', ['is_active'])
     op.create_index('ix_stock_universe_is_sp500', 'stock_universe', ['is_sp500'])
     op.create_index('ix_stock_universe_sector', 'stock_universe', ['sector'])
@@ -521,7 +491,6 @@ def upgrade() -> None:
     op.create_index('idx_universe_status_events_status_created', 'stock_universe_status_events', ['new_status', 'created_at'])
     op.create_index('idx_universe_status_events_symbol_created', 'stock_universe_status_events', ['symbol', 'created_at'])
     op.create_index('ix_stock_universe_status_events_created_at', 'stock_universe_status_events', ['created_at'])
-    op.create_index('ix_stock_universe_status_events_id', 'stock_universe_status_events', ['id'])
     op.create_index('ix_stock_universe_status_events_new_status', 'stock_universe_status_events', ['new_status'])
     op.create_index('ix_stock_universe_status_events_symbol', 'stock_universe_status_events', ['symbol'])
 
@@ -539,7 +508,6 @@ def upgrade() -> None:
         sa.Column('triggered_by', sa.String(length=20), nullable=True),
     )
     op.create_index('idx_task_name_started', 'task_execution_history', ['task_name', 'started_at'])
-    op.create_index('ix_task_execution_history_id', 'task_execution_history', ['id'])
     op.create_index('ix_task_execution_history_task_name', 'task_execution_history', ['task_name'])
 
     op.create_table('theme_alerts',
@@ -558,7 +526,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_alert_unread', 'theme_alerts', ['is_read', 'triggered_at'])
     op.create_index('ix_theme_alerts_alert_type', 'theme_alerts', ['alert_type'])
-    op.create_index('ix_theme_alerts_id', 'theme_alerts', ['id'])
     op.create_index('ix_theme_alerts_theme_cluster_id', 'theme_alerts', ['theme_cluster_id'])
     op.create_index('ix_theme_alerts_triggered_at', 'theme_alerts', ['triggered_at'])
 
@@ -598,7 +565,6 @@ def upgrade() -> None:
     )
     op.create_index('ix_theme_clusters_canonical_key', 'theme_clusters', ['canonical_key'])
     op.create_index('ix_theme_clusters_category', 'theme_clusters', ['category'])
-    op.create_index('ix_theme_clusters_id', 'theme_clusters', ['id'])
     op.create_index('ix_theme_clusters_is_active', 'theme_clusters', ['is_active'])
     op.create_index('ix_theme_clusters_lifecycle_state', 'theme_clusters', ['lifecycle_state'])
     op.create_index('ix_theme_clusters_name', 'theme_clusters', ['name'])
@@ -621,8 +587,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('theme_cluster_id', 'symbol', name='uix_theme_symbol'),
     )
-    op.create_index('idx_theme_constituents', 'theme_constituents', ['theme_cluster_id', 'symbol'])
-    op.create_index('ix_theme_constituents_id', 'theme_constituents', ['id'])
     op.create_index('ix_theme_constituents_symbol', 'theme_constituents', ['symbol'])
     op.create_index('ix_theme_constituents_theme_cluster_id', 'theme_constituents', ['theme_cluster_id'])
 
@@ -639,7 +603,6 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
     op.create_index('ix_theme_embeddings_content_hash', 'theme_embeddings', ['content_hash'])
-    op.create_index('ix_theme_embeddings_id', 'theme_embeddings', ['id'])
     op.create_index('ix_theme_embeddings_is_stale', 'theme_embeddings', ['is_stale'])
     op.create_index('ix_theme_embeddings_model_version', 'theme_embeddings', ['model_version'])
     op.create_index('ix_theme_embeddings_theme_cluster_id', 'theme_embeddings', ['theme_cluster_id'], unique=True)
@@ -677,12 +640,10 @@ def upgrade() -> None:
     op.create_index('ix_theme_mentions_best_alternative_cluster_id', 'theme_mentions', ['best_alternative_cluster_id'])
     op.create_index('ix_theme_mentions_canonical_theme', 'theme_mentions', ['canonical_theme'])
     op.create_index('ix_theme_mentions_content_item_id', 'theme_mentions', ['content_item_id'])
-    op.create_index('ix_theme_mentions_id', 'theme_mentions', ['id'])
     op.create_index('ix_theme_mentions_match_method', 'theme_mentions', ['match_method'])
     op.create_index('ix_theme_mentions_match_score_model', 'theme_mentions', ['match_score_model'])
     op.create_index('ix_theme_mentions_match_score_model_version', 'theme_mentions', ['match_score_model_version'])
     op.create_index('ix_theme_mentions_mentioned_at', 'theme_mentions', ['mentioned_at'])
-    op.create_index('ix_theme_mentions_pipeline', 'theme_mentions', ['pipeline'])
     op.create_index('ix_theme_mentions_source_type', 'theme_mentions', ['source_type'])
     op.create_index('ix_theme_mentions_theme_cluster_id', 'theme_mentions', ['theme_cluster_id'])
     op.create_index('ix_theme_mentions_threshold_version', 'theme_mentions', ['threshold_version'])
@@ -702,7 +663,6 @@ def upgrade() -> None:
         sa.Column('merged_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('merged_by', sa.String(length=50), nullable=True),
     )
-    op.create_index('ix_theme_merge_history_id', 'theme_merge_history', ['id'])
     op.create_index('ix_theme_merge_history_merge_type', 'theme_merge_history', ['merge_type'])
     op.create_index('ix_theme_merge_history_merged_at', 'theme_merge_history', ['merged_at'])
 
@@ -727,7 +687,6 @@ def upgrade() -> None:
     )
     op.create_index('ix_theme_merge_suggestions_approval_idempotency_key', 'theme_merge_suggestions', ['approval_idempotency_key'])
     op.create_index('ix_theme_merge_suggestions_created_at', 'theme_merge_suggestions', ['created_at'])
-    op.create_index('ix_theme_merge_suggestions_id', 'theme_merge_suggestions', ['id'])
     op.create_index('ix_theme_merge_suggestions_pair_max_cluster_id', 'theme_merge_suggestions', ['pair_max_cluster_id'])
     op.create_index('ix_theme_merge_suggestions_pair_min_cluster_id', 'theme_merge_suggestions', ['pair_min_cluster_id'])
     op.create_index('ix_theme_merge_suggestions_source_cluster_id', 'theme_merge_suggestions', ['source_cluster_id'])
@@ -763,11 +722,9 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('theme_cluster_id', 'date', name='uix_theme_metrics_date'),
     )
-    op.create_index('idx_theme_metrics_date', 'theme_metrics', ['theme_cluster_id', 'date'])
     op.create_index('idx_theme_metrics_pipeline_date', 'theme_metrics', ['pipeline', 'date'])
     op.create_index('idx_theme_rank', 'theme_metrics', ['date', 'rank'])
     op.create_index('ix_theme_metrics_date', 'theme_metrics', ['date'])
-    op.create_index('ix_theme_metrics_id', 'theme_metrics', ['id'])
     op.create_index('ix_theme_metrics_theme_cluster_id', 'theme_metrics', ['theme_cluster_id'])
 
     op.create_table('theme_pipeline_runs',
@@ -788,7 +745,6 @@ def upgrade() -> None:
         sa.Column('started_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index('ix_theme_pipeline_runs_id', 'theme_pipeline_runs', ['id'])
     op.create_index('ix_theme_pipeline_runs_pipeline', 'theme_pipeline_runs', ['pipeline'])
     op.create_index('ix_theme_pipeline_runs_run_id', 'theme_pipeline_runs', ['run_id'], unique=True)
 
@@ -809,7 +765,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_validation_symbol_unresolved', 'ticker_validation_log', ['symbol', 'is_resolved', 'detected_at'])
     op.create_index('idx_validation_unresolved', 'ticker_validation_log', ['is_resolved', 'detected_at'])
-    op.create_index('ix_ticker_validation_log_id', 'ticker_validation_log', ['id'])
     op.create_index('ix_ticker_validation_log_is_resolved', 'ticker_validation_log', ['is_resolved'])
     op.create_index('ix_ticker_validation_log_symbol', 'ticker_validation_log', ['symbol'])
 
@@ -836,7 +791,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_user_themes_id', 'user_themes', ['id'])
     op.create_index('ix_user_themes_name', 'user_themes', ['name'], unique=True)
 
     op.create_table('user_watchlists',
@@ -848,7 +802,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_user_watchlists_id', 'user_watchlists', ['id'])
     op.create_index('ix_user_watchlists_name', 'user_watchlists', ['name'], unique=True)
 
     op.create_table('watchlist',
@@ -857,7 +810,6 @@ def upgrade() -> None:
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('added_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_watchlist_id', 'watchlist', ['id'])
     op.create_index('ix_watchlist_symbol', 'watchlist', ['symbol'], unique=True)
 
     op.create_table('chatbot_conversations',
@@ -871,7 +823,6 @@ def upgrade() -> None:
         sa.Column('folder_id', sa.Integer(), sa.ForeignKey('chatbot_folders.id', ondelete='SET NULL'), nullable=True),
     )
     op.create_index('ix_chatbot_conversations_conversation_id', 'chatbot_conversations', ['conversation_id'], unique=True)
-    op.create_index('ix_chatbot_conversations_id', 'chatbot_conversations', ['id'])
 
     op.create_table('content_item_pipeline_state',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -893,7 +844,6 @@ def upgrade() -> None:
     op.create_index('idx_cips_pipeline_status_created', 'content_item_pipeline_state', ['pipeline', 'status', 'created_at'])
     op.create_index('idx_cips_pipeline_status_last_attempt', 'content_item_pipeline_state', ['pipeline', 'status', 'last_attempt_at'])
     op.create_index('idx_cips_updated_at', 'content_item_pipeline_state', ['updated_at'])
-    op.create_index('ix_content_item_pipeline_state_id', 'content_item_pipeline_state', ['id'])
 
     op.create_table('document_chunks',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -908,8 +858,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_document_chunks_document', 'document_chunks', ['document_id'])
     op.create_index('idx_document_chunks_section', 'document_chunks', ['section_name'])
-    op.create_index('ix_document_chunks_document_id', 'document_chunks', ['document_id'])
-    op.create_index('ix_document_chunks_id', 'document_chunks', ['id'])
 
     op.create_table('feature_run_pointers',
         sa.Column('key', sa.Text(), primary_key=True, nullable=False),
@@ -944,7 +892,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_provider_snapshot_rows_run_exchange', 'provider_snapshot_rows', ['run_id', 'exchange'])
     op.create_index('ix_provider_snapshot_rows_exchange', 'provider_snapshot_rows', ['exchange'])
-    op.create_index('ix_provider_snapshot_rows_id', 'provider_snapshot_rows', ['id'])
     op.create_index('ix_provider_snapshot_rows_run_id', 'provider_snapshot_rows', ['run_id'])
     op.create_index('ix_provider_snapshot_rows_symbol', 'provider_snapshot_rows', ['symbol'])
 
@@ -971,7 +918,6 @@ def upgrade() -> None:
         sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index('ix_scans_feature_run_id', 'scans', ['feature_run_id'])
-    op.create_index('ix_scans_id', 'scans', ['id'])
     op.create_index('ix_scans_idempotency_key', 'scans', ['idempotency_key'], unique=True)
     op.create_index('ix_scans_scan_id', 'scans', ['scan_id'], unique=True)
     op.create_index('ix_scans_trigger_source', 'scans', ['trigger_source'])
@@ -1016,7 +962,6 @@ def upgrade() -> None:
     op.create_index('idx_theme_alias_cluster_active', 'theme_aliases', ['theme_cluster_id', 'is_active'])
     op.create_index('idx_theme_alias_source_confidence', 'theme_aliases', ['source', 'confidence'])
     op.create_index('ix_theme_aliases_alias_key', 'theme_aliases', ['alias_key'])
-    op.create_index('ix_theme_aliases_id', 'theme_aliases', ['id'])
     op.create_index('ix_theme_aliases_is_active', 'theme_aliases', ['is_active'])
     op.create_index('ix_theme_aliases_pipeline', 'theme_aliases', ['pipeline'])
     op.create_index('ix_theme_aliases_theme_cluster_id', 'theme_aliases', ['theme_cluster_id'])
@@ -1033,7 +978,6 @@ def upgrade() -> None:
         sa.Column('transition_metadata', sa.JSON(), nullable=True),
         sa.Column('transitioned_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
     )
-    op.create_index('ix_theme_lifecycle_transitions_id', 'theme_lifecycle_transitions', ['id'])
     op.create_index('ix_theme_lifecycle_transitions_theme_cluster_id', 'theme_lifecycle_transitions', ['theme_cluster_id'])
     op.create_index('ix_theme_lifecycle_transitions_to_state', 'theme_lifecycle_transitions', ['to_state'])
     op.create_index('ix_theme_lifecycle_transitions_transitioned_at', 'theme_lifecycle_transitions', ['transitioned_at'])
@@ -1056,7 +1000,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_theme_relationship_source_active', 'theme_relationships', ['source_cluster_id', 'is_active'])
     op.create_index('idx_theme_relationship_target_active', 'theme_relationships', ['target_cluster_id', 'is_active'])
-    op.create_index('ix_theme_relationships_id', 'theme_relationships', ['id'])
     op.create_index('ix_theme_relationships_is_active', 'theme_relationships', ['is_active'])
     op.create_index('ix_theme_relationships_pipeline', 'theme_relationships', ['pipeline'])
     op.create_index('ix_theme_relationships_relationship_type', 'theme_relationships', ['relationship_type'])
@@ -1082,7 +1025,6 @@ def upgrade() -> None:
         sa.UniqueConstraint('theme_id', 'name', name='uix_theme_subgroup_name'),
     )
     op.create_index('idx_theme_subgroup', 'user_theme_subgroups', ['theme_id', 'position'])
-    op.create_index('ix_user_theme_subgroups_id', 'user_theme_subgroups', ['id'])
     op.create_index('ix_user_theme_subgroups_theme_id', 'user_theme_subgroups', ['theme_id'])
 
     op.create_table('watchlist_items',
@@ -1097,7 +1039,6 @@ def upgrade() -> None:
         sa.UniqueConstraint('watchlist_id', 'symbol', name='uix_watchlist_symbol'),
     )
     op.create_index('idx_watchlist_item', 'watchlist_items', ['watchlist_id', 'position'])
-    op.create_index('ix_watchlist_items_id', 'watchlist_items', ['id'])
     op.create_index('ix_watchlist_items_watchlist_id', 'watchlist_items', ['watchlist_id'])
 
     op.create_table('chatbot_messages',
@@ -1117,7 +1058,6 @@ def upgrade() -> None:
     )
     op.create_index('idx_conversation_messages', 'chatbot_messages', ['conversation_id', 'created_at'])
     op.create_index('ix_chatbot_messages_conversation_id', 'chatbot_messages', ['conversation_id'])
-    op.create_index('ix_chatbot_messages_id', 'chatbot_messages', ['id'])
 
     op.create_table('ibd_group_peer_cache',
         sa.Column('id', sa.Integer(), primary_key=True, nullable=False),
@@ -1134,8 +1074,6 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
         sa.UniqueConstraint('scan_id', 'industry_group', name='uix_scan_group'),
     )
-    op.create_index('idx_scan_group', 'ibd_group_peer_cache', ['scan_id', 'industry_group'])
-    op.create_index('ix_ibd_group_peer_cache_id', 'ibd_group_peer_cache', ['id'])
     op.create_index('ix_ibd_group_peer_cache_industry_group', 'ibd_group_peer_cache', ['industry_group'])
     op.create_index('ix_ibd_group_peer_cache_scan_id', 'ibd_group_peer_cache', ['scan_id'])
 
@@ -1249,7 +1187,6 @@ def upgrade() -> None:
     op.create_index('ix_scan_results_gics_sector', 'scan_results', ['gics_sector'])
     op.create_index('ix_scan_results_ibd_group_rank', 'scan_results', ['ibd_group_rank'])
     op.create_index('ix_scan_results_ibd_industry_group', 'scan_results', ['ibd_industry_group'])
-    op.create_index('ix_scan_results_id', 'scan_results', ['id'])
     op.create_index('ix_scan_results_ipo_date', 'scan_results', ['ipo_date'])
     op.create_index('ix_scan_results_market_cap', 'scan_results', ['market_cap'])
     op.create_index('ix_scan_results_peg_ratio', 'scan_results', ['peg_ratio'])
@@ -1285,7 +1222,6 @@ def upgrade() -> None:
         sa.UniqueConstraint('subgroup_id', 'symbol', name='uix_subgroup_symbol'),
     )
     op.create_index('idx_subgroup_stock', 'user_theme_stocks', ['subgroup_id', 'position'])
-    op.create_index('ix_user_theme_stocks_id', 'user_theme_stocks', ['id'])
     op.create_index('ix_user_theme_stocks_subgroup_id', 'user_theme_stocks', ['subgroup_id'])
 
     op.create_table('chatbot_agent_executions',
@@ -1303,7 +1239,6 @@ def upgrade() -> None:
         sa.Column('error_message', sa.Text(), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True, server_default=sa.text('now()')),
     )
-    op.create_index('ix_chatbot_agent_executions_id', 'chatbot_agent_executions', ['id'])
     op.create_index('ix_chatbot_agent_executions_message_id', 'chatbot_agent_executions', ['message_id'])
 
 
