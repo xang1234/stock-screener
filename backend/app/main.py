@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.engine import make_url
 
 from .config import settings
 from .database import engine
@@ -16,6 +17,13 @@ from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
 
 logger = logging.getLogger(__name__)
+
+
+def _redacted_database_url(database_url: str) -> str:
+    try:
+        return make_url(database_url).render_as_string(hide_password=True)
+    except Exception:
+        return "<invalid>"
 
 
 async def trigger_gapfill_on_startup():
@@ -71,7 +79,7 @@ def initialize_runtime() -> None:
     logger.info(
         "Starting Stock Scanner API",
         extra={
-            "database_url": settings.database_url,
+            "database_url": _redacted_database_url(settings.database_url),
             "cors_origins": settings.cors_origins_list,
         },
     )
@@ -101,7 +109,7 @@ async def lifespan(app: FastAPI):
 
 
 def _docs_enabled() -> bool:
-    return settings.server_expose_api_docs or not settings.server_auth_enabled
+    return settings.server_expose_api_docs
 
 
 _docs_url = "/docs" if _docs_enabled() else None
@@ -134,13 +142,15 @@ _READINESS_TABLES = ("scans", "scan_results", "stock_universe")
 @app.get("/")
 async def root():
     """Return API information."""
-    return {
+    payload = {
         "name": "Stock Scanner API",
         "version": "0.1.0",
         "description": "CANSLIM + Minervini stock scanner",
-        "docs": "/docs",
-        "status": "running"
+        "status": "running",
     }
+    if _docs_url is not None:
+        payload["docs"] = _docs_url
+    return payload
 
 
 @app.get("/livez")

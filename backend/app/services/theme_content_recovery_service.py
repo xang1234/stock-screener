@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _THEME_CONTENT_STORAGE_LOCK = Lock()
 _THEME_CONTENT_RESET_LOOKBACK_DAYS = 365
+_THEME_CONTENT_RESET_ADVISORY_LOCK_KEY = 497230140118562871
 _THEME_CONTENT_REINDEX_TARGETS = (
     "content_items",
     "content_sources",
@@ -57,10 +58,10 @@ def reset_corrupt_theme_content_storage(exc: Exception) -> None:
     )
     with _THEME_CONTENT_STORAGE_LOCK:
         with engine.begin() as conn:
+            _acquire_theme_content_reset_lock(conn)
             drop_theme_content_tables(conn)
-        with engine.begin() as conn:
             rewind_theme_content_source_cursors(conn)
-        recreate_theme_content_tables()
+            recreate_theme_content_tables(conn)
 
 
 def drop_theme_content_tables(conn) -> None:
@@ -76,11 +77,21 @@ def force_forget_theme_content_tables(conn) -> None:
     drop_theme_content_tables(conn)
 
 
-def recreate_theme_content_tables() -> None:
+def _acquire_theme_content_reset_lock(conn) -> None:
+    """Serialize corruption resets across PostgreSQL workers within the transaction."""
+    if not is_postgres(conn):
+        return
+    conn.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _THEME_CONTENT_RESET_ADVISORY_LOCK_KEY},
+    )
+
+
+def recreate_theme_content_tables(conn) -> None:
     """Recreate theme content storage tables after a corruption reset."""
-    ContentItem.__table__.create(bind=engine, checkfirst=True)
-    ThemeMention.__table__.create(bind=engine, checkfirst=True)
-    ContentItemPipelineState.__table__.create(bind=engine, checkfirst=True)
+    ContentItem.__table__.create(bind=conn, checkfirst=True)
+    ThemeMention.__table__.create(bind=conn, checkfirst=True)
+    ContentItemPipelineState.__table__.create(bind=conn, checkfirst=True)
 
 
 def rewind_theme_content_source_cursors(conn) -> None:

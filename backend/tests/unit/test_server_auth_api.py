@@ -4,6 +4,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+import app.main as main_app
 from app.main import app
 
 
@@ -163,3 +164,19 @@ async def test_login_cookie_can_be_forced_secure_with_explicit_setting(client, m
 
     assert response.status_code == 200
     assert "Secure" in response.headers["set-cookie"]
+
+
+def test_docs_gate_requires_explicit_exposure(monkeypatch):
+    monkeypatch.setattr(main_app.settings, "server_expose_api_docs", False)
+    monkeypatch.setattr(main_app.settings, "server_auth_enabled", False)
+
+    assert main_app._docs_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_root_omits_docs_when_docs_disabled(monkeypatch):
+    monkeypatch.setattr(main_app, "_docs_url", None)
+
+    payload = await main_app.root()
+
+    assert "docs" not in payload

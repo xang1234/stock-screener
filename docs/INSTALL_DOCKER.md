@@ -153,6 +153,11 @@ pg_restore -d <database> <dump-file>
 
 Older installs that already have a populated PostgreSQL schema but no `alembic_version` marker should run the one-shot reconciliation script before the first post-upgrade boot:
 
+Use the same Compose file stack you deployed with for both commands below. Examples:
+- Local/default stack: `docker-compose ...`
+- Production overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml ...`
+- HTTPS overlay: `docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml ...`
+
 ```bash
 docker-compose run --rm backend python scripts/run_legacy_runtime_migrations.py
 docker-compose run --rm backend alembic upgrade head

@@ -13,12 +13,14 @@ def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
     monkeypatch: pytest.MonkeyPatch,
 ):
     calls: list[str] = []
+    begin_calls = {"count": 0}
 
     class _DummyConn:
         pass
 
     class _DummyBegin:
         def __enter__(self):
+            begin_calls["count"] += 1
             return _DummyConn()
 
         def __exit__(self, exc_type, exc, tb):
@@ -29,13 +31,22 @@ def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
             return _DummyBegin()
 
     monkeypatch.setattr(recovery_service, "engine", _DummyEngine())
+    monkeypatch.setattr(
+        recovery_service,
+        "_acquire_theme_content_reset_lock",
+        lambda conn: calls.append("lock"),
+    )
     monkeypatch.setattr(recovery_service, "drop_theme_content_tables", lambda conn: calls.append("drop"))
     monkeypatch.setattr(
         recovery_service,
         "rewind_theme_content_source_cursors",
         lambda conn: calls.append("rewind"),
     )
-    monkeypatch.setattr(recovery_service, "recreate_theme_content_tables", lambda: calls.append("recreate"))
+    monkeypatch.setattr(
+        recovery_service,
+        "recreate_theme_content_tables",
+        lambda conn: calls.append("recreate"),
+    )
 
     themes_api._reset_corrupt_theme_content_storage(
         DatabaseError(
@@ -45,4 +56,5 @@ def test_reset_corrupt_theme_content_storage_recreates_immediately_after_rewind(
         )
     )
 
-    assert calls == ["drop", "rewind", "recreate"]
+    assert begin_calls["count"] == 1
+    assert calls == ["lock", "drop", "rewind", "recreate"]

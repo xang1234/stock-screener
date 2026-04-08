@@ -46,12 +46,12 @@ Enables research mode in the chatbot.
 
 ### PostgreSQL
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_DB` | `stockscanner` | Database name |
-| `POSTGRES_USER` | `stockscanner` | Database user |
-| `POSTGRES_PASSWORD` | `stockscanner` | Database password |
-| `DATABASE_URL` | `postgresql://stockscanner:stockscanner@postgres:5432/stockscanner` | Full connection string |
+| Variable | Local Default | Docker Default | Description |
+|----------|---------------|----------------|-------------|
+| `POSTGRES_DB` | `stockscanner` | `stockscanner` | Database name |
+| `POSTGRES_USER` | `stockscanner` | `stockscanner` | Database user |
+| `POSTGRES_PASSWORD` | `stockscanner` | `stockscanner` | Database password |
+| `DATABASE_URL` | `postgresql://stockscanner:stockscanner@localhost:5432/stockscanner` | `postgresql://stockscanner:stockscanner@postgres:5432/stockscanner` | Full connection string |
 
 ## Redis / Celery
 

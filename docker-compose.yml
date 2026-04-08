@@ -60,7 +60,7 @@ x-worker-common: &worker-common
     - ./data:/app/data
   depends_on:
     backend:
-      condition: service_started
+      condition: service_healthy
     postgres:
       condition: service_healthy
     redis:
@@ -137,7 +137,7 @@ services:
       - ./data:/app/data
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
