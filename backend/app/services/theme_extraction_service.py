@@ -1121,40 +1121,52 @@ Example themes for this pipeline: {examples_str}
             TypeError,
             RuntimeError,
         ) as error:
-            self.db.rollback()
-
-            item_for_failure = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
-            if item_for_failure is None:
-                return False, 0
-
-            failure_state = self._load_pipeline_state(item_id)
-            if failure_state is None:
-                failure_state = ContentItemPipelineState(
-                    content_item_id=item_id,
-                    pipeline=self.pipeline,
-                    status="in_progress",
-                    attempt_count=1,
-                    last_attempt_at=datetime.utcnow(),
-                )
-                self.db.add(failure_state)
-
-            failure_state.status = self._classify_failure_status(error)
-            failure_state.last_attempt_at = datetime.utcnow()
-            failure_state.error_code = self._failure_code(error)
-            failure_state.error_message = str(error)[:4000]
-            failure_state.processed_at = None
-
-            # Compatibility writes
-            if isinstance(error, ThemeExtractionParseError):
-                item_for_failure.is_processed = False
-                item_for_failure.processed_at = None
-            else:
-                item_for_failure.is_processed = True
-                item_for_failure.processed_at = datetime.utcnow()
-            item_for_failure.extraction_error = str(error)
-
-            self.db.commit()
+            self._record_processing_failure(item_id=item_id, error=error)
             raise
+        except Exception as error:
+            logger.exception(
+                "Unexpected extraction failure while processing content item %s; "
+                "recording failure state to avoid stuck in_progress rows",
+                item_id,
+            )
+            self._record_processing_failure(item_id=item_id, error=error)
+            raise
+
+    def _record_processing_failure(self, item_id: int, error: Exception) -> None:
+        """Persist failure details so pipeline rows do not remain stuck in-progress."""
+        self.db.rollback()
+
+        item_for_failure = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
+        if item_for_failure is None:
+            return
+
+        failure_state = self._load_pipeline_state(item_id)
+        if failure_state is None:
+            failure_state = ContentItemPipelineState(
+                content_item_id=item_id,
+                pipeline=self.pipeline,
+                status="in_progress",
+                attempt_count=1,
+                last_attempt_at=datetime.utcnow(),
+            )
+            self.db.add(failure_state)
+
+        failure_state.status = self._classify_failure_status(error)
+        failure_state.last_attempt_at = datetime.utcnow()
+        failure_state.error_code = self._failure_code(error)
+        failure_state.error_message = str(error)[:4000]
+        failure_state.processed_at = None
+
+        # Compatibility writes
+        if isinstance(error, ThemeExtractionParseError):
+            item_for_failure.is_processed = False
+            item_for_failure.processed_at = None
+        else:
+            item_for_failure.is_processed = True
+            item_for_failure.processed_at = datetime.utcnow()
+        item_for_failure.extraction_error = str(error)
+
+        self.db.commit()
 
     def _normalize_theme(self, theme: str) -> str:
         """
