@@ -1,0 +1,2 @@
+"""Theme platform application slice."""
+
