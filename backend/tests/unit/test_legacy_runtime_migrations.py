@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, text
 
-from app.db_migrations.universe_migration import migrate_scan_universe_schema_and_backfill
+from app.db_migrations.universe_migration import _ensure_indexes, migrate_scan_universe_schema_and_backfill
 from app.infra.db.legacy_runtime_migrations import (
     _THEME_MERGE_SAFETY_REQUIRED_COLUMNS,
     _THEME_MERGE_SAFETY_REQUIRED_INDEXES,
@@ -109,4 +109,45 @@ def test_universe_migration_ensures_indexes_for_partially_migrated_scans_schema(
         "idx_scans_universe_exchange",
         "idx_scans_universe_index",
     }.issubset(indexes)
+    engine.dispose()
+
+
+def test_universe_index_ensure_reuses_equivalent_existing_indexes():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE scans (
+                    id INTEGER PRIMARY KEY,
+                    scan_id TEXT,
+                    universe TEXT,
+                    universe_key TEXT,
+                    universe_type TEXT,
+                    universe_exchange TEXT,
+                    universe_index TEXT,
+                    universe_symbols TEXT
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX custom_key_idx ON scans(universe_key)"))
+        conn.execute(text("CREATE INDEX custom_type_idx ON scans(universe_type)"))
+        conn.execute(text("CREATE INDEX custom_exchange_idx ON scans(universe_exchange)"))
+        conn.execute(text("CREATE INDEX custom_index_idx ON scans(universe_index)"))
+
+        created = _ensure_indexes(conn)
+
+    with engine.connect() as conn:
+        indexes = {
+            index["name"]
+            for index in index_defs(conn, "scans")
+            if index.get("name")
+        }
+
+    assert created == 0
+    assert "idx_scans_universe_key" not in indexes
+    assert "idx_scans_universe_type" not in indexes
+    assert "idx_scans_universe_exchange" not in indexes
+    assert "idx_scans_universe_index" not in indexes
     engine.dispose()

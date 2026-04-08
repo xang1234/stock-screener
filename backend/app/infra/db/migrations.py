@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _ALEMBIC_INI = _BACKEND_ROOT / "alembic.ini"
 _ALEMBIC_SCRIPT_LOCATION = _BACKEND_ROOT / "alembic"
+_BASELINE_REVISION = "20260408_0001"
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -54,6 +55,8 @@ def migrate_database_to_head(engine: Engine, revision: str = "head") -> str:
     if has_user_tables and not has_version_table:
         logger.info("Reconciling legacy pre-Alembic schema before upgrade to %s", revision)
         reconcile_legacy_runtime_schema(engine)
+        logger.info("Stamping baseline revision %s for reconciled legacy schema", _BASELINE_REVISION)
+        command.stamp(config, _BASELINE_REVISION)
         logger.info("Legacy schema reconciliation completed; running Alembic upgrade to %s", revision)
         command.upgrade(config, revision)
         return "reconciled"

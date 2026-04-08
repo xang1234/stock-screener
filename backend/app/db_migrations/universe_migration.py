@@ -12,7 +12,7 @@ import hashlib
 import logging
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names
+from ..infra.db.portability import column_names, index_defs
 
 logger = logging.getLogger(__name__)
 
@@ -89,15 +89,25 @@ def _add_missing_columns(conn, existing_columns: set) -> int:
 
 def _ensure_indexes(conn) -> int:
     """Ensure the structured universe indexes exist even on partially migrated schemas."""
-    statements = (
-        "CREATE INDEX IF NOT EXISTS idx_scans_universe_key ON scans(universe_key)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_universe_type ON scans(universe_type)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_universe_exchange ON scans(universe_exchange)",
-        "CREATE INDEX IF NOT EXISTS idx_scans_universe_index ON scans(universe_index)",
-    )
-    for statement in statements:
-        conn.execute(text(statement))
-    return len(statements)
+    required_indexes = {
+        "idx_scans_universe_key": ("universe_key",),
+        "idx_scans_universe_type": ("universe_type",),
+        "idx_scans_universe_exchange": ("universe_exchange",),
+        "idx_scans_universe_index": ("universe_index",),
+    }
+    existing_indexes = {
+        tuple(index.get("columns") or [])
+        for index in index_defs(conn, "scans")
+        if index.get("columns")
+    }
+    created = 0
+    for index_name, columns in required_indexes.items():
+        if columns in existing_indexes:
+            continue
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON scans({columns[0]})"))
+        existing_indexes.add(columns)
+        created += 1
+    return created
 
 
 def _backfill_universe_fields(conn) -> int:
