@@ -111,7 +111,7 @@ def _get_table_indexes(conn) -> set[str]:
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
-    timestamp_type = 'TIMESTAMP'
+    timestamp_type = 'TIMESTAMP WITH TIME ZONE'
     active_default = 'TRUE'
     add_statements = {
         "source_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN source_cluster_id INTEGER",

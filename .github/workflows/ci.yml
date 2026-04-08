@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt
+        run: pip install -r backend/requirements.txt -r backend/requirements-test.txt
 
       - name: "Gate 0: Theme identity invariants"
         run: make gate-identity

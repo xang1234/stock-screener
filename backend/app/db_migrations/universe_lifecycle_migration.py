@@ -280,7 +280,7 @@ def migrate_universe_lifecycle(engine) -> None:
 
         legacy_columns = _get_columns(conn, "stock_universe")
 
-        timestamp_type = 'TIMESTAMP'
+        timestamp_type = 'TIMESTAMP WITH TIME ZONE'
         add_columns = {
             "status": "ALTER TABLE stock_universe ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
             "status_reason": "ALTER TABLE stock_universe ADD COLUMN status_reason TEXT",

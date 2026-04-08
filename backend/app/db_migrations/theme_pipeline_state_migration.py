@@ -212,10 +212,10 @@ def _add_missing_columns(conn) -> list[str]:
         "attempt_count": "ALTER TABLE content_item_pipeline_state ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
         "error_code": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_code TEXT",
         "error_message": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_message TEXT",
-        "last_attempt_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at TIMESTAMP",
-        "processed_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at TIMESTAMP",
-        "created_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-        "updated_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "last_attempt_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at TIMESTAMP WITH TIME ZONE",
+        "processed_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at TIMESTAMP WITH TIME ZONE",
+        "created_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }
     added: list[str] = []
     for column, ddl in column_ddl.items():

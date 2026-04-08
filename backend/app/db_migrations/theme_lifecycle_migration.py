@@ -26,7 +26,7 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
     }
     with engine.connect() as conn:
         columns = _get_table_columns(conn, THEME_TABLE)
-        timestamp_type = 'TIMESTAMP'
+        timestamp_type = 'TIMESTAMP WITH TIME ZONE'
         active_true = 'TRUE'
         active_false = 'FALSE'
         add_statements = {

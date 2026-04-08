@@ -1,11 +1,18 @@
 """Database setup and session management using SQLAlchemy."""
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 from .config import settings
 
+_parsed_url = make_url(settings.database_url)
+if _parsed_url.get_backend_name() != "postgresql":
+    raise ValueError(
+        f"Only PostgreSQL is supported. Got DATABASE_URL with backend "
+        f"'{_parsed_url.get_backend_name()}'. Use: postgresql://user:pass@host/dbname"
+    )
 
 engine = create_engine(
     settings.database_url,
