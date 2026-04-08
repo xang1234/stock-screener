@@ -9,14 +9,12 @@ vi.mock('./pages/ThemesPage', () => ({ default: () => <div>Live Themes Page</div
 vi.mock('./pages/ChatbotPage', () => ({ default: () => <div>Live Chatbot Page</div> }));
 vi.mock('./components/Stock/StockDetails', () => ({ default: () => <div>Live Stock Details</div> }));
 vi.mock('./components/Layout/Layout', () => ({ default: ({ children }) => <div>{children}</div> }));
-vi.mock('./components/App/DesktopSetupScreen', () => ({ default: () => <div>Desktop Setup</div> }));
 vi.mock('./components/App/ServerLoginScreen', () => ({ default: () => <div>Server Login</div> }));
 vi.mock('./contexts/PipelineContext', () => ({ PipelineProvider: ({ children }) => <>{children}</> }));
 vi.mock('./contexts/RuntimeContext', () => ({
   RuntimeProvider: ({ children }) => <>{children}</>,
   useRuntime: () => ({
     auth: null,
-    desktopMode: false,
     features: {
       themes: true,
       chatbot: true,
@@ -25,7 +23,6 @@ vi.mock('./contexts/RuntimeContext', () => ({
     login: vi.fn(),
     loginError: null,
     runtimeReady: true,
-    setupRequired: false,
   }),
 }));
 vi.mock('./components/Scan/FilterPanel', () => ({

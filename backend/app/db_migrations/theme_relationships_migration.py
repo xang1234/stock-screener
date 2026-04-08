@@ -9,11 +9,7 @@ from sqlalchemy import text
 from ..infra.db.portability import (
     column_names,
     index_names,
-    is_sqlite,
-    sql_bool_literal,
-    sql_timestamp_type,
     table_names,
-    trigger_names,
 )
 from ..models.theme import ThemeRelationship
 
@@ -42,19 +38,12 @@ EXPECTED_INDEXES = {
     "idx_theme_relationships_pair_type",
 }
 
-EXPECTED_TRIGGERS = {
-    "trg_theme_relationship_validate_insert",
-    "trg_theme_relationship_validate_update",
-}
-
-
 def migrate_theme_relationships(engine) -> dict[str, Any]:
     """Create/patch theme_relationships schema idempotently."""
     stats: dict[str, Any] = {
         "table_created": False,
         "columns_added": [],
         "indexes_ensured": [],
-        "triggers_ensured": [],
         "rows_normalized": 0,
         "self_edges_removed": 0,
     }
@@ -62,32 +51,7 @@ def migrate_theme_relationships(engine) -> dict[str, Any]:
     with engine.connect() as conn:
         tables = _get_existing_tables(conn)
         if TABLE_NAME not in tables:
-            if is_sqlite(conn):
-                conn.execute(
-                    text(
-                        """
-                        CREATE TABLE IF NOT EXISTS theme_relationships (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            source_cluster_id INTEGER NOT NULL,
-                            target_cluster_id INTEGER NOT NULL,
-                            pipeline TEXT NOT NULL DEFAULT 'technical',
-                            relationship_type TEXT NOT NULL,
-                            confidence FLOAT NOT NULL DEFAULT 0.5,
-                            provenance TEXT NOT NULL DEFAULT 'rule_inference',
-                            evidence JSON,
-                            is_active BOOLEAN NOT NULL DEFAULT 1,
-                            created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                            updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                            CHECK (relationship_type IN ('subset', 'related', 'distinct')),
-                            CHECK (source_cluster_id != target_cluster_id),
-                            FOREIGN KEY (source_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE,
-                            FOREIGN KEY (target_cluster_id) REFERENCES theme_clusters(id) ON DELETE CASCADE
-                        )
-                        """
-                    )
-                )
-            else:
-                ThemeRelationship.__table__.create(bind=conn, checkfirst=True)
+            ThemeRelationship.__table__.create(bind=conn, checkfirst=True)
             stats["table_created"] = True
         else:
             stats["columns_added"] = _add_missing_columns(conn)
@@ -110,7 +74,6 @@ def migrate_theme_relationships(engine) -> dict[str, Any]:
         stats["self_edges_removed"] = int(removed.rowcount or 0)
 
         stats["indexes_ensured"] = _ensure_indexes(conn)
-        stats["triggers_ensured"] = _ensure_validation_triggers(conn)
         conn.commit()
 
     logger.info("Theme relationships migration completed: %s", stats)
@@ -124,16 +87,13 @@ def verify_theme_relationships_schema(engine) -> dict[str, Any]:
         table_exists = TABLE_NAME in tables
         columns = _get_table_columns(conn) if table_exists else set()
         indexes = _get_table_indexes(conn) if table_exists else set()
-        triggers = _get_table_triggers(conn) if table_exists else set()
         missing_columns = sorted(REQUIRED_COLUMNS - columns)
         missing_indexes = sorted(EXPECTED_INDEXES - indexes)
-        missing_triggers = sorted(EXPECTED_TRIGGERS - triggers) if is_sqlite(conn) else []
         return {
             "table_exists": table_exists,
             "missing_columns": missing_columns,
             "missing_indexes": missing_indexes,
-            "missing_triggers": missing_triggers,
-            "ok": table_exists and not missing_columns and not missing_indexes and not missing_triggers,
+            "ok": table_exists and not missing_columns and not missing_indexes,
         }
 
 
@@ -149,14 +109,10 @@ def _get_table_indexes(conn) -> set[str]:
     return index_names(conn, TABLE_NAME)
 
 
-def _get_table_triggers(conn) -> set[str]:
-    return trigger_names(conn, TABLE_NAME)
-
-
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
-    timestamp_type = sql_timestamp_type(conn)
-    active_default = sql_bool_literal(True, conn)
+    timestamp_type = 'TIMESTAMP WITH TIME ZONE'
+    active_default = 'TRUE'
     add_statements = {
         "source_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN source_cluster_id INTEGER",
         "target_cluster_id": "ALTER TABLE theme_relationships ADD COLUMN target_cluster_id INTEGER",
@@ -223,55 +179,3 @@ def _ensure_indexes(conn) -> list[str]:
     return ensured
 
 
-def _ensure_validation_triggers(conn) -> list[str]:
-    if not is_sqlite(conn):
-        return []
-
-    ensured: list[str] = []
-
-    conn.execute(
-        text(
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_theme_relationship_validate_insert
-            BEFORE INSERT ON theme_relationships
-            FOR EACH ROW
-            BEGIN
-                SELECT
-                    CASE
-                        WHEN NEW.source_cluster_id = NEW.target_cluster_id
-                        THEN RAISE(ABORT, 'theme relationship cannot be self-referential')
-                    END;
-                SELECT
-                    CASE
-                        WHEN NEW.relationship_type NOT IN ('subset', 'related', 'distinct')
-                        THEN RAISE(ABORT, 'invalid relationship_type')
-                    END;
-            END
-            """
-        )
-    )
-    ensured.append("trg_theme_relationship_validate_insert")
-
-    conn.execute(
-        text(
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_theme_relationship_validate_update
-            BEFORE UPDATE ON theme_relationships
-            FOR EACH ROW
-            BEGIN
-                SELECT
-                    CASE
-                        WHEN NEW.source_cluster_id = NEW.target_cluster_id
-                        THEN RAISE(ABORT, 'theme relationship cannot be self-referential')
-                    END;
-                SELECT
-                    CASE
-                        WHEN NEW.relationship_type NOT IN ('subset', 'related', 'distinct')
-                        THEN RAISE(ABORT, 'invalid relationship_type')
-                    END;
-            END
-            """
-        )
-    )
-    ensured.append("trg_theme_relationship_validate_update")
-    return ensured

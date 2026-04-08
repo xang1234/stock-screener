@@ -46,10 +46,9 @@ _include("ticker_validation", prefix="/ticker-validation", tags=["ticker-validat
 _include("filter_presets", prefix="/filter-presets", tags=["filter-presets"])
 _include("features", prefix="/features", tags=["features"])
 
-if not settings.desktop_mode:
-    _include("cache", tags=["cache"])
-    _include("fundamentals", tags=["fundamentals"])
-    _include("data_fetch_status", tags=["data-fetch"])
+_include("cache", tags=["cache"])
+_include("fundamentals", tags=["fundamentals"])
+_include("data_fetch_status", tags=["data-fetch"])
 
 if settings.feature_themes:
     _include("themes", prefix="/themes", tags=["themes"])

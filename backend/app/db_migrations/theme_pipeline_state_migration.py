@@ -17,8 +17,6 @@ from ..infra.db.portability import (
     column_names,
     foreign_keys,
     index_names,
-    is_sqlite,
-    sql_timestamp_type,
     table_names,
 )
 from ..models.theme import ContentItemPipelineState
@@ -186,58 +184,7 @@ def _get_table_indexes(conn) -> set[str]:
 
 
 def _create_pipeline_state_table(conn) -> None:
-    if not is_sqlite(conn):
-        ContentItemPipelineState.__table__.create(bind=conn, checkfirst=True)
-        return
-    status_values = ", ".join(f"'{v}'" for v in STATUS_VALUES)
-    pipeline_values = ", ".join(f"'{v}'" for v in PIPELINE_VALUES)
-    conn.execute(
-        text(
-            f"""
-            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content_item_id INTEGER NOT NULL,
-                pipeline TEXT NOT NULL CHECK (pipeline IN ({pipeline_values})),
-                status TEXT NOT NULL CHECK (status IN ({status_values})),
-                attempt_count INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT,
-                error_message TEXT,
-                last_attempt_at DATETIME,
-                processed_at DATETIME,
-                created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE CASCADE
-            )
-            """
-        )
-    )
-
-
-def _create_pipeline_state_table_with_name(conn, table_name: str) -> None:
-    if not is_sqlite(conn):
-        raise RuntimeError("table rebuild helper is SQLite-only")
-    status_values = ", ".join(f"'{v}'" for v in STATUS_VALUES)
-    pipeline_values = ", ".join(f"'{v}'" for v in PIPELINE_VALUES)
-    conn.execute(
-        text(
-            f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content_item_id INTEGER NOT NULL,
-                pipeline TEXT NOT NULL CHECK (pipeline IN ({pipeline_values})),
-                status TEXT NOT NULL CHECK (status IN ({status_values})),
-                attempt_count INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT,
-                error_message TEXT,
-                last_attempt_at DATETIME,
-                processed_at DATETIME,
-                created_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                updated_at DATETIME NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-                FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE CASCADE
-            )
-            """
-        )
-    )
+    ContentItemPipelineState.__table__.create(bind=conn, checkfirst=True)
 
 
 def _has_required_fk_cascade(conn) -> bool:
@@ -252,82 +199,23 @@ def _has_required_fk_cascade(conn) -> bool:
 
 
 def _needs_table_rebuild(conn) -> bool:
-    if not is_sqlite(conn):
-        return False
-    constraints = check_constraints(conn, TABLE_NAME)
-    has_status_check = any("status" in (constraint.get("sqltext") or "") for constraint in constraints)
-    has_pipeline_check = any("pipeline" in (constraint.get("sqltext") or "") for constraint in constraints)
-    has_fk_cascade = _has_required_fk_cascade(conn)
-    return not (has_status_check and has_pipeline_check and has_fk_cascade)
+    return False
 
 
 def _rebuild_pipeline_state_table(conn) -> None:
-    if not is_sqlite(conn):
-        return
-    old_table = TABLE_NAME
-    new_table = f"{TABLE_NAME}__new"
-
-    existing_cols = _get_table_columns(conn)
-    # Ensure clean temp name in idempotent repeated runs.
-    conn.execute(text(f"DROP TABLE IF EXISTS {new_table}"))
-    _create_pipeline_state_table_with_name(conn, new_table)
-
-    target_cols = [
-        "id",
-        "content_item_id",
-        "pipeline",
-        "status",
-        "attempt_count",
-        "error_code",
-        "error_message",
-        "last_attempt_at",
-        "processed_at",
-        "created_at",
-        "updated_at",
-    ]
-    select_exprs = []
-    for col in target_cols:
-        if col in existing_cols:
-            select_exprs.append(col)
-        elif col == "attempt_count":
-            select_exprs.append("0 AS attempt_count")
-        elif col == "status":
-            select_exprs.append("'pending' AS status")
-        elif col == "created_at":
-            select_exprs.append("CURRENT_TIMESTAMP AS created_at")
-        elif col == "updated_at":
-            select_exprs.append("CURRENT_TIMESTAMP AS updated_at")
-        else:
-            select_exprs.append(f"NULL AS {col}")
-
-    conn.execute(text("PRAGMA foreign_keys=OFF"))
-    try:
-        conn.execute(
-            text(
-                f"""
-                INSERT INTO {new_table} ({", ".join(target_cols)})
-                SELECT {", ".join(select_exprs)}
-                FROM {old_table}
-                """
-            )
-        )
-        conn.execute(text(f"DROP TABLE {old_table}"))
-        conn.execute(text(f"ALTER TABLE {new_table} RENAME TO {old_table}"))
-    finally:
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+    return
 
 
 def _add_missing_columns(conn) -> list[str]:
     existing = _get_table_columns(conn)
-    timestamp_type = sql_timestamp_type(conn)
     column_ddl = {
         "attempt_count": "ALTER TABLE content_item_pipeline_state ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
         "error_code": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_code TEXT",
         "error_message": "ALTER TABLE content_item_pipeline_state ADD COLUMN error_message TEXT",
-        "last_attempt_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at {timestamp_type}",
-        "processed_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at {timestamp_type}",
-        "created_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
-        "updated_at": f"ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "last_attempt_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN last_attempt_at TIMESTAMP WITH TIME ZONE",
+        "processed_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN processed_at TIMESTAMP WITH TIME ZONE",
+        "created_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "updated_at": "ALTER TABLE content_item_pipeline_state ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP",
     }
     added: list[str] = []
     for column, ddl in column_ddl.items():

@@ -11,8 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db_migrations.theme_aliases_migration import migrate_theme_aliases
-from app.db_migrations.theme_cluster_identity_migration import migrate_theme_cluster_identity
+from app.database import Base
 from app.api.v1.themes import _safe_theme_cluster_response
 from app.infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
 from app.models.theme import ThemeCluster
@@ -21,77 +20,85 @@ from app.schemas.theme import ThemeClusterResponse
 
 def test_db_enforces_pipeline_scoped_uniqueness_for_cluster_keys():
     engine = create_engine("sqlite:///:memory:")
-    migrate_theme_cluster_identity(engine)
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine)
 
-    with engine.connect() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO theme_clusters(name, canonical_key, display_name, pipeline)
-                VALUES ('AI Infrastructure', 'ai_infrastructure', 'AI Infrastructure', 'technical')
-                """
-            )
-        )
-        conn.commit()
+    session = SessionFactory()
+    try:
+        session.add(ThemeCluster(
+            name="AI Infrastructure",
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            pipeline="technical",
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+            is_active=True,
+        ))
+        session.commit()
 
         with pytest.raises(IntegrityError):
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO theme_clusters(name, canonical_key, display_name, pipeline)
-                    VALUES ('AI Infra Duplicate', 'ai_infrastructure', 'AI Infra Duplicate', 'technical')
-                    """
-                )
-            )
-            conn.commit()
+            session.add(ThemeCluster(
+                name="AI Infra Duplicate",
+                canonical_key="ai_infrastructure",
+                display_name="AI Infra Duplicate",
+                pipeline="technical",
+                first_seen_at=datetime.utcnow(),
+                last_seen_at=datetime.utcnow(),
+                is_active=True,
+            ))
+            session.commit()
+    finally:
+        session.close()
 
 
 def test_db_enforces_pipeline_scoped_uniqueness_for_alias_keys():
     engine = create_engine("sqlite:///:memory:")
-    migrate_theme_cluster_identity(engine)
-    migrate_theme_aliases(engine)
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine)
 
-    with engine.connect() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO theme_clusters(name, canonical_key, display_name, pipeline)
-                VALUES ('AI Infrastructure', 'ai_infrastructure', 'AI Infrastructure', 'technical')
-                """
-            )
+    session = SessionFactory()
+    try:
+        cluster = ThemeCluster(
+            name="AI Infrastructure",
+            canonical_key="ai_infrastructure",
+            display_name="AI Infrastructure",
+            pipeline="technical",
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+            is_active=True,
         )
-        conn.commit()
+        session.add(cluster)
+        session.flush()
 
-        cluster_id = conn.execute(text("SELECT id FROM theme_clusters LIMIT 1")).scalar_one()
-        conn.execute(
+        session.execute(
             text(
                 """
-                INSERT INTO theme_aliases(theme_cluster_id, pipeline, alias_text, alias_key)
-                VALUES (:cluster_id, 'technical', 'AI Infrastructure', 'ai_infrastructure')
+                INSERT INTO theme_aliases(theme_cluster_id, pipeline, alias_text, alias_key, source, confidence, evidence_count, is_active)
+                VALUES (:cluster_id, 'technical', 'AI Infrastructure', 'ai_infrastructure', 'test', 1.0, 1, 1)
                 """
             ),
-            {"cluster_id": int(cluster_id)},
+            {"cluster_id": int(cluster.id)},
         )
-        conn.commit()
+        session.commit()
 
         with pytest.raises(IntegrityError):
-            conn.execute(
+            session.execute(
                 text(
                     """
-                    INSERT INTO theme_aliases(theme_cluster_id, pipeline, alias_text, alias_key)
-                    VALUES (:cluster_id, 'technical', 'A.I. Infrastructure', 'ai_infrastructure')
+                    INSERT INTO theme_aliases(theme_cluster_id, pipeline, alias_text, alias_key, source, confidence, evidence_count, is_active)
+                    VALUES (:cluster_id, 'technical', 'A.I. Infrastructure', 'ai_infrastructure', 'test', 1.0, 1, 1)
                     """
                 ),
-                {"cluster_id": int(cluster_id)},
+                {"cluster_id": int(cluster.id)},
             )
-            conn.commit()
+            session.commit()
+    finally:
+        session.close()
 
 
 def test_repository_rejects_invalid_pipeline_or_empty_alias_transitions():
     engine = create_engine("sqlite:///:memory:")
     SessionFactory = sessionmaker(bind=engine)
-    from app.database import Base
-
     Base.metadata.create_all(engine)
 
     session: Session = SessionFactory()

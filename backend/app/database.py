@@ -1,41 +1,26 @@
 """Database setup and session management using SQLAlchemy."""
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 from .config import settings
-from .infra.db.portability import is_postgres, is_sqlite
 
+_parsed_url = make_url(settings.database_url)
+if _parsed_url.get_backend_name() != "postgresql":
+    raise ValueError(
+        f"Only PostgreSQL is supported. Got DATABASE_URL with backend "
+        f"'{_parsed_url.get_backend_name()}'. Use: postgresql://user:pass@host/dbname"
+    )
 
-def _engine_kwargs() -> dict:
-    kwargs = {
-        "echo": False,
-        "pool_pre_ping": True,
-    }
-    if is_sqlite(settings.database_url):
-        kwargs["connect_args"] = {"check_same_thread": False}
-    elif is_postgres(settings.database_url):
-        # Keep the default conservative for the current multi-service Docker shape.
-        kwargs["pool_size"] = 5
-        kwargs["max_overflow"] = 5
-    return kwargs
-
-
-engine = create_engine(settings.database_url, **_engine_kwargs())
-
-
-# Enable SQLite pragmas for WAL mode, concurrency, and foreign keys
-if is_sqlite(settings.database_url):
-
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=15000")
-        cursor.execute("PRAGMA synchronous=FULL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+engine = create_engine(
+    settings.database_url,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
+)
 
 # Create SessionLocal class for database sessions
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from ..infra.db.portability import column_names, sql_bool_literal, sql_timestamp_type, table_names
+from ..infra.db.portability import column_names, table_names
 from ..models.theme import ThemeLifecycleTransition
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,9 @@ def migrate_theme_lifecycle(engine) -> dict[str, Any]:
     }
     with engine.connect() as conn:
         columns = _get_table_columns(conn, THEME_TABLE)
-        timestamp_type = sql_timestamp_type(conn)
-        active_true = sql_bool_literal(True, conn)
-        active_false = sql_bool_literal(False, conn)
+        timestamp_type = 'TIMESTAMP WITH TIME ZONE'
+        active_true = 'TRUE'
+        active_false = 'FALSE'
         add_statements = {
             "lifecycle_state": "ALTER TABLE theme_clusters ADD COLUMN lifecycle_state TEXT",
             "lifecycle_state_updated_at": f"ALTER TABLE theme_clusters ADD COLUMN lifecycle_state_updated_at {timestamp_type}",

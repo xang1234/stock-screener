@@ -1276,13 +1276,13 @@ def _fetch_content_items_with_themes_with_recovery(
             if not is_corruption_error(retry_exc):
                 raise
             logger.warning(
-                "Theme content browser query still hits SQLite corruption after REINDEX; "
+                "Theme content browser query still hits corruption after REINDEX; "
                 "checking whether rebuildable theme-content storage can be reset: %s",
                 retry_exc,
             )
             if not _corruption_targets_theme_content_storage(**kwargs):
                 logger.error(
-                    "Theme content browser detected SQLite corruption outside rebuildable "
+                    "Theme content browser detected database corruption outside rebuildable "
                     "theme-content storage. Run backend/scripts/check_db_integrity.py --repair "
                     "or restore the latest valid backup. Initial error: %s. Retry error: %s",
                     exc,
@@ -1295,25 +1295,25 @@ def _fetch_content_items_with_themes_with_recovery(
 
 
 def _attempt_reindex_theme_content_storage(exc: Exception) -> bool:
-    """Try to repair theme browser read paths by rebuilding relevant SQLite indexes."""
+    """Try to repair theme browser read paths by rebuilding relevant indexes."""
     logger.warning(
-        "Attempting SQLite REINDEX for theme content browser after corruption signature: %s",
+        "Attempting REINDEX for theme content browser after corruption signature: %s",
         exc,
     )
     try:
         with _THEME_CONTENT_STORAGE_LOCK:
             with engine.begin() as conn:
                 for target in _THEME_CONTENT_REINDEX_TARGETS:
-                    conn.execute(text(f'REINDEX "{target}"'))
+                    conn.execute(text(f'REINDEX TABLE "{target}"'))
     except Exception as reindex_exc:
         if not is_corruption_error(reindex_exc):
             raise
         logger.warning(
-            "SQLite REINDEX did not clear theme content browser corruption: %s",
+            "REINDEX did not clear theme content browser corruption: %s",
             reindex_exc,
         )
         return False
-    logger.warning("SQLite REINDEX completed for theme content browser recovery")
+    logger.warning("REINDEX completed for theme content browser recovery")
     return True
 
 
@@ -1338,7 +1338,7 @@ def _corruption_targets_theme_content_storage(
         except Exception as exc:
             if is_corruption_error(exc):
                 logger.warning(
-                    "Theme content storage probe hit SQLite corruption while reading content_sources; "
+                    "Theme content storage probe hit database corruption while reading content_sources; "
                     "skipping destructive reset: %s",
                     exc,
                 )
@@ -1391,7 +1391,7 @@ def _corruption_targets_theme_content_storage(
         except Exception as exc:
             if is_corruption_error(exc):
                 logger.warning(
-                    "Theme content storage probe detected SQLite corruption on query path: %s",
+                    "Theme content storage probe detected database corruption on query path: %s",
                     exc,
                 )
                 return True
@@ -1400,24 +1400,14 @@ def _corruption_targets_theme_content_storage(
 
 
 def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
-    """Drop and recreate rebuildable theme content tables after SQLite corruption."""
+    """Drop and recreate rebuildable theme content tables after database corruption."""
     logger.warning(
-        "Resetting theme content storage after SQLite corruption signature: %s",
+        "Resetting theme content storage after database corruption signature: %s",
         exc,
     )
     with _THEME_CONTENT_STORAGE_LOCK:
         with engine.begin() as conn:
-            try:
-                _drop_theme_content_tables(conn)
-            except Exception as reset_exc:
-                if not is_corruption_error(reset_exc):
-                    raise
-                logger.warning(
-                    "Normal theme content table drop failed due to SQLite corruption; "
-                    "forcing schema cleanup: %s",
-                    reset_exc,
-                )
-                _force_forget_theme_content_tables(conn)
+            _drop_theme_content_tables(conn)
         with engine.begin() as conn:
             _rewind_theme_content_source_cursors(conn)
         _recreate_theme_content_tables()
@@ -1425,48 +1415,17 @@ def _reset_corrupt_theme_content_storage(exc: Exception) -> None:
 
 def _drop_theme_content_tables(conn) -> None:
     """Drop rebuildable theme content storage tables using normal DDL."""
-    from ...infra.db.portability import is_sqlite
+    from ...infra.db.portability import is_postgres
 
-    if is_sqlite(conn):
-        conn.execute(text("PRAGMA foreign_keys=OFF"))
-        try:
-            conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state"))
-            conn.execute(text("DROP TABLE IF EXISTS theme_mentions"))
-            conn.execute(text("DROP TABLE IF EXISTS content_items"))
-        finally:
-            conn.execute(text("PRAGMA foreign_keys=ON"))
-        return
-
-    conn.execute(text("DROP TABLE IF EXISTS content_item_pipeline_state CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS theme_mentions CASCADE"))
-    conn.execute(text("DROP TABLE IF EXISTS content_items CASCADE"))
+    cascade = " CASCADE" if is_postgres(conn) else ""
+    conn.execute(text(f"DROP TABLE IF EXISTS content_item_pipeline_state{cascade}"))
+    conn.execute(text(f"DROP TABLE IF EXISTS theme_mentions{cascade}"))
+    conn.execute(text(f"DROP TABLE IF EXISTS content_items{cascade}"))
 
 
 def _force_forget_theme_content_tables(conn) -> None:
-    """Remove theme content storage tables from sqlite_master when normal DDL can't read them."""
-    from ...infra.db.portability import is_sqlite
-
-    if not is_sqlite(conn):
-        _drop_theme_content_tables(conn)
-        return
-
-    conn.execute(text("PRAGMA foreign_keys=OFF"))
-    conn.execute(text("PRAGMA writable_schema=ON"))
-    try:
-        conn.execute(
-            text(
-                """
-                DELETE FROM sqlite_master
-                WHERE name IN ('content_items', 'theme_mentions', 'content_item_pipeline_state')
-                   OR tbl_name IN ('content_items', 'theme_mentions', 'content_item_pipeline_state')
-                """
-            )
-        )
-        current_version = conn.execute(text("PRAGMA schema_version")).scalar() or 0
-        conn.execute(text(f"PRAGMA schema_version = {int(current_version) + 1}"))
-    finally:
-        conn.execute(text("PRAGMA writable_schema=OFF"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
+    """Force-drop theme content storage tables (alias for _drop)."""
+    _drop_theme_content_tables(conn)
 
 
 def _recreate_theme_content_tables() -> None:

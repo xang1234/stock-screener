@@ -446,7 +446,7 @@ const GroupDetailModal = ({ group, open, onClose }) => {
 };
 
 function GroupRankingsPage() {
-  const { bootstrap, bootstrapIncomplete, features, runtimeReady, uiSnapshots } = useRuntime();
+  const { features, runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedPeriod, setSelectedPeriod] = useState('1w');
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -605,24 +605,12 @@ function GroupRankingsPage() {
       })
     : [];
 
-  const isBootstrapMissingData = bootstrapIncomplete && errorRankings?.response?.status === 404;
-
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
           <CircularProgress />
         </Box>
-      </Container>
-    );
-  }
-
-  if (isBootstrapMissingData) {
-    return (
-      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
-        <Alert severity="info">
-          {bootstrap?.message || 'Group rankings are still being prepared for this desktop install.'}
-        </Alert>
       </Container>
     );
   }

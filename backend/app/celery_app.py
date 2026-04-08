@@ -125,14 +125,9 @@ def _dispose_engine_after_fork(sender=None, **kwargs):
 
 @worker_shutting_down.connect
 def _graceful_db_shutdown(sender=None, **kwargs):
-    """Checkpoint WAL and close DB connections on worker shutdown."""
+    """Close DB connections on worker shutdown."""
     try:
         from .database import engine
-        from .infra.db.portability import is_sqlite
-        from sqlalchemy import text
-        if is_sqlite(engine):
-            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
         engine.dispose()
         _logger.info("Worker shutdown: DB connections closed")
     except Exception as e:
@@ -284,36 +279,13 @@ if settings.cache_warmup_enabled:
         # function remains available for manual invocation via the API.
 
         # Weekly cleanup of orphaned scans (cancelled, stale running/queued).
-        # Runs 15 minutes before weekly-full-refresh to reduce one overlapping
-        # SQLite writer window. This does not eliminate all 2:00 AM SQLite
-        # activity because daily-integrity-check still runs at 2:00 AM ET.
+        # Runs Sunday at 1:45 AM ET, before weekly-full-refresh at 2:00 AM.
         'weekly-orphaned-scan-cleanup': {
             'task': 'app.tasks.cache_tasks.cleanup_orphaned_scans',
             'schedule': crontab(
                 hour=1,  # 1:45 AM ET
                 minute=45,
                 day_of_week=0  # Sunday
-            ),
-        },
-
-        # Daily WAL checkpoint to flush WAL file and keep size bounded
-        # Runs at 1:30 AM ET daily (quiet period between price cleanup and orphan cleanup)
-        'daily-wal-checkpoint': {
-            'task': 'app.tasks.cache_tasks.wal_checkpoint',
-            'schedule': crontab(
-                hour=1,
-                minute=30,
-            ),
-        },
-
-        # Daily database integrity check (PRAGMA quick_check)
-        # Runs at 2:00 AM ET, 30 min after WAL checkpoint, to detect corruption
-        # early. Logs warnings instead of blocking the health check endpoint.
-        'daily-integrity-check': {
-            'task': 'app.tasks.cache_tasks.daily_integrity_check',
-            'schedule': crontab(
-                hour=2,
-                minute=0,
             ),
         },
 

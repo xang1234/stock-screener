@@ -24,11 +24,9 @@ import { getWatchlists, getWatchlistData, getWatchlistStewardship } from '../../
 import WatchlistTable from './WatchlistTable';
 import UserWatchlistManager from './UserWatchlistManager';
 import WatchlistChartModal from './WatchlistChartModal';
-import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 function WatchlistsTab() {
-  const { bootstrap, bootstrapIncomplete } = useRuntime();
   const { activeProfile } = useStrategyProfile();
   const [selectedWatchlistId, setSelectedWatchlistId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -259,9 +257,7 @@ function WatchlistsTab() {
         ) : watchlists.length === 0 ? (
           <Box textAlign="center" py={4}>
             <Typography color="text.secondary" gutterBottom>
-              {bootstrapIncomplete
-                ? (bootstrap?.message || 'Desktop setup is still preparing local market data. You can create watchlists now and the data will fill in as setup completes.')
-                : 'No watchlists yet. Create your first watchlist to get started.'}
+              No watchlists yet. Create your first watchlist to get started.
             </Typography>
             <Tooltip title="Manage watchlists">
               <IconButton color="primary" onClick={() => setManagerOpen(true)} size="large">

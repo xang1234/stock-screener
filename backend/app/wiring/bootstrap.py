@@ -21,10 +21,9 @@ from __future__ import annotations
 
 from typing import Iterator
 
-from app.config import settings
 from app.database import SessionLocal
 from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
-from app.services.job_backend import JobBackend, LocalJobBackend, create_job_backend
+from app.services.job_backend import JobBackend, CeleryJobBackend
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -47,10 +46,6 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 
 _task_dispatcher: TaskDispatcher | None = None
 _job_backend: JobBackend | None = None
-_desktop_bootstrap_service: DesktopBootstrapService | None = None
-_desktop_update_service: DesktopUpdateService | None = None
-_desktop_setup_service: DesktopSetupService | None = None
-_desktop_launch_agent_service: DesktopLaunchAgentService | None = None
 _ui_snapshot_service: UISnapshotService | None = None
 
 
@@ -58,79 +53,18 @@ def get_job_backend() -> JobBackend:
     """Return the configured async job backend."""
     global _job_backend
     if _job_backend is None:
-        _job_backend = create_job_backend()
+        _job_backend = CeleryJobBackend()
     return _job_backend
 
 
-def get_local_job_backend() -> LocalJobBackend:
-    """Return the singleton local job backend in desktop mode."""
-    backend = get_job_backend()
-    if not isinstance(backend, LocalJobBackend):
-        raise RuntimeError("Local job backend is only available in desktop mode")
-    return backend
-
-
 def get_task_dispatcher() -> TaskDispatcher:
-    """Return the runtime-appropriate task dispatcher."""
+    """Return the Celery task dispatcher."""
     global _task_dispatcher
     if _task_dispatcher is None:
-        from app.infra.tasks.dispatcher import CeleryTaskDispatcher, LocalTaskDispatcher
+        from app.infra.tasks.dispatcher import CeleryTaskDispatcher
 
-        if settings.desktop_mode:
-            _task_dispatcher = LocalTaskDispatcher(get_local_job_backend())
-        else:
-            _task_dispatcher = CeleryTaskDispatcher()
+        _task_dispatcher = CeleryTaskDispatcher()
     return _task_dispatcher
-
-
-def get_desktop_bootstrap_service() -> DesktopBootstrapService:
-    """Return the desktop bootstrap orchestrator."""
-    global _desktop_bootstrap_service
-    if _desktop_bootstrap_service is None:
-        from app.services.desktop_bootstrap_service import DesktopBootstrapService
-
-        _desktop_bootstrap_service = DesktopBootstrapService(
-            session_factory=SessionLocal,
-            job_backend=get_local_job_backend(),
-        )
-    return _desktop_bootstrap_service
-
-
-def get_desktop_update_service() -> DesktopUpdateService:
-    """Return the desktop update orchestrator."""
-    global _desktop_update_service
-    if _desktop_update_service is None:
-        from app.services.desktop_update_service import DesktopUpdateService
-
-        _desktop_update_service = DesktopUpdateService(
-            session_factory=SessionLocal,
-            job_backend=get_local_job_backend(),
-        )
-    return _desktop_update_service
-
-
-def get_desktop_setup_service() -> DesktopSetupService:
-    """Return the desktop setup orchestrator."""
-    global _desktop_setup_service
-    if _desktop_setup_service is None:
-        from app.services.desktop_setup_service import DesktopSetupService
-
-        _desktop_setup_service = DesktopSetupService(
-            session_factory=SessionLocal,
-            job_backend=get_local_job_backend(),
-            update_service=get_desktop_update_service(),
-        )
-    return _desktop_setup_service
-
-
-def get_desktop_launch_agent_service() -> DesktopLaunchAgentService:
-    """Return the launch agent installer used by the macOS desktop bundle."""
-    global _desktop_launch_agent_service
-    if _desktop_launch_agent_service is None:
-        from app.services.desktop_launch_agent_service import DesktopLaunchAgentService
-
-        _desktop_launch_agent_service = DesktopLaunchAgentService()
-    return _desktop_launch_agent_service
 
 
 def get_ui_snapshot_service() -> UISnapshotService:

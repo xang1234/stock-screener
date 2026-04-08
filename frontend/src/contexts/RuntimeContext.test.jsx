@@ -6,19 +6,11 @@ import { RuntimeProvider, useRuntime } from './RuntimeContext';
 
 const {
   getAppCapabilities,
-  getDesktopSetupStatus,
-  getDesktopUpdateStatus,
-  runDesktopUpdateNow,
-  startDesktopSetup,
   loginServer,
   logoutServer,
   setUnauthorizedResponseHandler,
 } = vi.hoisted(() => ({
   getAppCapabilities: vi.fn(),
-  getDesktopSetupStatus: vi.fn(),
-  getDesktopUpdateStatus: vi.fn(),
-  runDesktopUpdateNow: vi.fn(),
-  startDesktopSetup: vi.fn(),
   loginServer: vi.fn(),
   logoutServer: vi.fn(),
   setUnauthorizedResponseHandler: vi.fn(),
@@ -30,10 +22,6 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../api/appRuntime', () => ({
   getAppCapabilities: (...args) => getAppCapabilities(...args),
-  getDesktopSetupStatus: (...args) => getDesktopSetupStatus(...args),
-  getDesktopUpdateStatus: (...args) => getDesktopUpdateStatus(...args),
-  runDesktopUpdateNow: (...args) => runDesktopUpdateNow(...args),
-  startDesktopSetup: (...args) => startDesktopSetup(...args),
 }));
 
 vi.mock('../api/auth', () => ({
@@ -42,12 +30,11 @@ vi.mock('../api/auth', () => ({
 }));
 
 function RuntimeProbe() {
-  const { auth, desktopMode, runtimeReady } = useRuntime();
+  const { auth, runtimeReady } = useRuntime();
 
   return (
     <>
       <div data-testid="runtime-ready">{String(runtimeReady)}</div>
-      <div data-testid="desktop-mode">{String(desktopMode)}</div>
       <div data-testid="auth-required">{String(auth.required)}</div>
     </>
   );
@@ -76,10 +63,6 @@ describe('RuntimeProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getAppCapabilities.mockReset();
-    getDesktopSetupStatus.mockReset();
-    getDesktopUpdateStatus.mockReset();
-    runDesktopUpdateNow.mockReset();
-    startDesktopSetup.mockReset();
     loginServer.mockReset();
     logoutServer.mockReset();
     setUnauthorizedResponseHandler.mockReset();
@@ -96,7 +79,6 @@ describe('RuntimeProvider', () => {
       expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
     });
 
-    expect(screen.getByTestId('desktop-mode')).toHaveTextContent('false');
     expect(screen.getByTestId('auth-required')).toHaveTextContent('false');
     expect(getAppCapabilities).toHaveBeenCalledTimes(2);
   });

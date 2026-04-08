@@ -20,8 +20,15 @@ from sqlalchemy.orm import Session
 
 from app.scanners.base_screener import ScreenerResult, StockData
 from app.scanners.scan_orchestrator import ScanOrchestrator
-from app.infra.db.portability import sqlite_json_path
 from app.infra.db.repositories.scan_result_repo import _map_orchestrator_result
+
+
+def _sqlite_json_path(path_segments):
+    """Build a SQLite json_extract path from segments."""
+    parts = [segment for segment in path_segments if segment]
+    if not parts:
+        return "$"
+    return "$." + ".".join(parts)
 from app.infra.query.scan_result_query import _JSON_FIELD_MAP as SR_JSON_FIELD_MAP
 from app.infra.query.feature_store_query import _JSON_FIELD_MAP as FS_JSON_FIELD_MAP
 from app.use_cases.feature_store.build_daily_snapshot import _map_orchestrator_to_feature_row
@@ -262,7 +269,7 @@ class TestScanResultRoundTrip:
     def test_all_se_fields_resolve_non_null(self, sr_db_session, field_name, json_path):
         result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
         _insert_sr_row(sr_db_session, "AAPL", result_dict)
-        sqlite_path = sqlite_json_path(json_path)
+        sqlite_path = _sqlite_json_path(json_path)
 
         rows = sr_db_session.execute(
             text(f"SELECT json_extract(details, '{sqlite_path}') FROM scan_results WHERE symbol = 'AAPL'")
@@ -437,7 +444,7 @@ class TestFeatureStoreRoundTrip:
     def test_all_se_fields_resolve_non_null(self, fs_db_session, field_name, json_path):
         result_dict = _call_combine_results({"setup_engine": _make_se_screener_result()})
         _insert_fs_row(fs_db_session, "AAPL", result_dict)
-        sqlite_path = sqlite_json_path(json_path)
+        sqlite_path = _sqlite_json_path(json_path)
 
         rows = fs_db_session.execute(
             text(f"SELECT json_extract(details_json, '{sqlite_path}') FROM stock_feature_daily WHERE symbol = 'AAPL'")
