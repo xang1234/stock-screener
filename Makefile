@@ -10,7 +10,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 .PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
-        frontend-lint frontend-test frontend golden-update all
+        frontend-lint frontend-test frontend phase2-type-gate phase2-reliability golden-update all
 
 # ── Tooling ─────────────────────────────────────────────────────────
 
@@ -148,9 +148,16 @@ frontend-test: ## Run frontend tests
 
 frontend: frontend-lint frontend-test ## Frontend lint + test
 
+# ── Phase 2 Reliability ─────────────────────────────────────────────
+
+phase2-type-gate: ## Focused Phase 2 type-contract checks (touched modules)
+	cd backend && $(PYTHON) scripts/check_phase2_type_contracts.py
+
+phase2-reliability: phase2-type-gate ## Alias for Phase 2 reliability gate bundle
+
 # ── Utilities ───────────────────────────────────────────────────────
 
 golden-update: ## Regenerate golden snapshots for review
 	$(PYTEST) tests/unit/golden/ -v --tb=short --golden-update
 
-all: gate-check gate-identity gates frontend ## Full CI (gate-check + identity + backend gates + frontend)
+all: gate-check gate-identity gates phase2-reliability frontend ## Full CI (gate-check + identity + backend gates + phase2 reliability + frontend)

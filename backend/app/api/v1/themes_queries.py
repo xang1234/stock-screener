@@ -61,7 +61,7 @@ router = APIRouter()
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
-async def get_themes_bootstrap(
+def get_themes_bootstrap(
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
     theme_view: str = Query("grouped", pattern="^(grouped|flat)$"),
     snapshot_service=Depends(get_ui_snapshot_service),
@@ -74,7 +74,7 @@ async def get_themes_bootstrap(
 
 
 @router.get("/pipelines")
-async def get_available_pipelines():
+def get_available_pipelines():
     """Return available theme pipelines."""
     from ...config.pipeline_config import get_all_pipelines
 
@@ -82,7 +82,7 @@ async def get_available_pipelines():
 
 
 @router.get("/rankings", response_model=ThemeRankingsResponse)
-async def get_theme_rankings(
+def get_theme_rankings(
     limit: int = Query(20, ge=1, le=500, description="Number of themes to return"),
     offset: int = Query(0, ge=0, description="Number of themes to skip for pagination"),
     status: Optional[str] = Query(None, description="Filter by status: emerging, trending, fading, dormant"),
@@ -135,7 +135,7 @@ async def get_theme_rankings(
 
 
 @router.get("/emerging", response_model=EmergingThemesResponse)
-async def get_emerging_themes(
+def get_emerging_themes(
     min_velocity: float = Query(1.5, description="Minimum mention velocity"),
     min_mentions: int = Query(3, description="Minimum mentions in 7 days"),
     lifecycle_states: Optional[str] = Query(None, description="Comma-separated lifecycle states"),
@@ -157,7 +157,7 @@ async def get_emerging_themes(
 
 
 @router.get("/alerts", response_model=AlertsResponse)
-async def get_alerts(
+def get_alerts(
     unread_only: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -182,7 +182,7 @@ async def get_alerts(
 
 
 @router.get("/lifecycle-transitions", response_model=ThemeLifecycleTransitionHistoryResponse)
-async def get_lifecycle_transitions(
+def get_lifecycle_transitions(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     pipeline: str = Query("technical", description="Pipeline: technical or fundamental"),
@@ -205,7 +205,7 @@ async def get_lifecycle_transitions(
 
 
 @router.post("/alerts/{alert_id}/dismiss")
-async def dismiss_alert(
+def dismiss_alert(
     alert_id: int,
     db: Session = Depends(get_db),
 ):
@@ -336,7 +336,7 @@ def _build_match_slice(key: str, rows: list[dict[str, object]]) -> ThemeMatchTel
 
 
 @router.get("/matching/telemetry", response_model=ThemeMatchTelemetryResponse)
-async def get_matching_telemetry(
+def get_matching_telemetry(
     days: Annotated[int, Query(ge=1, le=365, description="Rolling window in days")] = 30,
     pipeline: Annotated[Optional[str], Query(description="Filter by pipeline: technical or fundamental")] = None,
     source_type: Annotated[Optional[str], Query(description="Filter by source type")] = None,
@@ -442,7 +442,7 @@ async def get_matching_telemetry(
 
 
 @router.get("/{theme_id}", response_model=ThemeDetailResponse)
-async def get_theme_detail(
+def get_theme_detail(
     theme_id: int,
     db: Session = Depends(get_db),
 ):
@@ -472,7 +472,7 @@ async def get_theme_detail(
 
 
 @router.get("/{theme_id}/history")
-async def get_theme_history(
+def get_theme_history(
     theme_id: int,
     days: int = Query(30, ge=1, le=180, description="Days of history"),
     db: Session = Depends(get_db),
@@ -505,7 +505,7 @@ async def get_theme_history(
 
 
 @router.get("/{theme_id}/mentions", response_model=ThemeMentionsResponse)
-async def get_theme_mentions(
+def get_theme_mentions(
     theme_id: int,
     limit: int = Query(50, ge=1, le=200, description="Max mentions to return"),
     db: Session = Depends(get_db),
@@ -547,7 +547,7 @@ async def get_theme_mentions(
 
 
 @router.get("/correlation/clusters", response_model=CorrelationDiscoveryResponse)
-async def discover_correlation_clusters(
+def discover_correlation_clusters(
     correlation_threshold: float = Query(0.6, ge=0.3, le=0.95),
     min_cluster_size: int = Query(3, ge=2, le=20),
     db: Session = Depends(get_db),
@@ -573,7 +573,7 @@ async def discover_correlation_clusters(
 
 
 @router.get("/{theme_id}/validate", response_model=ThemeValidationResponse)
-async def validate_theme(
+def validate_theme(
     theme_id: int,
     min_correlation: float = Query(0.5, ge=0.2, le=0.9),
     db: Session = Depends(get_db),
@@ -592,7 +592,7 @@ async def validate_theme(
 
 
 @router.get("/{theme_id}/entrants")
-async def find_theme_entrants(
+def find_theme_entrants(
     theme_id: int,
     correlation_threshold: float = Query(0.6, ge=0.4, le=0.9),
     db: Session = Depends(get_db),
@@ -615,7 +615,7 @@ async def find_theme_entrants(
 
 
 @router.get("/{theme_id}/similar", response_model=SimilarThemesResponse)
-async def find_similar_themes(
+def find_similar_themes(
     theme_id: int,
     threshold: float = Query(0.75, ge=0.5, le=0.99, description="Minimum similarity threshold"),
     db: Session = Depends(get_db),
@@ -634,4 +634,3 @@ async def find_similar_themes(
         threshold=threshold,
         similar_themes=[SimilarThemeResponse(**similar_row) for similar_row in similar],
     )
-

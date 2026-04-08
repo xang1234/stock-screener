@@ -18,14 +18,14 @@ router = APIRouter()
 
 
 @router.get("/status", response_model=ServerAuthStatusResponse)
-async def get_auth_status(request: Request) -> ServerAuthStatusResponse:
+def get_auth_status(request: Request) -> ServerAuthStatusResponse:
     """Return whether the current client is authenticated."""
     status = get_server_auth_status(request)
     return ServerAuthStatusResponse(**status.__dict__)
 
 
 @router.post("/login", response_model=ServerAuthStatusResponse)
-async def login_server(request: Request, payload: AuthLoginRequest) -> JSONResponse:
+def login_server(request: Request, payload: AuthLoginRequest) -> JSONResponse:
     """Authenticate the current browser session with the shared server password."""
     status = get_server_auth_status()
     if not status.required:
@@ -52,7 +52,7 @@ async def login_server(request: Request, payload: AuthLoginRequest) -> JSONRespo
 
 
 @router.post("/logout", response_model=ServerAuthStatusResponse)
-async def logout_server() -> JSONResponse:
+def logout_server() -> JSONResponse:
     """Clear the current browser auth session."""
     status = get_server_auth_status()
     body = ServerAuthStatusResponse(

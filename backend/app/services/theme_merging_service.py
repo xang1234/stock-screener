@@ -26,7 +26,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 import numpy as np
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, or_, and_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ..models.app_settings import AppSetting
 from ..models.theme import (
@@ -37,7 +37,10 @@ from ..models.theme import (
     ThemeMergeSuggestion,
     ThemeMergeHistory,
 )
+from ..theme_platform.contracts import MergeActionResult
 from .llm import LLMService, LLMError
+from .llm.config import is_model_supported_for_use_case
+from .errors import ThemeMergeConflictError
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key
 from .theme_lifecycle_service import apply_lifecycle_transition
@@ -90,11 +93,11 @@ class ThemeMergingService:
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
     EMBEDDING_MODEL_VERSION = "embedding-v1"
     EMBEDDING_DIM = 384
-    DEFAULT_MERGE_MODEL = "openai/glm-4.7-flash"
+    DEFAULT_MERGE_MODEL = "minimax/MiniMax-M2.7"
     CANDIDATE_TOP_K = 16
     CANDIDATE_BLOCK_MAX = 96
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session) -> None:
         self.db = db
         self.embedding_engine = ThemeEmbeddingEngine(self.EMBEDDING_MODEL)
         self.embedding_repo = ThemeEmbeddingRepository(db)
@@ -141,26 +144,31 @@ class ThemeMergingService:
         picked.discard(source_id)
         return picked
 
-    def _load_merge_model_config(self):
+    def _load_merge_model_config(self) -> None:
         """Load merge-model selection from persisted settings."""
         try:
             setting = self.db.query(AppSetting).filter(AppSetting.key == "llm_merge_model").first()
             if setting and setting.value:
-                self.merge_model_id = setting.value
-            if self.merge_model_id.startswith("ollama"):
-                ollama_setting = self.db.query(AppSetting).filter(AppSetting.key == "ollama_api_base").first()
-                if ollama_setting and ollama_setting.value:
-                    os.environ["OLLAMA_API_BASE"] = ollama_setting.value
+                candidate_model = setting.value.strip()
+                if is_model_supported_for_use_case(model_id=candidate_model, use_case="merge"):
+                    self.merge_model_id = candidate_model
+                else:
+                    self.merge_model_id = self.DEFAULT_MERGE_MODEL
+                    logger.warning(
+                        "Unsupported persisted merge model %s; falling back to %s",
+                        candidate_model,
+                        self.DEFAULT_MERGE_MODEL,
+                    )
             logger.info("Theme merge verification configured model: %s", self.merge_model_id)
-        except Exception as exc:
+        except (SQLAlchemyError, RuntimeError, ValueError, TypeError) as exc:
             logger.warning("Could not load merge model setting; using default %s (%s)", self.merge_model_id, exc)
 
-    def _init_llm_client(self):
+    def _init_llm_client(self) -> None:
         """Initialize LLMService for verification"""
         try:
-            self.llm = LLMService(use_case="extraction")
+            self.llm = LLMService(use_case="merge")
             logger.info("LLMService initialized for theme merging (model=%s)", self.merge_model_id)
-        except Exception as e:
+        except (LLMError, RuntimeError, ValueError, TypeError) as e:
             logger.warning(f"LLMService initialization failed: {e}")
 
     def _normalize_suggested_name(self, suggested_name: str | None) -> str | None:
@@ -211,7 +219,7 @@ class ThemeMergingService:
         suggestion: ThemeMergeSuggestion,
         *,
         idempotency_key: str,
-    ) -> dict | None:
+    ) -> MergeActionResult | None:
         if suggestion.approval_idempotency_key != idempotency_key:
             return None
         payload = suggestion.approval_result_json
@@ -238,7 +246,7 @@ class ThemeMergingService:
         mentions_merged: int,
         idempotency_key: str | None,
         warning: str | None = None,
-    ) -> dict:
+    ) -> MergeActionResult:
         result = {
             "success": True,
             "source_name": source_name,
@@ -1228,7 +1236,7 @@ class ThemeMergingService:
                 "should_merge": False,
                 "confidence": 0.0,
             }
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError) as e:
             logger.error(f"Error verifying merge for {theme1.name} vs {theme2.name}: {e}")
             return {
                 "error": str(e),
@@ -1310,11 +1318,14 @@ class ThemeMergingService:
         final_suggestion_status: str | None = None,
         idempotency_key: str | None = None,
         merged_by: str = "system",
-    ) -> dict:
+    ) -> MergeActionResult:
         """Execute a theme merge: merge source INTO target"""
         try:
             if source_id == target_id:
-                return {"error": "Source and target theme must be different", "success": False}
+                raise ThemeMergeConflictError(
+                    "Source and target theme must be different",
+                    error_code="theme_merge_same_cluster",
+                )
             ordered_theme_ids = sorted({source_id, target_id})
             locked_themes = self._maybe_with_for_update(
                 self.db.query(ThemeCluster)
@@ -1326,19 +1337,25 @@ class ThemeMergingService:
             target = themes_by_id.get(target_id)
 
             if not source or not target:
-                return {"error": "Theme not found", "success": False}
+                raise ThemeMergeConflictError("Theme not found", error_code="theme_merge_not_found")
 
             if not source.is_active:
-                return {"error": "Source theme already deactivated", "success": False}
+                raise ThemeMergeConflictError(
+                    "Source theme already deactivated",
+                    error_code="theme_merge_source_inactive",
+                )
 
             # Block cross-pipeline merges
             source_pipeline = source.pipeline or "technical"
             target_pipeline = target.pipeline or "technical"
             if source_pipeline != target_pipeline:
-                return {
-                    "error": f"Cross-pipeline merge not allowed: source is '{source_pipeline}', target is '{target_pipeline}'",
-                    "success": False
-                }
+                raise ThemeMergeConflictError(
+                    (
+                        "Cross-pipeline merge not allowed: "
+                        f"source is '{source_pipeline}', target is '{target_pipeline}'"
+                    ),
+                    error_code="theme_merge_cross_pipeline",
+                )
 
             locked_suggestion = None
             if suggestion:
@@ -1346,19 +1363,25 @@ class ThemeMergingService:
                     self.db.query(ThemeMergeSuggestion).filter(ThemeMergeSuggestion.id == suggestion.id)
                 ).first()
                 if not locked_suggestion:
-                    return {"error": "Suggestion not found", "success": False}
+                    raise ThemeMergeConflictError(
+                        "Suggestion not found",
+                        error_code="theme_merge_suggestion_not_found",
+                    )
                 if idempotency_key and locked_suggestion.approval_idempotency_key:
                     if locked_suggestion.approval_idempotency_key != idempotency_key:
-                        return {"error": "Idempotency key mismatch for suggestion approval", "success": False}
+                        raise ThemeMergeConflictError(
+                            "Idempotency key mismatch for suggestion approval",
+                            error_code="theme_merge_idempotency_mismatch",
+                        )
                 if expected_suggestion_status and locked_suggestion.status != expected_suggestion_status:
                     if idempotency_key:
                         replay = self._load_replay_result(locked_suggestion, idempotency_key=idempotency_key)
                         if replay:
                             return replay
-                    return {
-                        "error": f"Suggestion status changed to {locked_suggestion.status}",
-                        "success": False,
-                    }
+                    raise ThemeMergeConflictError(
+                        f"Suggestion status changed to {locked_suggestion.status}",
+                        error_code="theme_merge_suggestion_status_changed",
+                    )
 
             # Track counts
             constituents_merged = 0
@@ -1443,7 +1466,10 @@ class ThemeMergingService:
                     )
                 except ValueError as exc:
                     self.db.rollback()
-                    return {"error": f"Lifecycle transition failed: {exc}", "success": False}
+                    raise ThemeMergeConflictError(
+                        f"Lifecycle transition failed: {exc}",
+                        error_code="theme_merge_lifecycle_transition_failed",
+                    ) from exc
             else:
                 source.is_active = False
 
@@ -1513,8 +1539,10 @@ class ThemeMergingService:
                     synchronize_session=False,
                 )
                 if updated_rows != 1:
-                    self.db.rollback()
-                    return {"error": "Suggestion status changed during merge", "success": False}
+                    raise ThemeMergeConflictError(
+                        "Suggestion status changed during merge",
+                        error_code="theme_merge_suggestion_status_changed",
+                    )
 
             self.db.commit()
 
@@ -1522,17 +1550,49 @@ class ThemeMergingService:
             embedding_warning = None
             try:
                 self.update_theme_embedding(target)
-            except Exception as exc:
+            except (SQLAlchemyError, RuntimeError, ValueError, TypeError, LLMError) as exc:
                 logger.exception("Target embedding refresh failed after merge %s -> %s: %s", source_id, target_id, exc)
                 embedding_warning = str(exc)
 
             if embedding_warning:
                 result_payload["warning"] = f"Merged successfully but target embedding refresh failed: {embedding_warning}"
             return result_payload
-        except Exception as exc:
+        except ThemeMergeConflictError as exc:
             self.db.rollback()
-            logger.exception("Merge transaction failed for %s -> %s", source_id, target_id)
-            return {"error": f"Merge transaction failed: {exc}", "success": False}
+            logger.warning(
+                "Merge conflict for %s -> %s",
+                source_id,
+                target_id,
+                extra={
+                    "event": "theme_merge_conflict",
+                    "path": "theme_merging_service.execute_merge",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": None,
+                    "error_code": exc.error_code,
+                },
+            )
+            return {"error": str(exc), "error_code": exc.error_code, "success": False}
+        except (SQLAlchemyError, RuntimeError, ValueError, TypeError, IntegrityError) as exc:
+            self.db.rollback()
+            logger.exception(
+                "Merge transaction failed for %s -> %s",
+                source_id,
+                target_id,
+                extra={
+                    "event": "theme_merge_execution_failed",
+                    "path": "theme_merging_service.execute_merge",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": None,
+                    "error_code": "theme_merge_execution_failed",
+                },
+            )
+            return {
+                "error": f"Merge transaction failed: {exc}",
+                "error_code": "theme_merge_execution_failed",
+                "success": False,
+            }
 
     def run_consolidation(self, dry_run: bool = True) -> dict:
         """
@@ -2612,7 +2672,7 @@ class ThemeMergingService:
 
         return results
 
-    def approve_suggestion(self, suggestion_id: int, idempotency_key: str | None = None) -> dict:
+    def approve_suggestion(self, suggestion_id: int, idempotency_key: str | None = None) -> MergeActionResult:
         """Approve and execute a merge suggestion"""
         operation_key = idempotency_key.strip()[:128] if idempotency_key and idempotency_key.strip() else None
         suggestion = self._maybe_with_for_update(

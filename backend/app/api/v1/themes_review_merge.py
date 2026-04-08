@@ -43,7 +43,7 @@ router = APIRouter()
 
 
 @router.get("/merge-suggestions", response_model=ThemeMergeSuggestionsResponse)
-async def get_merge_suggestions(
+def get_merge_suggestions(
     status: Optional[str] = Query(None, description="Filter by status: pending, approved, rejected, auto_merged"),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -58,7 +58,7 @@ async def get_merge_suggestions(
 
 
 @router.post("/merge-suggestions/{suggestion_id}/approve", response_model=MergeActionResponse)
-async def approve_merge_suggestion(
+def approve_merge_suggestion(
     suggestion_id: int,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
@@ -79,7 +79,7 @@ async def approve_merge_suggestion(
 
 
 @router.post("/merge-suggestions/{suggestion_id}/reject")
-async def reject_merge_suggestion(
+def reject_merge_suggestion(
     suggestion_id: int,
     db: Session = Depends(get_db),
 ):
@@ -99,7 +99,7 @@ async def reject_merge_suggestion(
 
 
 @router.get("/merge-history", response_model=ThemeMergeHistoryListResponse)
-async def get_merge_history(
+def get_merge_history(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
@@ -113,7 +113,7 @@ async def get_merge_history(
 
 
 @router.post("/consolidate", response_model=ConsolidationResultResponse)
-async def run_theme_consolidation(
+def run_theme_consolidation(
     dry_run: bool = Query(True, description="If true, report only without executing merges"),
     db: Session = Depends(get_db),
 ):
@@ -128,7 +128,7 @@ async def run_theme_consolidation(
 
 
 @router.post("/consolidate/async")
-async def run_theme_consolidation_async(
+def run_theme_consolidation_async(
     dry_run: bool = Query(False, description="If true, only report what would happen"),
     db: Session = Depends(get_db),
 ):
@@ -145,7 +145,7 @@ async def run_theme_consolidation_async(
 
 
 @router.get("/merge-plan/dry-run", response_model=MergePlanDryRunResponse)
-async def get_merge_plan_dry_run(
+def get_merge_plan_dry_run(
     limit_pairs: int = Query(120, ge=1, le=500, description="Max similar pairs to analyze"),
     pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
     db: Session = Depends(get_db),
@@ -166,7 +166,7 @@ async def get_merge_plan_dry_run(
 
 
 @router.post("/embeddings/refresh-campaign", response_model=EmbeddingRefreshCampaignResponse)
-async def run_embedding_refresh_campaign(
+def run_embedding_refresh_campaign(
     pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
     refresh_batch_size: int = Query(100, ge=1, le=1000, description="Missing/outdated refresh batch size per pass"),
     stale_batch_size: int = Query(100, ge=1, le=1000, description="Stale recompute batch size"),
@@ -191,7 +191,7 @@ async def run_embedding_refresh_campaign(
 
 
 @router.post("/merge-wave/strict-auto", response_model=StrictAutoMergeWaveResponse)
-async def run_strict_auto_merge_wave(
+def run_strict_auto_merge_wave(
     pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
     limit_pairs: int = Query(200, ge=1, le=1000, description="Maximum candidate pairs to evaluate"),
     dry_run: bool = Query(False, description="If true, evaluate strict eligibility without mutating data"),
@@ -212,7 +212,7 @@ async def run_strict_auto_merge_wave(
 
 
 @router.post("/merge-wave/manual-review", response_model=ManualReviewWaveResponse)
-async def run_manual_review_wave(
+def run_manual_review_wave(
     payload: ManualReviewWaveRequest,
     pipeline: Optional[str] = Query(None, pattern="^(technical|fundamental)$"),
     db: Session = Depends(get_db),
@@ -234,7 +234,7 @@ async def run_manual_review_wave(
 
 
 @router.get("/candidates/queue", response_model=CandidateThemeQueueResponse)
-async def get_candidate_theme_queue(
+def get_candidate_theme_queue(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
@@ -255,7 +255,7 @@ async def get_candidate_theme_queue(
 
 
 @router.post("/candidates/review", response_model=CandidateThemeReviewResponse)
-async def review_candidate_themes(
+def review_candidate_themes(
     payload: CandidateThemeReviewRequest,
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
     db: Session = Depends(get_db),
@@ -283,7 +283,7 @@ async def review_candidate_themes(
 
 
 @router.get("/relationship-graph", response_model=ThemeRelationshipGraphResponse)
-async def get_relationship_graph(
+def get_relationship_graph(
     theme_cluster_id: int = Query(..., ge=1, description="Root theme cluster id"),
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$"),
     limit: int = Query(120, ge=1, le=500),
@@ -307,7 +307,7 @@ async def get_relationship_graph(
 
 
 @router.post("/alerts/check")
-async def check_for_alerts(
+def check_for_alerts(
     db: Session = Depends(get_db),
 ):
     """Check for and generate new alerts."""
@@ -320,7 +320,7 @@ async def check_for_alerts(
 
 
 @router.post("/alerts/{alert_id}/read")
-async def mark_alert_read(
+def mark_alert_read(
     alert_id: int,
     db: Session = Depends(get_db),
 ):
@@ -336,7 +336,7 @@ async def mark_alert_read(
 
 
 @router.post("/create-from-cluster")
-async def create_theme_from_cluster(
+def create_theme_from_cluster(
     name: str,
     symbols: list[str],
     description: Optional[str] = None,
@@ -361,7 +361,7 @@ async def create_theme_from_cluster(
 
 
 @router.post("/{theme_id}/add-constituents")
-async def add_theme_constituents(
+def add_theme_constituents(
     theme_id: int,
     symbols: list[str],
     db: Session = Depends(get_db),
@@ -397,7 +397,7 @@ async def add_theme_constituents(
 
 
 @router.delete("/{theme_id}")
-async def deactivate_theme(
+def deactivate_theme(
     theme_id: int,
     db: Session = Depends(get_db),
 ):

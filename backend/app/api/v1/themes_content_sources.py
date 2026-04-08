@@ -38,7 +38,7 @@ router = APIRouter()
 
 
 @router.get("/twitter/session", response_model=TwitterSessionStatusResponse)
-async def get_twitter_session_status() -> TwitterSessionStatusResponse:
+def get_twitter_session_status() -> TwitterSessionStatusResponse:
     """Get current XUI auth/session status for twitter ingestion."""
     service = XUISessionBridgeService()
     try:
@@ -49,7 +49,7 @@ async def get_twitter_session_status() -> TwitterSessionStatusResponse:
 
 
 @router.post("/twitter/session/challenge", response_model=TwitterSessionChallengeResponse)
-async def create_twitter_session_challenge(request: Request) -> TwitterSessionChallengeResponse:
+def create_twitter_session_challenge(request: Request) -> TwitterSessionChallengeResponse:
     """Issue one-time challenge token for browser-extension session import."""
     service = XUISessionBridgeService()
     origin = request.headers.get("origin")
@@ -62,7 +62,7 @@ async def create_twitter_session_challenge(request: Request) -> TwitterSessionCh
 
 
 @router.post("/twitter/session/import", response_model=TwitterSessionStatusResponse)
-async def import_twitter_session_from_browser(
+def import_twitter_session_from_browser(
     payload: TwitterSessionImportRequest,
     request: Request,
 ) -> TwitterSessionStatusResponse:
@@ -86,7 +86,7 @@ async def import_twitter_session_from_browser(
 
 
 @router.get("/sources", response_model=list[ContentSourceResponse])
-async def list_content_sources(
+def list_content_sources(
     active_only: bool = Query(True),
     pipeline: Optional[str] = Query(None, description="Filter by pipeline: technical or fundamental"),
     db: Session = Depends(get_db),
@@ -109,7 +109,7 @@ async def list_content_sources(
 
 
 @router.post("/sources", response_model=ContentSourceResponse)
-async def add_content_source(
+def add_content_source(
     source: ContentSourceCreate,
     db: Session = Depends(get_db),
 ):
@@ -146,7 +146,7 @@ async def add_content_source(
 
 
 @router.put("/sources/{source_id}", response_model=ContentSourceResponse)
-async def update_content_source(
+def update_content_source(
     source_id: int,
     source: ContentSourceUpdate,
     db: Session = Depends(get_db),
@@ -202,7 +202,7 @@ async def update_content_source(
 
 
 @router.delete("/sources/{source_id}")
-async def delete_content_source(
+def delete_content_source(
     source_id: int,
     db: Session = Depends(get_db),
 ):
@@ -218,7 +218,7 @@ async def delete_content_source(
 
 
 @router.post("/sources/seed-defaults")
-async def seed_default_sources_endpoint(
+def seed_default_sources_endpoint(
     db: Session = Depends(get_db),
 ):
     """Seed default content sources."""
@@ -227,7 +227,7 @@ async def seed_default_sources_endpoint(
 
 
 @router.post("/ingest", response_model=IngestionResponse)
-async def run_ingestion(
+def run_ingestion(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
@@ -239,7 +239,7 @@ async def run_ingestion(
 
 
 @router.post("/extract", response_model=ExtractionResponse)
-async def run_extraction(
+def run_extraction(
     limit: int = Query(50, ge=1, le=200, description="Max items to process"),
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$", description="Pipeline: technical or fundamental"),
     db: Session = Depends(get_db),
@@ -254,7 +254,7 @@ async def run_extraction(
 
 
 @router.post("/calculate-metrics")
-async def calculate_theme_metrics(
+def calculate_theme_metrics(
     pipeline: str = Query("technical", pattern="^(technical|fundamental)$", description="Pipeline: technical or fundamental"),
     db: Session = Depends(get_db),
 ):
@@ -268,7 +268,7 @@ async def calculate_theme_metrics(
 
 
 @router.post("/validate-all")
-async def validate_all_themes(
+def validate_all_themes(
     min_correlation: float = Query(0.5, ge=0.2, le=0.9),
     db: Session = Depends(get_db),
 ):

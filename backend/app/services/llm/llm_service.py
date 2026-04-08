@@ -6,7 +6,7 @@ Provides:
 - Automatic fallback handling between models
 - Streaming support
 - Retry logic with exponential backoff
-- Support for Groq, Z.AI, DeepSeek, Together AI, OpenRouter, and more
+- Support for sanctioned providers (Groq, Minimax, Z.AI)
 """
 import asyncio
 import logging
@@ -118,22 +118,6 @@ class LLMService:
         zai_base = getattr(settings, "zai_api_base", None) or os.environ.get("ZAI_API_BASE")
         if zai_base:
             os.environ["ZAI_API_BASE"] = zai_base
-
-        # DeepSeek
-        deepseek_key = getattr(settings, "deepseek_api_key", None) or os.environ.get("DEEPSEEK_API_KEY")
-        if deepseek_key:
-            os.environ["DEEPSEEK_API_KEY"] = deepseek_key
-
-        # Together AI
-        together_key = getattr(settings, "together_api_key", None) or os.environ.get("TOGETHER_API_KEY")
-        if together_key:
-            os.environ["TOGETHER_API_KEY"] = together_key
-            os.environ["TOGETHERAI_API_KEY"] = together_key
-
-        # OpenRouter
-        openrouter_key = getattr(settings, "openrouter_api_key", None) or os.environ.get("OPENROUTER_API_KEY")
-        if openrouter_key:
-            os.environ["OPENROUTER_API_KEY"] = openrouter_key
 
         # Minimax — cache resolved values for per-request use
         self._minimax_api_key = getattr(settings, "minimax_api_key", None) or os.environ.get("MINIMAX_API_KEY")

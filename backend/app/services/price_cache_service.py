@@ -31,6 +31,10 @@ from ..utils.market_hours import (
     is_market_open, get_eastern_now, EASTERN, MARKET_CLOSE_TIME,
     is_trading_day, get_last_trading_day
 )
+from .cache.price_cache_failure_telemetry import PriceCacheFailureTelemetry
+from .cache.price_cache_freshness import PriceCacheFreshnessPolicy
+from .cache.price_cache_warmup import PriceCacheWarmupStore
+from .errors import CacheRefreshError
 from .redis_pool import get_redis_client, get_bulk_redis_client, is_redis_enabled
 
 logger = logging.getLogger(__name__)
@@ -78,6 +82,26 @@ class PriceCacheService:
                 logger.warning("Redis connection failed. Will use database fallback.")
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
+
+        self._freshness_policy = PriceCacheFreshnessPolicy(
+            logger=logger,
+            redis_client=self._redis_client,
+            fetch_meta_key_template=self.REDIS_KEY_FETCH_META,
+            get_expected_data_date=self._get_expected_data_date,
+            get_fetch_metadata=self._get_fetch_metadata,
+        )
+        self._warmup_store = PriceCacheWarmupStore(
+            logger=logger,
+            redis_client=self._redis_client,
+            metadata_key=WARMUP_METADATA_KEY,
+            heartbeat_key=WARMUP_HEARTBEAT_KEY,
+        )
+        self._failure_telemetry = PriceCacheFailureTelemetry(
+            logger=logger,
+            redis_client=self._redis_client,
+            key_template=self.SYMBOL_FAILURE_KEY,
+            ttl_seconds=self.SYMBOL_FAILURE_TTL,
+        )
 
     @classmethod
     def get_instance(cls, redis_client: Optional[redis.Redis] = None):
@@ -433,8 +457,24 @@ class PriceCacheService:
 
             return data
 
-        except Exception as e:
-            logger.error(f"Error fetching {symbol}: {e}", exc_info=True)
+        except Exception as exc:
+            error = CacheRefreshError(
+                f"Full cache refresh failed for {symbol}: {exc}",
+                error_code="price_cache_full_refresh_failed",
+            )
+            logger.error(
+                "%s",
+                error,
+                extra={
+                    "event": "cache_refresh_failed",
+                    "path": "price_cache_service._fetch_full_and_cache",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": symbol,
+                    "error_code": error.error_code,
+                },
+                exc_info=exc,
+            )
             return None
 
     def _fetch_incremental_and_merge(
@@ -529,8 +569,24 @@ class PriceCacheService:
 
             return merged_data
 
-        except Exception as e:
-            logger.error(f"Error fetching incremental data for {symbol}: {e}", exc_info=True)
+        except Exception as exc:
+            error = CacheRefreshError(
+                f"Incremental cache refresh failed for {symbol}: {exc}",
+                error_code="price_cache_incremental_refresh_failed",
+            )
+            logger.error(
+                "%s",
+                error,
+                extra={
+                    "event": "cache_refresh_failed",
+                    "path": "price_cache_service._fetch_incremental_and_merge",
+                    "pipeline": None,
+                    "run_id": None,
+                    "symbol": symbol,
+                    "error_code": error.error_code,
+                },
+                exc_info=exc,
+            )
             return cached_data  # Return stale cache as fallback
 
     def _store_recent_in_redis(self, symbol: str, data: pd.DataFrame) -> None:
@@ -660,14 +716,7 @@ class PriceCacheService:
         now_et: Optional[datetime] = None,
     ) -> bool:
         """Return True when a fetch-meta record marks a same-day bar stale after close."""
-        if not meta or not meta.get("needs_refresh_after_close", False):
-            return False
-
-        now_et = now_et or get_eastern_now()
-        if is_market_open(now_et):
-            return False
-
-        return now_et.time() >= time(16, 30)
+        return self._freshness_policy.is_fetch_metadata_stale(meta, now_et=now_et)
 
     def _is_intraday_data_stale(self, symbol: str) -> bool:
         """
@@ -680,11 +729,7 @@ class PriceCacheService:
         This catches the case where data was fetched at 2 PM with an
         incomplete "today" bar, but user is now scanning at 6 PM.
         """
-        meta = self._get_fetch_metadata(symbol)
-        is_stale = self._is_fetch_metadata_stale(meta)
-        if is_stale:
-            logger.debug(f"{symbol}: intraday data is stale (fetched during market, now after close)")
-        return is_stale
+        return self._freshness_policy.is_intraday_data_stale(symbol)
 
     def get_stale_intraday_symbols(self) -> List[str]:
         """
@@ -696,67 +741,7 @@ class PriceCacheService:
         Returns:
             List of symbols that have stale intraday data
         """
-        if not self._redis_client:
-            return []
-
-        try:
-            # Pre-compute market state once (not per-symbol)
-            now_et = get_eastern_now()
-            market_open = is_market_open(now_et)
-
-            # If market is still open, no data is "stale" yet
-            if market_open:
-                return []
-
-            # Check if we're past the close buffer
-            post_close_buffer = time(16, 30)
-            if now_et.time() < post_close_buffer:
-                return []
-
-            # Collect all fetch_meta keys via SCAN
-            pattern = "price:*:fetch_meta"
-            all_keys = []
-            all_symbols = []
-            cursor = 0
-
-            while True:
-                cursor, keys = self._redis_client.scan(cursor, match=pattern, count=500)
-                for key in keys:
-                    key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                    parts = key_str.split(':')
-                    if len(parts) == 3:
-                        all_keys.append(key)
-                        all_symbols.append(parts[1])
-                if cursor == 0:
-                    break
-
-            if not all_keys:
-                return []
-
-            # Pipeline-read all fetch_meta values at once
-            pipeline = self._redis_client.pipeline()
-            for key in all_keys:
-                pipeline.get(key)
-            meta_values = pipeline.execute()
-
-            # Filter locally for stale intraday data
-            stale_symbols = []
-            for symbol, meta_json in zip(all_symbols, meta_values):
-                if not meta_json:
-                    continue
-                try:
-                    meta = json.loads(meta_json)
-                    if meta.get("needs_refresh_after_close", False):
-                        stale_symbols.append(symbol)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-
-            logger.info(f"Found {len(stale_symbols)} symbols with stale intraday data")
-            return stale_symbols
-
-        except Exception as e:
-            logger.error(f"Error scanning for stale intraday symbols: {e}", exc_info=True)
-            return []
+        return self._freshness_policy.get_stale_intraday_symbols()
 
     def get_staleness_status(self) -> Dict:
         """
@@ -765,19 +750,7 @@ class PriceCacheService:
         Returns:
             Dict with staleness info including count and market status
         """
-        now_et = get_eastern_now()
-        market_open = is_market_open(now_et)
-
-        # Get stale symbols
-        stale_symbols = self.get_stale_intraday_symbols()
-
-        return {
-            "stale_intraday_count": len(stale_symbols),
-            "stale_symbols": stale_symbols[:10],  # Return first 10 for display
-            "market_is_open": market_open,
-            "current_time_et": now_et.strftime("%Y-%m-%d %H:%M:%S ET"),
-            "has_stale_data": len(stale_symbols) > 0
-        }
+        return self._freshness_policy.get_staleness_status()
 
     def get_cache_health_status(self) -> Dict:
         """
@@ -1108,21 +1081,11 @@ class PriceCacheService:
         Returns:
             Dict with status, count, total, completed_at or None
         """
-        if not self._redis_client:
-            return None
-
-        try:
-            meta_json = self._redis_client.get(WARMUP_METADATA_KEY)
-            if meta_json:
-                return json.loads(meta_json)
-            return None
-        except Exception as e:
-            logger.error(f"Error getting warmup metadata: {e}")
-            return None
+        return self._warmup_store.get_warmup_metadata()
 
     def get_warmup_metadata(self) -> Optional[Dict]:
         """Public wrapper for last warmup metadata used by downstream scheduled tasks."""
-        return self._get_warmup_metadata()
+        return self._warmup_store.get_warmup_metadata()
 
     def save_warmup_metadata(self, status: str, count: int, total: int, error: str = None) -> None:
         """
@@ -1134,25 +1097,7 @@ class PriceCacheService:
             total: Total number of symbols attempted
             error: Error message if failed
         """
-        if not self._redis_client:
-            return
-
-        try:
-            meta = {
-                "status": status,
-                "count": count,
-                "total": total,
-                "completed_at": datetime.now().isoformat(),
-                "error": error
-            }
-            self._redis_client.setex(
-                WARMUP_METADATA_KEY,
-                86400 * 7,  # 7 days TTL
-                json.dumps(meta)
-            )
-            logger.info(f"Saved warmup metadata: {status} ({count}/{total})")
-        except Exception as e:
-            logger.error(f"Error saving warmup metadata: {e}")
+        self._warmup_store.save_warmup_metadata(status=status, count=count, total=total, error=error)
 
     def update_warmup_heartbeat(self, current: int, total: int, percent: float = None) -> None:
         """
@@ -1166,24 +1111,7 @@ class PriceCacheService:
             total: Total symbols to process
             percent: Optional percentage complete
         """
-        if not self._redis_client:
-            return
-
-        try:
-            heartbeat = {
-                "status": "running",
-                "current": current,
-                "total": total,
-                "percent": percent or round((current / total) * 100, 1) if total > 0 else 0,
-                "updated_at": datetime.now().isoformat()
-            }
-            self._redis_client.setex(
-                WARMUP_HEARTBEAT_KEY,
-                3600,  # 1 hour TTL
-                json.dumps(heartbeat)
-            )
-        except Exception as e:
-            logger.error(f"Error updating warmup heartbeat: {e}")
+        self._warmup_store.update_warmup_heartbeat(current=current, total=total, percent=percent)
 
     def _get_heartbeat_info(self) -> Optional[Dict]:
         """
@@ -1193,34 +1121,7 @@ class PriceCacheService:
             Dict with 'minutes' (float), 'status' (str), and raw heartbeat data,
             or None if no heartbeat found.
         """
-        if not self._redis_client:
-            return None
-
-        try:
-            heartbeat_json = self._redis_client.get(WARMUP_HEARTBEAT_KEY)
-            if not heartbeat_json:
-                return None
-
-            heartbeat = json.loads(heartbeat_json)
-            hb_status = heartbeat.get('status', 'running')
-
-            # For terminal states, use completed_at; for running, use updated_at
-            ts_field = 'completed_at' if hb_status in ('completed', 'failed') else 'updated_at'
-            ts_str = heartbeat.get(ts_field, heartbeat.get('updated_at', ''))
-            if ts_str:
-                ts = datetime.fromisoformat(ts_str)
-                minutes = (datetime.now() - ts).total_seconds() / 60
-            else:
-                minutes = None
-
-            return {
-                **heartbeat,
-                "minutes": minutes,
-                "status": hb_status,
-            }
-        except Exception as e:
-            logger.error(f"Error getting heartbeat info: {e}")
-            return None
+        return self._warmup_store.get_heartbeat_info()
 
     def _get_minutes_since_heartbeat(self) -> Optional[float]:
         """
@@ -1230,10 +1131,7 @@ class PriceCacheService:
         Returns:
             Minutes since last heartbeat, or None if no heartbeat found
         """
-        info = self._get_heartbeat_info()
-        if info is None:
-            return None
-        return info.get("minutes")
+        return self._warmup_store.get_minutes_since_heartbeat()
 
     def _get_task_progress(self) -> Dict:
         """
@@ -1242,33 +1140,11 @@ class PriceCacheService:
         Returns:
             Dict with current, total, percent or empty dict
         """
-        if not self._redis_client:
-            return {}
-
-        try:
-            heartbeat_json = self._redis_client.get(WARMUP_HEARTBEAT_KEY)
-            if not heartbeat_json:
-                return {}
-
-            heartbeat = json.loads(heartbeat_json)
-            return {
-                "current": heartbeat.get('current'),
-                "total": heartbeat.get('total'),
-                "progress": heartbeat.get('percent')
-            }
-        except Exception as e:
-            logger.error(f"Error getting task progress: {e}")
-            return {}
+        return self._warmup_store.get_task_progress()
 
     def clear_warmup_heartbeat(self) -> None:
         """Clear the warmup heartbeat. Kept for backward compatibility."""
-        if not self._redis_client:
-            return
-
-        try:
-            self._redis_client.delete(WARMUP_HEARTBEAT_KEY)
-        except Exception as e:
-            logger.error(f"Error clearing warmup heartbeat: {e}")
+        self._warmup_store.clear_warmup_heartbeat()
 
     def complete_warmup_heartbeat(self, status: str = "completed") -> None:
         """
@@ -1280,21 +1156,7 @@ class PriceCacheService:
         Args:
             status: Terminal status - "completed" or "failed"
         """
-        if not self._redis_client:
-            return
-
-        try:
-            heartbeat = {
-                "status": status,
-                "completed_at": datetime.now().isoformat(),
-            }
-            self._redis_client.setex(
-                WARMUP_HEARTBEAT_KEY,
-                3600,  # 1 hour TTL (same as running heartbeats)
-                json.dumps(heartbeat)
-            )
-        except Exception as e:
-            logger.error(f"Error completing warmup heartbeat: {e}")
+        self._warmup_store.complete_warmup_heartbeat(status=status)
 
     def clear_fetch_metadata(self, symbol: str) -> None:
         """
@@ -1510,19 +1372,8 @@ class PriceCacheService:
         Delegates to _get_expected_data_date() which correctly handles all
         edge cases: market hours, grace periods, weekends, and holidays.
         """
-        if last_date is None:
-            return False
-
-        expected = self._get_expected_data_date()
-        if expected is None:
-            return False
-
-        is_fresh = last_date >= expected
-
-        if not is_fresh:
-            logger.debug(f"Data is stale (last: {last_date}, expected: {expected})")
-
-        return is_fresh
+        del max_age_days
+        return self._freshness_policy.is_data_fresh(last_date)
 
     def store_in_cache(self, symbol: str, data: pd.DataFrame, also_store_db: bool = True) -> None:
         """
@@ -2107,25 +1958,8 @@ class PriceCacheService:
         Returns the new failure count. When count >= SYMBOL_FAILURE_THRESHOLD,
         the caller should deactivate the symbol in stock_universe.
         """
-        if not self._redis_client:
-            return 0
-
-        try:
-            key = self.SYMBOL_FAILURE_KEY.format(symbol=symbol)
-            count = self._redis_client.incr(key)
-            self._redis_client.expire(key, self.SYMBOL_FAILURE_TTL)
-            return count
-        except Exception as e:
-            logger.error(f"Error recording failure for {symbol}: {e}")
-            return 0
+        return self._failure_telemetry.record_symbol_failure(symbol)
 
     def clear_symbol_failure(self, symbol: str) -> None:
         """Clear failure counter on successful fetch."""
-        if not self._redis_client:
-            return
-
-        try:
-            key = self.SYMBOL_FAILURE_KEY.format(symbol=symbol)
-            self._redis_client.delete(key)
-        except Exception as e:
-            logger.error(f"Error clearing failure for {symbol}: {e}")
+        self._failure_telemetry.clear_symbol_failure(symbol)

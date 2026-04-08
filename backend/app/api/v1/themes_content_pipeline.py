@@ -20,6 +20,7 @@ from ...services.theme_pipeline_state_service import (
     compute_pipeline_state_health,
 )
 from ...theme_platform.content_browser_queries import render_content_items_csv_chunk
+from ...theme_platform.contracts import PipelineRunStatusPayload
 from .themes_common import _VALID_THEME_PIPELINES, resolve_source_ids_for_pipeline
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def _themes_api_module():
 
 
 @router.post("/pipeline/run")
-async def run_pipeline_async(
+def run_pipeline_async(
     pipeline: Optional[str] = Query(None, description="Pipeline: technical, fundamental, or None for both"),
     lookback_days: Optional[int] = Query(None, ge=1, le=30, description="Re-fetch articles from the last N days (backfill mode)"),
     db: Session = Depends(get_db),
@@ -79,7 +80,7 @@ async def run_pipeline_async(
 
 
 @router.get("/pipeline/{run_id}/status")
-async def get_pipeline_status(
+def get_pipeline_status(
     run_id: str,
     db: Session = Depends(get_db),
 ):
@@ -94,7 +95,7 @@ async def get_pipeline_status(
     if not pipeline_run:
         raise HTTPException(status_code=404, detail=f"Pipeline run {run_id} not found")
 
-    response = {
+    response: PipelineRunStatusPayload = {
         "run_id": run_id,
         "task_id": pipeline_run.task_id,
         "status": pipeline_run.status,
@@ -149,7 +150,7 @@ async def get_pipeline_status(
 
 
 @router.get("/pipeline/runs")
-async def list_pipeline_runs(
+def list_pipeline_runs(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
@@ -179,7 +180,7 @@ async def list_pipeline_runs(
 
 
 @router.get("/pipeline/failed-count")
-async def get_failed_items_count(
+def get_failed_items_count(
     pipeline: Optional[str] = Query(None, description="Filter by pipeline"),
     db: Session = Depends(get_db),
 ):
@@ -212,7 +213,7 @@ async def get_failed_items_count(
 
 
 @router.get("/pipeline/state-health")
-async def get_pipeline_state_health(
+def get_pipeline_state_health(
     pipeline: Optional[str] = Query(None, description="Pipeline: technical or fundamental"),
     window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
     db: Session = Depends(get_db),
@@ -229,7 +230,7 @@ async def get_pipeline_state_health(
 
 
 @router.get("/pipeline/observability", response_model=ThemePipelineObservabilityResponse)
-async def get_pipeline_observability(
+def get_pipeline_observability(
     pipeline: str = Query(..., description="Pipeline: technical or fundamental"),
     window_days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
     db: Session = Depends(get_db),
@@ -245,7 +246,7 @@ async def get_pipeline_observability(
 
 
 @router.get("/content", response_model=ContentItemsListResponse)
-async def list_content_items(
+def list_content_items(
     search: Optional[str] = Query(None, description="Search in title, source_name, tickers"),
     source_type: Optional[str] = Query(None, description="Filter: substack, twitter, news, reddit"),
     sentiment: Optional[str] = Query(None, description="Filter: bullish, bearish, neutral"),
@@ -286,7 +287,7 @@ async def list_content_items(
 
 
 @router.get("/content/export")
-async def export_content_items(
+def export_content_items(
     search: Optional[str] = Query(None, description="Search in title, source_name, tickers"),
     source_type: Optional[str] = Query(None, description="Filter: substack, twitter, news, reddit"),
     sentiment: Optional[str] = Query(None, description="Filter: bullish, bearish, neutral"),

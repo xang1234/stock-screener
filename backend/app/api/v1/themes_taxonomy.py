@@ -26,7 +26,7 @@ router = APIRouter()
 
 
 @router.get("/taxonomy/l1", response_model=L1ThemeRankingsResponse)
-async def get_l1_rankings(
+def get_l1_rankings(
     pipeline: str = Query("technical", description="Pipeline filter"),
     category: Optional[str] = Query(None, description="Filter by L1 category"),
     sort_by: str = Query("momentum_score", description="Sort field: momentum_score, mentions_7d, num_constituents, basket_return_1w, basket_rs_vs_spy, display_name, rank"),
@@ -54,7 +54,7 @@ async def get_l1_rankings(
 
 
 @router.get("/taxonomy/l1/{l1_id}/children", response_model=L1ChildrenResponse)
-async def get_l1_children(
+def get_l1_children(
     l1_id: int,
     sort_by: str = Query("momentum_score", description="Sort field"),
     sort_order: str = Query("desc", description="Sort order: asc or desc"),
@@ -83,7 +83,7 @@ async def get_l1_children(
 
 
 @router.post("/taxonomy/assign")
-async def run_taxonomy_assignment(
+def run_taxonomy_assignment(
     request: TaxonomyAssignmentRequest,
     db: Session = Depends(get_db),
 ):
@@ -100,7 +100,7 @@ async def run_taxonomy_assignment(
 
 
 @router.post("/taxonomy/assign/async")
-async def run_taxonomy_assignment_async(
+def run_taxonomy_assignment_async(
     pipeline: str = Query("technical"),
     dry_run: bool = Query(False),
     db: Session = Depends(get_db),
@@ -114,7 +114,7 @@ async def run_taxonomy_assignment_async(
 
 
 @router.put("/taxonomy/{l2_id}/reassign")
-async def reassign_l2_to_l1(
+def reassign_l2_to_l1(
     l2_id: int,
     request: L2ReassignRequest,
     db: Session = Depends(get_db),
@@ -134,7 +134,7 @@ async def reassign_l2_to_l1(
 
 
 @router.get("/taxonomy/unassigned", response_model=UnassignedThemesResponse)
-async def get_unassigned_themes(
+def get_unassigned_themes(
     pipeline: str = Query("technical"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -152,7 +152,7 @@ async def get_unassigned_themes(
 
 
 @router.get("/taxonomy/categories", response_model=L1CategoriesResponse)
-async def get_l1_categories(
+def get_l1_categories(
     pipeline: str = Query("technical"),
     db: Session = Depends(get_db),
 ):
@@ -164,4 +164,3 @@ async def get_l1_categories(
     return L1CategoriesResponse(
         categories=[L1CategoryItem(**category) for category in categories],
     )
-

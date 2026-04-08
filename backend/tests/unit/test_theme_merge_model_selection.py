@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -35,15 +34,9 @@ def _llm_json_response(payload: str):
     )
 
 
-def test_load_merge_model_config_reads_llm_merge_model_setting(db_session, monkeypatch):
-    db_session.add_all(
-        [
-            AppSetting(key="llm_merge_model", value="ollama_chat/qwen3:14b", category="llm"),
-            AppSetting(key="ollama_api_base", value="http://localhost:22434", category="llm"),
-        ]
-    )
+def test_load_merge_model_config_reads_llm_merge_model_setting(db_session):
+    db_session.add(AppSetting(key="llm_merge_model", value="openai/glm-4.7-flash", category="llm"))
     db_session.commit()
-    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
     service = ThemeMergingService.__new__(ThemeMergingService)
     service.db = db_session
@@ -51,9 +44,20 @@ def test_load_merge_model_config_reads_llm_merge_model_setting(db_session, monke
 
     service._load_merge_model_config()
 
-    assert service.merge_model_id == "ollama_chat/qwen3:14b"
-    assert "OLLAMA_API_BASE" in os.environ
-    assert os.environ["OLLAMA_API_BASE"] == "http://localhost:22434"
+    assert service.merge_model_id == "openai/glm-4.7-flash"
+
+
+def test_load_merge_model_config_rejects_unsupported_model(db_session):
+    db_session.add(AppSetting(key="llm_merge_model", value="ollama_chat/qwen3:14b", category="llm"))
+    db_session.commit()
+
+    service = ThemeMergingService.__new__(ThemeMergingService)
+    service.db = db_session
+    service.merge_model_id = ThemeMergingService.DEFAULT_MERGE_MODEL
+
+    service._load_merge_model_config()
+
+    assert service.merge_model_id == ThemeMergingService.DEFAULT_MERGE_MODEL
 
 
 def test_verify_merge_with_llm_uses_configured_merge_model_without_fallbacks():

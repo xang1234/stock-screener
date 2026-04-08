@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -13,6 +14,14 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
 from ..config import settings
+from .errors import (
+    AuthTokenDecodeError,
+    AuthTokenError,
+    AuthTokenExpiredError,
+    AuthTokenSignatureError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -119,7 +128,7 @@ def request_is_authenticated(request: Request | None) -> bool:
     return _verify_session_token(token)
 
 
-async def require_server_session(request: Request) -> bool:
+def require_server_session(request: Request) -> bool:
     """FastAPI dependency enforcing server auth on protected routes."""
     if not server_auth_required():
         return True
@@ -165,15 +174,47 @@ def _sign_payload(payload: dict[str, int | str]) -> str:
 
 def _verify_session_token(token: str) -> bool:
     try:
-        raw_payload, raw_sig = token.split(".", 1)
-    except ValueError:
+        _decode_and_validate_session_token(token)
+        return True
+    except AuthTokenExpiredError as exc:
+        logger.info(
+            "Server auth token expired",
+            extra={
+                "event": "server_auth_token_validation_failed",
+                "path": "server_auth._verify_session_token",
+                "pipeline": None,
+                "run_id": None,
+                "symbol": None,
+                "error_code": exc.error_code,
+            },
+        )
         return False
+    except AuthTokenError as exc:
+        logger.warning(
+            "Server auth token rejected",
+            extra={
+                "event": "server_auth_token_validation_failed",
+                "path": "server_auth._verify_session_token",
+                "pipeline": None,
+                "run_id": None,
+                "symbol": None,
+                "error_code": exc.error_code,
+            },
+        )
+        return False
+
+
+def _decode_and_validate_session_token(token: str) -> dict[str, int | str]:
+    try:
+        raw_payload, raw_sig = token.split(".", 1)
+    except ValueError as exc:
+        raise AuthTokenDecodeError("Malformed session token") from exc
 
     try:
         payload_bytes = _b64_decode(raw_payload)
         supplied_sig = _b64_decode(raw_sig)
-    except Exception:
-        return False
+    except (ValueError, TypeError) as exc:
+        raise AuthTokenDecodeError("Invalid session token encoding") from exc
 
     expected_sig = hmac.new(
         _session_secret().encode("utf-8"),
@@ -181,16 +222,26 @@ def _verify_session_token(token: str) -> bool:
         hashlib.sha256,
     ).digest()
     if not hmac.compare_digest(supplied_sig, expected_sig):
-        return False
+        raise AuthTokenSignatureError("Invalid session token signature")
 
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
-    except Exception:
-        return False
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AuthTokenDecodeError("Invalid session token payload") from exc
 
-    exp = int(payload.get("exp") or 0)
+    if not isinstance(payload, dict):
+        raise AuthTokenDecodeError("Invalid session token payload shape")
+    if payload.get("sub") != "server-user":
+        raise AuthTokenDecodeError("Invalid session token subject")
+
+    try:
+        exp = int(payload.get("exp") or 0)
+    except (TypeError, ValueError) as exc:
+        raise AuthTokenDecodeError("Invalid session token expiry") from exc
     now = int(time.time())
-    return exp > now and payload.get("sub") == "server-user"
+    if exp <= now:
+        raise AuthTokenExpiredError("Session token expired")
+    return payload
 
 
 def _b64_encode(value: bytes) -> str:

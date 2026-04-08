@@ -3,11 +3,9 @@ Theme Extraction Service
 
 Uses LLMService (via LiteLLM) to extract themes and tickers from unstructured content.
 This is the core intelligence layer that identifies market themes from text.
-Falls back to Google Gemini if LiteLLM providers are unavailable.
 """
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import replace
@@ -18,7 +16,7 @@ from typing import Optional
 
 import numpy as np
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ..infra.db.repositories.theme_alias_repo import SqlThemeAliasRepository
@@ -32,25 +30,12 @@ from ..models.theme import (
     ThemeConstituent,
 )
 from ..models.app_settings import AppSetting
-from ..config import settings
-from .llm import LLMService, LLMError, LLMQuotaExceededError
+from .errors import ProviderQuotaServiceError, ProviderRateLimitServiceError
+from .llm import LLMService, LLMError, LLMQuotaExceededError, LLMRateLimitError
+from .llm.config import is_model_supported_for_use_case
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from .theme_lifecycle_service import set_initial_lifecycle_defaults
-
-# Optional Gemini import for fallback
-# Suppress Pydantic warnings from google-genai library (third-party issue)
-import warnings
-warnings.filterwarnings("ignore", message="Field name .* shadows an attribute in parent")
-
-try:
-    from google import genai
-    from google.genai import types
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    genai = None
-    types = None
 
 logger = logging.getLogger(__name__)
 
@@ -174,14 +159,7 @@ Return ONLY the JSON array, no other text."""
 
 
 class ThemeExtractionService:
-    """Service for extracting themes from content using LLMService or Google Gemini API"""
-
-    # Gemini models (fallback if LiteLLM providers not available)
-    GEMINI_MODELS = [
-        "models/gemini-2.0-flash",
-        "models/gemini-2.0-flash-lite",
-        "models/gemini-2.5-flash",
-    ]
+    """Service for extracting themes from content using sanctioned LiteLLM providers."""
     DEFAULT_EXTRACTION_MAX_TOKENS = 2000
     HIGH_EXTRACTION_MAX_TOKENS = 4000
     PROCESSABLE_STATUSES = {"pending", "failed_retryable"}
@@ -255,8 +233,7 @@ class ThemeExtractionService:
         self._load_pipeline_config()
 
         self.llm = None
-        self.gemini_client = None
-        self.provider = None  # 'litellm' or 'gemini'
+        self.provider = None
         self.configured_model = None  # Model ID from settings
         self._load_configured_model()
         self._init_client()
@@ -300,7 +277,7 @@ class ThemeExtractionService:
         except (TypeError, ValueError):
             return float(fallback)
 
-    def _load_pipeline_config(self):
+    def _load_pipeline_config(self) -> None:
         """Load pipeline-specific configuration"""
         try:
             from ..config.pipeline_config import get_pipeline_config
@@ -310,28 +287,29 @@ class ThemeExtractionService:
             logger.warning(f"Could not load pipeline config: {e}. Using defaults.")
             self.pipeline_config = None
 
-    def _load_configured_model(self):
+    def _load_configured_model(self) -> None:
         """Load configured model from database settings"""
         try:
             from ..models.app_settings import AppSetting
             setting = self.db.query(AppSetting).filter(AppSetting.key == "llm_extraction_model").first()
-            if setting:
+            if setting and setting.value and is_model_supported_for_use_case(
+                model_id=setting.value,
+                use_case="extraction",
+            ):
                 self.configured_model = setting.value
-                logger.info(f"Using configured extraction model: {self.configured_model}")
-
-                # Set OLLAMA_API_BASE if using Ollama model
-                if self.configured_model.startswith("ollama"):
-                    ollama_setting = self.db.query(AppSetting).filter(AppSetting.key == "ollama_api_base").first()
-                    if ollama_setting:
-                        os.environ["OLLAMA_API_BASE"] = ollama_setting.value
-                        logger.info(f"Set OLLAMA_API_BASE to: {ollama_setting.value}")
+                logger.info("Using configured extraction model: %s", self.configured_model)
             else:
+                if setting and setting.value:
+                    logger.warning(
+                        "Ignoring unsupported extraction model '%s'; using preset defaults",
+                        setting.value,
+                    )
                 self.configured_model = None
         except Exception as e:
             logger.warning(f"Could not load configured model: {e}")
             self.configured_model = None
 
-    def _load_reprocessing_config(self):
+    def _load_reprocessing_config(self) -> None:
         """Load reprocessing settings from database."""
         try:
             from ..models.app_settings import AppSetting
@@ -342,9 +320,8 @@ class ThemeExtractionService:
         except Exception:
             self.max_age_days = 30
 
-    def _init_client(self):
-        """Initialize LLM client - try LLMService first, then Gemini"""
-        # Try LLMService first (supports multiple providers via LiteLLM)
+    def _init_client(self) -> None:
+        """Initialize sanctioned LLM extraction client."""
         try:
             self.llm = LLMService(use_case="extraction")
             self.provider = "litellm"
@@ -352,21 +329,9 @@ class ThemeExtractionService:
             logger.info("LLMService initialized for theme extraction")
             return
         except Exception as e:
-            logger.warning(f"LLMService initialization failed: {e}")
+            logger.warning("LLMService initialization failed for extraction: %s", e)
 
-        # Fallback to Gemini
-        gemini_api_key = getattr(settings, "gemini_api_key", None) or getattr(settings, "google_api_key", None)
-        if not gemini_api_key:
-            gemini_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-
-        if gemini_api_key and GEMINI_AVAILABLE:
-            self.gemini_client = genai.Client(api_key=gemini_api_key)
-            self.provider = "gemini"
-            self._min_request_interval = 15.0  # Gemini has lower rate limit
-            logger.info("Gemini API client initialized for theme extraction (fallback)")
-            return
-
-        logger.warning("No LLM provider available - theme extraction will be disabled")
+        logger.error("No sanctioned LLM provider available for theme extraction")
 
     def _get_valid_tickers(self) -> set:
         """Get set of valid tickers from stock universe"""
@@ -479,7 +444,7 @@ class ThemeExtractionService:
                 cleaned.append(t)
         return list(set(cleaned))  # Dedupe
 
-    def _rate_limit(self):
+    def _rate_limit(self) -> None:
         """Apply rate limiting between API calls"""
         now = time.time()
         elapsed = now - self._last_request_time
@@ -496,7 +461,7 @@ class ThemeExtractionService:
         # Use configured model if set
         model_override = self.configured_model if self.configured_model else None
         active_model = model_override or self.llm.preset.primary.model_id
-        # Minimax M2.7 is the primary extraction model, with Z.AI and Groq as
+        # Minimax M2.7 is the primary extraction model, with Z.AI as
         # fallbacks. Each request starts from the primary; fallbacks only activate
         # if the primary exhausts its retries for that single request.
         allow_fallbacks = True
@@ -534,24 +499,6 @@ class ThemeExtractionService:
         else:
             return asyncio.run(_call())
 
-    def _try_generate_gemini(self, prompt: str, model: str) -> str:
-        """Try to generate content with Gemini API"""
-        system_prompt = self._get_system_prompt()
-        response = self.gemini_client.models.generate_content(
-            model=model,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[types.Part(text=system_prompt + "\n\n" + prompt)]
-                )
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=2000,
-            )
-        )
-        return response.text.strip()
-
     def _get_system_prompt(self) -> str:
         """Get the system prompt, optionally with pipeline-specific additions"""
         base_prompt = EXTRACTION_SYSTEM_PROMPT
@@ -575,7 +522,7 @@ Example themes for this pipeline: {examples_str}
 
     def extract_from_content(self, content_item: ContentItem) -> list[dict]:
         """
-        Extract themes from a single content item using LLM (Groq or Gemini)
+        Extract themes from a single content item using sanctioned LLM providers.
 
         Returns list of extracted theme mentions
         """
@@ -595,44 +542,21 @@ Example themes for this pipeline: {examples_str}
             content=content,
         )
 
+        response_text = ""
         try:
             # Apply rate limiting
             self._rate_limit()
 
-            # Try to generate based on provider
-            response_text = None
-            last_error = None
-
-            current_provider = self.provider
-
-            if current_provider == "litellm":
-                try:
-                    response_text = self._try_generate_litellm(prompt)
-                except Exception as e:
-                    logger.warning(f"LLMService failed: {e}")
-                    last_error = e
-                    # Fallback to Gemini if available
-                    if self.gemini_client:
-                        current_provider = "gemini"
-
-            if current_provider == "gemini" and response_text is None:
-                for model in self.GEMINI_MODELS:
-                    try:
-                        response_text = self._try_generate_gemini(prompt, model)
-                        break
-                    except Exception as e:
-                        error_str = str(e)
-                        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "rate_limit" in error_str.lower():
-                            wait_time = 15
-                            logger.warning(f"Rate limited on {model}, waiting {wait_time}s before trying next model...")
-                            time.sleep(wait_time)
-                            last_error = e
-                            continue
-                        else:
-                            raise
-
-            if response_text is None:
-                raise last_error or Exception("All providers exhausted")
+            if self.provider != "litellm":
+                raise ThemeExtractionProviderUnavailableError(
+                    "No sanctioned extraction provider is configured"
+                )
+            try:
+                response_text = self._try_generate_litellm(prompt)
+            except LLMQuotaExceededError as exc:
+                raise ProviderQuotaServiceError(str(exc)) from exc
+            except LLMRateLimitError as exc:
+                raise ProviderRateLimitServiceError(str(exc)) from exc
 
             # Extract JSON from response
             # Handle Qwen3 thinking tags first
@@ -688,7 +612,12 @@ Example themes for this pipeline: {examples_str}
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             logger.error(f"Raw response: {response_text[:500] if response_text else 'EMPTY'}")
             raise ThemeExtractionParseError(f"Failed to parse LLM response: {e}") from e
-        except Exception as e:
+        except (
+            ThemeExtractionProviderUnavailableError,
+            ProviderRateLimitServiceError,
+            ProviderQuotaServiceError,
+            LLMError,
+        ) as e:
             logger.error(f"LLM extraction failed (will retry): {e}")
             raise  # Re-raise so process_batch() marks extraction_error
 
@@ -1090,6 +1019,10 @@ Example themes for this pipeline: {examples_str}
             return "failed_retryable"
         if isinstance(error, ThemeExtractionProviderUnavailableError):
             return "failed_retryable"
+        if isinstance(error, ProviderRateLimitServiceError):
+            return "failed_retryable"
+        if isinstance(error, ProviderQuotaServiceError):
+            return "failed_terminal"
 
         error_text = str(error).lower()
         terminal_markers = (
@@ -1117,6 +1050,10 @@ Example themes for this pipeline: {examples_str}
             return "llm_provider_unavailable"
         if isinstance(error, LLMQuotaExceededError):
             return "llm_provider_quota_exhausted"
+        if isinstance(error, ProviderQuotaServiceError):
+            return error.error_code
+        if isinstance(error, ProviderRateLimitServiceError):
+            return error.error_code
         if isinstance(error, LLMError):
             return f"llm_{name}"
         if "json" in name:
@@ -1125,6 +1062,8 @@ Example themes for this pipeline: {examples_str}
 
     def _is_provider_quota_exhausted(self, error: Exception) -> bool:
         """Detect hard provider quota errors that should abort the current batch."""
+        if isinstance(error, ProviderQuotaServiceError):
+            return True
         if isinstance(error, LLMQuotaExceededError):
             return True
         error_text = str(error).lower()
@@ -1171,41 +1110,63 @@ Example themes for this pipeline: {examples_str}
 
             self.db.commit()
             return True, mention_count
-        except Exception as error:
-            self.db.rollback()
-
-            item_for_failure = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
-            if item_for_failure is None:
-                return False, 0
-
-            failure_state = self._load_pipeline_state(item_id)
-            if failure_state is None:
-                failure_state = ContentItemPipelineState(
-                    content_item_id=item_id,
-                    pipeline=self.pipeline,
-                    status="in_progress",
-                    attempt_count=1,
-                    last_attempt_at=datetime.utcnow(),
-                )
-                self.db.add(failure_state)
-
-            failure_state.status = self._classify_failure_status(error)
-            failure_state.last_attempt_at = datetime.utcnow()
-            failure_state.error_code = self._failure_code(error)
-            failure_state.error_message = str(error)[:4000]
-            failure_state.processed_at = None
-
-            # Compatibility writes
-            if isinstance(error, ThemeExtractionParseError):
-                item_for_failure.is_processed = False
-                item_for_failure.processed_at = None
-            else:
-                item_for_failure.is_processed = True
-                item_for_failure.processed_at = datetime.utcnow()
-            item_for_failure.extraction_error = str(error)
-
-            self.db.commit()
+        except (
+            ThemeExtractionParseError,
+            ThemeExtractionProviderUnavailableError,
+            ProviderRateLimitServiceError,
+            ProviderQuotaServiceError,
+            LLMError,
+            SQLAlchemyError,
+            ValueError,
+            TypeError,
+            RuntimeError,
+        ) as error:
+            self._record_processing_failure(item_id=item_id, error=error)
             raise
+        except Exception as error:
+            logger.exception(
+                "Unexpected extraction failure while processing content item %s; "
+                "recording failure state to avoid stuck in_progress rows",
+                item_id,
+            )
+            self._record_processing_failure(item_id=item_id, error=error)
+            raise
+
+    def _record_processing_failure(self, item_id: int, error: Exception) -> None:
+        """Persist failure details so pipeline rows do not remain stuck in-progress."""
+        self.db.rollback()
+
+        item_for_failure = self.db.query(ContentItem).filter(ContentItem.id == item_id).first()
+        if item_for_failure is None:
+            return
+
+        failure_state = self._load_pipeline_state(item_id)
+        if failure_state is None:
+            failure_state = ContentItemPipelineState(
+                content_item_id=item_id,
+                pipeline=self.pipeline,
+                status="in_progress",
+                attempt_count=1,
+                last_attempt_at=datetime.utcnow(),
+            )
+            self.db.add(failure_state)
+
+        failure_state.status = self._classify_failure_status(error)
+        failure_state.last_attempt_at = datetime.utcnow()
+        failure_state.error_code = self._failure_code(error)
+        failure_state.error_message = str(error)[:4000]
+        failure_state.processed_at = None
+
+        # Compatibility writes
+        if isinstance(error, ThemeExtractionParseError):
+            item_for_failure.is_processed = False
+            item_for_failure.processed_at = None
+        else:
+            item_for_failure.is_processed = True
+            item_for_failure.processed_at = datetime.utcnow()
+        item_for_failure.extraction_error = str(error)
+
+        self.db.commit()
 
     def _normalize_theme(self, theme: str) -> str:
         """

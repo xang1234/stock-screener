@@ -27,10 +27,14 @@ def test_extraction_preset_defaults_to_minimax_m27() -> None:
     preset = get_preset_for_use_case("extraction")
 
     assert preset.primary.model_id == "minimax/MiniMax-M2.7"
-    assert [model.model_id for model in preset.fallbacks] == [
-        "openai/glm-4.7-flash",
-        "groq/qwen/qwen3-32b",
-    ]
+    assert [model.model_id for model in preset.fallbacks] == ["openai/glm-4.7-flash"]
+
+
+def test_merge_preset_defaults_to_minimax_m27() -> None:
+    preset = get_preset_for_use_case("merge")
+
+    assert preset.primary.model_id == "minimax/MiniMax-M2.7"
+    assert [model.model_id for model in preset.fallbacks] == ["openai/glm-4.7-flash"]
 
 
 def test_apply_provider_overrides_injects_zai_api_key_and_base(monkeypatch) -> None:
@@ -133,7 +137,7 @@ def test_resolve_fallback_models_uses_full_chain_for_non_preset_override() -> No
     assert service._resolve_fallback_models(
         primary_model="deepseek/deepseek-chat",
         allow_fallbacks=True,
-    ) == ["openai/glm-4.7-flash", "groq/qwen/qwen3-32b"]
+    ) == ["openai/glm-4.7-flash"]
 
 
 def test_resolve_fallback_models_dedupes_primary_model() -> None:

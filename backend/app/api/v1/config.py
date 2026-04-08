@@ -27,7 +27,12 @@ from ...schemas.config import (
 )
 from ...config.pipeline_config import get_pipeline_config
 from ...services.theme_extraction_service import ThemeExtractionService
-from ...services.llm.config import AVAILABLE_MODELS, get_model_by_id
+from ...services.llm.config import (
+    AVAILABLE_MODELS,
+    DEFAULT_MODEL_BY_USE_CASE,
+    get_model_by_id,
+    is_model_supported_for_use_case,
+)
 from ...config import settings
 
 logger = logging.getLogger(__name__)
@@ -240,8 +245,30 @@ async def get_llm_config(
         - Available models list
     """
     # Get current settings
-    extraction_model_id = get_setting(db, "llm_extraction_model", "openai/glm-4.7-flash")
-    merge_model_id = get_setting(db, "llm_merge_model", "openai/glm-4.7-flash")
+    extraction_model_id = get_setting(
+        db,
+        "llm_extraction_model",
+        DEFAULT_MODEL_BY_USE_CASE["extraction"],
+    )
+    merge_model_id = get_setting(
+        db,
+        "llm_merge_model",
+        DEFAULT_MODEL_BY_USE_CASE["merge"],
+    )
+    if not is_model_supported_for_use_case(model_id=extraction_model_id, use_case="extraction"):
+        logger.warning(
+            "Unsupported persisted extraction model %s; falling back to %s",
+            extraction_model_id,
+            DEFAULT_MODEL_BY_USE_CASE["extraction"],
+        )
+        extraction_model_id = DEFAULT_MODEL_BY_USE_CASE["extraction"]
+    if not is_model_supported_for_use_case(model_id=merge_model_id, use_case="merge"):
+        logger.warning(
+            "Unsupported persisted merge model %s; falling back to %s",
+            merge_model_id,
+            DEFAULT_MODEL_BY_USE_CASE["merge"],
+        )
+        merge_model_id = DEFAULT_MODEL_BY_USE_CASE["merge"]
     ollama_api_base = get_setting(db, "ollama_api_base", "http://localhost:11434")
 
     # Also check environment variable override
@@ -286,19 +313,26 @@ async def update_llm_model(
     Returns:
         Updated configuration
     """
-    # Validate model exists
+    supported_use_cases = {"extraction", "merge"}
+    if request.use_case not in supported_use_cases:
+        raise HTTPException(status_code=400, detail=f"Invalid use_case: {request.use_case}")
+
     model_info = get_model_by_id(request.model_id)
     if not model_info:
-        # Allow custom model IDs but warn
-        logger.warning(f"Unknown model ID: {request.model_id}")
+        raise HTTPException(status_code=400, detail=f"Unsupported model_id: {request.model_id}")
+    if not is_model_supported_for_use_case(model_id=request.model_id, use_case=request.use_case):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model '{request.model_id}' is not supported for use_case '{request.use_case}'. "
+                "Only sanctioned providers are available in server mode."
+            ),
+        )
 
-    # Update setting based on use case
     if request.use_case == "extraction":
         set_setting(db, "llm_extraction_model", request.model_id, "llm", "Model used for theme extraction")
-    elif request.use_case == "merge":
-        set_setting(db, "llm_merge_model", request.model_id, "llm", "Model used for theme merge verification")
     else:
-        raise HTTPException(status_code=400, detail=f"Invalid use_case: {request.use_case}")
+        set_setting(db, "llm_merge_model", request.model_id, "llm", "Model used for theme merge verification")
 
     return {
         "status": "success",
