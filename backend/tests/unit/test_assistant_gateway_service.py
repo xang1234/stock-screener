@@ -51,6 +51,63 @@ async def test_health_reports_available(session_factory, assistant_settings):
     assert payload["status"] == "healthy"
 
 
+@pytest.mark.asyncio
+async def test_health_falls_back_to_localhost_for_local_runs(session_factory):
+    requested_hosts: list[str] = []
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host or "")
+        if request.url.host == "hermes":
+            raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+        return httpx.Response(200, json={"data": [{"id": "hermes-agent"}]})
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    payload = await service.health()
+
+    assert payload["available"] is True
+    assert requested_hosts == ["hermes", "127.0.0.1"]
+
+
+@pytest.mark.asyncio
+async def test_health_returns_actionable_hint_for_docker_only_hostname(session_factory):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    payload = await service.health()
+
+    assert payload["available"] is False
+    assert "only resolves inside Docker Compose" in payload["detail"]
+    assert "HERMES_API_BASE=http://127.0.0.1:8642/v1" in payload["detail"]
+
+
 def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_settings):
     service = AssistantGatewayService(
         app_settings=assistant_settings,
@@ -233,3 +290,53 @@ async def test_stream_message_preserves_partial_content_when_tool_round_trips_hi
     done_chunk = next(chunk for chunk in chunks if chunk["type"] == "done")
     assert done_chunk["message"]["content"] == "Round three partial."
     assert request_count == 3
+
+
+@pytest.mark.asyncio
+async def test_stream_message_uses_localhost_fallback_for_local_runs(session_factory):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+    request_hosts: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_hosts.append((request.method, request.url.host or ""))
+        if request.url.host == "hermes":
+            raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "hermes-agent"}]})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            content=b"""data: {\"choices\": [{\"delta\": {\"content\": \"Fallback worked.\"}}]}\n\ndata: [DONE]\n\n""",
+        )
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with session_factory() as db:
+        conversation = service.create_conversation(db, "Fallback")
+        chunks = [
+            chunk
+            async for chunk in service.stream_message(
+                db,
+                conversation_id=conversation.conversation_id,
+                content="Ping the assistant.",
+            )
+        ]
+
+    done_chunk = next(chunk for chunk in chunks if chunk["type"] == "done")
+    assert done_chunk["message"]["content"] == "Fallback worked."
+    assert request_hosts == [
+        ("GET", "hermes"),
+        ("GET", "127.0.0.1"),
+        ("POST", "127.0.0.1"),
+    ]
