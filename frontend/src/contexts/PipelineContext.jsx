@@ -1,8 +1,7 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getPipelineStatus } from '../api/themes';
-
-const PipelineContext = createContext(null);
+import { PipelineContext } from './pipelineContextStore';
 
 export function PipelineProvider({ children }) {
   const queryClient = useQueryClient();
@@ -91,12 +90,4 @@ export function PipelineProvider({ children }) {
       {children}
     </PipelineContext.Provider>
   );
-}
-
-export function usePipeline() {
-  const context = useContext(PipelineContext);
-  if (!context) {
-    throw new Error('usePipeline must be used within a PipelineProvider');
-  }
-  return context;
 }

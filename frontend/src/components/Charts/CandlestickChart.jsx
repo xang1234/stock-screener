@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
 import { createChart, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { Box, CircularProgress, Alert, AlertTitle, Button, ToggleButtonGroup, ToggleButton, useTheme, Skeleton, Typography } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -68,9 +68,7 @@ const ChartSkeleton = ({ height, isDarkMode }) => {
             {[...Array(40)].map((_, i) => {
               // Create varied heights for realistic look
               const minHeight = 20;
-              const maxHeight = 80;
               const height = minHeight + Math.sin(i * 0.3) * 30 + Math.random() * 20;
-              const isUp = Math.random() > 0.45;
 
               return (
                 <Box
@@ -553,7 +551,7 @@ function CandlestickChart({
       ema20SeriesRef.current = null;
       ema50SeriesRef.current = null;
     };
-  }, [height, isDarkMode]); // Re-initialize only when height or theme changes (NOT symbol or timeframe - data updates handle those)
+  }, [height, isDarkMode, symbol]); // Re-initialize only when required visual inputs change
 
   // Track symbol changes - set flag to restore range when symbol changes
   useEffect(() => {
@@ -564,19 +562,15 @@ function CandlestickChart({
     prevSymbolRef.current = symbol;
   }, [symbol]);
 
-  // Debounced callback for visible range changes
-  const debouncedRangeChange = useCallback(
-    debounce((range) => {
-      if (onVisibleRangeChange && range) {
-        onVisibleRangeChange(range);
-      }
-    }, 100),
-    [onVisibleRangeChange]
-  );
-
   // Subscribe to visible time range changes
   useEffect(() => {
     if (!chartRef.current || !onVisibleRangeChange) return;
+
+    const debouncedRangeChange = debounce((range) => {
+      if (range) {
+        onVisibleRangeChange(range);
+      }
+    }, 100);
 
     const timeScale = chartRef.current.timeScale();
     const unsubscribe = timeScale.subscribeVisibleTimeRangeChange((range) => {
@@ -588,7 +582,7 @@ function CandlestickChart({
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [onVisibleRangeChange, debouncedRangeChange]);
+  }, [onVisibleRangeChange]);
 
   // Update chart data when data changes
   useEffect(() => {

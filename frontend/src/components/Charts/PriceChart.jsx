@@ -3,7 +3,6 @@
  *
  * Displays stock price history with 50-day, 150-day, and 200-day moving averages
  */
-import React from 'react';
 import {
   LineChart,
   Line,

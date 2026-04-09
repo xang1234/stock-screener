@@ -24,8 +24,8 @@ vi.mock('@tanstack/react-virtual', () => ({
     getTotalSize: () => count * 32,
   }),
 }));
-vi.mock('./RSSparkline', () => ({ default: () => <td data-testid="rs-sparkline" /> }));
-vi.mock('./PriceSparkline', () => ({ default: () => <td data-testid="price-sparkline" /> }));
+vi.mock('./RSSparkline', () => ({ default: () => <span data-testid="rs-sparkline" /> }));
+vi.mock('./PriceSparkline', () => ({ default: () => <span data-testid="price-sparkline" /> }));
 vi.mock('../common/AddToWatchlistMenu', () => ({ default: () => null }));
 
 /** Default props for a basic render — 1 row, page 1. */

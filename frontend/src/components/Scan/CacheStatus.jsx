@@ -14,7 +14,7 @@
  * - Completion notification when task finishes
  * - Confirmation dialog for expensive operations
  */
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Chip,
   CircularProgress,
@@ -70,7 +70,7 @@ const getRelativeTime = (isoTimestamp) => {
     if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
     if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
     return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-  } catch (error) {
+  } catch {
     return 'Unknown';
   }
 };
@@ -98,7 +98,7 @@ const getFundamentalsFreshness = (lastUpdate) => {
     } else {
       return { status: 'Very Stale', color: 'error', icon: <ErrorIcon /> };
     }
-  } catch (error) {
+  } catch {
     return { status: 'Error', color: 'error', icon: <ErrorIcon /> };
   }
 };
@@ -243,7 +243,7 @@ export default function CacheStatus() {
   // Mutation for fundamental refresh
   const fundamentalsMutation = useMutation({
     mutationFn: triggerFundamentalsRefresh,
-    onSuccess: (data) => {
+    onSuccess: () => {
       setNotification({
         open: true,
         message: 'Fundamentals refresh started',

@@ -16,16 +16,6 @@ function ScanProgress({ status, progress, totalStocks, completedStocks, passedSt
     return `~${hours}h${minutes}m`;
   };
 
-  const getStatusColor = () => {
-    switch (status) {
-      case 'completed': return 'success.main';
-      case 'running': return 'primary.main';
-      case 'queued': return 'warning.main';
-      case 'failed': return 'error.main';
-      default: return 'text.secondary';
-    }
-  };
-
   const getStatusIcon = () => {
     switch (status) {
       case 'completed': return <CheckCircleIcon sx={{ fontSize: 14, color: 'success.main' }} />;

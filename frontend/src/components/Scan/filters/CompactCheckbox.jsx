@@ -1,17 +1,22 @@
 import { Box, ToggleButtonGroup, ToggleButton, Typography } from '@mui/material';
 
+const ALL_VALUE = '__all__';
+
 /**
  * Compact tri-state toggle for boolean filters
  * States: null (All), true (Yes), false (No)
  */
 function CompactCheckbox({ label, value, onChange }) {
   const handleChange = (event, newValue) => {
-    // If clicking same button, reset to null (All)
     if (newValue === null && value !== null) {
       onChange(null);
-    } else {
-      onChange(newValue);
+      return;
     }
+    if (newValue === ALL_VALUE) {
+      onChange(null);
+      return;
+    }
+    onChange(newValue);
   };
 
   return (
@@ -24,7 +29,7 @@ function CompactCheckbox({ label, value, onChange }) {
         {label}
       </Typography>
       <ToggleButtonGroup
-        value={value}
+        value={value ?? ALL_VALUE}
         exclusive
         onChange={handleChange}
         size="small"
@@ -38,7 +43,7 @@ function CompactCheckbox({ label, value, onChange }) {
           },
         }}
       >
-        <ToggleButton value={null} aria-label="all">
+        <ToggleButton value={ALL_VALUE} aria-label="all">
           All
         </ToggleButton>
         <ToggleButton value={true} aria-label="yes" sx={{ color: 'success.main' }}>

@@ -10,7 +10,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import RemoveIcon from '@mui/icons-material/Remove';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
-import { usePipeline } from '../contexts/PipelineContext';
+import { usePipeline } from '../contexts/usePipeline';
 
 const PipelineProgressCard = () => {
   const { pipelineStatus, isCardVisible, isMinimized, closePipelineCard, toggleMinimize } = usePipeline();

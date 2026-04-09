@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ScanPage from './ScanPage';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
+import * as scanApi from '../api/scans';
 
 const runtimeState = {
   runtimeReady: false,
@@ -120,5 +121,58 @@ describe('ScanPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('checkbox', { name: /vcp/i })).not.toBeChecked();
     });
+  });
+
+  it('renders completed scan results flow with filter panel', async () => {
+    runtimeState.runtimeReady = true;
+    scanApi.getScans.mockResolvedValueOnce({
+      scans: [
+        {
+          scan_id: 'scan-1',
+          status: 'completed',
+          created_at: '2026-04-09T00:00:00Z',
+        },
+      ],
+    });
+    scanApi.getScanStatus.mockResolvedValueOnce({ status: 'completed' });
+    scanApi.getScanResults.mockResolvedValueOnce({
+      total: 1,
+      results: [
+        {
+          symbol: 'NVDA',
+          company_name: 'NVIDIA',
+          composite_score: 98,
+          minervini_score: 92,
+          current_price: 900,
+          stage: 2,
+        },
+      ],
+    });
+    scanApi.getFilterOptions.mockResolvedValueOnce({
+      ibd_industries: ['Semiconductors'],
+      gics_sectors: ['Technology'],
+      ratings: ['Buy'],
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={createTheme()}>
+          <ScanPage />
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText('Filters')).toBeInTheDocument();
   });
 });

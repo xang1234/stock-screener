@@ -73,6 +73,12 @@ jobs:
       - name: Test
         run: cd frontend && npm run test:run
 
+      - name: Install Playwright browser
+        run: cd frontend && npx playwright install --with-deps chromium
+
+      - name: Smoke test
+        run: cd frontend && npm run test:smoke
+
   publish-images:
     name: Publish Docker Images
     needs: [backend, frontend]

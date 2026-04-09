@@ -20,6 +20,8 @@ import LinkIcon from '@mui/icons-material/Link';
 
 import ReactMarkdown from 'react-markdown';
 
+const EMPTY_ARRAY = [];
+
 /**
  * Process content to make inline citations [N] clickable links.
  * Converts [1], [2], etc. to markdown links pointing to the reference URL.
@@ -63,9 +65,9 @@ function MessageBubble({ message }) {
   const isError = message.isError;
 
   // Handle both camelCase (streaming) and snake_case (loaded from backend)
-  const toolCalls = message.toolCalls || message.tool_calls || [];
-  const thinkingTraces = message.thinkingTraces || message.thinking_traces || [];
-  const references = message.sourceReferences || message.source_references || [];
+  const toolCalls = message.toolCalls ?? message.tool_calls ?? EMPTY_ARRAY;
+  const thinkingTraces = message.thinkingTraces ?? message.thinking_traces ?? EMPTY_ARRAY;
+  const references = message.sourceReferences ?? message.source_references ?? EMPTY_ARRAY;
 
   const hasToolCalls = toolCalls.length > 0;
   const hasThinking = thinkingTraces.length > 0;

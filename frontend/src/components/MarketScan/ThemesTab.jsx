@@ -25,6 +25,8 @@ import { getThemes, getThemeData } from '../../api/userThemes';
 import ThemeTable from './ThemeTable';
 import ThemeManager from './ThemeManager';
 
+const EMPTY_THEMES = [];
+
 function ThemesTab() {
   const [selectedThemeId, setSelectedThemeId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -39,7 +41,7 @@ function ThemesTab() {
     queryFn: getThemes,
   });
 
-  const themes = themesData?.themes || [];
+  const themes = themesData?.themes ?? EMPTY_THEMES;
 
   // Auto-select first theme if none selected
   useEffect(() => {

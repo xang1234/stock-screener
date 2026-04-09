@@ -11,7 +11,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
  */
 function ResearchProgressIndicator({
   phase,
-  currentUnit,
   totalUnits,
   completedUnits,
   sourcesFound,

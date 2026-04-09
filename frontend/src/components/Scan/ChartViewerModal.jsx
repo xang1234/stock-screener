@@ -12,8 +12,6 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import PeopleIcon from '@mui/icons-material/People';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllFilteredSymbols, getSetupDetails, getSingleResult } from '../../api/scans';
 import { fetchPriceHistory, priceHistoryKeys } from '../../api/priceHistory';
@@ -55,7 +53,6 @@ function ChartViewerModal({
   const [peerModalOpen, setPeerModalOpen] = useState(false);
   const [setupDrawerOpen, setSetupDrawerOpen] = useState(false);
   const [visibleRange, setVisibleRange] = useState(null); // Persist zoom across symbol navigation
-  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   // Build API params from filter state
   const filterParams = useMemo(
@@ -234,9 +231,8 @@ function ChartViewerModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, goNext, goPrevious, onClose, setupDrawerOpen]);
 
-  // Reset description expansion and setup drawer when symbol changes
+  // Reset setup drawer when symbol changes
   useEffect(() => {
-    setDescriptionExpanded(false);
     setSetupDrawerOpen(false);
   }, [currentSymbol]);
 

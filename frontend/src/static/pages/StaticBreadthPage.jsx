@@ -17,6 +17,8 @@ import {
 import BreadthChart from '../../components/Charts/BreadthChart';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
 
+const RANGE_DAYS = { '1M': 31, '3M': 90 };
+
 function MetricCard({ label, value }) {
   return (
     <Paper sx={{ p: 2, height: '100%' }}>
@@ -40,15 +42,14 @@ function StaticBreadthPage() {
   });
   const [timeRange, setTimeRange] = useState('1M');
 
-  const rangeDays = { '1M': 31, '3M': 90 };
   const payload = breadthQuery.data?.payload || {};
   const filteredChartData = useMemo(() => {
     const allData = payload.chart_data || payload.history_90d || [];
-    return allData.slice(-(rangeDays[timeRange] || 31));
+    return allData.slice(-(RANGE_DAYS[timeRange] || 31));
   }, [payload.chart_data, payload.history_90d, timeRange]);
   const filteredSpyData = useMemo(() => {
     const allSpy = payload.spy_overlay || [];
-    return allSpy.slice(-(rangeDays[timeRange] || 31));
+    return allSpy.slice(-(RANGE_DAYS[timeRange] || 31));
   }, [payload.spy_overlay, timeRange]);
 
   if (manifestQuery.isLoading || breadthQuery.isLoading) {

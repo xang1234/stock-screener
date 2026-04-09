@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Box, TextField, Typography } from '@mui/material';
 
 /**
@@ -19,6 +19,7 @@ function CompactRangeInput({
 }) {
   const [localMin, setLocalMin] = useState(minValue ?? '');
   const [localMax, setLocalMax] = useState(maxValue ?? '');
+  const debounceTimeoutRef = useRef();
 
   // Sync local state with props
   useEffect(() => {
@@ -26,24 +27,22 @@ function CompactRangeInput({
     setLocalMax(maxValue ?? '');
   }, [minValue, maxValue]);
 
+  useEffect(() => () => {
+    clearTimeout(debounceTimeoutRef.current);
+  }, []);
+
   // Debounced onChange handler
-  const debouncedOnChange = useCallback(
-    (() => {
-      let timeout;
-      return (min, max) => {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => {
-          const parsedMin = min === '' ? null : parseFloat(min);
-          const parsedMax = max === '' ? null : parseFloat(max);
-          // Convert NaN to null to prevent invalid filter values
-          const validMin = (parsedMin !== null && !Number.isNaN(parsedMin)) ? parsedMin : null;
-          const validMax = (parsedMax !== null && !Number.isNaN(parsedMax)) ? parsedMax : null;
-          onChange({ min: validMin, max: validMax });
-        }, 300);
-      };
-    })(),
-    [onChange]
-  );
+  const debouncedOnChange = (min, max) => {
+    clearTimeout(debounceTimeoutRef.current);
+    debounceTimeoutRef.current = setTimeout(() => {
+      const parsedMin = min === '' ? null : parseFloat(min);
+      const parsedMax = max === '' ? null : parseFloat(max);
+      // Convert NaN to null to prevent invalid filter values
+      const validMin = (parsedMin !== null && !Number.isNaN(parsedMin)) ? parsedMin : null;
+      const validMax = (parsedMax !== null && !Number.isNaN(parsedMax)) ? parsedMax : null;
+      onChange({ min: validMin, max: validMax });
+    }, 300);
+  };
 
   const handleMinChange = (e) => {
     const value = e.target.value;

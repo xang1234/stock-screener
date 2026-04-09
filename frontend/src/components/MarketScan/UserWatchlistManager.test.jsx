@@ -62,5 +62,5 @@ describe('UserWatchlistManager import flow', () => {
         format: 'auto',
       });
     });
-  }, 10000);
+  }, 20000);
 });

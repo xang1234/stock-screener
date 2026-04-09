@@ -73,7 +73,7 @@ function TaskSettingsModal({ open, onClose }) {
   const [error, setError] = useState(null);
 
   // Query for scheduled tasks
-  const { data: tasksData, isLoading, refetch } = useQuery({
+  const { data: tasksData, isLoading } = useQuery({
     queryKey: ['scheduledTasks'],
     queryFn: getScheduledTasks,
     enabled: open,
