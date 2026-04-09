@@ -46,6 +46,7 @@ def test_lists_expected_tools(read_only_service):
         "watchlist_add",
         "group_rankings",
         "stock_lookup",
+        "stock_snapshot",
         "breadth_snapshot",
         "daily_digest",
     }
@@ -211,6 +212,16 @@ def test_stock_lookup_unknown_symbol(read_only_service):
 
     assert payload["stock"] is None
     assert "not found" in payload["summary"]
+
+
+def test_stock_snapshot_returns_combined_context(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["stock"]["symbol"] == "NVDA"
+    assert payload["technicals"]["composite_score"] == 92.0
+    assert payload["themes"][0]["display_name"] == "AI Infrastructure"
+    assert payload["watchlists"][0]["name"] == "Leaders"
+    assert payload["breadth"]["date"] == "2026-03-29"
 
 
 def test_breadth_snapshot_returns_multiple_days(read_only_service):

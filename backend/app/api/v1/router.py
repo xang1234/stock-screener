@@ -58,6 +58,7 @@ if settings.feature_tasks:
     _include("tasks", prefix="/tasks", tags=["tasks"])
 
 if settings.feature_chatbot:
+    _include("assistant", prefix="/assistant", tags=["assistant"])
     _include("chatbot", prefix="/chatbot", tags=["chatbot"])
     _include("chatbot_folders", prefix="/chatbot/folders", tags=["chatbot-folders"])
     _include("prompt_presets", prefix="/prompt-presets", tags=["prompt-presets"])

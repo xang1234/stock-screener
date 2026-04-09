@@ -34,6 +34,7 @@ from .models import (
     FindCandidatesArgs,
     GroupRankingsArgs,
     MarketOverviewArgs,
+    StockSnapshotArgs,
     StockLookupArgs,
     TaskStatusArgs,
     ThemeStateArgs,
@@ -141,6 +142,12 @@ class MarketCopilotService:
                     description="Look up a stock by symbol and return universe info, fundamentals, and optionally RS rating and stage from the latest feature run.",
                     args_model=StockLookupArgs,
                     handler=self._stock_lookup,
+                ),
+                ToolSpec(
+                    name="stock_snapshot",
+                    description="Return a combined snapshot for one symbol including universe metadata, latest feature-run posture, theme membership, breadth context, and watchlist presence.",
+                    args_model=StockSnapshotArgs,
+                    handler=self._stock_snapshot,
                 ),
                 ToolSpec(
                     name="breadth_snapshot",
@@ -954,6 +961,152 @@ class MarketCopilotService:
             ),
             stock=stock_info,
             technicals=technicals,
+        )
+
+    def _stock_snapshot(self, args: StockSnapshotArgs) -> ToolEnvelope:
+        with self._session_scope() as db:
+            stock = (
+                db.query(StockUniverse)
+                .filter(StockUniverse.symbol == args.symbol, StockUniverse.is_active.is_(True))
+                .first()
+            )
+            run = self._latest_published_run(db)
+            breadth = self._latest_breadth(db, getattr(run, "as_of_date", None))
+            watchlists = (
+                db.query(UserWatchlist)
+                .join(WatchlistItem, WatchlistItem.watchlist_id == UserWatchlist.id)
+                .filter(WatchlistItem.symbol == args.symbol)
+                .order_by(UserWatchlist.position.asc())
+                .all()
+            )
+            constituent_query = (
+                db.query(ThemeConstituent, ThemeCluster, ThemeMetrics)
+                .join(ThemeCluster, ThemeCluster.id == ThemeConstituent.theme_cluster_id)
+                .filter(
+                    ThemeConstituent.symbol == args.symbol,
+                    ThemeConstituent.is_active.is_(True),
+                    ThemeCluster.is_active.is_(True),
+                )
+                .order_by(ThemeCluster.display_name.asc())
+            )
+            if run is not None:
+                constituent_query = constituent_query.outerjoin(
+                    ThemeMetrics,
+                    (ThemeMetrics.theme_cluster_id == ThemeCluster.id)
+                    & (ThemeMetrics.date == run.as_of_date),
+                )
+            else:
+                constituent_query = constituent_query.outerjoin(
+                    ThemeMetrics,
+                    ThemeMetrics.theme_cluster_id == ThemeCluster.id,
+                )
+            constituent_rows = constituent_query.all()
+
+        if stock is None:
+            return self._envelope(
+                f"Symbol {args.symbol!r} was not found in the active stock universe.",
+                facts=[],
+                citations=[],
+                next_actions=["Verify the ticker symbol or check if it was delisted."],
+                freshness=self._freshness(),
+                stock=None,
+                technicals=None,
+                themes=[],
+                watchlists=[],
+                breadth=None,
+            )
+
+        technicals = None
+        if run is not None:
+            with self._uow_scope() as uow:
+                row = uow.feature_store.get_by_symbol_for_run(
+                    run.id,
+                    args.symbol,
+                    include_sparklines=False,
+                    include_setup_payload=False,
+                )
+            if row is not None:
+                technicals = self._candidate_record(row)
+                technicals["run_id"] = run.id
+                technicals["as_of_date"] = run.as_of_date.isoformat()
+
+        themes = [
+            {
+                "display_name": cluster.display_name,
+                "canonical_key": cluster.canonical_key,
+                "category": cluster.category,
+                "lifecycle_state": cluster.lifecycle_state,
+                "confidence": constituent.confidence,
+                "mention_count": constituent.mention_count,
+                "momentum_score": getattr(metrics, "momentum_score", None),
+                "status": getattr(metrics, "status", None),
+            }
+            for constituent, cluster, metrics in constituent_rows
+        ]
+        breadth_record = self._breadth_record(breadth)
+        watchlist_rows = [{"id": row.id, "name": row.name} for row in watchlists]
+        run_date = run.as_of_date if run is not None else None
+
+        facts = [
+            self._fact("symbol", stock.symbol, "stock_universe"),
+            self._fact("sector", stock.sector, "stock_universe"),
+            self._fact("theme_count", len(themes), "theme_clusters", run_date),
+            self._fact("watchlist_count", len(watchlist_rows), "user_watchlists"),
+        ]
+        if technicals is not None:
+            facts.append(self._fact("composite_score", technicals.get("composite_score"), "feature_runs", run_date))
+        citations = [self._citation("stock_universe", stock.symbol, f"stock_universe:{stock.symbol}")]
+        citations.extend(
+            self._citation("theme_clusters", theme["display_name"], f"theme_clusters:{theme['canonical_key']}", run_date)
+            for theme in themes[:3]
+        )
+        if breadth is not None:
+            citations.append(self._citation("market_breadth", "Breadth", f"market_breadth:{breadth.date.isoformat()}", breadth.date))
+
+        summary = (
+            f"{stock.symbol} ({stock.name}) is tracked in {len(watchlist_rows)} watchlist(s) and {len(themes)} active theme(s)."
+        )
+        if technicals is not None:
+            summary += (
+                f" Latest published run {run.id} scored it {technicals.get('composite_score')} "
+                f"with RS {technicals.get('rs_rating')} and stage {technicals.get('stage')}."
+            )
+        if breadth is not None:
+            summary += f" Latest breadth 5-day ratio is {breadth.ratio_5day} on {breadth.date.isoformat()}."
+
+        return self._envelope(
+            summary,
+            facts=facts,
+            citations=citations,
+            next_actions=[
+                "Use explain_symbol for setup detail and peers.",
+                "Use theme_state to inspect any linked themes in more detail." if themes else "Use find_candidates to compare against other leadership names.",
+            ],
+            freshness=self._freshness(
+                as_of_date=run_date,
+                stock_universe="current",
+                **{
+                    key: value
+                    for key, value in {
+                        "feature_run": run_date.isoformat() if run_date else None,
+                        "market_breadth": breadth.date.isoformat() if breadth is not None else None,
+                        "theme_metrics": run_date.isoformat() if themes and run_date else None,
+                    }.items()
+                    if value is not None
+                },
+            ),
+            stock={
+                "symbol": stock.symbol,
+                "name": stock.name,
+                "sector": stock.sector,
+                "industry": stock.industry,
+                "market_cap": stock.market_cap,
+                "exchange": stock.exchange,
+            },
+            technicals=technicals,
+            themes=themes,
+            watchlists=watchlist_rows,
+            breadth=breadth_record,
         )
 
     def _breadth_snapshot(self, args: BreadthSnapshotArgs) -> ToolEnvelope:

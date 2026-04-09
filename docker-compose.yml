@@ -18,6 +18,10 @@ x-app-env: &app-env
   SERVER_AUTH_SESSION_SECRET: ${SERVER_AUTH_SESSION_SECRET:-}
   SERVER_AUTH_SECURE_COOKIE: ${SERVER_AUTH_SECURE_COOKIE:-false}
   SERVER_EXPOSE_API_DOCS: ${SERVER_EXPOSE_API_DOCS:-false}
+  HERMES_API_BASE: ${HERMES_API_BASE:-http://hermes:8642/v1}
+  HERMES_API_KEY: ${HERMES_API_KEY:-}
+  HERMES_MODEL: ${HERMES_MODEL:-hermes-agent}
+  HERMES_REQUEST_TIMEOUT_SECONDS: ${HERMES_REQUEST_TIMEOUT_SECONDS:-120}
   ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
   ZAI_API_KEY: ${ZAI_API_KEY:-}
   ZAI_API_KEYS: ${ZAI_API_KEYS:-}
@@ -92,6 +96,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  hermes:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    profiles: ["assistant"]
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: ${HERMES_API_KEY:-}
+    volumes:
+      - ./data/hermes:/root/.hermes
+      - ./integrations/hermes/skills:/root/.hermes/skills:ro
+    expose:
+      - "8642"
+    depends_on:
+      backend:
+        condition: service_started
     restart: unless-stopped
 
   backend:

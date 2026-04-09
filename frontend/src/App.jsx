@@ -12,6 +12,7 @@ import MarketScanPage from './pages/MarketScanPage';
 import StockDetails from './components/Stock/StockDetails';
 import Layout from './components/Layout/Layout';
 import ServerLoginScreen from './components/App/ServerLoginScreen';
+import { AssistantChatProvider } from './contexts/AssistantChatContext';
 import { PipelineProvider } from './contexts/PipelineContext';
 import { RuntimeProvider, useRuntime } from './contexts/RuntimeContext';
 import { StrategyProfileProvider } from './contexts/StrategyProfileContext';
@@ -284,7 +285,9 @@ function AppShell() {
 
   const routedApp = (
     <StrategyProfileProvider>
-      {appRoutes}
+      <AssistantChatProvider>
+        {appRoutes}
+      </AssistantChatProvider>
     </StrategyProfileProvider>
   );
 

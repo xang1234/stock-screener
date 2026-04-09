@@ -211,6 +211,10 @@ class Settings(BaseSettings):
     read_url_max_chars: int = 100000  # Max characters to extract from URLs
 
     # Hermes / MCP integration
+    hermes_api_base: str = "http://127.0.0.1:8642/v1"
+    hermes_api_key: str = ""
+    hermes_model: str = "hermes-agent"
+    hermes_request_timeout_seconds: int = 120
     mcp_server_name: str = "stockscreen-market-copilot"
     mcp_watchlist_writes_enabled: bool = False
     mcp_http_enabled: bool = True

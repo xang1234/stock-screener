@@ -174,6 +174,20 @@ class StockLookupArgs(BaseModel):
         return normalized
 
 
+class StockSnapshotArgs(BaseModel):
+    """Arguments for stock_snapshot."""
+
+    symbol: str = Field(..., min_length=1, max_length=10)
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized:
+            raise ValueError("symbol must contain at least one non-whitespace character")
+        return normalized
+
+
 class BreadthSnapshotArgs(BaseModel):
     """Arguments for breadth_snapshot."""
 
