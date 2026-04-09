@@ -183,6 +183,7 @@ mcp_servers:
         - find_candidates
         - explain_symbol
         - watchlist_snapshot
+        - watchlist_add
         - theme_state
         - task_status
         - group_rankings

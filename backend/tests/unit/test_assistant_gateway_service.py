@@ -52,7 +52,7 @@ async def test_health_reports_available(session_factory, assistant_settings):
 
 
 @pytest.mark.asyncio
-async def test_health_falls_back_to_localhost_for_local_runs(session_factory):
+async def test_health_falls_back_to_localhost_for_local_runs(session_factory, monkeypatch):
     requested_hosts: list[str] = []
     assistant_settings = SimpleNamespace(
         hermes_api_base="http://hermes:8642/v1",
@@ -74,6 +74,7 @@ async def test_health_falls_back_to_localhost_for_local_runs(session_factory):
         session_factory=session_factory,
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    monkeypatch.setattr(service, "_is_running_in_container", lambda: False)
 
     payload = await service.health()
 
@@ -82,7 +83,7 @@ async def test_health_falls_back_to_localhost_for_local_runs(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_health_returns_actionable_hint_for_docker_only_hostname(session_factory):
+async def test_health_returns_actionable_hint_for_docker_only_hostname(session_factory, monkeypatch):
     assistant_settings = SimpleNamespace(
         hermes_api_base="http://hermes:8642/v1",
         hermes_api_key="test-key",
@@ -100,6 +101,7 @@ async def test_health_returns_actionable_hint_for_docker_only_hostname(session_f
         session_factory=session_factory,
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    monkeypatch.setattr(service, "_is_running_in_container", lambda: False)
 
     payload = await service.health()
 
@@ -164,7 +166,7 @@ async def test_health_returns_actionable_hint_for_localhost_connection_refused(s
 
 
 @pytest.mark.asyncio
-async def test_health_prefers_timeout_over_earlier_network_error(session_factory):
+async def test_health_prefers_timeout_over_earlier_network_error(session_factory, monkeypatch):
     assistant_settings = SimpleNamespace(
         hermes_api_base="http://hermes:8642/v1",
         hermes_api_key="test-key",
@@ -187,6 +189,7 @@ async def test_health_prefers_timeout_over_earlier_network_error(session_factory
         session_factory=session_factory,
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    monkeypatch.setattr(service, "_is_running_in_container", lambda: False)
 
     payload = await service.health()
 
@@ -379,7 +382,7 @@ async def test_stream_message_preserves_partial_content_when_tool_round_trips_hi
 
 
 @pytest.mark.asyncio
-async def test_stream_message_uses_localhost_fallback_for_local_runs(session_factory):
+async def test_stream_message_uses_localhost_fallback_for_local_runs(session_factory, monkeypatch):
     assistant_settings = SimpleNamespace(
         hermes_api_base="http://hermes:8642/v1",
         hermes_api_key="test-key",
@@ -407,6 +410,7 @@ async def test_stream_message_uses_localhost_fallback_for_local_runs(session_fac
         session_factory=session_factory,
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    monkeypatch.setattr(service, "_is_running_in_container", lambda: False)
 
     with session_factory() as db:
         conversation = service.create_conversation(db, "Fallback")
