@@ -44,6 +44,19 @@ Important points:
 - Send the same `SERVER_AUTH_PASSWORD` as an `x-server-auth` header so Hermes can reach the protected MCP transport.
 - Register the external skills directory so Hermes can load `market-copilot`.
 
+For local development, prefer the repo helper instead of hand-editing `~/.hermes`:
+
+```bash
+bash scripts/run_local_hermes_gateway.sh
+```
+
+That script:
+
+- sources the repo `.env` and `backend/.env`
+- runs Hermes with `HERMES_HOME=data/hermes`
+- generates `data/hermes/config.yaml` with the local MCP URL `http://127.0.0.1:8000/mcp`
+- starts the OpenAI-compatible Hermes API on `http://127.0.0.1:8642/v1`
+
 ## Docker Compose
 
 `docker-compose.yml` now includes an opt-in Hermes sidecar under the `assistant` profile:
@@ -105,6 +118,7 @@ Local backend + Hermes:
 ```bash
 cd backend
 PYTHONPATH="$PWD" ./venv/bin/python -m uvicorn app.main:app --reload
+bash ../scripts/run_local_hermes_gateway.sh
 curl -s -H "x-server-auth: $SERVER_AUTH_PASSWORD" http://127.0.0.1:8000/api/v1/assistant/health
 ```
 

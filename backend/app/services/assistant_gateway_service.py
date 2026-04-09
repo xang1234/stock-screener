@@ -518,12 +518,13 @@ class AssistantGatewayService:
             return (
                 f"{detail}. The hostname 'hermes' only resolves inside Docker Compose. "
                 "For local backend runs, set HERMES_API_BASE=http://127.0.0.1:8642/v1 "
-                "or start Hermes locally on that address."
+                "or start Hermes locally on that address with `bash scripts/run_local_hermes_gateway.sh`."
             )
         if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port:
             return (
                 f"{detail}. No Hermes API server is listening on {parsed.hostname}:{parsed.port}. "
-                "Start Hermes on that address, or point HERMES_API_BASE at the host/port where Hermes is running."
+                "Start Hermes with `bash scripts/run_local_hermes_gateway.sh`, "
+                "or point HERMES_API_BASE at the host/port where Hermes is running."
             )
         return detail
 

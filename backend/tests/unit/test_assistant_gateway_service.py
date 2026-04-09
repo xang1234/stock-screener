@@ -106,6 +106,7 @@ async def test_health_returns_actionable_hint_for_docker_only_hostname(session_f
     assert payload["available"] is False
     assert "only resolves inside Docker Compose" in payload["detail"]
     assert "HERMES_API_BASE=http://127.0.0.1:8642/v1" in payload["detail"]
+    assert "bash scripts/run_local_hermes_gateway.sh" in payload["detail"]
 
 
 @pytest.mark.asyncio
@@ -132,6 +133,7 @@ async def test_health_returns_actionable_hint_for_localhost_connection_refused(s
 
     assert payload["available"] is False
     assert "No Hermes API server is listening on 127.0.0.1:8642" in payload["detail"]
+    assert "bash scripts/run_local_hermes_gateway.sh" in payload["detail"]
 
 
 def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_settings):
