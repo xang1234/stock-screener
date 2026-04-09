@@ -100,6 +100,7 @@ services:
 
   hermes:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    platform: ${HERMES_PLATFORM:-linux/amd64}
     profiles: ["assistant"]
     environment:
       API_SERVER_ENABLED: "true"
@@ -107,13 +108,13 @@ services:
       API_SERVER_PORT: "8642"
       API_SERVER_KEY: ${HERMES_API_KEY:-}
     volumes:
-      - ./data/hermes:/root/.hermes
-      - ./integrations/hermes/skills:/root/.hermes/skills:ro
+      - ./data/hermes:/opt/data
+      - ./integrations/hermes/skills:/opt/external-skills:ro
     expose:
       - "8642"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   backend:

@@ -59,19 +59,33 @@ That script:
 
 ## Docker Compose
 
-`docker-compose.yml` now includes an opt-in Hermes sidecar under the `assistant` profile:
+For Docker-first local or server runs, prefer the repo helper:
 
 ```bash
-docker compose --profile assistant up -d
+cp .env.docker.example .env.docker
+# edit .env.docker and set at least SERVER_AUTH_PASSWORD plus your provider keys
+bash scripts/start_docker_assistant_stack.sh .env.docker
 ```
+
+That script:
+
+- uses `.env.docker` instead of the root `.env`, so local `HERMES_API_BASE=http://127.0.0.1:8642/v1` values do not leak into the backend container
+- writes `data/hermes/config.yaml` with Docker MCP access at `http://backend:8000/mcp`
+- writes `data/hermes/.env` with Hermes API-server and provider/search keys
+- starts `postgres`, `redis`, `backend`, `frontend`, and `hermes` under the `assistant` profile
 
 The service is internal-only:
 
-- no browser-facing port is published
+- no browser-facing Hermes port is published
 - backend uses `HERMES_API_BASE=http://hermes:8642/v1`
 - Hermes state lives under `data/hermes/`
+- the Hermes image is pinned to `linux/amd64` by default because the upstream image is not currently multi-arch
 
-Before enabling the profile, place a real Hermes config file in `data/hermes/config.yaml` using the example template and your actual secrets.
+Manual equivalent:
+
+```bash
+docker compose --env-file .env.docker --profile assistant up -d postgres redis backend frontend hermes
+```
 
 ## Assistant runtime contract
 
@@ -140,3 +154,18 @@ Full app:
 - confirm the answer shows citations and tool activity
 - open the global assistant drawer from a non-chat route
 - test the watchlist preview flow from the latest assistant answer
+
+## Docker-first startup order
+
+If you want backend and Hermes both under Docker Compose:
+
+1. Copy the Docker env file:
+   `cp .env.docker.example .env.docker`
+2. Set at least:
+   `SERVER_AUTH_PASSWORD`, one Hermes-capable model key such as `MINIMAX_API_KEY`, and optional `TAVILY_API_KEY` / `SERPER_API_KEY`
+3. Start the stack:
+   `bash scripts/start_docker_assistant_stack.sh .env.docker`
+4. Verify:
+   `docker compose --env-file .env.docker --profile assistant ps`
+5. Open:
+   `http://localhost/chatbot`

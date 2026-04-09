@@ -110,6 +110,33 @@ async def test_health_returns_actionable_hint_for_docker_only_hostname(session_f
 
 
 @pytest.mark.asyncio
+async def test_health_returns_docker_helper_hint_for_container_runs(session_factory, monkeypatch):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    monkeypatch.setattr(service, "_is_running_in_container", lambda: True)
+
+    payload = await service.health()
+
+    assert payload["available"] is False
+    assert "bash scripts/start_docker_assistant_stack.sh .env.docker" in payload["detail"]
+
+
+@pytest.mark.asyncio
 async def test_health_returns_actionable_hint_for_localhost_connection_refused(session_factory):
     assistant_settings = SimpleNamespace(
         hermes_api_base="http://127.0.0.1:8642/v1",

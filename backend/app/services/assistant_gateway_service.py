@@ -513,7 +513,8 @@ class AssistantGatewayService:
             if self._is_running_in_container():
                 return (
                     f"{detail}. Start the Hermes sidecar with "
-                    "`docker compose --profile assistant up -d`, or point HERMES_API_BASE at a reachable host."
+                    "`bash scripts/start_docker_assistant_stack.sh .env.docker`, "
+                    "or point HERMES_API_BASE at a reachable host."
                 )
             return (
                 f"{detail}. The hostname 'hermes' only resolves inside Docker Compose. "
