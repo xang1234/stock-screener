@@ -72,6 +72,7 @@ That script:
 - uses `.env.docker` instead of the root `.env`, so local `HERMES_API_BASE=http://127.0.0.1:8642/v1` values do not leak into the backend container
 - writes `data/hermes/config.yaml` with Docker MCP access at `http://backend:8000/mcp`
 - writes `data/hermes/.env` with Hermes API-server and provider/search keys
+- forwards the same Hermes provider keys directly into the container environment
 - starts `postgres`, `redis`, `backend`, `frontend`, and `hermes` under the `assistant` profile
 
 The service is internal-only:
@@ -86,6 +87,23 @@ Manual equivalent:
 ```bash
 docker compose --env-file .env.docker --profile assistant up -d postgres redis backend frontend hermes
 ```
+
+### Passing LLM keys to Hermes
+
+For Docker runs, put Hermes' own inference keys in `.env.docker`. The helper and compose file now pass them into the `hermes` container directly and also render them into `data/hermes/.env`.
+
+Use at least one of:
+
+- `MINIMAX_API_KEY`
+- `ZAI_API_KEY` or `GLM_API_KEY`
+- `OPENROUTER_API_KEY`
+- `OPENAI_API_KEY` together with `OPENAI_BASE_URL` for a custom OpenAI-compatible endpoint
+
+Optional:
+
+- `HERMES_INFERENCE_PROVIDER=minimax|zai|openrouter|custom` to force provider selection instead of auto-detecting from the available keys
+
+If Hermes logs the large interactive ASCII banner and then exits, it is not running the gateway. The Docker assistant path should now start `hermes gateway`, not the interactive CLI.
 
 ## Assistant runtime contract
 
@@ -162,7 +180,7 @@ If you want backend and Hermes both under Docker Compose:
 1. Copy the Docker env file:
    `cp .env.docker.example .env.docker`
 2. Set at least:
-   `SERVER_AUTH_PASSWORD`, one Hermes-capable model key such as `MINIMAX_API_KEY`, and optional `TAVILY_API_KEY` / `SERPER_API_KEY`
+   `SERVER_AUTH_PASSWORD`, one Hermes inference key such as `MINIMAX_API_KEY`, and optional `TAVILY_API_KEY` / `SERPER_API_KEY`
 3. Start the stack:
    `bash scripts/start_docker_assistant_stack.sh .env.docker`
 4. Verify:

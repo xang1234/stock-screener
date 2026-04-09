@@ -61,6 +61,27 @@ load_env_file "$ENV_FILE"
 
 : "${SERVER_AUTH_PASSWORD:?Set SERVER_AUTH_PASSWORD in $ENV_FILE}"
 
+HERMES_HAS_PROVIDER_KEY=false
+for provider_key in OPENROUTER_API_KEY OPENAI_API_KEY MINIMAX_API_KEY GLM_API_KEY ZAI_API_KEY Z_AI_API_KEY; do
+  if [[ -n "${!provider_key:-}" ]]; then
+    HERMES_HAS_PROVIDER_KEY=true
+    break
+  fi
+done
+
+if [[ "${HERMES_HAS_PROVIDER_KEY}" != "true" ]]; then
+  cat >&2 <<EOF
+Set at least one Hermes inference key in $ENV_FILE before starting the assistant stack.
+
+Supported Docker-first options:
+  - MINIMAX_API_KEY
+  - ZAI_API_KEY or GLM_API_KEY
+  - OPENROUTER_API_KEY
+  - OPENAI_API_KEY together with OPENAI_BASE_URL for a custom OpenAI-compatible endpoint
+EOF
+  exit 1
+fi
+
 if [[ -n "${HERMES_API_BASE:-}" && "${HERMES_API_BASE}" != "http://hermes:8642/v1" ]]; then
   cat >&2 <<EOF
 HERMES_API_BASE in $ENV_FILE must be http://hermes:8642/v1 for Docker assistant runs.
@@ -71,7 +92,15 @@ fi
 
 mkdir -p "$ROOT_DIR/data/hermes"
 
+GLM_API_KEY_VALUE="${GLM_API_KEY:-${ZAI_API_KEY:-${Z_AI_API_KEY:-}}}"
+ZAI_API_KEY_VALUE="${ZAI_API_KEY:-${GLM_API_KEY:-${Z_AI_API_KEY:-}}}"
+Z_AI_API_KEY_VALUE="${Z_AI_API_KEY:-${ZAI_API_KEY:-${GLM_API_KEY:-}}}"
+GLM_BASE_URL_VALUE="${GLM_BASE_URL:-${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}}"
+
 cat > "$ROOT_DIR/data/hermes/config.yaml" <<EOF
+model:
+  provider: ${HERMES_INFERENCE_PROVIDER:-auto}
+
 mcp_servers:
   stockscreen_market:
     url: "http://backend:8000/mcp"
@@ -104,10 +133,17 @@ API_SERVER_ENABLED=true
 API_SERVER_HOST=0.0.0.0
 API_SERVER_PORT=8642
 API_SERVER_KEY=${HERMES_API_KEY:-}
+HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-}
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-}
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
+OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+GLM_API_KEY=${GLM_API_KEY_VALUE}
+ZAI_API_KEY=${ZAI_API_KEY_VALUE}
+Z_AI_API_KEY=${Z_AI_API_KEY_VALUE}
+GLM_BASE_URL=${GLM_BASE_URL_VALUE}
 MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
 MINIMAX_BASE_URL=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
-GROQ_API_KEY=${GROQ_API_KEY:-}
-GROQ_API_KEYS=${GROQ_API_KEYS:-}
 TAVILY_API_KEY=${TAVILY_API_KEY:-}
 SERPER_API_KEY=${SERPER_API_KEY:-}
 EOF
