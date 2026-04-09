@@ -23,4 +23,4 @@ mcp_servers:
 
 skills:
   external_dirs:
-    - /root/.hermes/skills
+    - /opt/external-skills
