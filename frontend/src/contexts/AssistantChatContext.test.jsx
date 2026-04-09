@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssistantChatProvider, useAssistantChat } from './AssistantChatContext';
 import { renderWithProviders } from '../test/renderWithProviders';
@@ -33,8 +33,11 @@ function AssistantConsumer() {
     conversationId,
     conversationTitle,
     displayedMessages,
+    isStreaming,
     sendMessage,
   } = useAssistantChat();
+  const latestMessage = displayedMessages[displayedMessages.length - 1];
+  const latestToolArgs = latestMessage?.tool_calls?.[0]?.args ?? null;
 
   return (
     <div>
@@ -44,6 +47,8 @@ function AssistantConsumer() {
       <div data-testid="message-log">
         {displayedMessages.map((message) => `${message.role}:${message.content}`).join('|')}
       </div>
+      <div data-testid="streaming-state">{isStreaming ? 'streaming' : 'idle'}</div>
+      <div data-testid="tool-args">{latestToolArgs ? JSON.stringify(latestToolArgs) : 'none'}</div>
       <button type="button" onClick={() => sendMessage('What do you think about NVDA?')}>
         Send
       </button>
@@ -183,6 +188,63 @@ describe('AssistantChatContext', () => {
       expect(screen.getByTestId('conversation-title')).toHaveTextContent('Restored assistant thread');
       expect(screen.getByTestId('message-log')).toHaveTextContent('user:How does breadth look?');
       expect(screen.getByTestId('message-log')).toHaveTextContent('assistant:Breadth remains constructive.');
+    });
+  });
+
+  it('keeps live tool-call args visible while streaming', async () => {
+    sendMessageStream.mockImplementation((_conversationId, _content, onChunk) => {
+      onChunk({
+        type: 'tool_call',
+        tool: 'stock_snapshot',
+        params: { symbol: 'NVDA' },
+      });
+      return vi.fn();
+    });
+
+    renderWithProviders(
+      <AssistantChatProvider>
+        <AssistantConsumer />
+      </AssistantChatProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('assistant-health')).toHaveTextContent('online'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tool-args')).toHaveTextContent('"symbol":"NVDA"');
+      expect(screen.getByTestId('streaming-state')).toHaveTextContent('streaming');
+    });
+  });
+
+  it('resets the draft when the stream closes without a terminal event', async () => {
+    let onDoneCallback;
+    sendMessageStream.mockImplementation((_conversationId, _content, onChunk, _onError, onDone) => {
+      onChunk({ type: 'content', content: 'Partial answer' });
+      onDoneCallback = onDone;
+      return vi.fn();
+    });
+
+    renderWithProviders(
+      <AssistantChatProvider>
+        <AssistantConsumer />
+      </AssistantChatProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('assistant-health')).toHaveTextContent('online'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(screen.getByTestId('streaming-state')).toHaveTextContent('streaming'));
+
+    await act(async () => {
+      onDoneCallback();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('streaming-state')).toHaveTextContent('idle');
+      expect(screen.getByTestId('message-log')).toHaveTextContent('assistant:Partial answer');
+      expect(screen.getByTestId('message-log')).toHaveTextContent('Stream ended unexpectedly before the assistant completed its reply.');
     });
   });
 });

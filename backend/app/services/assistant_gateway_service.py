@@ -46,6 +46,7 @@ _TOOL_NAME_SUFFIXES = (
     "find_candidates",
     "explain_symbol",
     "watchlist_snapshot",
+    "watchlist_add",
     "theme_state",
     "task_status",
     "group_rankings",
@@ -135,7 +136,10 @@ class AssistantGatewayService:
         )
         if conversation is None:
             return None
-        conversation.messages = sorted(conversation.messages, key=lambda row: row.created_at)
+        conversation.messages = sorted(
+            conversation.messages,
+            key=lambda row: (row.created_at, row.id),
+        )
         return conversation
 
     async def health(self) -> dict[str, Any]:
@@ -459,7 +463,10 @@ class AssistantGatewayService:
         if chunk.get("type") in {"content", "tool_call", "tool_result", "error"}:
             normalized = [chunk]
             if chunk["type"] == "tool_call":
-                index = int(chunk.get("index") or len(tool_calls))
+                index = chunk.get("index")
+                if index is None:
+                    index = len(tool_calls)
+                index = int(index)
                 entry = tool_calls.setdefault(index, {"index": index, "arguments_parts": []})
                 entry["name"] = chunk.get("tool") or chunk.get("name")
                 entry["id"] = chunk.get("id")
@@ -703,9 +710,7 @@ class AssistantGatewayService:
             "tool_name": message.tool_name,
             "tool_input": message.tool_input,
             "tool_output": message.tool_output,
-            "reasoning": message.reasoning,
             "tool_calls": message.tool_calls,
-            "thinking_traces": message.thinking_traces,
             "source_references": message.source_references,
             "created_at": (
                 message.created_at.isoformat()

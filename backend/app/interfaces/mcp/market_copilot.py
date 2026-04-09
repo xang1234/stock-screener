@@ -1047,6 +1047,7 @@ class MarketCopilotService:
             }
             for constituent, cluster, metrics in constituent_rows
         ]
+        has_theme_metrics = any(metrics is not None for _, _, metrics in constituent_rows)
         breadth_record = self._breadth_record(breadth)
         watchlist_rows = [{"id": row.id, "name": row.name} for row in watchlists]
         run_date = run.as_of_date if run is not None else None
@@ -1094,7 +1095,7 @@ class MarketCopilotService:
                     for key, value in {
                         "feature_run": run_date.isoformat() if run_date else None,
                         "market_breadth": breadth.date.isoformat() if breadth is not None else None,
-                        "theme_metrics": run_date.isoformat() if themes and run_date else None,
+                        "theme_metrics": run_date.isoformat() if has_theme_metrics and run_date else None,
                     }.items()
                     if value is not None
                 },

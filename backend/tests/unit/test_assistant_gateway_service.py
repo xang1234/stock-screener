@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import httpx
@@ -68,6 +69,66 @@ def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_set
     assert preview["addable_symbols"] == ["MSFT"]
     assert preview["existing_symbols"] == ["NVDA"]
     assert preview["invalid_symbols"] == ["ZZZZ"]
+
+
+def test_get_conversation_orders_tied_timestamps_by_id(session_factory, assistant_settings):
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+    )
+
+    with session_factory() as db:
+        conversation = service.create_conversation(db, "Ordering check")
+        created_at = datetime(2026, 4, 9, tzinfo=UTC)
+        db.add_all(
+            [
+                Message(
+                    conversation_id=conversation.conversation_id,
+                    role="assistant",
+                    content="second",
+                    created_at=created_at,
+                ),
+                Message(
+                    conversation_id=conversation.conversation_id,
+                    role="user",
+                    content="first",
+                    created_at=created_at,
+                ),
+            ]
+        )
+        db.commit()
+
+        loaded = service.get_conversation(db, conversation.conversation_id)
+
+    assert loaded is not None
+    assert [message.id for message in loaded.messages] == sorted(message.id for message in loaded.messages)
+
+
+def test_normalize_stream_chunk_keeps_explicit_custom_tool_index_zero(session_factory, assistant_settings):
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+    )
+    tool_calls = {
+        0: {
+            "index": 0,
+            "name": "stock_snapshot",
+            "arguments_parts": [],
+        }
+    }
+
+    service._normalize_stream_chunk(
+        {
+            "type": "tool_call",
+            "index": 0,
+            "tool": "stock_snapshot",
+            "params": {"symbol": "NVDA"},
+        },
+        tool_calls,
+    )
+
+    assert set(tool_calls) == {0}
+    assert tool_calls[0]["arguments"] == {"symbol": "NVDA"}
 
 
 @pytest.mark.asyncio

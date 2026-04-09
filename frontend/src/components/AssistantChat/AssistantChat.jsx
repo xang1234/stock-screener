@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -37,7 +37,6 @@ function AssistantChat({ mode = 'page', onClose = null }) {
     assistantHealth,
     conversationTitle,
     displayedMessages,
-    ensureConversation,
     isLoadingConversation,
     isStreaming,
     sendMessage,
@@ -45,10 +44,6 @@ function AssistantChat({ mode = 'page', onClose = null }) {
   } = useAssistantChat();
   const [input, setInput] = useState('');
   const [watchlistDialogOpen, setWatchlistDialogOpen] = useState(false);
-
-  useEffect(() => {
-    ensureConversation().catch(() => {});
-  }, [ensureConversation]);
 
   const latestAssistantSymbols = useMemo(() => {
     const latestAssistantMessage = [...displayedMessages]

@@ -35,7 +35,7 @@ MCP_HTTP_ENABLED=true
 
 ## Hermes configuration
 
-Hermes should call the backend’s authenticated HTTP MCP transport, not the old stdio-only path. A sample config template is included at [config.yaml.example](/Users/admin/StockScreenClaude/integrations/hermes/config.yaml.example).
+Hermes should call the backend’s authenticated HTTP MCP transport, not the old stdio-only path. A sample config template is included at [config.yaml.example](config.yaml.example).
 
 Important points:
 

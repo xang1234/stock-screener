@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AssistantConversationCreate(BaseModel):
@@ -30,6 +31,17 @@ class AssistantReferenceItem(BaseModel):
     snippet: str | None = None
     reference_number: int | None = None
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized.startswith("/"):
+            return normalized
+        parsed = urlparse(normalized)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return normalized
+        raise ValueError("url must be an internal app path or an http(s) URL")
+
 
 class AssistantMessageResponse(BaseModel):
     """Persisted assistant or user message."""
@@ -44,9 +56,7 @@ class AssistantMessageResponse(BaseModel):
     tool_name: str | None = None
     tool_input: dict[str, Any] | None = None
     tool_output: dict[str, Any] | None = None
-    reasoning: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
-    thinking_traces: list[dict[str, Any]] | None = None
     source_references: list[AssistantReferenceItem] | None = None
     created_at: datetime
 

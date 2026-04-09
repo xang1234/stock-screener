@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockApiClient, mockNotifyUnauthorizedResponse } = vi.hoisted(() => ({
   mockApiClient: {
@@ -22,6 +22,11 @@ import { sendMessageStream } from './assistant';
 describe('assistant streaming api', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('includes credentials on assistant streaming fetch requests', async () => {

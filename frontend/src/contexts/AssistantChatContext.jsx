@@ -140,6 +140,27 @@ export function AssistantChatProvider({ children }) {
     return conversation.conversation_id;
   }, [resetDraft]);
 
+  const finalizeUnexpectedStreamEnd = useCallback(() => {
+    const danglingDraft = draftRef.current;
+    if (!danglingDraft) {
+      return;
+    }
+    setMessages((previous) => [
+      ...previous,
+      {
+        ...danglingDraft,
+        id: `assistant-eof-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        content: danglingDraft.content
+          ? `${danglingDraft.content}\n\nStream ended unexpectedly before the assistant completed its reply.`
+          : 'Stream ended unexpectedly before the assistant completed its reply.',
+        isStreaming: false,
+        isError: true,
+      },
+    ]);
+    resetDraft();
+  }, [resetDraft]);
+
   const sendMessage = useCallback(async (content) => {
     const normalizedContent = content.trim();
     if (!normalizedContent || isStreaming) {
@@ -182,6 +203,7 @@ export function AssistantChatProvider({ children }) {
                 {
                   type: 'call',
                   tool: chunk.tool,
+                  args: chunk.params || {},
                   params: chunk.params || {},
                 },
               ],
@@ -247,9 +269,9 @@ export function AssistantChatProvider({ children }) {
         ]);
         resetDraft();
       },
-      () => {}
+      finalizeUnexpectedStreamEnd
     );
-  }, [ensureConversation, isStreaming, resetDraft, updateDraft]);
+  }, [ensureConversation, finalizeUnexpectedStreamEnd, isStreaming, resetDraft, updateDraft]);
 
   const displayedMessages = useMemo(() => {
     if (!draftMessage) return messages;

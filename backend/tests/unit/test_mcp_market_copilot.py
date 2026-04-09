@@ -5,9 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import delete
 
 from app.interfaces.mcp.market_copilot import MarketCopilotService
 from app.infra.db.models.feature_store import FeatureRun
+from app.models.theme import ThemeMetrics
 from tests.helpers.mcp_fixture import create_mcp_test_session_factory, seed_market_copilot_data
 
 
@@ -183,6 +185,20 @@ def test_watchlist_add_writes_when_enabled(session_factory):
     snapshot = _tool_payload(service.call_tool("watchlist_snapshot", {"watchlist": "Leaders"}))
     symbols = [row["symbol"] for row in snapshot["items"]]
     assert symbols == ["NVDA", "MSFT"]
+
+
+def test_stock_snapshot_only_marks_theme_metrics_fresh_when_metrics_exist(session_factory, read_only_service):
+    with session_factory() as db:
+        run = db.query(FeatureRun).filter(FeatureRun.status == "published").order_by(FeatureRun.id.desc()).first()
+        assert run is not None
+        db.execute(delete(ThemeMetrics).where(ThemeMetrics.date == run.as_of_date))
+        db.commit()
+
+    payload = _tool_payload(read_only_service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["themes"]
+    assert all(theme["momentum_score"] is None for theme in payload["themes"])
+    assert "theme_metrics" not in payload["freshness"]["sources"]
 
 
 def test_stock_lookup_returns_universe_info(read_only_service):

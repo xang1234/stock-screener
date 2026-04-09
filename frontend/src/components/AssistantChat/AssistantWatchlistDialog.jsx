@@ -62,7 +62,10 @@ function AssistantWatchlistDialog({ open, symbols, onClose }) {
 
   const noWatchlists = open && !watchlistsQuery.isLoading && watchlists.length === 0;
   const preview = previewQuery.data;
-  const canConfirm = Boolean(preview?.addable_symbols?.length) && !addMutation.isPending;
+  const canConfirm = Boolean(preview?.addable_symbols?.length)
+    && !watchlistsQuery.isError
+    && !previewQuery.isError
+    && !addMutation.isPending;
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -77,6 +80,12 @@ function AssistantWatchlistDialog({ open, symbols, onClose }) {
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
               <CircularProgress size={24} />
             </Box>
+          ) : watchlistsQuery.isError ? (
+            <Alert severity="error">
+              {watchlistsQuery.error?.response?.data?.detail
+                || watchlistsQuery.error?.message
+                || 'Failed to load watchlists.'}
+            </Alert>
           ) : noWatchlists ? (
             <Alert severity="info">Create a watchlist first to add assistant suggestions.</Alert>
           ) : (
@@ -101,6 +110,14 @@ function AssistantWatchlistDialog({ open, symbols, onClose }) {
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
               <CircularProgress size={24} />
             </Box>
+          )}
+
+          {selectedWatchlist && previewQuery.isError && (
+            <Alert severity="error">
+              {previewQuery.error?.response?.data?.detail
+                || previewQuery.error?.message
+                || 'Failed to preview symbols for this watchlist.'}
+            </Alert>
           )}
 
           {preview?.summary && <Alert severity="info">{preview.summary}</Alert>}

@@ -34,9 +34,16 @@ describe('AssistantWatchlistDialog', () => {
       reason: null,
       summary: '1 symbol can be added to Leaders.',
     });
-    bulkAddItems.mockResolvedValue({
-      added: [{ symbol: 'NVDA' }],
-    });
+    bulkAddItems.mockResolvedValue([
+      {
+        id: 101,
+        watchlist_id: 7,
+        position: 1,
+        symbol: 'NVDA',
+        created_at: '2026-04-09T00:02:00Z',
+        updated_at: '2026-04-09T00:02:00Z',
+      },
+    ]);
   });
 
   it('previews the diff and confirms the add through the existing watchlist API', async () => {
@@ -71,5 +78,39 @@ describe('AssistantWatchlistDialog', () => {
 
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['userWatchlists'] });
     expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['userWatchlistData', 7] });
+  });
+
+  it('surfaces watchlist loading failures', async () => {
+    getWatchlists.mockRejectedValueOnce(new Error('Watchlists unavailable'));
+
+    renderWithProviders(
+      <AssistantWatchlistDialog
+        open
+        symbols={['NVDA']}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Watchlists unavailable')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Confirm add' })).toBeDisabled();
+    });
+  });
+
+  it('surfaces preview failures and keeps confirm disabled', async () => {
+    previewWatchlistAdd.mockRejectedValueOnce(new Error('Preview failed'));
+
+    renderWithProviders(
+      <AssistantWatchlistDialog
+        open
+        symbols={['NVDA']}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Preview failed')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Confirm add' })).toBeDisabled();
+    });
   });
 });

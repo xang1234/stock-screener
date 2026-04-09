@@ -227,9 +227,16 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
     }
 
     if (path === '/v1/user-watchlists/7/items/bulk' && method === 'POST') {
-      return jsonResponse(route, {
-        added: [{ symbol: 'NVDA' }],
-      });
+      return jsonResponse(route, [
+        {
+          id: 101,
+          watchlist_id: 7,
+          position: 1,
+          symbol: 'NVDA',
+          created_at: '2026-04-09T00:02:00Z',
+          updated_at: '2026-04-09T00:02:00Z',
+        },
+      ]);
     }
 
     if (path === '/v1/strategy-profiles' && method === 'GET') {
