@@ -79,6 +79,16 @@ jobs:
       - name: Smoke test
         run: cd frontend && npm run test:smoke
 
+  assistant-compose-smoke:
+    name: Assistant Compose Smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assistant profile compose smoke
+        run: bash scripts/run_docker_assistant_compose_smoke.sh
+
   publish-images:
     name: Publish Docker Images
     needs: [backend, frontend]

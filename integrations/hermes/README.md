@@ -169,3 +169,21 @@ If you want backend and Hermes both under Docker Compose:
    `docker compose --env-file .env.docker --profile assistant ps`
 5. Open:
    `http://localhost/chatbot`
+
+## Compose smoke check
+
+To validate the Docker assistant profile end to end with fixture values:
+
+```bash
+bash scripts/run_docker_assistant_compose_smoke.sh
+```
+
+It will:
+
+- generate a temporary Docker env file
+- boot `postgres`, `redis`, `backend`, `frontend`, and `hermes`
+- wait for frontend and assistant health through the real reverse-proxy path
+- verify Hermes has both `/opt/data/config.yaml` and `/opt/data/.env`
+- log in through `/api/v1/auth/login`
+- create an assistant conversation through `/api/v1/assistant/conversations`
+- tear the stack down on exit
