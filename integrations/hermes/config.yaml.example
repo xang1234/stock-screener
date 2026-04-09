@@ -1,6 +1,6 @@
 mcp_servers:
   stockscreen_market:
-    url: "http://backend:8000/mcp"
+    url: "http://backend:8000/mcp/"
     headers:
       x-server-auth: "REPLACE_WITH_SERVER_AUTH_PASSWORD"
     tools:

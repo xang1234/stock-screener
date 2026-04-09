@@ -14,8 +14,10 @@ from .market_copilot import MarketCopilotService
 SUPPORTED_PROTOCOL_VERSIONS = (
     "2025-11-05",
     "2025-06-18",
+    "2025-03-26",
     "2024-11-05",
 )
+DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 SERVER_VERSION = "0.1.0"
 
 
@@ -112,7 +114,7 @@ class MarketCopilotMcpServer:
             negotiated = (
                 protocol_version
                 if protocol_version in SUPPORTED_PROTOCOL_VERSIONS
-                else SUPPORTED_PROTOCOL_VERSIONS[0]
+                else DEFAULT_PROTOCOL_VERSION
             )
             return self._result_response(
                 request_id,

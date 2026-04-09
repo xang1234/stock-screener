@@ -154,8 +154,27 @@ class TestMcpHttpTransport:
         )
         assert resp.status_code == 200
         body = resp.json()
+        assert body["result"]["protocolVersion"] == "2025-03-26"
         assert body["result"]["capabilities"]["tools"]["listChanged"] is False
         assert "name" in body["result"]["serverInfo"]
+
+    async def test_initialize_defaults_to_2025_03_26_for_unknown_protocol(self, client):
+        resp = await client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2026-01-01",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest-http", "version": "1.0"},
+                },
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["result"]["protocolVersion"] == "2025-03-26"
 
     async def test_tools_list_returns_13_tools(self, client):
         resp = await client.post(

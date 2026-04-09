@@ -61,6 +61,55 @@ load_env_file "$ENV_FILE"
 
 : "${SERVER_AUTH_PASSWORD:?Set SERVER_AUTH_PASSWORD in $ENV_FILE}"
 
+resolve_hermes_provider() {
+  if [[ -n "${HERMES_INFERENCE_PROVIDER:-}" ]]; then
+    printf '%s' "${HERMES_INFERENCE_PROVIDER}"
+    return
+  fi
+  if [[ -n "${MINIMAX_API_KEY:-}" ]]; then
+    printf '%s' "minimax"
+    return
+  fi
+  if [[ -n "${GLM_API_KEY:-}" || -n "${ZAI_API_KEY:-}" || -n "${Z_AI_API_KEY:-}" ]]; then
+    printf '%s' "zai"
+    return
+  fi
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    printf '%s' "openrouter"
+    return
+  fi
+  if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" ]]; then
+    printf '%s' "custom"
+    return
+  fi
+  printf '%s' "auto"
+}
+
+resolve_hermes_model() {
+  local provider="$1"
+  if [[ -n "${HERMES_DEFAULT_MODEL:-}" ]]; then
+    printf '%s' "${HERMES_DEFAULT_MODEL}"
+    return
+  fi
+  case "$provider" in
+    minimax)
+      printf '%s' "MiniMax-M2.7"
+      ;;
+    zai)
+      printf '%s' "glm-4.5-flash"
+      ;;
+    openrouter)
+      printf '%s' "anthropic/claude-sonnet-4"
+      ;;
+    custom)
+      printf '%s' "gpt-4o-mini"
+      ;;
+    *)
+      printf '%s' "MiniMax-M2.7"
+      ;;
+  esac
+}
+
 HERMES_HAS_PROVIDER_KEY=false
 for provider_key in OPENROUTER_API_KEY OPENAI_API_KEY MINIMAX_API_KEY GLM_API_KEY ZAI_API_KEY Z_AI_API_KEY; do
   if [[ -n "${!provider_key:-}" ]]; then
@@ -96,14 +145,17 @@ GLM_API_KEY_VALUE="${GLM_API_KEY:-${ZAI_API_KEY:-${Z_AI_API_KEY:-}}}"
 ZAI_API_KEY_VALUE="${ZAI_API_KEY:-${GLM_API_KEY:-${Z_AI_API_KEY:-}}}"
 Z_AI_API_KEY_VALUE="${Z_AI_API_KEY:-${ZAI_API_KEY:-${GLM_API_KEY:-}}}"
 GLM_BASE_URL_VALUE="${GLM_BASE_URL:-${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}}"
+HERMES_PROVIDER_VALUE="$(resolve_hermes_provider)"
+HERMES_DEFAULT_MODEL_VALUE="$(resolve_hermes_model "$HERMES_PROVIDER_VALUE")"
 
 cat > "$ROOT_DIR/data/hermes/config.yaml" <<EOF
 model:
-  provider: ${HERMES_INFERENCE_PROVIDER:-auto}
+  provider: ${HERMES_PROVIDER_VALUE}
+  default: ${HERMES_DEFAULT_MODEL_VALUE}
 
 mcp_servers:
   stockscreen_market:
-    url: "http://backend:8000/mcp"
+    url: "http://backend:8000/mcp/"
     headers:
       x-server-auth: "${SERVER_AUTH_PASSWORD}"
     tools:
@@ -133,7 +185,7 @@ API_SERVER_ENABLED=true
 API_SERVER_HOST=0.0.0.0
 API_SERVER_PORT=8642
 API_SERVER_KEY=${HERMES_API_KEY:-}
-HERMES_INFERENCE_PROVIDER=${HERMES_INFERENCE_PROVIDER:-}
+HERMES_INFERENCE_PROVIDER=${HERMES_PROVIDER_VALUE}
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
 OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-}
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -160,6 +212,7 @@ COMPOSE_CMD=(
 echo "Prepared data/hermes/config.yaml and data/hermes/.env"
 echo "Using env file: $ENV_FILE"
 echo "Using Hermes platform: $HERMES_PLATFORM"
+echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
 
 if [[ "$DRY_RUN" == "true" ]]; then
   printf 'Would run:'

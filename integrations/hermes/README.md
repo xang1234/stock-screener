@@ -40,7 +40,7 @@ Hermes should call the backend’s authenticated HTTP MCP transport, not the old
 Important points:
 
 - Keep Hermes private on the Docker network or localhost.
-- Configure Hermes to call `http://backend:8000/mcp` in Docker or `http://127.0.0.1:8000/mcp` locally.
+- Configure Hermes to call `http://backend:8000/mcp/` in Docker or `http://127.0.0.1:8000/mcp/` locally.
 - Send the same `SERVER_AUTH_PASSWORD` as an `x-server-auth` header so Hermes can reach the protected MCP transport.
 - Register the external skills directory so Hermes can load `market-copilot`.
 
@@ -54,7 +54,7 @@ That script:
 
 - sources the repo `.env` and `backend/.env`
 - runs Hermes with `HERMES_HOME=data/hermes`
-- generates `data/hermes/config.yaml` with the local MCP URL `http://127.0.0.1:8000/mcp`
+- generates `data/hermes/config.yaml` with the local MCP URL `http://127.0.0.1:8000/mcp/`
 - starts the OpenAI-compatible Hermes API on `http://127.0.0.1:8642/v1`
 
 ## Docker Compose
@@ -70,7 +70,7 @@ bash scripts/start_docker_assistant_stack.sh .env.docker
 That script:
 
 - uses `.env.docker` instead of the root `.env`, so local `HERMES_API_BASE=http://127.0.0.1:8642/v1` values do not leak into the backend container
-- writes `data/hermes/config.yaml` with Docker MCP access at `http://backend:8000/mcp`
+- writes `data/hermes/config.yaml` with Docker MCP access at `http://backend:8000/mcp/`
 - writes `data/hermes/.env` with Hermes API-server and provider/search keys
 - forwards the same Hermes provider keys directly into the container environment
 - starts `postgres`, `redis`, `backend`, `frontend`, and `hermes` under the `assistant` profile
@@ -102,6 +102,14 @@ Use at least one of:
 Optional:
 
 - `HERMES_INFERENCE_PROVIDER=minimax|zai|openrouter|custom` to force provider selection instead of auto-detecting from the available keys
+- `HERMES_DEFAULT_MODEL=...` to override the model written into Hermes `config.yaml`
+
+When no override is set, the repo helpers now write a sane default model for the chosen provider:
+
+- `minimax` -> `MiniMax-M2.7`
+- `zai` -> `glm-4.5-flash`
+- `openrouter` -> `anthropic/claude-sonnet-4`
+- `custom` -> `gpt-4o-mini`
 
 If Hermes logs the large interactive ASCII banner and then exits, it is not running the gateway. The Docker assistant path should now start `hermes gateway`, not the interactive CLI.
 
