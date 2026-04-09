@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-from pathlib import Path
+from io import BytesIO
 import httpx
 import pytest
 import pytest_asyncio
@@ -15,85 +12,84 @@ from tests.helpers.mcp_stdio import read_mcp_message, write_mcp_message
 
 
 def test_mcp_server_lists_tools_and_serves_market_overview(tmp_path):
-    backend_dir = Path(__file__).resolve().parents[2]
     database_path = tmp_path / "mcp-server.sqlite3"
     database_url = f"sqlite:///{database_path}"
 
     session_factory, _engine = create_mcp_test_session_factory(database_url)
     seed_market_copilot_data(session_factory)
 
-    env = os.environ.copy()
-    env["DATABASE_URL"] = database_url
-    env["MCP_WATCHLIST_WRITES_ENABLED"] = "false"
+    from types import SimpleNamespace
 
-    process = subprocess.Popen(
-        [sys.executable, "-m", "app.interfaces.mcp.server"],
-        cwd=backend_dir,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
+    from app.interfaces.mcp.market_copilot import MarketCopilotService
+    from app.interfaces.mcp.server import MarketCopilotMcpServer, StdioTransport
+
+    instream = BytesIO()
+    outstream = BytesIO()
+    transport = StdioTransport(instream=instream, outstream=outstream)
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(
+            mcp_server_name="test-stdio",
+            mcp_watchlist_writes_enabled=False,
+        ),
     )
 
-    try:
-        assert process.stdin is not None
-        assert process.stdout is not None
-
-        write_mcp_message(
-            process.stdin,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "pytest", "version": "1.0"},
-                },
+    write_mcp_message(
+        instream,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
             },
-        )
-        initialize = read_mcp_message(process.stdout)
-        assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
+        },
+    )
+    write_mcp_message(
+        instream,
+        {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        },
+    )
+    write_mcp_message(
+        instream,
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        },
+    )
+    write_mcp_message(
+        instream,
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "market_overview", "arguments": {}},
+        },
+    )
+    instream.seek(0)
 
-        write_mcp_message(
-            process.stdin,
-            {
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {},
-            },
-        )
+    MarketCopilotMcpServer(service, transport=transport).serve_forever()
+    outstream.seek(0)
 
-        write_mcp_message(
-            process.stdin,
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/list",
-                "params": {},
-            },
-        )
-        tools_list = read_mcp_message(process.stdout)
-        tool_names = {tool["name"] for tool in tools_list["result"]["tools"]}
-        assert "market_overview" in tool_names
-        assert "watchlist_add" in tool_names
+    initialize = read_mcp_message(outstream)
+    assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
 
-        write_mcp_message(
-            process.stdin,
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {"name": "market_overview", "arguments": {}},
-            },
-        )
-        tool_call = read_mcp_message(process.stdout)
-        structured = tool_call["result"]["structuredContent"]
-        assert "Published feature run 2" in structured["summary"]
-        assert structured["runs"]["selected"]["id"] == 2
-    finally:
-        process.terminate()
-        process.wait(timeout=5)
+    tools_list = read_mcp_message(outstream)
+    tool_names = {tool["name"] for tool in tools_list["result"]["tools"]}
+    assert "market_overview" in tool_names
+    assert "watchlist_add" in tool_names
+
+    tool_call = read_mcp_message(outstream)
+    structured = tool_call["result"]["structuredContent"]
+    assert "Published feature run 2" in structured["summary"]
+    assert structured["runs"]["selected"]["id"] == 2
 
 
 @pytest.mark.asyncio
@@ -161,7 +157,7 @@ class TestMcpHttpTransport:
         assert body["result"]["capabilities"]["tools"]["listChanged"] is False
         assert "name" in body["result"]["serverInfo"]
 
-    async def test_tools_list_returns_12_tools(self, client):
+    async def test_tools_list_returns_13_tools(self, client):
         resp = await client.post(
             "/mcp/",
             json={
@@ -173,9 +169,10 @@ class TestMcpHttpTransport:
         )
         body = resp.json()
         tool_names = {t["name"] for t in body["result"]["tools"]}
-        assert len(tool_names) == 12
+        assert len(tool_names) == 13
         assert "group_rankings" in tool_names
         assert "stock_lookup" in tool_names
+        assert "stock_snapshot" in tool_names
         assert "breadth_snapshot" in tool_names
         assert "daily_digest" in tool_names
 

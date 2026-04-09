@@ -5,8 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import delete
 
 from app.interfaces.mcp.market_copilot import MarketCopilotService
+from app.infra.db.models.feature_store import FeatureRun
+from app.models.theme import ThemeMetrics
 from tests.helpers.mcp_fixture import create_mcp_test_session_factory, seed_market_copilot_data
 
 
@@ -46,6 +49,7 @@ def test_lists_expected_tools(read_only_service):
         "watchlist_add",
         "group_rankings",
         "stock_lookup",
+        "stock_snapshot",
         "breadth_snapshot",
         "daily_digest",
     }
@@ -183,6 +187,20 @@ def test_watchlist_add_writes_when_enabled(session_factory):
     assert symbols == ["NVDA", "MSFT"]
 
 
+def test_stock_snapshot_only_marks_theme_metrics_fresh_when_metrics_exist(session_factory, read_only_service):
+    with session_factory() as db:
+        run = db.query(FeatureRun).filter(FeatureRun.status == "published").order_by(FeatureRun.id.desc()).first()
+        assert run is not None
+        db.execute(delete(ThemeMetrics).where(ThemeMetrics.date == run.as_of_date))
+        db.commit()
+
+    payload = _tool_payload(read_only_service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["themes"]
+    assert all(theme["momentum_score"] is None for theme in payload["themes"])
+    assert "theme_metrics" not in payload["freshness"]["sources"]
+
+
 def test_stock_lookup_returns_universe_info(read_only_service):
     payload = _tool_payload(read_only_service.call_tool("stock_lookup", {"symbol": "nvda"}))
 
@@ -211,6 +229,35 @@ def test_stock_lookup_unknown_symbol(read_only_service):
 
     assert payload["stock"] is None
     assert "not found" in payload["summary"]
+
+
+def test_stock_snapshot_returns_combined_context(read_only_service):
+    payload = _tool_payload(read_only_service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["stock"]["symbol"] == "NVDA"
+    assert payload["technicals"]["composite_score"] == 92.0
+    assert payload["themes"][0]["display_name"] == "AI Infrastructure"
+    assert payload["watchlists"][0]["name"] == "Leaders"
+    assert payload["breadth"]["date"] == "2026-03-29"
+
+
+def test_stock_snapshot_without_published_run_does_not_duplicate_theme_rows(session_factory):
+    with session_factory() as db:
+        db.query(FeatureRun).update({FeatureRun.status: "failed"})
+        db.commit()
+
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(
+            mcp_watchlist_writes_enabled=False,
+            mcp_server_name="stockscreen-market-copilot",
+        ),
+    )
+
+    payload = _tool_payload(service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["technicals"] is None
+    assert [theme["display_name"] for theme in payload["themes"]] == ["AI Infrastructure"]
 
 
 def test_breadth_snapshot_returns_multiple_days(read_only_service):

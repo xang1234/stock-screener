@@ -20,7 +20,7 @@ const defaultScanDefaults = {
 const defaultCapabilities = (authenticated) => ({
   features: {
     themes: true,
-    chatbot: false,
+    chatbot: true,
     tasks: false,
   },
   auth: {
@@ -56,10 +56,37 @@ const ensureLoginVisible = async (page) => {
   await expect(loginTitle).toBeVisible({ timeout: 20000 });
 };
 
-test('single-tenant operator smoke path (login -> scan -> themes review -> auth expiry -> relogin)', async ({ page }) => {
+test('single-tenant operator smoke path (assistant -> scan -> themes review -> auth expiry -> relogin)', async ({ page }) => {
   let authenticated = false;
   let expireNextScanRequest = false;
   let latestScanId = 'scan-smoke';
+  const assistantConversationId = 'assistant-smoke';
+  let assistantMessages = [];
+
+  const assistantReply = {
+    id: 2,
+    conversation_id: assistantConversationId,
+    role: 'assistant',
+    content: 'NVDA remains the strongest internal AI theme candidate [1]. External coverage is still constructive, so it is worth keeping on a watchlist.',
+    agent_type: 'hermes',
+    tool_calls: [
+      {
+        tool: 'stock_snapshot',
+        args: { symbol: 'NVDA' },
+      },
+    ],
+    source_references: [
+      {
+        reference_number: 1,
+        type: 'internal',
+        title: 'Feature run snapshot',
+        url: '/stocks/NVDA',
+        section: 'As of 2026-04-09',
+        snippet: 'Latest published scan posture and theme context.',
+      },
+    ],
+    created_at: '2026-04-09T00:01:00Z',
+  };
 
   await page.route('**/*', async (route, request) => {
     const url = new URL(request.url());
@@ -84,8 +111,132 @@ test('single-tenant operator smoke path (login -> scan -> themes review -> auth 
       return jsonResponse(route, { success: true });
     }
 
+    if (path === '/v1/assistant/health' && method === 'GET') {
+      if (!authenticated) {
+        return jsonResponse(route, { detail: 'Unauthorized' }, 401);
+      }
+      return jsonResponse(route, {
+        status: 'ok',
+        available: true,
+        streaming: true,
+        popup_enabled: true,
+        model: 'hermes-smoke',
+        detail: null,
+      });
+    }
+
     if (!authenticated) {
       return jsonResponse(route, { detail: 'Unauthorized' }, 401);
+    }
+
+    if (path === '/v1/assistant/conversations' && method === 'POST') {
+      return jsonResponse(route, {
+        id: 1,
+        conversation_id: assistantConversationId,
+        title: 'Assistant',
+        folder_id: null,
+        created_at: '2026-04-09T00:00:00Z',
+        updated_at: '2026-04-09T00:00:00Z',
+        is_active: true,
+        message_count: assistantMessages.length,
+      });
+    }
+
+    if (path === '/v1/assistant/conversations' && method === 'GET') {
+      return jsonResponse(route, {
+        conversations: [
+          {
+            id: 1,
+            conversation_id: assistantConversationId,
+            title: 'Assistant',
+            folder_id: null,
+            created_at: '2026-04-09T00:00:00Z',
+            updated_at: '2026-04-09T00:00:00Z',
+            is_active: true,
+            message_count: assistantMessages.length,
+          },
+        ],
+        total: 1,
+      });
+    }
+
+    if (path === `/v1/assistant/conversations/${assistantConversationId}` && method === 'GET') {
+      return jsonResponse(route, {
+        id: 1,
+        conversation_id: assistantConversationId,
+        title: 'Assistant',
+        folder_id: null,
+        created_at: '2026-04-09T00:00:00Z',
+        updated_at: '2026-04-09T00:00:00Z',
+        is_active: true,
+        message_count: assistantMessages.length,
+        messages: assistantMessages,
+      });
+    }
+
+    if (path === `/v1/assistant/conversations/${assistantConversationId}/messages` && method === 'POST') {
+      const body = request.postDataJSON();
+      assistantMessages = [
+        ...assistantMessages,
+        {
+          id: assistantMessages.length + 1,
+          conversation_id: assistantConversationId,
+          role: 'user',
+          content: body.content,
+          created_at: '2026-04-09T00:00:30Z',
+        },
+        assistantReply,
+      ];
+
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: [
+          `data: ${JSON.stringify({ type: 'content', content: 'NVDA remains the strongest internal AI theme candidate [1]. ' })}`,
+          '',
+          `data: ${JSON.stringify({ type: 'tool_call', tool: 'stock_snapshot', params: { symbol: 'NVDA' } })}`,
+          '',
+          `data: ${JSON.stringify({ type: 'tool_result', tool: 'stock_snapshot', status: 'ok', result: { symbol: 'NVDA' } })}`,
+          '',
+          `data: ${JSON.stringify({ type: 'content', content: 'External coverage is still constructive, so it is worth keeping on a watchlist.' })}`,
+          '',
+          `data: ${JSON.stringify({ type: 'done', message: assistantReply, tool_calls: assistantReply.tool_calls, references: assistantReply.source_references })}`,
+          '',
+        ].join('\n'),
+      });
+    }
+
+    if (path === '/v1/user-watchlists' && method === 'GET') {
+      return jsonResponse(route, {
+        watchlists: [
+          { id: 7, name: 'Leaders' },
+        ],
+      });
+    }
+
+    if (path === '/v1/assistant/watchlist-add-preview' && method === 'POST') {
+      return jsonResponse(route, {
+        watchlist: { id: 7, name: 'Leaders' },
+        requested_symbols: ['NVDA'],
+        addable_symbols: ['NVDA'],
+        existing_symbols: [],
+        invalid_symbols: [],
+        reason: null,
+        summary: '1 symbol can be added to Leaders.',
+      });
+    }
+
+    if (path === '/v1/user-watchlists/7/items/bulk' && method === 'POST') {
+      return jsonResponse(route, [
+        {
+          id: 101,
+          watchlist_id: 7,
+          position: 1,
+          symbol: 'NVDA',
+          created_at: '2026-04-09T00:02:00Z',
+          updated_at: '2026-04-09T00:02:00Z',
+        },
+      ]);
     }
 
     if (path === '/v1/strategy-profiles' && method === 'GET') {
@@ -345,7 +496,26 @@ test('single-tenant operator smoke path (login -> scan -> themes review -> auth 
   await page.getByLabel('Server password').fill('smoke-password');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
+  await page.goto('/chatbot');
+  await expect(page.getByRole('heading', { name: 'Assistant' })).toBeVisible();
+  await expect(page.getByText('Hermes online')).toBeVisible();
+  await page.getByPlaceholder(/ask about scans, themes, breadth, symbols/i).fill(
+    'Compare StockScreenClaude signals with current web context for NVDA.'
+  );
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByText(/NVDA remains the strongest internal AI theme candidate/i)).toBeVisible();
+  await page.getByText('Sources (1)').click();
+  await expect(page.getByText('Feature run snapshot')).toBeVisible();
+
   await page.goto('/scan');
+  await expect(page.getByLabel('Open assistant')).toBeVisible();
+  await page.getByLabel('Open assistant').click();
+  await expect(page.getByText(/NVDA remains the strongest internal AI theme candidate/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Add tickers to watchlist' }).click();
+  await expect(page.getByText('1 symbol can be added to Leaders.')).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm add' }).click();
+  await expect(page.getByText('1 symbol can be added to Leaders.')).not.toBeVisible();
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Scan' })).toBeVisible();
   await page.getByRole('button', { name: 'Scan' }).click();
   await expect(page.getByText(/Results:\s*1 stocks/i)).toBeVisible();
@@ -364,4 +534,5 @@ test('single-tenant operator smoke path (login -> scan -> themes review -> auth 
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.goto('/scan');
   await expect(page.getByRole('button', { name: 'Scan' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Assistant' })).toBeVisible();
 });

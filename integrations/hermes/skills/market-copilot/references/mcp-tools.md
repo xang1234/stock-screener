@@ -18,6 +18,11 @@ Hermes prefixes MCP tools as `mcp_<server>_<tool>`, so the expected tool names a
 - `mcp_stockscreen_market_theme_state`
 - `mcp_stockscreen_market_task_status`
 - `mcp_stockscreen_market_watchlist_add`
+- `mcp_stockscreen_market_group_rankings`
+- `mcp_stockscreen_market_stock_lookup`
+- `mcp_stockscreen_market_stock_snapshot`
+- `mcp_stockscreen_market_breadth_snapshot`
+- `mcp_stockscreen_market_daily_digest`
 
 If you rename the Hermes MCP server key, these prefixed names will change too.
 

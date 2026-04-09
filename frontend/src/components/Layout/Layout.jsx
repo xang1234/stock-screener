@@ -4,6 +4,8 @@ import {
   Box,
   Button,
   Container,
+  Drawer,
+  Fab,
   FormControl,
   InputBase,
   InputLabel,
@@ -19,10 +21,13 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
+import { AssistantChat } from '../AssistantChat';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
+import { useAssistantChat } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
@@ -72,7 +77,15 @@ function Layout({ children }) {
   const colorMode = useContext(ColorModeContext);
   const { auth, features, isLoggingOut, logout } = useRuntime();
   const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
+  const { assistantHealth } = useAssistantChat();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+
+  const assistantAvailable = (
+    features.chatbot
+    && assistantHealth.available
+    && (!auth?.required || auth?.authenticated)
+  );
 
   const navItems = [
     { path: '/', label: 'Routine' },
@@ -82,7 +95,7 @@ function Layout({ children }) {
     { path: '/digest', label: 'Digest' },
     { path: '/validation', label: 'Validation' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
-    ...(features.chatbot ? [{ path: '/chatbot', label: 'Chatbot' }] : []),
+    ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),
   ];
 
   return (
@@ -195,6 +208,37 @@ function Layout({ children }) {
       {features.themes && <PipelineProgressCard />}
 
       {features.tasks && <TaskSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />}
+
+      {assistantAvailable && location.pathname !== '/chatbot' && (
+        <>
+          <Fab
+            color="secondary"
+            aria-label="Open assistant"
+            onClick={() => setAssistantOpen(true)}
+            sx={{
+              position: 'fixed',
+              right: 24,
+              bottom: 24,
+              zIndex: theme.zIndex.drawer - 1,
+            }}
+          >
+            <SmartToyIcon />
+          </Fab>
+
+          <Drawer
+            anchor="right"
+            open={assistantOpen}
+            onClose={() => setAssistantOpen(false)}
+            PaperProps={{
+              sx: {
+                width: { xs: '100%', sm: 440 },
+              },
+            }}
+          >
+            <AssistantChat mode="drawer" onClose={() => setAssistantOpen(false)} />
+          </Drawer>
+        </>
+      )}
     </Box>
   );
 }

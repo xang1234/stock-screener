@@ -1,103 +1,94 @@
-# Hermes Market Copilot
+# Hermes Assistant Integration
 
-This integration exposes StockScreenClaude market state to [Hermes Agent MCP](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/) and ships a Hermes skill pack that turns those tools into repeatable market workflows.
+StockScreenClaude now uses Hermes as a **private assistant runtime** behind the backend. The browser never calls Hermes directly. The backend owns auth, transcript persistence, SSE normalization, and watchlist confirmation flows.
 
-It is intentionally split in two:
+The integration has three parts:
 
-- MCP server: deterministic tool access to market state, feature-run diffs, watchlists, themes, and task health.
-- Hermes skill: workflow guidance for after-close briefs, run-diff analysis, watchlist stewardship, and theme scouting.
+- Backend proxy: `/api/v1/assistant/*`
+- Authenticated MCP data plane: `/mcp`
+- Hermes skills: `integrations/hermes/skills/market-copilot/`
 
-## What ships here
+## Deployment posture
 
-- Local stdio MCP server entrypoint: `backend/app/interfaces/mcp/server.py`
-- Tool adapters: `backend/app/interfaces/mcp/market_copilot.py`
-- Hermes skill directory: `integrations/hermes/skills/market-copilot/`
-
-## Prerequisites
-
-- Hermes Agent installed with MCP support. Hermes' MCP docs cover the expected `mcp_servers` config shape and local stdio setup.
-- A working StockScreenClaude backend virtualenv at `backend/venv/`
-- A reachable StockScreenClaude database via `DATABASE_URL`
+- Supported database: PostgreSQL
+- Supported app posture: single-tenant server deployment
+- Supported assistant posture: Hermes runs on the same host or Docker network as the backend
+- Not supported: browser-direct Hermes access, desktop-mode Hermes wiring, repo/file/shell access in the product assistant path
 
 ## Backend configuration
 
-In `backend/.env`, keep these settings explicit:
+In `backend/.env` or your Docker env source, keep these explicit:
 
 ```dotenv
-DATABASE_URL=sqlite:////ABS/PATH/TO/StockScreenClaude/data/stockscanner.db
+DATABASE_URL=postgresql://user:password@localhost/stockscanner
+SERVER_AUTH_PASSWORD=replace-me
+HERMES_API_BASE=http://127.0.0.1:8642/v1
+HERMES_API_KEY=replace-me
+HERMES_MODEL=hermes-agent
+HERMES_REQUEST_TIMEOUT_SECONDS=120
 MCP_SERVER_NAME=stockscreen-market-copilot
 MCP_WATCHLIST_WRITES_ENABLED=false
+MCP_HTTP_ENABLED=true
 ```
 
-`MCP_WATCHLIST_WRITES_ENABLED=false` is the safe default. Leave it off unless you want Hermes to be able to call `watchlist_add`.
-
-## Manual smoke test
-
-From the repo root:
-
-```bash
-cd backend
-PYTHONPATH="$PWD" ./venv/bin/python -m app.interfaces.mcp.server
-```
-
-The process will wait on stdio for an MCP client. Stop it with `Ctrl+C` after confirming it starts cleanly.
+`MCP_WATCHLIST_WRITES_ENABLED=false` remains the safe default. The product assistant does not mutate watchlists directly; confirmed watchlist writes still go through the app backend.
 
 ## Hermes configuration
 
-Add the MCP server and external skill directory to `~/.hermes/config.yaml`.
+Hermes should call the backend’s authenticated HTTP MCP transport, not the old stdio-only path. A sample config template is included at [config.yaml.example](config.yaml.example).
 
-Keep the server key as `stockscreen_market`. Hermes prefixes MCP tools as `mcp_<server>_<tool>`, and the bundled skill assumes that exact prefix.
+Important points:
 
-```yaml
-mcp_servers:
-  stockscreen_market:
-    command: "/ABS/PATH/TO/StockScreenClaude/backend/venv/bin/python"
-    args: ["-m", "app.interfaces.mcp.server"]
-    env:
-      PYTHONPATH: "/ABS/PATH/TO/StockScreenClaude/backend"
-      DATABASE_URL: "sqlite:////ABS/PATH/TO/StockScreenClaude/data/stockscanner.db"
-      MCP_SERVER_NAME: "stockscreen-market-copilot"
-      MCP_WATCHLIST_WRITES_ENABLED: "false"
-    tools:
-      include:
-        - market_overview
-        - compare_feature_runs
-        - find_candidates
-        - explain_symbol
-        - watchlist_snapshot
-        - theme_state
-        - task_status
-        - watchlist_add
-      prompts: false
-      resources: false
+- Keep Hermes private on the Docker network or localhost.
+- Configure Hermes to call `http://backend:8000/mcp` in Docker or `http://127.0.0.1:8000/mcp` locally.
+- Send the same `SERVER_AUTH_PASSWORD` as an `x-server-auth` header so Hermes can reach the protected MCP transport.
+- Register the external skills directory so Hermes can load `market-copilot`.
 
-skills:
-  external_dirs:
-    - /ABS/PATH/TO/StockScreenClaude/integrations/hermes/skills
-```
+## Docker Compose
 
-If you change the server key from `stockscreen_market`, Hermes will register different prefixed tool names and you will need to update the skill instructions accordingly.
-
-After saving the config:
+`docker-compose.yml` now includes an opt-in Hermes sidecar under the `assistant` profile:
 
 ```bash
-hermes chat
+docker compose --profile assistant up -d
 ```
 
-If Hermes is already running, use `/reload-mcp` after updating the config.
+The service is internal-only:
+
+- no browser-facing port is published
+- backend uses `HERMES_API_BASE=http://hermes:8642/v1`
+- Hermes state lives under `data/hermes/`
+
+Before enabling the profile, place a real Hermes config file in `data/hermes/config.yaml` using the example template and your actual secrets.
+
+## Assistant runtime contract
+
+The backend proxy sends Hermes a system prompt that tells it to:
+
+- use StockScreenClaude MCP tools first for scans, themes, breadth, watchlists, and symbol posture
+- use broader web research only when internal data is missing or stale
+- separate internal signals from external web/news context
+- mention freshness caveats explicitly
+- stay in research-assistant mode and avoid certainty language
+
+The frontend assistant lives at `/chatbot` for v1, but the UI is labeled **Assistant** and also appears as a global popup drawer.
 
 ## Included MCP tools
 
-The server exposes these v1 tools:
+The current deterministic MCP surface is:
 
-- `market_overview(as_of_date?)`
-- `compare_feature_runs(run_a?, run_b?, limit=25)`
-- `find_candidates(filters, universe?, limit=25)`
-- `explain_symbol(symbol, depth="brief"|"full")`
-- `watchlist_snapshot(watchlist)`
-- `theme_state(theme_name?, limit=10)`
-- `task_status(task_name?)`
-- `watchlist_add(watchlist, symbols, reason?)`
+- `market_overview`
+- `compare_feature_runs`
+- `find_candidates`
+- `explain_symbol`
+- `watchlist_snapshot`
+- `theme_state`
+- `task_status`
+- `watchlist_add`
+- `group_rankings`
+- `stock_lookup`
+- `stock_snapshot`
+- `breadth_snapshot`
+- `daily_digest`
 
 Every tool returns the same top-level envelope:
 
@@ -107,26 +98,31 @@ Every tool returns the same top-level envelope:
 - `freshness`
 - `next_actions`
 
-## Using the Hermes skill
+## Manual smoke checks
 
-Once the external skill directory is registered, Hermes can load the included skill as:
+Local backend + Hermes:
 
-```text
-/market-copilot
+```bash
+cd backend
+PYTHONPATH="$PWD" ./venv/bin/python -m uvicorn app.main:app --reload
+curl -s -H "x-server-auth: $SERVER_AUTH_PASSWORD" http://127.0.0.1:8000/api/v1/assistant/health
 ```
 
-Example prompts:
+MCP transport:
 
-- `/market-copilot Write an after-close brief for my Leaders and Breakouts watchlists.`
-- `/market-copilot Compare the latest two feature runs and explain the biggest movers.`
-- `/market-copilot Review the AI Infrastructure theme and tell me which symbols deserve deeper work.`
-
-## Weekday after-close automation
-
-Hermes cron jobs run in fresh sessions, so the prompt needs to carry its own workflow. After setting a home channel in Hermes, a good recurring prompt is:
-
-```text
-Every weekday at 6:15pm America/New_York, use the market-copilot skill with the stockscreen_market MCP tools to prepare an after-close brief. Start with market_overview, compare the latest two published feature runs with limit 10, inspect theme_state with limit 5, check task_status, and snapshot the Leaders and Breakouts watchlists. Write five short sections: Market State, Run Diff, Themes, Watchlists, Risks, Next Actions. If freshness is stale or any scheduled task failed, lead with that caveat.
+```bash
+curl -s \
+  -H "Content-Type: application/json" \
+  -H "x-server-auth: $SERVER_AUTH_PASSWORD" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  http://127.0.0.1:8000/mcp/
 ```
 
-That prompt follows Hermes' scheduled-task model: fresh session, explicit instructions, and delivery to the configured home channel.
+Full app:
+
+- sign in through the normal server login
+- open `/chatbot`
+- ask for a scan/theme/breadth summary
+- confirm the answer shows citations and tool activity
+- open the global assistant drawer from a non-chat route
+- test the watchlist preview flow from the latest assistant answer
