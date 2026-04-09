@@ -18,6 +18,19 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import { LinearProgress } from '@mui/material';
 
+function normalizeVelocity(velocity) {
+  const numericVelocity = Number(velocity);
+  if (!Number.isFinite(numericVelocity) || numericVelocity <= 0) {
+    return null;
+  }
+  return numericVelocity;
+}
+
+function formatVelocityLabel(velocity) {
+  const numericVelocity = normalizeVelocity(velocity);
+  return numericVelocity ? `${numericVelocity.toFixed(1)}x` : '-';
+}
+
 export function MomentumBar({ score }) {
   const numericScore = Number.isFinite(score) ? Math.max(0, Math.min(score, 100)) : 0;
   const color = numericScore >= 70 ? 'success' : numericScore >= 50 ? 'warning' : 'error';
@@ -39,7 +52,8 @@ export function MomentumBar({ score }) {
 }
 
 export function VelocityIndicator({ velocity }) {
-  if (!velocity) {
+  const numericVelocity = normalizeVelocity(velocity);
+  if (!numericVelocity) {
     return (
       <Box sx={{ color: 'text.secondary', fontFamily: 'monospace', fontSize: '11px' }}>
         -
@@ -47,21 +61,21 @@ export function VelocityIndicator({ velocity }) {
     );
   }
 
-  const isAccelerating = velocity > 1;
+  const isAccelerating = numericVelocity > 1;
   const color =
-    velocity >= 2
+    numericVelocity >= 2
       ? 'success.main'
-      : velocity >= 1.5
+      : numericVelocity >= 1.5
         ? 'warning.main'
-        : velocity >= 1
+        : numericVelocity >= 1
           ? 'info.main'
           : 'text.secondary';
 
   return (
     <Box display="flex" alignItems="center" sx={{ fontFamily: 'monospace' }}>
       {isAccelerating && <TrendingUpIcon sx={{ fontSize: 12, mr: 0.25, color }} />}
-      <Box component="span" sx={{ color, fontWeight: velocity >= 1.5 ? 600 : 400, fontSize: '11px' }}>
-        {velocity.toFixed(1)}x
+      <Box component="span" sx={{ color, fontWeight: numericVelocity >= 1.5 ? 600 : 400, fontSize: '11px' }}>
+        {numericVelocity.toFixed(1)}x
       </Box>
     </Box>
   );
@@ -107,7 +121,7 @@ function EmergingThemesCard({ themes, isLoading }) {
                   <Box sx={{ fontSize: '11px', fontWeight: 500 }}>{theme.theme}</Box>
                   <Box display="flex" gap={0.5} mt={0.25}>
                     <Chip
-                      label={`${theme.velocity.toFixed(1)}x`}
+                      label={formatVelocityLabel(theme.velocity)}
                       size="small"
                       variant="outlined"
                       color="warning"
@@ -134,7 +148,7 @@ function EmergingThemesCard({ themes, isLoading }) {
   );
 }
 
-function TopTrendingThemesCard({ topTrendingThemes, onSelectTheme }) {
+function TopTrendingThemesCard({ topTrendingThemes = [], onSelectTheme }) {
   return (
     <Card variant="outlined" sx={{ height: '100%' }}>
       <CardContent>
@@ -156,11 +170,11 @@ function TopTrendingThemesCard({ topTrendingThemes, onSelectTheme }) {
             sx={{ cursor: 'pointer' }}
             role="button"
             tabIndex={0}
-            onClick={() => onSelectTheme({ id: theme.id, name: theme.name })}
+            onClick={() => onSelectTheme?.({ id: theme.id, name: theme.name })}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onSelectTheme({ id: theme.id, name: theme.name });
+                onSelectTheme?.({ id: theme.id, name: theme.name });
               }
             }}
           >

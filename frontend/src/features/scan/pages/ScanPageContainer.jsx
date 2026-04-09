@@ -238,8 +238,8 @@ function ScanPage() {
       const latestCompletedScan = scanHistory.scans.find(
         (scan) => scan.status === 'completed' || scan.status === 'cancelled'
       );
-      hasAutoLoadedScanRef.current = true;
       if (latestCompletedScan) {
+        hasAutoLoadedScanRef.current = true;
         handleLoadScan(latestCompletedScan.scan_id);
       }
     }

@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ScanPage from './ScanPage';
@@ -168,5 +168,62 @@ describe('ScanPage', () => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
     });
     expect(screen.getByText('Filters')).toBeInTheDocument();
+  });
+
+  it('auto-loads the latest completed scan after scan history refreshes from running-only state', async () => {
+    runtimeState.runtimeReady = true;
+    scanApi.getScans
+      .mockResolvedValueOnce({
+        scans: [
+          {
+            scan_id: 'scan-running',
+            status: 'running',
+            created_at: '2026-04-09T00:00:00Z',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        scans: [
+          {
+            scan_id: 'scan-complete',
+            status: 'completed',
+            created_at: '2026-04-09T00:05:00Z',
+          },
+        ],
+      });
+    scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
+    scanApi.getScanResults.mockResolvedValue({
+      total: 1,
+      results: [
+        {
+          symbol: 'NVDA',
+          company_name: 'NVIDIA',
+          composite_score: 98,
+          minervini_score: 92,
+          current_price: 900,
+          stage: 2,
+        },
+      ],
+    });
+
+    const { queryClient } = renderWithProviders(<ScanPage />);
+
+    await waitFor(() => {
+      expect(scanApi.getScans).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['scanHistory'] });
+    });
+
+    await waitFor(() => {
+      expect(scanApi.getScans).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(scanApi.getScanStatus).toHaveBeenCalledWith('scan-complete');
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
+    });
   });
 });
