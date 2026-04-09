@@ -3,7 +3,6 @@
  *
  * Shows detailed technical analysis metrics including RS rating, stage, MA analysis, and VCP
  */
-import React from 'react';
 import {
   Card,
   CardContent,
@@ -194,7 +193,7 @@ export const StageAnalysisCard = ({ stage, stageName, description, confidence })
  * MA Alignment Display
  */
 export const MAAlignmentCard = ({ maAnalysis }) => {
-  const { alignment, ma_200_trend, ma_50_position, separation } = maAnalysis;
+  const { alignment, ma_200_trend, separation } = maAnalysis;
 
   return (
     <Card>

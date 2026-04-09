@@ -70,7 +70,7 @@ function TradingViewChart({ symbol, interval = 'D', range = '9M', hideSidebar = 
         script.parentNode.removeChild(script);
       }
     };
-  }, [symbol, interval, range, mode]);
+  }, [symbol, interval, range, mode, hideSidebar]);
 
   return (
     <Box

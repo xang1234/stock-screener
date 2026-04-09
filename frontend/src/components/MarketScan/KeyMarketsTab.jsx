@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Box, Typography, IconButton, Chip, CircularProgress } from '@mui/material';
+import { Box, Typography, IconButton, CircularProgress } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 import TradingViewChart from './TradingViewChart';
 import SymbolNavigator from './SymbolNavigator';

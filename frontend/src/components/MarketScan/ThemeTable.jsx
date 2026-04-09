@@ -19,7 +19,6 @@ import {
   TableRow,
   Typography,
   IconButton,
-  Collapse,
   Paper,
 } from '@mui/material';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -38,7 +37,7 @@ const PRICE_PERIODS = [
   { key: '3m', label: '3M' },
 ];
 
-function ThemeTable({ themeData, onRefresh }) {
+function ThemeTable({ themeData }) {
   const [collapsedGroups, setCollapsedGroups] = useState({});
 
   const toggleGroup = async (subgroupId, currentState) => {

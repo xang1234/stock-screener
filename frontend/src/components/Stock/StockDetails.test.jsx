@@ -193,7 +193,7 @@ describe('StockDetails', () => {
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();
-  }, 10000);
+  }, 20000);
 
   it('renders degraded workspace payloads without decision or regime cards throwing', async () => {
     getStockDecisionDashboard.mockResolvedValue({

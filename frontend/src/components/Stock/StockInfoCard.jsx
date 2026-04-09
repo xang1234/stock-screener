@@ -8,7 +8,6 @@ import {
   Box,
   Divider,
 } from '@mui/material';
-import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import BusinessIcon from '@mui/icons-material/Business';
 
 function StockInfoCard({ stockData }) {

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
-  Paper,
   Typography,
   Drawer,
   List,
@@ -31,7 +30,6 @@ import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import DriveFileMoveIcon from '@mui/icons-material/DriveFileMove';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import ChatWindow from '../components/Chatbot/ChatWindow';
@@ -50,6 +48,7 @@ import {
 } from '../api/chatbot';
 
 const DRAWER_WIDTH = 260;
+const EMPTY_LIST = [];
 
 function ChatbotPage() {
   const theme = useTheme();
@@ -275,8 +274,8 @@ function ChatbotPage() {
     }
   };
 
-  const conversations = conversationsData?.conversations || [];
-  const folders = foldersData?.folders || [];
+  const conversations = conversationsData?.conversations ?? EMPTY_LIST;
+  const folders = foldersData?.folders ?? EMPTY_LIST;
   const isConfigured = healthData?.groq_configured;
 
   // Group conversations by folder - memoized to prevent re-grouping on sidebar toggle

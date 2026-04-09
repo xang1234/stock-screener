@@ -21,6 +21,8 @@ import RSSparkline from '../../components/Scan/RSSparkline';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import { getGroupRankColor } from '../../utils/colorUtils';
 
+const EMPTY_RESULTS = [];
+
 const formatNumber = (value, digits = 0) => {
   if (value == null) return '-';
   return Number(value).toLocaleString(undefined, {
@@ -60,8 +62,8 @@ function StaticHomePage() {
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
 
-  const topResults = homeQuery.data?.scan_summary?.top_results || [];
-  const topGroups = homeQuery.data?.top_groups || [];
+  const topResults = homeQuery.data?.scan_summary?.top_results ?? EMPTY_RESULTS;
+  const topGroups = homeQuery.data?.top_groups ?? EMPTY_RESULTS;
 
   const chartEntries = useMemo(() => chartIndexQuery.data?.symbols || [], [chartIndexQuery.data]);
   const chartEnabledSymbols = useMemo(() => new Set(chartEntries.map((e) => e.symbol)), [chartEntries]);

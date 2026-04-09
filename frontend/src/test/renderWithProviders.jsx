@@ -30,5 +30,8 @@ export function renderWithProviders(ui, options = {}) {
       </QueryClientProvider>
     );
   }
-  return render(ui, { wrapper: Wrapper, ...options });
+  return {
+    queryClient,
+    ...render(ui, { wrapper: Wrapper, ...options }),
+  };
 }

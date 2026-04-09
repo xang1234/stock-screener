@@ -32,6 +32,8 @@ const confidenceBandColor = (band) => {
   return 'default';
 };
 
+const EMPTY_ITEMS = [];
+
 export function ThemeCandidateReviewContent({ pipeline = 'technical' }) {
   const queryClient = useQueryClient();
   const [selectedIds, setSelectedIds] = useState([]);
@@ -44,7 +46,7 @@ export function ThemeCandidateReviewContent({ pipeline = 'technical' }) {
   });
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const items = queue?.items || [];
+  const items = queue?.items ?? EMPTY_ITEMS;
   const visibleItemIds = useMemo(() => items.map((row) => row.theme_cluster_id), [items]);
   const selectedVisibleIds = useMemo(
     () => visibleItemIds.filter((id) => selectedSet.has(id)),

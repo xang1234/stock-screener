@@ -55,7 +55,7 @@ export async function isBridgeAvailable() {
   try {
     await sendBridgeRequest('PING', {}, 1000);
     return true;
-  } catch (_error) {
+  } catch {
     return false;
   }
 }

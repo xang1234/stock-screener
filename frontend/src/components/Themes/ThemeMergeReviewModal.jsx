@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
@@ -292,6 +292,8 @@ function HistoryRow({ entry }) {
   );
 }
 
+const EMPTY_SUGGESTIONS = [];
+
 export function ThemeMergeReviewContent({ onClose }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState(0);
@@ -347,12 +349,20 @@ export function ThemeMergeReviewContent({ onClose }) {
   });
 
   // Auto-select all pending suggestions when they load
-  const suggestionsList = pendingSuggestions?.suggestions || pendingSuggestions || [];
+  const suggestionsList = useMemo(() => {
+    if (Array.isArray(pendingSuggestions?.suggestions)) {
+      return pendingSuggestions.suggestions;
+    }
+    if (Array.isArray(pendingSuggestions)) {
+      return pendingSuggestions;
+    }
+    return EMPTY_SUGGESTIONS;
+  }, [pendingSuggestions]);
   useEffect(() => {
     if (suggestionsList.length > 0) {
       setSelectedIds(new Set(suggestionsList.map((s) => s.id)));
     }
-  }, [suggestionsList.length]);
+  }, [suggestionsList]);
 
   const handleToggleSelection = (id) => {
     setSelectedIds((prev) => {

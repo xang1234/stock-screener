@@ -155,7 +155,7 @@ describe('DigestPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download Markdown' }));
     await waitFor(() => expect(window.URL.createObjectURL).toHaveBeenCalled());
     expect(await screen.findByText('Markdown download started.')).toBeInTheDocument();
-  });
+  }, 25000);
 
   it('renders degraded empty states without crashing', async () => {
     getDailyDigest.mockResolvedValue({

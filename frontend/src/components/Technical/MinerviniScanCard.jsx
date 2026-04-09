@@ -3,7 +3,6 @@
  *
  * Displays comprehensive Minervini template analysis results
  */
-import React from 'react';
 import {
   Card,
   CardContent,

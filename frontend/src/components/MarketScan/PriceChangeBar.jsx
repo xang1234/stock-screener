@@ -17,7 +17,6 @@ import { Box, Typography, useTheme } from '@mui/material';
 
 function PriceChangeBar({ value, min, max, width = 60, height = 24 }) {
   const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
 
   // Background color - use theme's paper background to blend in perfectly
   const bgColor = theme.palette.background.paper;

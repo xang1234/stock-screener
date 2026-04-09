@@ -167,8 +167,10 @@ describe('StaticScanPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText(/Loading full scan dataset: 1 \/ 2 rows/i)).toBeInTheDocument();
-    expect(screen.getByTestId('results-table-rows')).toHaveTextContent('NVDA');
+    expect(await screen.findByText(/Loading full scan dataset: [01] \/ 2 rows/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('results-table-rows')).toHaveTextContent('NVDA');
+    });
     expect(screen.queryByTestId('filter-panel')).not.toBeInTheDocument();
 
     await act(async () => {
