@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.interfaces.mcp.market_copilot import MarketCopilotService
+from app.infra.db.models.feature_store import FeatureRun
 from tests.helpers.mcp_fixture import create_mcp_test_session_factory, seed_market_copilot_data
 
 
@@ -222,6 +223,25 @@ def test_stock_snapshot_returns_combined_context(read_only_service):
     assert payload["themes"][0]["display_name"] == "AI Infrastructure"
     assert payload["watchlists"][0]["name"] == "Leaders"
     assert payload["breadth"]["date"] == "2026-03-29"
+
+
+def test_stock_snapshot_without_published_run_does_not_duplicate_theme_rows(session_factory):
+    with session_factory() as db:
+        db.query(FeatureRun).update({FeatureRun.status: "failed"})
+        db.commit()
+
+    service = MarketCopilotService(
+        session_factory,
+        SimpleNamespace(
+            mcp_watchlist_writes_enabled=False,
+            mcp_server_name="stockscreen-market-copilot",
+        ),
+    )
+
+    payload = _tool_payload(service.call_tool("stock_snapshot", {"symbol": "NVDA"}))
+
+    assert payload["technicals"] is None
+    assert [theme["display_name"] for theme in payload["themes"]] == ["AI Infrastructure"]
 
 
 def test_breadth_snapshot_returns_multiple_days(read_only_service):

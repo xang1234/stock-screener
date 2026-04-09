@@ -72,17 +72,22 @@ def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_set
 
 @pytest.mark.asyncio
 async def test_stream_message_persists_transcript_and_tool_results(session_factory, assistant_settings):
-    stream_bytes = b"""data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"function\": {\"name\": \"mcp_stockscreen_market_stock_snapshot\", \"arguments\": \"{\\\"symbol\\\":\\\"NVDA\\\"}\"}}]}}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"NVDA remains one of the stronger symbols in the current leadership set.\"}}]}\n\ndata: [DONE]\n\n"""
+    stream_responses = [
+        b"""data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"function\": {\"name\": \"mcp_stockscreen_market_stock_snapshot\", \"arguments\": \"{\\\"symbol\\\":\\\"NVDA\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n""",
+        b"""data: {\"choices\": [{\"delta\": {\"content\": \"Use [1] for the internal snapshot. See [Reuters](https://example.com) for broader context.\"}}]}\n\ndata: [DONE]\n\n""",
+    ]
+    request_payloads: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"
         payload = request.content.decode("utf-8")
+        request_payloads.append(payload)
         assert "StockScreenClaude Assistant" in payload
         assert "\"role\":\"user\"" in payload
         return httpx.Response(
             200,
             headers={"Content-Type": "text/event-stream"},
-            content=stream_bytes,
+            content=stream_responses[len(request_payloads) - 1],
         )
 
     service = AssistantGatewayService(
@@ -103,10 +108,17 @@ async def test_stream_message_persists_transcript_and_tool_results(session_facto
         ]
 
     assert any(chunk["type"] == "tool_result" for chunk in chunks)
+    assert any(chunk["type"] == "content" for chunk in chunks)
     done_chunk = next(chunk for chunk in chunks if chunk["type"] == "done")
     assert done_chunk["message"]["role"] == "assistant"
+    assert done_chunk["message"]["content"] == "Use [1] for the internal snapshot. See [Reuters](https://example.com) for broader context."
     assert done_chunk["tool_calls"][0]["tool"] == "stock_snapshot"
-    assert done_chunk["references"]
+    assert done_chunk["references"][0]["reference_number"] == 1
+    assert done_chunk["references"][0]["url"] == "/stocks/NVDA"
+    assert any(reference["url"] == "https://example.com" and reference["reference_number"] is None for reference in done_chunk["references"])
+    assert len(request_payloads) == 2
+    assert "\"role\":\"tool\"" in request_payloads[1]
+    assert "\"tool_call_id\":\"call_1\"" in request_payloads[1]
 
     with session_factory() as db:
         persisted_messages = (
@@ -118,3 +130,4 @@ async def test_stream_message_persists_transcript_and_tool_results(session_facto
         assert [message.role for message in persisted_messages] == ["user", "assistant"]
         assert persisted_messages[1].agent_type == "hermes"
         assert persisted_messages[1].tool_calls[0]["tool"] == "stock_snapshot"
+        assert persisted_messages[1].content.startswith("Use [1] for the internal snapshot.")

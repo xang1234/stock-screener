@@ -55,7 +55,7 @@ function AssistantWatchlistDialog({ open, symbols, onClose }) {
     mutationFn: () => bulkAddItems(Number(selectedWatchlistId), previewQuery.data?.addable_symbols || []),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['userWatchlists'] });
-      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', selectedWatchlistId] });
+      queryClient.invalidateQueries({ queryKey: ['userWatchlistData', Number(selectedWatchlistId)] });
       onClose();
     },
   });

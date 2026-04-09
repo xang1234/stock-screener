@@ -39,6 +39,7 @@ advice. Prefer concise, evidence-based responses with citations where possible.
 
 _CONTENT_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)(?:\s+\"([^\"]+)\")?\)")
 _RAW_URL_PATTERN = re.compile(r"(?<!\()(?P<url>https?://[^\s)]+)")
+_MAX_TOOL_ROUND_TRIPS = 3
 _TOOL_NAME_SUFFIXES = (
     "market_overview",
     "compare_feature_runs",
@@ -279,38 +280,70 @@ class AssistantGatewayService:
         db.commit()
 
         history = self._conversation_history(db, conversation_id, limit=20)
-        payload = self._build_chat_payload(history)
-        tool_calls = self._initial_tool_call_state()
-        content_parts: list[str] = []
+        request_messages: list[dict[str, Any]] = list(history)
+        combined_tool_calls: list[dict[str, Any]] = []
+        source_references: list[dict[str, Any]] = []
+        final_content_events: list[dict[str, Any]] = []
+        final_content_parts: list[str] = []
 
         try:
             async with self._open_client() as client:
-                async with client.stream(
-                    "POST",
-                    self._chat_url(),
-                    json=payload,
-                    headers=self._request_headers(),
-                ) as response:
-                    await self._ensure_upstream_success(response)
+                for _ in range(_MAX_TOOL_ROUND_TRIPS):
+                    tool_calls = self._initial_tool_call_state()
+                    buffered_content_events: list[dict[str, Any]] = []
+                    buffered_content_parts: list[str] = []
 
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if not data:
-                            continue
-                        if data == "[DONE]":
-                            break
+                    async with client.stream(
+                        "POST",
+                        self._chat_url(),
+                        json=self._build_chat_payload(request_messages),
+                        headers=self._request_headers(),
+                    ) as response:
+                        await self._ensure_upstream_success(response)
 
-                        chunk = self._parse_stream_chunk(data)
-                        if chunk is None:
-                            continue
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data:
+                                continue
+                            if data == "[DONE]":
+                                break
 
-                        normalized_chunks = self._normalize_stream_chunk(chunk, tool_calls)
-                        for normalized in normalized_chunks:
-                            if normalized["type"] == "content":
-                                content_parts.append(normalized["content"])
-                            yield normalized
+                            chunk = self._parse_stream_chunk(data)
+                            if chunk is None:
+                                continue
+
+                            normalized_chunks = self._normalize_stream_chunk(chunk, tool_calls)
+                            for normalized in normalized_chunks:
+                                if normalized["type"] == "content":
+                                    buffered_content_events.append(normalized)
+                                    buffered_content_parts.append(normalized["content"])
+                                    continue
+                                yield normalized
+
+                    finalized_tool_calls = self._finalize_tool_calls(tool_calls)
+                    (
+                        round_tool_calls,
+                        assistant_tool_message,
+                        tool_messages,
+                        result_chunks,
+                        reference_items,
+                    ) = self._execute_tool_calls(finalized_tool_calls)
+                    combined_tool_calls.extend(round_tool_calls)
+                    source_references.extend(reference_items)
+
+                    if assistant_tool_message is None:
+                        final_content_events = buffered_content_events
+                        final_content_parts = buffered_content_parts
+                        break
+
+                    for result_chunk in result_chunks:
+                        yield result_chunk
+                    request_messages.extend([assistant_tool_message, *tool_messages])
+                else:
+                    final_content_events = []
+                    final_content_parts = []
         except AssistantGatewayError:
             raise
         except (httpx.ConnectError, httpx.NetworkError) as exc:
@@ -318,19 +351,12 @@ class AssistantGatewayService:
         except httpx.TimeoutException as exc:
             raise AssistantUpstreamUnavailableError("Hermes response timed out.") from exc
 
-        combined_tool_calls: list[dict[str, Any]] = []
-        source_references: list[dict[str, Any]] = []
-        for tool_call in self._finalize_tool_calls(tool_calls):
-            combined_tool_call, result_chunk, reference_items = self._resolve_tool_result(tool_call)
-            combined_tool_calls.append(combined_tool_call)
-            if result_chunk is not None:
-                yield result_chunk
-            source_references.extend(reference_items)
+        for content_chunk in final_content_events:
+            yield content_chunk
 
         source_references.extend(
             self._extract_content_references(
-                "".join(content_parts),
-                start_number=len(source_references) + 1,
+                "".join(final_content_parts),
             )
         )
         source_references = self._dedupe_references(source_references)
@@ -338,7 +364,7 @@ class AssistantGatewayService:
         assistant_message = Message(
             conversation_id=conversation_id,
             role="assistant",
-            content=("".join(content_parts)).strip() or "No assistant response returned.",
+            content=("".join(final_content_parts)).strip() or "No assistant response returned.",
             agent_type="hermes",
             tool_calls=combined_tool_calls or None,
             source_references=source_references or None,
@@ -356,18 +382,18 @@ class AssistantGatewayService:
             "tool_calls": combined_tool_calls,
         }
 
-    def _build_chat_payload(self, history: list[dict[str, str]]) -> dict[str, Any]:
+    def _build_chat_payload(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "model": self._settings.hermes_model,
             "stream": True,
             "temperature": 0.2,
             "messages": [
                 {"role": "system", "content": _ASSISTANT_SYSTEM_PROMPT},
-                *history,
+                *messages,
             ],
         }
 
-    def _conversation_history(self, db: Session, conversation_id: str, *, limit: int) -> list[dict[str, str]]:
+    def _conversation_history(self, db: Session, conversation_id: str, *, limit: int) -> list[dict[str, Any]]:
         rows = (
             db.query(Message)
             .filter(
@@ -493,35 +519,75 @@ class AssistantGatewayService:
             )
         return finalized
 
-    def _resolve_tool_result(
+    def _execute_tool_calls(
         self,
-        tool_call: dict[str, Any],
-    ) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
-        tool_name = tool_call.get("name") or "tool"
-        normalized_tool_name = self._match_market_copilot_tool(tool_name)
-        arguments = tool_call.get("arguments") or {}
-        combined = {
-            "tool": normalized_tool_name or tool_name,
-            "args": arguments,
-            "result": None,
-        }
+        tool_calls: list[dict[str, Any]],
+    ) -> tuple[
+        list[dict[str, Any]],
+        dict[str, Any] | None,
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        combined_tool_calls: list[dict[str, Any]] = []
+        wire_tool_calls: list[dict[str, Any]] = []
+        tool_messages: list[dict[str, Any]] = []
+        result_chunks: list[dict[str, Any]] = []
+        references: list[dict[str, Any]] = []
 
-        if normalized_tool_name is None:
-            return combined, None, []
+        for tool_call in tool_calls:
+            raw_tool_name = tool_call.get("name") or "tool"
+            normalized_tool_name = self._match_market_copilot_tool(raw_tool_name)
+            arguments = tool_call.get("arguments") or {}
+            tool_call_id = str(tool_call.get("id") or f"call_{tool_call.get('index', len(combined_tool_calls))}")
+            combined = {
+                "tool": normalized_tool_name or raw_tool_name,
+                "args": arguments,
+                "result": None,
+            }
 
-        result = self._market_copilot.call_tool(normalized_tool_name, arguments)
-        payload = result.get("structuredContent")
-        combined["result"] = payload
+            if normalized_tool_name is not None:
+                result = self._market_copilot.call_tool(normalized_tool_name, arguments)
+                payload = result.get("structuredContent")
+                combined["result"] = payload
+                references.extend(self._references_from_tool_payload(normalized_tool_name, payload))
+                result_chunks.append(
+                    {
+                        "type": "tool_result",
+                        "tool": normalized_tool_name,
+                        "status": "success" if result.get("isError") is not True else "error",
+                        "result": payload,
+                    }
+                )
+                wire_tool_calls.append(
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": raw_tool_name,
+                            "arguments": self._json_dumps(arguments),
+                        },
+                    }
+                )
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": self._json_dumps(payload or {}),
+                    }
+                )
 
-        status = "success" if result.get("isError") is not True else "error"
-        result_chunk = {
-            "type": "tool_result",
-            "tool": normalized_tool_name,
-            "status": status,
-            "result": payload,
-        }
-        references = self._references_from_tool_payload(normalized_tool_name, payload)
-        return combined, result_chunk, references
+            combined_tool_calls.append(combined)
+
+        assistant_tool_message = None
+        if wire_tool_calls:
+            assistant_tool_message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": wire_tool_calls,
+            }
+
+        return combined_tool_calls, assistant_tool_message, tool_messages, result_chunks, references
 
     def _match_market_copilot_tool(self, raw_name: str | None) -> str | None:
         if not raw_name:
@@ -576,9 +642,8 @@ class AssistantGatewayService:
             return "/"
         return "/"
 
-    def _extract_content_references(self, content: str, *, start_number: int) -> list[dict[str, Any]]:
+    def _extract_content_references(self, content: str) -> list[dict[str, Any]]:
         references: list[dict[str, Any]] = []
-        next_number = start_number
         for match in _CONTENT_LINK_PATTERN.finditer(content or ""):
             title = match.group(1).strip() or self._domain_label(match.group(2))
             references.append(
@@ -588,10 +653,9 @@ class AssistantGatewayService:
                     "url": match.group(2),
                     "section": None,
                     "snippet": match.group(3) or None,
-                    "reference_number": next_number,
+                    "reference_number": None,
                 }
             )
-            next_number += 1
         for match in _RAW_URL_PATTERN.finditer(content or ""):
             url = match.group("url")
             if any(existing.get("url") == url for existing in references):
@@ -603,10 +667,9 @@ class AssistantGatewayService:
                     "url": url,
                     "section": None,
                     "snippet": None,
-                    "reference_number": next_number,
+                    "reference_number": None,
                 }
             )
-            next_number += 1
         return references
 
     def _dedupe_references(self, references: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -618,8 +681,12 @@ class AssistantGatewayService:
                 continue
             seen.add(key)
             deduped.append(ref)
-        for index, ref in enumerate(deduped, start=1):
-            ref["reference_number"] = index
+        next_reference_number = 1
+        for ref in deduped:
+            if ref.get("reference_number") is None:
+                continue
+            ref["reference_number"] = next_reference_number
+            next_reference_number += 1
         return deduped
 
     def _domain_label(self, url: str) -> str:
@@ -696,3 +763,6 @@ class AssistantGatewayService:
             return json.loads(candidate)
         except json.JSONDecodeError:
             return candidate
+
+    def _json_dumps(self, value: Any) -> str:
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)

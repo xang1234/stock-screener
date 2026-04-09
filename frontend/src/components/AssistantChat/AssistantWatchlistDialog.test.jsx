@@ -41,14 +41,14 @@ describe('AssistantWatchlistDialog', () => {
 
   it('previews the diff and confirms the add through the existing watchlist API', async () => {
     const onClose = vi.fn();
-
-    renderWithProviders(
+    const { queryClient } = renderWithProviders(
       <AssistantWatchlistDialog
         open
         symbols={['NVDA', 'AVGO']}
         onClose={onClose}
       />,
     );
+    const invalidateQueriesSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     await waitFor(() => {
       expect(getWatchlists).toHaveBeenCalledTimes(1);
@@ -68,5 +68,8 @@ describe('AssistantWatchlistDialog', () => {
       expect(bulkAddItems).toHaveBeenCalledWith(7, ['NVDA']);
       expect(onClose).toHaveBeenCalledTimes(1);
     });
+
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['userWatchlists'] });
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith({ queryKey: ['userWatchlistData', 7] });
   });
 });

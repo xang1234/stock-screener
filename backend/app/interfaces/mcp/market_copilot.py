@@ -979,8 +979,8 @@ class MarketCopilotService:
                 .order_by(UserWatchlist.position.asc())
                 .all()
             )
-            constituent_query = (
-                db.query(ThemeConstituent, ThemeCluster, ThemeMetrics)
+            constituent_base_query = (
+                db.query(ThemeConstituent, ThemeCluster)
                 .join(ThemeCluster, ThemeCluster.id == ThemeConstituent.theme_cluster_id)
                 .filter(
                     ThemeConstituent.symbol == args.symbol,
@@ -990,17 +990,21 @@ class MarketCopilotService:
                 .order_by(ThemeCluster.display_name.asc())
             )
             if run is not None:
-                constituent_query = constituent_query.outerjoin(
-                    ThemeMetrics,
-                    (ThemeMetrics.theme_cluster_id == ThemeCluster.id)
-                    & (ThemeMetrics.date == run.as_of_date),
+                constituent_rows = (
+                    constituent_base_query
+                    .add_entity(ThemeMetrics)
+                    .outerjoin(
+                        ThemeMetrics,
+                        (ThemeMetrics.theme_cluster_id == ThemeCluster.id)
+                        & (ThemeMetrics.date == run.as_of_date),
+                    )
+                    .all()
                 )
             else:
-                constituent_query = constituent_query.outerjoin(
-                    ThemeMetrics,
-                    ThemeMetrics.theme_cluster_id == ThemeCluster.id,
-                )
-            constituent_rows = constituent_query.all()
+                constituent_rows = [
+                    (constituent, cluster, None)
+                    for constituent, cluster in constituent_base_query.all()
+                ]
 
         if stock is None:
             return self._envelope(

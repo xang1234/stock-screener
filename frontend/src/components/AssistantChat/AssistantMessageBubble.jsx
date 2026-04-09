@@ -24,8 +24,11 @@ function processContentWithCitations(content, references) {
   }
 
   const referenceMap = new Map();
-  references.forEach((reference, index) => {
-    referenceMap.set(reference.reference_number || index + 1, reference);
+  references.forEach((reference) => {
+    if (reference.reference_number == null) {
+      return;
+    }
+    referenceMap.set(reference.reference_number, reference);
   });
 
   return content.replace(/\[(\d+)\]/g, (match, number) => {

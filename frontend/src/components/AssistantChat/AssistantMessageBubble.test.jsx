@@ -33,4 +33,31 @@ describe('AssistantMessageBubble', () => {
     expect(screen.getByText(/As of 2026-04-09/)).toBeInTheDocument();
     expect(screen.getByText(/Breadth ratio remains above 1.5/)).toBeInTheDocument();
   });
+
+  it('ignores unnumbered references when wiring inline numeric citations', () => {
+    renderWithProviders(
+      <AssistantMessageBubble
+        message={{
+          role: 'assistant',
+          content: 'Use [1] for the internal snapshot.',
+          created_at: '2026-04-09T00:00:00Z',
+          source_references: [
+            {
+              type: 'web',
+              title: 'Reuters',
+              url: 'https://example.com/reuters',
+            },
+            {
+              reference_number: 1,
+              type: 'internal',
+              title: 'Feature run snapshot',
+              url: '/stocks/NVDA',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: '[1]' })).toHaveAttribute('href', '/stocks/NVDA');
+  });
 });
