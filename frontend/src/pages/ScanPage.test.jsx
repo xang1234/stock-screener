@@ -58,9 +58,19 @@ vi.mock('../api/scans', () => ({
 }));
 
 beforeEach(() => {
+  vi.clearAllMocks();
   runtimeState.runtimeReady = false;
   runtimeState.uiSnapshots = { scan: false };
   runtimeState.scanDefaults = DEFAULT_SCAN_DEFAULTS;
+  scanApi.getScanBootstrap.mockResolvedValue(null);
+  scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
+  scanApi.getScanResults.mockResolvedValue({ total: 0, results: [] });
+  scanApi.getFilterOptions.mockResolvedValue({
+    ibd_industries: [],
+    gics_sectors: [],
+    ratings: [],
+  });
+  scanApi.getScans.mockResolvedValue({ scans: [] });
 });
 
 describe('ScanPage', () => {
@@ -125,30 +135,53 @@ describe('ScanPage', () => {
 
   it('renders completed scan results flow with filter panel', async () => {
     runtimeState.runtimeReady = true;
-    scanApi.getScans.mockResolvedValueOnce({
-      scans: [
-        {
+    runtimeState.uiSnapshots = { scan: true };
+    scanApi.getScanBootstrap.mockResolvedValue({
+      is_stale: false,
+      payload: {
+        universe_stats: {
+          active: 321,
+          sp500: 500,
+          by_exchange: { NYSE: 100, NASDAQ: 200, AMEX: 21 },
+        },
+        recent_scans: {
+          scans: [
+            {
+              scan_id: 'scan-1',
+              status: 'completed',
+              created_at: '2026-04-09T00:00:00Z',
+            },
+          ],
+        },
+        selected_scan: {
           scan_id: 'scan-1',
           status: 'completed',
-          created_at: '2026-04-09T00:00:00Z',
         },
-      ],
-    });
-    scanApi.getScanStatus.mockResolvedValueOnce({ status: 'completed' });
-    scanApi.getScanResults.mockResolvedValueOnce({
-      total: 1,
-      results: [
-        {
-          symbol: 'NVDA',
-          company_name: 'NVIDIA',
-          composite_score: 98,
-          minervini_score: 92,
-          current_price: 900,
-          stage: 2,
+        selected_scan_status: {
+          status: 'completed',
         },
-      ],
+        filter_options: {
+          ibd_industries: ['Semiconductors'],
+          gics_sectors: ['Technology'],
+          ratings: ['Buy'],
+        },
+        results_page: {
+          scan_id: 'scan-1',
+          total: 1,
+          results: [
+            {
+              symbol: 'NVDA',
+              company_name: 'NVIDIA',
+              composite_score: 98,
+              minervini_score: 92,
+              current_price: 900,
+              stage: 2,
+            },
+          ],
+        },
+      },
     });
-    scanApi.getFilterOptions.mockResolvedValueOnce({
+    scanApi.getFilterOptions.mockResolvedValue({
       ibd_industries: ['Semiconductors'],
       gics_sectors: ['Technology'],
       ratings: ['Buy'],
