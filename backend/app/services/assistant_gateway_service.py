@@ -207,6 +207,20 @@ class AssistantGatewayService:
                 "detail": "Hermes rejected the configured API key.",
             }
 
+        if timed_out:
+            logger.warning(
+                "Hermes health check timed out for %s after %s second(s).",
+                configured_api_base,
+                self._settings.hermes_request_timeout_seconds,
+            )
+            return {
+                "status": "timeout",
+                "available": False,
+                "streaming": True,
+                "popup_enabled": False,
+                "model": getattr(self._settings, "hermes_model", None),
+                "detail": "Hermes health check timed out.",
+            }
         if last_network_error is not None:
             detail = self._unreachable_hermes_detail(last_network_error)
             logger.warning(
@@ -221,20 +235,6 @@ class AssistantGatewayService:
                 "popup_enabled": False,
                 "model": getattr(self._settings, "hermes_model", None),
                 "detail": detail,
-            }
-        if timed_out:
-            logger.warning(
-                "Hermes health check timed out for %s after %s second(s).",
-                configured_api_base,
-                self._settings.hermes_request_timeout_seconds,
-            )
-            return {
-                "status": "timeout",
-                "available": False,
-                "streaming": True,
-                "popup_enabled": False,
-                "model": getattr(self._settings, "hermes_model", None),
-                "detail": "Hermes health check timed out.",
             }
 
         return {

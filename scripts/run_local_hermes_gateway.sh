@@ -47,6 +47,13 @@ resolve_hermes_provider() {
   printf '%s' "auto"
 }
 
+yaml_escape() {
+  local escaped="${1//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  escaped="${escaped//$'\n'/\\n}"
+  printf '%s' "$escaped"
+}
+
 validate_provider_credentials() {
   local provider="$1"
   case "$provider" in
@@ -81,6 +88,22 @@ validate_provider_credentials() {
       exit 1
       ;;
   esac
+}
+
+has_provider_credentials() {
+  local provider_key
+  for provider_key in OPENROUTER_API_KEY OPENAI_API_KEY MINIMAX_API_KEY GLM_API_KEY ZAI_API_KEY Z_AI_API_KEY; do
+    if [[ "$provider_key" == "OPENAI_API_KEY" ]]; then
+      if [[ -n "${OPENAI_API_KEY:-}" && -n "${OPENAI_BASE_URL:-}" ]]; then
+        return 0
+      fi
+      continue
+    fi
+    if [[ -n "${!provider_key:-}" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 resolve_hermes_model() {
@@ -136,7 +159,12 @@ fi
 
 HERMES_PROVIDER_VALUE="$(resolve_hermes_provider)"
 HERMES_DEFAULT_MODEL_VALUE="$(resolve_hermes_model "$HERMES_PROVIDER_VALUE")"
+if ! has_provider_credentials; then
+  echo "Set at least one Hermes inference key before starting Hermes locally." >&2
+  exit 1
+fi
 validate_provider_credentials "$HERMES_PROVIDER_VALUE"
+ESCAPED_SERVER_AUTH_PASSWORD="$(yaml_escape "$SERVER_AUTH_PASSWORD")"
 
 cat > "$HERMES_HOME_DIR/config.yaml" <<EOF
 model:
@@ -147,7 +175,7 @@ mcp_servers:
   stockscreen_market:
     url: "http://127.0.0.1:8000/mcp/"
     headers:
-      x-server-auth: "${SERVER_AUTH_PASSWORD}"
+      x-server-auth: "${ESCAPED_SERVER_AUTH_PASSWORD}"
     tools:
       include:
         - market_overview

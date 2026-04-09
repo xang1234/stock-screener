@@ -163,6 +163,37 @@ async def test_health_returns_actionable_hint_for_localhost_connection_refused(s
     assert "bash scripts/run_local_hermes_gateway.sh" in payload["detail"]
 
 
+@pytest.mark.asyncio
+async def test_health_prefers_timeout_over_earlier_network_error(session_factory):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
+        raise httpx.TimeoutException("timed out")
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    payload = await service.health()
+
+    assert payload["status"] == "timeout"
+    assert payload["detail"] == "Hermes health check timed out."
+
+
 def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_settings):
     service = AssistantGatewayService(
         app_settings=assistant_settings,

@@ -85,6 +85,13 @@ resolve_hermes_provider() {
   printf '%s' "auto"
 }
 
+yaml_escape() {
+  local escaped="${1//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  escaped="${escaped//$'\n'/\\n}"
+  printf '%s' "$escaped"
+}
+
 validate_provider_credentials() {
   local provider="$1"
   case "$provider" in
@@ -198,6 +205,8 @@ MINIMAX_BASE_URL_VALUE="${MINIMAX_BASE_URL:-${MINIMAX_API_BASE:-https://api.mini
 validate_provider_credentials "$HERMES_PROVIDER_VALUE"
 
 render_hermes_config() {
+  local escaped_server_auth_password
+  escaped_server_auth_password="$(yaml_escape "$SERVER_AUTH_PASSWORD")"
   cat <<EOF
 model:
   provider: ${HERMES_PROVIDER_VALUE}
@@ -207,7 +216,7 @@ mcp_servers:
   stockscreen_market:
     url: "http://backend:8000/mcp/"
     headers:
-      x-server-auth: "${SERVER_AUTH_PASSWORD}"
+      x-server-auth: "${escaped_server_auth_password}"
     tools:
       include:
         - market_overview
