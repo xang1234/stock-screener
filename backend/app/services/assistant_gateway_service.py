@@ -208,15 +208,26 @@ class AssistantGatewayService:
             }
 
         if last_network_error is not None:
+            detail = self._unreachable_hermes_detail(last_network_error)
+            logger.warning(
+                "Hermes health check failed for %s: %s",
+                configured_api_base,
+                detail,
+            )
             return {
                 "status": "unavailable",
                 "available": False,
                 "streaming": True,
                 "popup_enabled": False,
                 "model": getattr(self._settings, "hermes_model", None),
-                "detail": self._unreachable_hermes_detail(last_network_error),
+                "detail": detail,
             }
         if timed_out:
+            logger.warning(
+                "Hermes health check timed out for %s after %s second(s).",
+                configured_api_base,
+                self._settings.hermes_request_timeout_seconds,
+            )
             return {
                 "status": "timeout",
                 "available": False,
@@ -383,8 +394,19 @@ class AssistantGatewayService:
         except AssistantGatewayError:
             raise
         except (httpx.ConnectError, httpx.NetworkError) as exc:
-            raise AssistantUpstreamUnavailableError(self._unreachable_hermes_detail(exc)) from exc
+            detail = self._unreachable_hermes_detail(exc)
+            logger.warning(
+                "Hermes request failed for %s during assistant stream: %s",
+                self._configured_hermes_api_base(),
+                detail,
+            )
+            raise AssistantUpstreamUnavailableError(detail) from exc
         except httpx.TimeoutException as exc:
+            logger.warning(
+                "Hermes request timed out for %s after %s second(s).",
+                self._configured_hermes_api_base(),
+                self._settings.hermes_request_timeout_seconds,
+            )
             raise AssistantUpstreamUnavailableError("Hermes response timed out.") from exc
 
         for content_chunk in final_content_events:
@@ -497,6 +519,11 @@ class AssistantGatewayService:
                 f"{detail}. The hostname 'hermes' only resolves inside Docker Compose. "
                 "For local backend runs, set HERMES_API_BASE=http://127.0.0.1:8642/v1 "
                 "or start Hermes locally on that address."
+            )
+        if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port:
+            return (
+                f"{detail}. No Hermes API server is listening on {parsed.hostname}:{parsed.port}. "
+                "Start Hermes on that address, or point HERMES_API_BASE at the host/port where Hermes is running."
             )
         return detail
 

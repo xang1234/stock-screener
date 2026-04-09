@@ -108,6 +108,32 @@ async def test_health_returns_actionable_hint_for_docker_only_hostname(session_f
     assert "HERMES_API_BASE=http://127.0.0.1:8642/v1" in payload["detail"]
 
 
+@pytest.mark.asyncio
+async def test_health_returns_actionable_hint_for_localhost_connection_refused(session_factory):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://127.0.0.1:8642/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=30,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("All connection attempts failed", request=request)
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    payload = await service.health()
+
+    assert payload["available"] is False
+    assert "No Hermes API server is listening on 127.0.0.1:8642" in payload["detail"]
+
+
 def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_settings):
     service = AssistantGatewayService(
         app_settings=assistant_settings,
