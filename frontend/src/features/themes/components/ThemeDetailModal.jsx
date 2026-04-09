@@ -35,6 +35,18 @@ import {
   getThemeMentions,
 } from '../../../api/themes';
 
+function getSafeExternalUrl(url) {
+  if (!url) {
+    return null;
+  }
+  try {
+    const parsedUrl = new URL(url, window.location.origin);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:' ? parsedUrl.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function ThemeDetailModal({ themeId, themeName, open, onClose, selectedPipeline }) {
   const { data: detail, isLoading: isLoadingDetail } = useQuery({
     queryKey: ['themeDetail', themeId],
@@ -263,12 +275,14 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {mentions.mentions.map((mention) => (
-                        <TableRow key={mention.mention_id} hover>
-                          <TableCell sx={{ maxWidth: 200 }}>
-                            {mention.content_url ? (
+                      {mentions.mentions.map((mention) => {
+                        const safeContentUrl = getSafeExternalUrl(mention.content_url);
+                        return (
+                          <TableRow key={mention.mention_id} hover>
+                            <TableCell sx={{ maxWidth: 200 }}>
+                              {safeContentUrl ? (
                               <Link
-                                href={mention.content_url}
+                                href={safeContentUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 underline="hover"
@@ -297,65 +311,66 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                                 {mention.content_title || 'Untitled'}
                               </Box>
                             )}
-                          </TableCell>
-                          <TableCell sx={{ maxWidth: 280 }}>
-                            <Box
+                            </TableCell>
+                            <TableCell sx={{ maxWidth: 280 }}>
+                              <Box
+                                sx={{
+                                  fontSize: '10px',
+                                  color: 'text.secondary',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {mention.excerpt || '-'}
+                              </Box>
+                            </TableCell>
+                            <TableCell>
+                              <Box display="flex" alignItems="center" gap={0.5}>
+                                {mention.source_name && (
+                                  <Box sx={{ fontSize: '10px', fontWeight: 500 }}>{mention.source_name}</Box>
+                                )}
+                                <Box
+                                  component="span"
+                                  sx={{
+                                    fontSize: '9px',
+                                    padding: '1px 3px',
+                                    backgroundColor: 'action.selected',
+                                    borderRadius: '2px',
+                                  }}
+                                >
+                                  {mention.source_type}
+                                </Box>
+                              </Box>
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                size="small"
+                                label={mention.sentiment || 'neutral'}
+                                color={
+                                  mention.sentiment === 'bullish'
+                                    ? 'success'
+                                    : mention.sentiment === 'bearish'
+                                      ? 'error'
+                                      : 'default'
+                                }
+                                sx={{ height: 18, fontSize: '9px' }}
+                              />
+                            </TableCell>
+                            <TableCell
                               sx={{
                                 fontSize: '10px',
                                 color: 'text.secondary',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 2,
-                                WebkitBoxOrient: 'vertical',
-                                overflow: 'hidden',
+                                fontFamily: 'monospace',
+                                whiteSpace: 'nowrap',
                               }}
                             >
-                              {mention.excerpt || '-'}
-                            </Box>
-                          </TableCell>
-                          <TableCell>
-                            <Box display="flex" alignItems="center" gap={0.5}>
-                              {mention.source_name && (
-                                <Box sx={{ fontSize: '10px', fontWeight: 500 }}>{mention.source_name}</Box>
-                              )}
-                              <Box
-                                component="span"
-                                sx={{
-                                  fontSize: '9px',
-                                  padding: '1px 3px',
-                                  backgroundColor: 'action.selected',
-                                  borderRadius: '2px',
-                                }}
-                              >
-                                {mention.source_type}
-                              </Box>
-                            </Box>
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              size="small"
-                              label={mention.sentiment || 'neutral'}
-                              color={
-                                mention.sentiment === 'bullish'
-                                  ? 'success'
-                                  : mention.sentiment === 'bearish'
-                                    ? 'error'
-                                    : 'default'
-                              }
-                              sx={{ height: 18, fontSize: '9px' }}
-                            />
-                          </TableCell>
-                          <TableCell
-                            sx={{
-                              fontSize: '10px',
-                              color: 'text.secondary',
-                              fontFamily: 'monospace',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {mention.published_at ? new Date(mention.published_at).toLocaleDateString() : '-'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                              {mention.published_at ? new Date(mention.published_at).toLocaleDateString() : '-'}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </TableContainer>

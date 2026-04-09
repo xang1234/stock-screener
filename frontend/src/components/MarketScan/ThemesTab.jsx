@@ -147,7 +147,7 @@ function ThemesTab() {
             <CircularProgress />
           </Box>
         ) : themeData ? (
-          <ThemeTable themeData={themeData} onRefresh={handleRefresh} />
+          <ThemeTable themeData={themeData} />
         ) : themes.length === 0 ? (
           <Box textAlign="center" py={4}>
             <Typography color="text.secondary" gutterBottom>

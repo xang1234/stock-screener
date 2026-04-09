@@ -328,7 +328,15 @@ test('single-tenant operator smoke path (login -> scan -> themes review -> auth 
       return jsonResponse(route, { status: 'healthy' });
     }
 
-    return jsonResponse(route, {});
+    if (path === '/v1/filter-presets' && method === 'GET') {
+      return jsonResponse(route, { presets: [] });
+    }
+
+    if (/^\/v1\/stocks\/[^/]+\/history$/.test(path) && method === 'GET') {
+      return jsonResponse(route, []);
+    }
+
+    throw new Error(`Unhandled smoke mock for ${method} ${path}`);
   });
 
   await page.goto('/');

@@ -31,6 +31,8 @@ function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
   const { activeProfileDetail } = useStrategyProfile();
   const scanDefaultsAppliedRef = useRef(null);
+  const hasAutoLoadedScanRef = useRef(false);
+  const scanHistoryRef = useRef([]);
   const queryClient = useQueryClient();
 
   const [currentScanId, setCurrentScanId] = useState(null);
@@ -170,8 +172,18 @@ function ScanPage() {
 
   const handleLoadScan = useCallback(
     async (scanId) => {
+      if (!scanId) {
+        setCurrentScanId(null);
+        setBootstrappedScanId(null);
+        setScanStatus(null);
+        setPage(1);
+        hasAutoLoadedScanRef.current = true;
+        return;
+      }
+
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
+      setScanStatus(null);
       setPage(1);
 
       if (snapshotEnabled) {
@@ -191,7 +203,8 @@ function ScanPage() {
         setScanStatus(status.status);
       } catch (error) {
         console.error('Error loading scan:', error);
-        setScanStatus('completed');
+        const fallbackStatus = scanHistoryRef.current.find((scan) => scan.scan_id === scanId)?.status ?? null;
+        setScanStatus(fallbackStatus);
       }
     },
     [applyScanBootstrapSnapshot, snapshotEnabled]
@@ -214,10 +227,18 @@ function ScanPage() {
   });
 
   useEffect(() => {
+    scanHistoryRef.current = scanHistory?.scans ?? [];
+  }, [scanHistory?.scans]);
+
+  useEffect(() => {
+    if (hasAutoLoadedScanRef.current) {
+      return;
+    }
     if (!currentScanId && scanHistory?.scans?.length > 0) {
       const latestCompletedScan = scanHistory.scans.find(
         (scan) => scan.status === 'completed' || scan.status === 'cancelled'
       );
+      hasAutoLoadedScanRef.current = true;
       if (latestCompletedScan) {
         handleLoadScan(latestCompletedScan.scan_id);
       }
@@ -230,6 +251,7 @@ function ScanPage() {
       setCurrentScanId(data.scan_id);
       setBootstrappedScanId(null);
       setScanStatus(data.status);
+      setPage(1);
       refetchScans();
     },
   });
@@ -246,8 +268,9 @@ function ScanPage() {
     queryKey: ['scanStatus', currentScanId],
     queryFn: () => getScanStatus(currentScanId),
     enabled: Boolean(currentScanId) && (scanStatus === 'running' || scanStatus === 'queued'),
-    refetchInterval: (data) => {
-      if (data?.status && data.status !== 'running' && data.status !== 'queued') {
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status && status !== 'running' && status !== 'queued') {
         return false;
       }
       return 2000;

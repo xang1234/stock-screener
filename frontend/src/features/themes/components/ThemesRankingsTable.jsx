@@ -14,6 +14,7 @@ import {
   TableSortLabel,
   Tooltip,
 } from '@mui/material';
+import ArticleIcon from '@mui/icons-material/Article';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import { THEME_STATUS_COLORS } from '../constants';
 import { MomentumBar, VelocityIndicator } from './ThemeInsightsCards';
@@ -136,12 +137,7 @@ export default function ThemesRankingsTable({
           </TableHead>
           <TableBody>
             {sortedRankings.map((row) => (
-              <TableRow
-                key={row.theme}
-                hover
-                onClick={() => onOpenSources({ id: row.theme_cluster_id, name: row.theme })}
-                sx={{ cursor: 'pointer' }}
-              >
+              <TableRow key={row.theme} hover>
                 <TableCell>
                   <Box
                     component="span"
@@ -173,6 +169,19 @@ export default function ThemesRankingsTable({
                     >
                       {row.theme}
                     </Box>
+                    <Tooltip title="Open sources">
+                      <IconButton
+                        size="small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenSources({ id: row.theme_cluster_id, name: row.theme });
+                        }}
+                        sx={{ p: 0.25 }}
+                        aria-label={`Open sources for ${row.theme}`}
+                      >
+                        <ArticleIcon sx={{ fontSize: 14 }} />
+                      </IconButton>
+                    </Tooltip>
                     <Tooltip title="View details">
                       <IconButton
                         size="small"

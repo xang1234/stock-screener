@@ -21,6 +21,14 @@ function setup(overrides = {}) {
         sort_by: 'composite_score',
         sort_order: 'desc',
       },
+      {
+        id: 'preset-2',
+        name: 'Growth',
+        description: 'growth profile',
+        filters: { ...buildDefaultScanFilters(), symbolSearch: 'AAPL' },
+        sort_by: 'rs_rating',
+        sort_order: 'asc',
+      },
     ],
     createPresetAsync,
     updatePresetAsync,
@@ -103,5 +111,23 @@ describe('useScanFilterPresets', () => {
         description: 'desc',
       })
     );
+  });
+
+  it('renames the preset selected in the rename dialog, not the active preset', async () => {
+    const { hook, updatePresetAsync } = setup();
+
+    act(() => {
+      hook.result.current.handleLoadPreset('preset-1');
+      hook.result.current.handleRenamePreset('preset-2');
+    });
+
+    await act(async () => {
+      await hook.result.current.handleSaveDialogSave('Renamed Growth', 'updated');
+    });
+
+    expect(updatePresetAsync).toHaveBeenCalledWith({
+      presetId: 'preset-2',
+      updates: { name: 'Renamed Growth', description: 'updated' },
+    });
   });
 });

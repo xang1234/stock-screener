@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Badge,
   Box,
@@ -154,7 +153,15 @@ function TopTrendingThemesCard({ topTrendingThemes, onSelectTheme }) {
             borderBottom={index < 4 ? 1 : 0}
             borderColor="divider"
             sx={{ cursor: 'pointer' }}
+            role="button"
+            tabIndex={0}
             onClick={() => onSelectTheme({ id: theme.id, name: theme.name })}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onSelectTheme({ id: theme.id, name: theme.name });
+              }
+            }}
           >
             <Box display="flex" alignItems="center">
               <Typography variant="body2" color="text.secondary" sx={{ mr: 1, minWidth: 20 }}>
@@ -173,8 +180,6 @@ function TopTrendingThemesCard({ topTrendingThemes, onSelectTheme }) {
 }
 
 function AlertsCard({ alerts, isLoading, onDismiss, dismissingId }) {
-  const [hoveredId, setHoveredId] = useState(null);
-
   if (isLoading) {
     return (
       <Card variant="outlined">
@@ -205,8 +210,6 @@ function AlertsCard({ alerts, isLoading, onDismiss, dismissingId }) {
             {alerts.alerts.map((alert) => (
               <Box
                 key={alert.id}
-                onMouseEnter={() => setHoveredId(alert.id)}
-                onMouseLeave={() => setHoveredId(null)}
                 sx={{
                   py: 0.5,
                   opacity: alert.is_read ? 0.6 : 1,
@@ -218,6 +221,9 @@ function AlertsCard({ alerts, isLoading, onDismiss, dismissingId }) {
                   alignItems: 'flex-start',
                   justifyContent: 'space-between',
                   position: 'relative',
+                  '&:hover .dismiss-action, &:focus-within .dismiss-action': {
+                    opacity: 1,
+                  },
                 }}
               >
                 <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -228,19 +234,24 @@ function AlertsCard({ alerts, isLoading, onDismiss, dismissingId }) {
                     {new Date(alert.triggered_at).toLocaleDateString()}
                   </Box>
                 </Box>
-                {(hoveredId === alert.id || dismissingId === alert.id) && (
-                  <IconButton
-                    size="small"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDismiss?.(alert.id);
-                    }}
-                    disabled={dismissingId === alert.id}
-                    sx={{ p: 0.25, ml: 0.5, opacity: dismissingId === alert.id ? 0.5 : 1 }}
-                  >
-                    {dismissingId === alert.id ? <CircularProgress size={12} /> : <CloseIcon sx={{ fontSize: 14 }} />}
-                  </IconButton>
-                )}
+                <IconButton
+                  className="dismiss-action"
+                  size="small"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDismiss?.(alert.id);
+                  }}
+                  disabled={dismissingId === alert.id}
+                  sx={{
+                    p: 0.25,
+                    ml: 0.5,
+                    opacity: dismissingId === alert.id ? 0.5 : 0.35,
+                    transition: 'opacity 120ms ease',
+                  }}
+                  aria-label={`Dismiss alert ${alert.title}`}
+                >
+                  {dismissingId === alert.id ? <CircularProgress size={12} /> : <CloseIcon sx={{ fontSize: 14 }} />}
+                </IconButton>
               </Box>
             ))}
           </Box>

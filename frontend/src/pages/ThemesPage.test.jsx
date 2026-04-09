@@ -1,8 +1,7 @@
-import { createTheme, ThemeProvider } from '@mui/material';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThemesPage from './ThemesPage';
+import { renderWithProviders } from '../test/renderWithProviders';
 
 const runtimeState = {
   runtimeReady: true,
@@ -85,21 +84,7 @@ vi.mock('../api/themes', () => {
 });
 
 function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={createTheme()}>
-        <ThemesPage />
-      </ThemeProvider>
-    </QueryClientProvider>
-  );
+  return renderWithProviders(<ThemesPage />);
 }
 
 describe('ThemesPage', () => {

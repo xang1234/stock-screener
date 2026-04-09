@@ -46,6 +46,10 @@ function stockCountLabel(universe, universeStats, statsLoading, testSymbolsCount
   return `${universeStats.active} stocks`;
 }
 
+function toOptionalNumber(rawValue) {
+  return rawValue === '' ? undefined : Number(rawValue);
+}
+
 export default function ScanControlBar({
   currentScanId,
   scanHistory,
@@ -83,7 +87,7 @@ export default function ScanControlBar({
             labelId="prev-scan-label"
             value={currentScanId || ''}
             label="Previous Scans"
-            onChange={(event) => event.target.value && onLoadScan(event.target.value)}
+            onChange={(event) => onLoadScan(event.target.value)}
           >
             <MenuItem value="">
               <em>New Scan</em>
@@ -210,8 +214,8 @@ export default function ScanControlBar({
               <TextField
                 label="Min Price"
                 type="number"
-                value={customFilters.price_min}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, price_min: Number(event.target.value) })}
+                value={customFilters.price_min ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, price_min: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"
@@ -221,8 +225,8 @@ export default function ScanControlBar({
               <TextField
                 label="Max Price"
                 type="number"
-                value={customFilters.price_max}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, price_max: Number(event.target.value) })}
+                value={customFilters.price_max ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, price_max: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"
@@ -232,8 +236,8 @@ export default function ScanControlBar({
               <TextField
                 label="Min RS"
                 type="number"
-                value={customFilters.rs_rating_min}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, rs_rating_min: Number(event.target.value) })}
+                value={customFilters.rs_rating_min ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, rs_rating_min: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"
@@ -244,8 +248,8 @@ export default function ScanControlBar({
               <TextField
                 label="Min Vol"
                 type="number"
-                value={customFilters.volume_min}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, volume_min: Number(event.target.value) })}
+                value={customFilters.volume_min ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, volume_min: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"
@@ -255,8 +259,8 @@ export default function ScanControlBar({
               <TextField
                 label="Min EPS %"
                 type="number"
-                value={customFilters.eps_growth_min}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, eps_growth_min: Number(event.target.value) })}
+                value={customFilters.eps_growth_min ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, eps_growth_min: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"
@@ -266,8 +270,8 @@ export default function ScanControlBar({
               <TextField
                 label="Min Sales %"
                 type="number"
-                value={customFilters.sales_growth_min}
-                onChange={(event) => onCustomFiltersChange({ ...customFilters, sales_growth_min: Number(event.target.value) })}
+                value={customFilters.sales_growth_min ?? ''}
+                onChange={(event) => onCustomFiltersChange({ ...customFilters, sales_growth_min: toOptionalNumber(event.target.value) })}
                 disabled={controlsDisabled}
                 fullWidth
                 size="small"

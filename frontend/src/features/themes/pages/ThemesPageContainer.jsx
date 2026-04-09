@@ -32,6 +32,7 @@ import ThemesPageHeader from '../components/ThemesPageHeader';
 import ThemesRankingsTable from '../components/ThemesRankingsTable';
 
 const PAGE_SIZE = 50;
+const VALID_THEME_VIEWS = new Set(['grouped', 'flat']);
 
 function ThemesPage() {
   const [selectedTab, setSelectedTab] = useState('all');
@@ -48,7 +49,10 @@ function ThemesPage() {
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [selectedPipeline, setSelectedPipeline] = useState('technical');
   const [page, setPage] = useState(0);
-  const [themeView, setThemeView] = useState(() => localStorage.getItem('themeView') || 'grouped');
+  const [themeView, setThemeView] = useState(() => {
+    const storedThemeView = localStorage.getItem('themeView');
+    return VALID_THEME_VIEWS.has(storedThemeView) ? storedThemeView : 'grouped';
+  });
   const [categoryFilter, setCategoryFilter] = useState(null);
   const [bootstrapSettledVariants, setBootstrapSettledVariants] = useState({});
   const [dismissingAlertId, setDismissingAlertId] = useState(null);
@@ -266,7 +270,7 @@ function ThemesPage() {
   });
 
   const handleViewChange = (_, newView) => {
-    if (newView !== null) {
+    if (newView !== null && VALID_THEME_VIEWS.has(newView)) {
       setThemeView(newView);
       localStorage.setItem('themeView', newView);
       setPage(0);

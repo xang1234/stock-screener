@@ -18,6 +18,7 @@ export function useScanFilterPresets({
   const [presetSortSnapshot, setPresetSortSnapshot] = useState(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveDialogMode, setSaveDialogMode] = useState('save');
+  const [saveDialogPresetId, setSaveDialogPresetId] = useState(null);
   const [saveDialogInitialName, setSaveDialogInitialName] = useState('');
   const [saveDialogInitialDescription, setSaveDialogInitialDescription] = useState('');
   const [saveDialogError, setSaveDialogError] = useState(null);
@@ -64,6 +65,7 @@ export function useScanFilterPresets({
 
   const handleOpenSaveDialog = useCallback(() => {
     setSaveDialogMode('save');
+    setSaveDialogPresetId(null);
     setSaveDialogInitialName('');
     setSaveDialogInitialDescription('');
     setSaveDialogError(null);
@@ -98,6 +100,7 @@ export function useScanFilterPresets({
         return;
       }
       setSaveDialogMode('rename');
+      setSaveDialogPresetId(presetId);
       setSaveDialogInitialName(preset.name);
       setSaveDialogInitialDescription(preset.description || '');
       setSaveDialogError(null);
@@ -119,6 +122,7 @@ export function useScanFilterPresets({
   const handleSaveDialogClose = useCallback(() => {
     setSaveDialogOpen(false);
     setSaveDialogError(null);
+    setSaveDialogPresetId(null);
   }, []);
 
   const handleSaveDialogSave = useCallback(
@@ -138,8 +142,13 @@ export function useScanFilterPresets({
           setPresetFiltersSnapshot(filters);
           setPresetSortSnapshot({ sortBy, sortOrder });
         } else {
+          const targetPresetId = saveDialogPresetId ?? activePresetId;
+          if (!targetPresetId) {
+            setSaveDialogError('No preset selected for rename');
+            return;
+          }
           await updatePresetAsync({
-            presetId: activePresetId,
+            presetId: targetPresetId,
             updates: { name, description: description || null },
           });
         }
@@ -151,7 +160,16 @@ export function useScanFilterPresets({
         setSaveDialogError(errorMessage);
       }
     },
-    [activePresetId, createPresetAsync, filters, saveDialogMode, sortBy, sortOrder, updatePresetAsync]
+    [
+      activePresetId,
+      createPresetAsync,
+      filters,
+      saveDialogMode,
+      saveDialogPresetId,
+      sortBy,
+      sortOrder,
+      updatePresetAsync,
+    ]
   );
 
   return {

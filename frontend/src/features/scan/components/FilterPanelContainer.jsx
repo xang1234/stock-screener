@@ -238,20 +238,4 @@ function FilterPanel({
   );
 }
 
-export default memo(FilterPanel, (prevProps, nextProps) => (
-  prevProps.filters === nextProps.filters &&
-  prevProps.expanded === nextProps.expanded &&
-  prevProps.filterOptions === nextProps.filterOptions &&
-  prevProps.presetsEnabled === nextProps.presetsEnabled &&
-  prevProps.sectionDefaultExpanded === nextProps.sectionDefaultExpanded &&
-  prevProps.presets === nextProps.presets &&
-  prevProps.activePresetId === nextProps.activePresetId &&
-  prevProps.hasUnsavedChanges === nextProps.hasUnsavedChanges &&
-  prevProps.presetsLoading === nextProps.presetsLoading &&
-  prevProps.presetsSaving === nextProps.presetsSaving &&
-  prevProps.saveDialogOpen === nextProps.saveDialogOpen &&
-  prevProps.saveDialogMode === nextProps.saveDialogMode &&
-  prevProps.saveDialogInitialName === nextProps.saveDialogInitialName &&
-  prevProps.saveDialogInitialDescription === nextProps.saveDialogInitialDescription &&
-  prevProps.saveDialogError === nextProps.saveDialogError
-));
+export default memo(FilterPanel);

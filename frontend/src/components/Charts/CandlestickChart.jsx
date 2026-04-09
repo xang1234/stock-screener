@@ -582,7 +582,7 @@ function CandlestickChart({
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, [onVisibleRangeChange]);
+  }, [onVisibleRangeChange, symbol]);
 
   // Update chart data when data changes
   useEffect(() => {
