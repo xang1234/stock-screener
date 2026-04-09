@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -143,7 +144,8 @@ class AssistantGatewayService:
         return conversation
 
     async def health(self) -> dict[str, Any]:
-        if not str(self._settings.hermes_api_base or "").strip():
+        configured_api_base = self._configured_hermes_api_base()
+        if not configured_api_base:
             return {
                 "status": "misconfigured",
                 "available": False,
@@ -153,29 +155,49 @@ class AssistantGatewayService:
                 "detail": "HERMES_API_BASE is not configured.",
             }
 
+        last_network_error: Exception | None = None
+        timed_out = False
         try:
             async with self._open_client() as client:
-                response = await client.get(self._models_url(), headers=self._request_headers())
-        except (httpx.ConnectError, httpx.NetworkError) as exc:
-            return {
-                "status": "unavailable",
-                "available": False,
-                "streaming": True,
-                "popup_enabled": False,
-                "model": getattr(self._settings, "hermes_model", None),
-                "detail": f"Unable to reach Hermes: {exc}",
-            }
-        except httpx.TimeoutException:
-            return {
-                "status": "timeout",
-                "available": False,
-                "streaming": True,
-                "popup_enabled": False,
-                "model": getattr(self._settings, "hermes_model", None),
-                "detail": "Hermes health check timed out.",
-            }
+                for api_base in self._candidate_api_bases():
+                    try:
+                        response = await client.get(self._models_url(api_base), headers=self._request_headers())
+                    except (httpx.ConnectError, httpx.NetworkError) as exc:
+                        last_network_error = exc
+                        continue
+                    except httpx.TimeoutException:
+                        timed_out = True
+                        continue
 
-        if response.status_code in {401, 403}:
+                    if response.status_code in {401, 403}:
+                        return {
+                            "status": "auth_error",
+                            "available": False,
+                            "streaming": True,
+                            "popup_enabled": False,
+                            "model": getattr(self._settings, "hermes_model", None),
+                            "detail": "Hermes rejected the configured API key.",
+                        }
+
+                    if response.is_success:
+                        return {
+                            "status": "healthy",
+                            "available": True,
+                            "streaming": True,
+                            "popup_enabled": True,
+                            "model": getattr(self._settings, "hermes_model", None),
+                            "detail": None,
+                        }
+
+                    return {
+                        "status": "error",
+                        "available": False,
+                        "streaming": True,
+                        "popup_enabled": False,
+                        "model": getattr(self._settings, "hermes_model", None),
+                        "detail": f"Hermes returned HTTP {response.status_code}.",
+                    }
+        except AssistantUpstreamAuthError:
             return {
                 "status": "auth_error",
                 "available": False,
@@ -185,14 +207,34 @@ class AssistantGatewayService:
                 "detail": "Hermes rejected the configured API key.",
             }
 
-        if response.is_success:
+        if timed_out:
+            logger.warning(
+                "Hermes health check timed out for %s after %s second(s).",
+                configured_api_base,
+                self._settings.hermes_request_timeout_seconds,
+            )
             return {
-                "status": "healthy",
-                "available": True,
+                "status": "timeout",
+                "available": False,
                 "streaming": True,
-                "popup_enabled": True,
+                "popup_enabled": False,
                 "model": getattr(self._settings, "hermes_model", None),
-                "detail": None,
+                "detail": "Hermes health check timed out.",
+            }
+        if last_network_error is not None:
+            detail = self._unreachable_hermes_detail(last_network_error)
+            logger.warning(
+                "Hermes health check failed for %s: %s",
+                configured_api_base,
+                detail,
+            )
+            return {
+                "status": "unavailable",
+                "available": False,
+                "streaming": True,
+                "popup_enabled": False,
+                "model": getattr(self._settings, "hermes_model", None),
+                "detail": detail,
             }
 
         return {
@@ -201,7 +243,7 @@ class AssistantGatewayService:
             "streaming": True,
             "popup_enabled": False,
             "model": getattr(self._settings, "hermes_model", None),
-            "detail": f"Hermes returned HTTP {response.status_code}.",
+            "detail": "Hermes health check failed before receiving a usable response.",
         }
 
     def preview_watchlist_add(
@@ -292,6 +334,7 @@ class AssistantGatewayService:
 
         try:
             async with self._open_client() as client:
+                api_base = await self._resolve_chat_api_base(client)
                 for _ in range(_MAX_TOOL_ROUND_TRIPS):
                     tool_calls = self._initial_tool_call_state()
                     buffered_content_events: list[dict[str, Any]] = []
@@ -299,7 +342,7 @@ class AssistantGatewayService:
 
                     async with client.stream(
                         "POST",
-                        self._chat_url(),
+                        self._chat_url(api_base),
                         json=self._build_chat_payload(request_messages),
                         headers=self._request_headers(),
                     ) as response:
@@ -351,8 +394,19 @@ class AssistantGatewayService:
         except AssistantGatewayError:
             raise
         except (httpx.ConnectError, httpx.NetworkError) as exc:
-            raise AssistantUpstreamUnavailableError(f"Unable to reach Hermes: {exc}") from exc
+            detail = self._unreachable_hermes_detail(exc)
+            logger.warning(
+                "Hermes request failed for %s during assistant stream: %s",
+                self._configured_hermes_api_base(),
+                detail,
+            )
+            raise AssistantUpstreamUnavailableError(detail) from exc
         except httpx.TimeoutException as exc:
+            logger.warning(
+                "Hermes request timed out for %s after %s second(s).",
+                self._configured_hermes_api_base(),
+                self._settings.hermes_request_timeout_seconds,
+            )
             raise AssistantUpstreamUnavailableError("Hermes response timed out.") from exc
 
         for content_chunk in final_content_events:
@@ -424,11 +478,93 @@ class AssistantGatewayService:
             return self._client_factory()
         return httpx.AsyncClient(timeout=self._settings.hermes_request_timeout_seconds)
 
-    def _chat_url(self) -> str:
-        return f"{self._settings.hermes_api_base.rstrip('/')}/chat/completions"
+    def _configured_hermes_api_base(self) -> str:
+        return str(self._settings.hermes_api_base or "").strip()
 
-    def _models_url(self) -> str:
-        return f"{self._settings.hermes_api_base.rstrip('/')}/models"
+    def _chat_url(self, api_base: str) -> str:
+        return f"{api_base.rstrip('/')}/chat/completions"
+
+    def _models_url(self, api_base: str) -> str:
+        return f"{api_base.rstrip('/')}/models"
+
+    def _is_running_in_container(self) -> bool:
+        return os.path.exists("/.dockerenv")
+
+    def _candidate_api_bases(self) -> list[str]:
+        configured_api_base = self._configured_hermes_api_base()
+        if not configured_api_base:
+            return []
+
+        candidates = [configured_api_base]
+        parsed = urlparse(configured_api_base)
+        if parsed.hostname == "hermes" and not self._is_running_in_container():
+            localhost_netloc = "127.0.0.1"
+            if parsed.port is not None:
+                localhost_netloc = f"{localhost_netloc}:{parsed.port}"
+            localhost_base = parsed._replace(netloc=localhost_netloc).geturl()
+            if localhost_base not in candidates:
+                candidates.append(localhost_base)
+        return candidates
+
+    def _unreachable_hermes_detail(self, exc: Exception) -> str:
+        detail = f"Unable to reach Hermes: {exc}"
+        parsed = urlparse(self._configured_hermes_api_base())
+        if parsed.hostname == "hermes":
+            if self._is_running_in_container():
+                return (
+                    f"{detail}. Start the Hermes sidecar with "
+                    "`bash scripts/start_docker_assistant_stack.sh .env.docker`, "
+                    "or point HERMES_API_BASE at a reachable host."
+                )
+            return (
+                f"{detail}. The hostname 'hermes' only resolves inside Docker Compose. "
+                "For local backend runs, set HERMES_API_BASE=http://127.0.0.1:8642/v1 "
+                "or start Hermes locally on that address with `bash scripts/run_local_hermes_gateway.sh`."
+            )
+        if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port:
+            return (
+                f"{detail}. No Hermes API server is listening on {parsed.hostname}:{parsed.port}. "
+                "Start Hermes with `bash scripts/run_local_hermes_gateway.sh`, "
+                "or point HERMES_API_BASE at the host/port where Hermes is running."
+            )
+        return detail
+
+    async def _resolve_chat_api_base(self, client: httpx.AsyncClient) -> str:
+        candidate_api_bases = self._candidate_api_bases()
+        if len(candidate_api_bases) <= 1:
+            configured_api_base = self._configured_hermes_api_base()
+            if configured_api_base:
+                return configured_api_base
+            raise AssistantUpstreamUnavailableError("HERMES_API_BASE is not configured.")
+
+        last_network_error: Exception | None = None
+        for api_base in candidate_api_bases:
+            try:
+                response = await client.get(self._models_url(api_base), headers=self._request_headers())
+            except (httpx.ConnectError, httpx.NetworkError) as exc:
+                last_network_error = exc
+                continue
+            except httpx.TimeoutException as exc:
+                last_network_error = exc
+                continue
+
+            if response.status_code in {401, 403}:
+                raise AssistantUpstreamAuthError("Hermes rejected the configured API key.")
+            if response.is_success:
+                if api_base != self._configured_hermes_api_base():
+                    logger.warning(
+                        "Falling back to local Hermes base %s because configured base %s is unreachable.",
+                        api_base,
+                        self._configured_hermes_api_base(),
+                    )
+                return api_base
+            raise AssistantUpstreamUnavailableError(f"Hermes returned HTTP {response.status_code}.")
+
+        if isinstance(last_network_error, httpx.TimeoutException):
+            raise AssistantUpstreamUnavailableError("Hermes response timed out.") from last_network_error
+        if last_network_error is not None:
+            raise AssistantUpstreamUnavailableError(self._unreachable_hermes_detail(last_network_error)) from last_network_error
+        raise AssistantUpstreamUnavailableError("Unable to resolve a reachable Hermes endpoint.")
 
     async def _ensure_upstream_success(self, response: httpx.Response) -> None:
         if response.status_code in {401, 403}:

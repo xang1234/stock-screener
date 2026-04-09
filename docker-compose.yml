@@ -100,20 +100,35 @@ services:
 
   hermes:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    platform: ${HERMES_PLATFORM:-linux/amd64}
     profiles: ["assistant"]
+    command: ["gateway"]
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_PORT: "8642"
       API_SERVER_KEY: ${HERMES_API_KEY:-}
+      HERMES_INFERENCE_PROVIDER: ${HERMES_INFERENCE_PROVIDER:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      Z_AI_API_KEY: ${Z_AI_API_KEY:-}
+      GLM_BASE_URL: ${GLM_BASE_URL:-https://api.z.ai/api/paas/v4}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-${MINIMAX_API_BASE:-https://api.minimax.io/v1}}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
     volumes:
-      - ./data/hermes:/root/.hermes
-      - ./integrations/hermes/skills:/root/.hermes/skills:ro
+      - ./data/hermes:/opt/data
+      - ./integrations/hermes/skills:/opt/external-skills:ro
     expose:
       - "8642"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   backend:
@@ -234,12 +249,12 @@ services:
       args:
         VITE_API_URL: /api
     ports:
-      - "80:80"
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:80/nginx-health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/nginx-health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

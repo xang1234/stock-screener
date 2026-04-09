@@ -40,25 +40,78 @@ Hermes should call the backend’s authenticated HTTP MCP transport, not the old
 Important points:
 
 - Keep Hermes private on the Docker network or localhost.
-- Configure Hermes to call `http://backend:8000/mcp` in Docker or `http://127.0.0.1:8000/mcp` locally.
+- Configure Hermes to call `http://backend:8000/mcp/` in Docker or `http://127.0.0.1:8000/mcp/` locally.
 - Send the same `SERVER_AUTH_PASSWORD` as an `x-server-auth` header so Hermes can reach the protected MCP transport.
 - Register the external skills directory so Hermes can load `market-copilot`.
 
-## Docker Compose
-
-`docker-compose.yml` now includes an opt-in Hermes sidecar under the `assistant` profile:
+For local development, prefer the repo helper instead of hand-editing `~/.hermes`:
 
 ```bash
-docker compose --profile assistant up -d
+bash scripts/run_local_hermes_gateway.sh
 ```
+
+That script:
+
+- sources the repo `.env` and `backend/.env`
+- runs Hermes with `HERMES_HOME=data/hermes`
+- generates `data/hermes/config.yaml` with the local MCP URL `http://127.0.0.1:8000/mcp/`
+- starts the OpenAI-compatible Hermes API on `http://127.0.0.1:8642/v1`
+
+## Docker Compose
+
+For Docker-first local or server runs, prefer the repo helper:
+
+```bash
+cp .env.docker.example .env.docker
+# edit .env.docker and set at least SERVER_AUTH_PASSWORD plus your provider keys
+bash scripts/start_docker_assistant_stack.sh .env.docker
+```
+
+That script:
+
+- uses `.env.docker` instead of the root `.env`, so local `HERMES_API_BASE=http://127.0.0.1:8642/v1` values do not leak into the backend container
+- writes `data/hermes/config.yaml` with Docker MCP access at `http://backend:8000/mcp/`
+- writes `data/hermes/.env` with Hermes API-server and provider/search keys
+- forwards the same Hermes provider keys directly into the container environment
+- starts `postgres`, `redis`, `backend`, `frontend`, and `hermes` under the `assistant` profile
 
 The service is internal-only:
 
-- no browser-facing port is published
+- no browser-facing Hermes port is published
 - backend uses `HERMES_API_BASE=http://hermes:8642/v1`
 - Hermes state lives under `data/hermes/`
+- the Hermes image is pinned to `linux/amd64` by default because the upstream image is not currently multi-arch
 
-Before enabling the profile, place a real Hermes config file in `data/hermes/config.yaml` using the example template and your actual secrets.
+Manual equivalent:
+
+```bash
+docker compose --env-file .env.docker --profile assistant up -d postgres redis backend frontend hermes
+```
+
+### Passing LLM keys to Hermes
+
+For Docker runs, put Hermes' own inference keys in `.env.docker`. The helper and compose file now pass them into the `hermes` container directly and also render them into `data/hermes/.env`.
+
+Use at least one of:
+
+- `MINIMAX_API_KEY`
+- `ZAI_API_KEY` or `GLM_API_KEY`
+- `OPENROUTER_API_KEY`
+- `OPENAI_API_KEY` together with `OPENAI_BASE_URL` for a custom OpenAI-compatible endpoint
+
+Optional:
+
+- `HERMES_INFERENCE_PROVIDER=minimax|zai|openrouter|custom` to force provider selection instead of auto-detecting from the available keys
+- `HERMES_DEFAULT_MODEL=...` to override the model written into Hermes `config.yaml`
+
+When no override is set, the repo helpers now write a sane default model for the chosen provider:
+
+- `minimax` -> `MiniMax-M2.7`
+- `zai` -> `glm-4.5-flash`
+- `openrouter` -> `anthropic/claude-sonnet-4`
+- `custom` -> `gpt-4o-mini`
+
+If Hermes logs the large interactive ASCII banner and then exits, it is not running the gateway. The Docker assistant path should now start `hermes gateway`, not the interactive CLI.
 
 ## Assistant runtime contract
 
@@ -105,6 +158,7 @@ Local backend + Hermes:
 ```bash
 cd backend
 PYTHONPATH="$PWD" ./venv/bin/python -m uvicorn app.main:app --reload
+bash ../scripts/run_local_hermes_gateway.sh
 curl -s -H "x-server-auth: $SERVER_AUTH_PASSWORD" http://127.0.0.1:8000/api/v1/assistant/health
 ```
 
@@ -126,3 +180,36 @@ Full app:
 - confirm the answer shows citations and tool activity
 - open the global assistant drawer from a non-chat route
 - test the watchlist preview flow from the latest assistant answer
+
+## Docker-first startup order
+
+If you want backend and Hermes both under Docker Compose:
+
+1. Copy the Docker env file:
+   `cp .env.docker.example .env.docker`
+2. Set at least:
+   `SERVER_AUTH_PASSWORD`, one Hermes inference key such as `MINIMAX_API_KEY`, and optional `TAVILY_API_KEY` / `SERPER_API_KEY`
+3. Start the stack:
+   `bash scripts/start_docker_assistant_stack.sh .env.docker`
+4. Verify:
+   `docker compose --env-file .env.docker --profile assistant ps`
+5. Open:
+   `http://localhost/chatbot`
+
+## Compose smoke check
+
+To validate the Docker assistant profile end to end with fixture values:
+
+```bash
+bash scripts/run_docker_assistant_compose_smoke.sh
+```
+
+It will:
+
+- generate a temporary Docker env file
+- boot `postgres`, `redis`, `backend`, `frontend`, and `hermes`
+- wait for frontend and assistant health through the real reverse-proxy path
+- verify Hermes has both `/opt/data/config.yaml` and `/opt/data/.env`
+- log in through `/api/v1/auth/login`
+- create an assistant conversation through `/api/v1/assistant/conversations`
+- tear the stack down on exit
