@@ -192,3 +192,44 @@ async def test_stream_message_persists_transcript_and_tool_results(session_facto
         assert persisted_messages[1].agent_type == "hermes"
         assert persisted_messages[1].tool_calls[0]["tool"] == "stock_snapshot"
         assert persisted_messages[1].content.startswith("Use [1] for the internal snapshot.")
+
+
+@pytest.mark.asyncio
+async def test_stream_message_preserves_partial_content_when_tool_round_trips_hit_limit(session_factory, assistant_settings):
+    stream_responses = [
+        b"""data: {\"choices\": [{\"delta\": {\"content\": \"Round one. \", \"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"function\": {\"name\": \"mcp_stockscreen_market_stock_snapshot\", \"arguments\": \"{\\\"symbol\\\":\\\"NVDA\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n""",
+        b"""data: {\"choices\": [{\"delta\": {\"content\": \"Round two. \", \"tool_calls\": [{\"index\": 0, \"id\": \"call_2\", \"function\": {\"name\": \"mcp_stockscreen_market_stock_snapshot\", \"arguments\": \"{\\\"symbol\\\":\\\"MSFT\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n""",
+        b"""data: {\"choices\": [{\"delta\": {\"content\": \"Round three partial. \", \"tool_calls\": [{\"index\": 0, \"id\": \"call_3\", \"function\": {\"name\": \"mcp_stockscreen_market_stock_snapshot\", \"arguments\": \"{\\\"symbol\\\":\\\"AVGO\\\"}\"}}]}}]}\n\ndata: [DONE]\n\n""",
+    ]
+    request_count = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        response = httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            content=stream_responses[request_count],
+        )
+        request_count += 1
+        return response
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with session_factory() as db:
+        conversation = service.create_conversation(db, "Round trip limit")
+        chunks = [
+            chunk
+            async for chunk in service.stream_message(
+                db,
+                conversation_id=conversation.conversation_id,
+                content="Keep calling tools until the limit is hit.",
+            )
+        ]
+
+    done_chunk = next(chunk for chunk in chunks if chunk["type"] == "done")
+    assert done_chunk["message"]["content"] == "Round three partial."
+    assert request_count == 3

@@ -87,6 +87,11 @@ export function AssistantChatProvider({ children }) {
   }, []);
 
   const loadConversation = useCallback(async (targetConversationId) => {
+    if (abortRef.current) {
+      abortRef.current();
+      resetDraft();
+    }
+
     if (!targetConversationId) {
       setMessages([]);
       setConversationTitle('Assistant');
@@ -110,7 +115,7 @@ export function AssistantChatProvider({ children }) {
     } finally {
       setIsLoadingConversation(false);
     }
-  }, []);
+  }, [resetDraft]);
 
   useEffect(() => {
     const initialConversationId = initialConversationIdRef.current;

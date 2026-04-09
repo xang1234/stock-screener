@@ -96,3 +96,53 @@ async def test_assistant_watchlist_preview_endpoint(client):
     assert body["addable_symbols"] == ["MSFT"]
     assert body["existing_symbols"] == ["NVDA"]
     assert body["invalid_symbols"] == ["ZZZZ"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_http_404_for_inactive_conversation():
+    session_factory, engine = create_mcp_test_session_factory()
+    Conversation.__table__.create(bind=engine)
+    Message.__table__.create(bind=engine)
+    seed_market_copilot_data(session_factory)
+
+    gateway = AssistantGatewayService(
+        app_settings=SimpleNamespace(
+            hermes_api_base="http://hermes.test/v1",
+            hermes_api_key="test-key",
+            hermes_model="hermes-agent",
+            hermes_request_timeout_seconds=30,
+            mcp_watchlist_writes_enabled=False,
+            mcp_server_name="stockscreen-market-copilot",
+        ),
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200))),
+    )
+
+    with session_factory() as db:
+        conversation = gateway.create_conversation(db, "Inactive")
+        conversation.is_active = False
+        db.commit()
+        inactive_conversation_id = conversation.conversation_id
+
+    def override_get_db():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    test_app = FastAPI()
+    test_app.include_router(assistant_api.router, prefix="/api/v1/assistant")
+    test_app.dependency_overrides[assistant_api.get_db] = override_get_db
+    test_app.dependency_overrides[assistant_api._get_assistant_gateway_service] = lambda: gateway
+
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+        response = await async_client.post(
+            f"/api/v1/assistant/conversations/{inactive_conversation_id}/messages",
+            json={"content": "Hello"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Conversation not found"}
+    engine.dispose()

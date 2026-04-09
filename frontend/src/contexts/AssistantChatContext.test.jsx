@@ -34,6 +34,7 @@ function AssistantConsumer() {
     conversationTitle,
     displayedMessages,
     isStreaming,
+    loadConversation,
     sendMessage,
   } = useAssistantChat();
   const latestMessage = displayedMessages[displayedMessages.length - 1];
@@ -51,6 +52,9 @@ function AssistantConsumer() {
       <div data-testid="tool-args">{latestToolArgs ? JSON.stringify(latestToolArgs) : 'none'}</div>
       <button type="button" onClick={() => sendMessage('What do you think about NVDA?')}>
         Send
+      </button>
+      <button type="button" onClick={() => loadConversation('conv-restore')}>
+        Load restore
       </button>
     </div>
   );
@@ -245,6 +249,52 @@ describe('AssistantChatContext', () => {
       expect(screen.getByTestId('streaming-state')).toHaveTextContent('idle');
       expect(screen.getByTestId('message-log')).toHaveTextContent('assistant:Partial answer');
       expect(screen.getByTestId('message-log')).toHaveTextContent('Stream ended unexpectedly before the assistant completed its reply.');
+    });
+  });
+
+  it('aborts an active stream before loading a different conversation', async () => {
+    const abortStream = vi.fn();
+    sendMessageStream.mockImplementation((_conversationId, _content, onChunk) => {
+      onChunk({ type: 'content', content: 'Streaming reply' });
+      return abortStream;
+    });
+    getConversation.mockResolvedValueOnce({
+      id: 2,
+      conversation_id: 'conv-restore',
+      title: 'Restored assistant thread',
+      created_at: '2026-04-09T00:00:00Z',
+      updated_at: '2026-04-09T00:05:00Z',
+      is_active: true,
+      message_count: 1,
+      messages: [
+        {
+          id: 10,
+          conversation_id: 'conv-restore',
+          role: 'assistant',
+          content: 'Restored conversation',
+          created_at: '2026-04-09T00:05:00Z',
+        },
+      ],
+    });
+
+    renderWithProviders(
+      <AssistantChatProvider>
+        <AssistantConsumer />
+      </AssistantChatProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('assistant-health')).toHaveTextContent('online'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByTestId('streaming-state')).toHaveTextContent('streaming'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load restore' }));
+
+    await waitFor(() => {
+      expect(abortStream).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('conversation-id')).toHaveTextContent('conv-restore');
+      expect(screen.getByTestId('message-log')).toHaveTextContent('assistant:Restored conversation');
+      expect(screen.getByTestId('streaming-state')).toHaveTextContent('idle');
     });
   });
 });

@@ -35,7 +35,7 @@ class AssistantReferenceItem(BaseModel):
     @classmethod
     def validate_url(cls, value: str) -> str:
         normalized = str(value or "").strip()
-        if normalized.startswith("/"):
+        if normalized.startswith("/") and not normalized.startswith("//"):
             return normalized
         parsed = urlparse(normalized)
         if parsed.scheme in {"http", "https"} and parsed.netloc:

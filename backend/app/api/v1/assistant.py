@@ -74,7 +74,8 @@ async def send_message(
     db: Session = Depends(get_db),
     gateway: AssistantGatewayService = Depends(_get_assistant_gateway_service),
 ):
-    if gateway.get_conversation(db, conversation_id) is None:
+    conversation = gateway.get_conversation(db, conversation_id)
+    if conversation is None or not conversation.is_active:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     async def generate():

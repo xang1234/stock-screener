@@ -21,6 +21,9 @@ def test_assistant_reference_item_rejects_non_web_schemes():
     with pytest.raises(ValidationError):
         AssistantReferenceItem(type="web", title="Bad", url="javascript:alert(1)")
 
+    with pytest.raises(ValidationError):
+        AssistantReferenceItem(type="web", title="Bad", url="//example.com/path")
+
 
 def test_assistant_message_response_omits_internal_reasoning_fields():
     message = AssistantMessageResponse.model_validate(

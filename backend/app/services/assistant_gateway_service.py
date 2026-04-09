@@ -346,8 +346,8 @@ class AssistantGatewayService:
                         yield result_chunk
                     request_messages.extend([assistant_tool_message, *tool_messages])
                 else:
-                    final_content_events = []
-                    final_content_parts = []
+                    final_content_events = buffered_content_events
+                    final_content_parts = buffered_content_parts
         except AssistantGatewayError:
             raise
         except (httpx.ConnectError, httpx.NetworkError) as exc:

@@ -39,10 +39,19 @@ function AssistantWatchlistDialog({ open, symbols, onClose }) {
   );
 
   useEffect(() => {
-    if (!open || selectedWatchlistId || watchlists.length === 0) {
+    if (!open) {
+      setSelectedWatchlistId('');
       return;
     }
-    setSelectedWatchlistId(String(watchlists[0].id));
+    if (watchlists.length === 0) {
+      return;
+    }
+    const hasSelected = watchlists.some(
+      (watchlist) => String(watchlist.id) === String(selectedWatchlistId),
+    );
+    if (!hasSelected) {
+      setSelectedWatchlistId(String(watchlists[0].id));
+    }
   }, [open, selectedWatchlistId, watchlists]);
 
   const previewQuery = useQuery({
