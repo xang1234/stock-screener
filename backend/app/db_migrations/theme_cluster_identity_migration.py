@@ -111,7 +111,7 @@ def verify_theme_cluster_identity_schema(engine) -> dict[str, Any]:
                       SELECT pipeline, canonical_key, COUNT(*) c
                       FROM theme_clusters
                       GROUP BY pipeline, canonical_key
-                      HAVING c > 1
+                      HAVING COUNT(*) > 1
                     ) d
                     """
                 )

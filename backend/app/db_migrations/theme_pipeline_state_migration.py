@@ -127,7 +127,7 @@ def verify_theme_pipeline_state_schema(engine) -> dict[str, Any]:
                       SELECT content_item_id, pipeline, COUNT(*) c
                       FROM content_item_pipeline_state
                       GROUP BY content_item_id, pipeline
-                      HAVING c > 1
+                      HAVING COUNT(*) > 1
                     ) d
                     """
                 )
