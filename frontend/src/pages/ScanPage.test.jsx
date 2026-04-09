@@ -1,11 +1,10 @@
-import { createTheme, ThemeProvider } from '@mui/material';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ScanPage from './ScanPage';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 import * as scanApi from '../api/scans';
+import { renderWithProviders } from '../test/renderWithProviders';
 
 const runtimeState = {
   runtimeReady: false,
@@ -75,21 +74,7 @@ beforeEach(() => {
 
 describe('ScanPage', () => {
   it('renders without a temporal-dead-zone crash before runtime bootstrap completes', () => {
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: {
-          retry: false,
-        },
-      },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider theme={createTheme()}>
-          <ScanPage />
-        </ThemeProvider>
-      </QueryClientProvider>
-    );
+    renderWithProviders(<ScanPage />);
 
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
@@ -109,21 +94,7 @@ describe('ScanPage', () => {
       },
     };
 
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: {
-          retry: false,
-        },
-      },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider theme={createTheme()}>
-          <ScanPage />
-        </ThemeProvider>
-      </QueryClientProvider>
-    );
+    renderWithProviders(<ScanPage />);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue('123')).toBeInTheDocument();
@@ -187,21 +158,11 @@ describe('ScanPage', () => {
       ratings: ['Buy'],
     });
 
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: {
-          retry: false,
-        },
-      },
-    });
+    renderWithProviders(<ScanPage />);
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider theme={createTheme()}>
-          <ScanPage />
-        </ThemeProvider>
-      </QueryClientProvider>
-    );
+    await waitFor(() => {
+      expect(scanApi.getScanBootstrap).toHaveBeenCalledTimes(1);
+    });
 
     await waitFor(() => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();

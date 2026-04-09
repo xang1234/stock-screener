@@ -295,6 +295,10 @@ function ScanPage() {
     enabled: Boolean(currentScanId) && (scanStatus === 'completed' || scanStatus === 'cancelled'),
     staleTime: 60_000,
   });
+  const normalizedFilterOptions = useMemo(
+    () => normalizeScanFilterOptions(filterOptionsData),
+    [filterOptionsData]
+  );
 
   const handleStartScan = () => {
     const criteria = { include_vcp: includeVcp };
@@ -492,7 +496,7 @@ function ScanPage() {
           filters={filters}
           onFilterChange={handleFilterChange}
           onReset={handleResetFilters}
-          filterOptions={normalizeScanFilterOptions(filterOptionsData)}
+          filterOptions={normalizedFilterOptions}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
           presets={presets}

@@ -348,7 +348,7 @@ function ThemesPage() {
     );
   }
 
-  if (errorRankings) {
+  if (themeView === 'flat' && errorRankings) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Alert severity="error">Error loading themes: {errorRankings.message}</Alert>

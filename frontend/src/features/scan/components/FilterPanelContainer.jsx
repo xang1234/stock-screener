@@ -103,18 +103,23 @@ function FilterPanel({
         </Typography>
 
         {presetsEnabled && (
-          <FilterPresets
-            presets={presets}
-            activePresetId={activePresetId}
-            hasUnsavedChanges={hasUnsavedChanges}
-            isLoading={presetsLoading}
-            isSaving={presetsSaving}
-            onLoadPreset={onLoadPreset}
-            onSavePreset={onSavePreset}
-            onUpdatePreset={onUpdatePreset}
-            onRenamePreset={onRenamePreset}
-            onDeletePreset={onDeletePreset}
-          />
+          <Box
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <FilterPresets
+              presets={presets}
+              activePresetId={activePresetId}
+              hasUnsavedChanges={hasUnsavedChanges}
+              isLoading={presetsLoading}
+              isSaving={presetsSaving}
+              onLoadPreset={onLoadPreset}
+              onSavePreset={onSavePreset}
+              onUpdatePreset={onUpdatePreset}
+              onRenamePreset={onRenamePreset}
+              onDeletePreset={onDeletePreset}
+            />
+          </Box>
         )}
 
         <Box sx={{ flexGrow: 1 }} />
