@@ -85,6 +85,42 @@ resolve_hermes_provider() {
   printf '%s' "auto"
 }
 
+validate_provider_credentials() {
+  local provider="$1"
+  case "$provider" in
+    minimax)
+      [[ -n "${MINIMAX_API_KEY:-}" ]] || {
+        echo "MINIMAX_API_KEY is required when HERMES_INFERENCE_PROVIDER=minimax." >&2
+        exit 1
+      }
+      ;;
+    zai)
+      [[ -n "${GLM_API_KEY:-}" || -n "${ZAI_API_KEY:-}" || -n "${Z_AI_API_KEY:-}" ]] || {
+        echo "GLM_API_KEY, ZAI_API_KEY, or Z_AI_API_KEY is required when HERMES_INFERENCE_PROVIDER=zai." >&2
+        exit 1
+      }
+      ;;
+    openrouter)
+      [[ -n "${OPENROUTER_API_KEY:-}" ]] || {
+        echo "OPENROUTER_API_KEY is required when HERMES_INFERENCE_PROVIDER=openrouter." >&2
+        exit 1
+      }
+      ;;
+    custom)
+      [[ -n "${OPENAI_API_KEY:-}" && -n "${OPENAI_BASE_URL:-}" ]] || {
+        echo "OPENAI_API_KEY and OPENAI_BASE_URL are required when HERMES_INFERENCE_PROVIDER=custom." >&2
+        exit 1
+      }
+      ;;
+    auto)
+      ;;
+    *)
+      echo "Invalid HERMES_INFERENCE_PROVIDER: ${provider}. Allowed values: minimax|zai|openrouter|custom|auto." >&2
+      exit 1
+      ;;
+  esac
+}
+
 resolve_hermes_model() {
   local provider="$1"
   if [[ -n "${HERMES_DEFAULT_MODEL:-}" ]]; then
@@ -112,6 +148,13 @@ resolve_hermes_model() {
 
 HERMES_HAS_PROVIDER_KEY=false
 for provider_key in OPENROUTER_API_KEY OPENAI_API_KEY MINIMAX_API_KEY GLM_API_KEY ZAI_API_KEY Z_AI_API_KEY; do
+  if [[ "$provider_key" == "OPENAI_API_KEY" ]]; then
+    if [[ -n "${OPENAI_API_KEY:-}" && -n "${OPENAI_BASE_URL:-}" ]]; then
+      HERMES_HAS_PROVIDER_KEY=true
+      break
+    fi
+    continue
+  fi
   if [[ -n "${!provider_key:-}" ]]; then
     HERMES_HAS_PROVIDER_KEY=true
     break
@@ -131,6 +174,11 @@ EOF
   exit 1
 fi
 
+if [[ -n "${OPENAI_API_KEY:-}" && -z "${OPENAI_BASE_URL:-}" ]]; then
+  echo "OPENAI_BASE_URL must be set when OPENAI_API_KEY is provided in $ENV_FILE." >&2
+  exit 1
+fi
+
 if [[ -n "${HERMES_API_BASE:-}" && "${HERMES_API_BASE}" != "http://hermes:8642/v1" ]]; then
   cat >&2 <<EOF
 HERMES_API_BASE in $ENV_FILE must be http://hermes:8642/v1 for Docker assistant runs.
@@ -139,16 +187,18 @@ EOF
   exit 1
 fi
 
-mkdir -p "$ROOT_DIR/data/hermes"
-
 GLM_API_KEY_VALUE="${GLM_API_KEY:-${ZAI_API_KEY:-${Z_AI_API_KEY:-}}}"
 ZAI_API_KEY_VALUE="${ZAI_API_KEY:-${GLM_API_KEY:-${Z_AI_API_KEY:-}}}"
 Z_AI_API_KEY_VALUE="${Z_AI_API_KEY:-${ZAI_API_KEY:-${GLM_API_KEY:-}}}"
 GLM_BASE_URL_VALUE="${GLM_BASE_URL:-${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}}"
 HERMES_PROVIDER_VALUE="$(resolve_hermes_provider)"
 HERMES_DEFAULT_MODEL_VALUE="$(resolve_hermes_model "$HERMES_PROVIDER_VALUE")"
+MINIMAX_BASE_URL_VALUE="${MINIMAX_BASE_URL:-${MINIMAX_API_BASE:-https://api.minimax.io/v1}}"
 
-cat > "$ROOT_DIR/data/hermes/config.yaml" <<EOF
+validate_provider_credentials "$HERMES_PROVIDER_VALUE"
+
+render_hermes_config() {
+  cat <<EOF
 model:
   provider: ${HERMES_PROVIDER_VALUE}
   default: ${HERMES_DEFAULT_MODEL_VALUE}
@@ -179,8 +229,10 @@ skills:
   external_dirs:
     - /opt/external-skills
 EOF
+}
 
-cat > "$ROOT_DIR/data/hermes/.env" <<EOF
+render_hermes_env() {
+  cat <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_HOST=0.0.0.0
 API_SERVER_PORT=8642
@@ -195,10 +247,11 @@ ZAI_API_KEY=${ZAI_API_KEY_VALUE}
 Z_AI_API_KEY=${Z_AI_API_KEY_VALUE}
 GLM_BASE_URL=${GLM_BASE_URL_VALUE}
 MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-MINIMAX_BASE_URL=${MINIMAX_API_BASE:-https://api.minimax.io/v1}
+MINIMAX_BASE_URL=${MINIMAX_BASE_URL_VALUE}
 TAVILY_API_KEY=${TAVILY_API_KEY:-}
 SERPER_API_KEY=${SERPER_API_KEY:-}
 EOF
+}
 
 export HERMES_PLATFORM="${HERMES_PLATFORM:-linux/amd64}"
 COMPOSE_CMD=(
@@ -209,17 +262,25 @@ COMPOSE_CMD=(
   postgres redis backend frontend hermes
 )
 
-echo "Prepared data/hermes/config.yaml and data/hermes/.env"
-echo "Using env file: $ENV_FILE"
-echo "Using Hermes platform: $HERMES_PLATFORM"
-echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
-
 if [[ "$DRY_RUN" == "true" ]]; then
+  echo "Using env file: $ENV_FILE"
+  echo "Using Hermes platform: $HERMES_PLATFORM"
+  echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
   printf 'Would run:'
   printf ' %q' "${COMPOSE_CMD[@]}"
   printf '\n'
   exit 0
 fi
+
+mkdir -p "$ROOT_DIR/data/hermes"
+render_hermes_config > "$ROOT_DIR/data/hermes/config.yaml"
+render_hermes_env > "$ROOT_DIR/data/hermes/.env"
+chmod 600 "$ROOT_DIR/data/hermes/config.yaml" "$ROOT_DIR/data/hermes/.env"
+
+echo "Prepared data/hermes/config.yaml and data/hermes/.env"
+echo "Using env file: $ENV_FILE"
+echo "Using Hermes platform: $HERMES_PLATFORM"
+echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
 
 "${COMPOSE_CMD[@]}"
 

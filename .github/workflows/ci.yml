@@ -91,7 +91,7 @@ jobs:
 
   publish-images:
     name: Publish Docker Images
-    needs: [backend, frontend]
+    needs: [backend, frontend, assistant-compose-smoke]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

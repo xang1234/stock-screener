@@ -243,7 +243,7 @@ class AssistantGatewayService:
             "streaming": True,
             "popup_enabled": False,
             "model": getattr(self._settings, "hermes_model", None),
-            "detail": f"Hermes returned HTTP {response.status_code}.",
+            "detail": "Hermes health check failed before receiving a usable response.",
         }
 
     def preview_watchlist_add(

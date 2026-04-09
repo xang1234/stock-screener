@@ -47,6 +47,42 @@ resolve_hermes_provider() {
   printf '%s' "auto"
 }
 
+validate_provider_credentials() {
+  local provider="$1"
+  case "$provider" in
+    minimax)
+      [[ -n "${MINIMAX_API_KEY:-}" ]] || {
+        echo "MINIMAX_API_KEY is required when HERMES_INFERENCE_PROVIDER=minimax." >&2
+        exit 1
+      }
+      ;;
+    zai)
+      [[ -n "${GLM_API_KEY:-}" || -n "${ZAI_API_KEY:-}" || -n "${Z_AI_API_KEY:-}" ]] || {
+        echo "GLM_API_KEY, ZAI_API_KEY, or Z_AI_API_KEY is required when HERMES_INFERENCE_PROVIDER=zai." >&2
+        exit 1
+      }
+      ;;
+    openrouter)
+      [[ -n "${OPENROUTER_API_KEY:-}" ]] || {
+        echo "OPENROUTER_API_KEY is required when HERMES_INFERENCE_PROVIDER=openrouter." >&2
+        exit 1
+      }
+      ;;
+    custom)
+      [[ -n "${OPENAI_API_KEY:-}" && -n "${OPENAI_BASE_URL:-}" ]] || {
+        echo "OPENAI_API_KEY and OPENAI_BASE_URL are required when HERMES_INFERENCE_PROVIDER=custom." >&2
+        exit 1
+      }
+      ;;
+    auto)
+      ;;
+    *)
+      echo "Invalid HERMES_INFERENCE_PROVIDER: ${provider}. Allowed values: minimax|zai|openrouter|custom|auto." >&2
+      exit 1
+      ;;
+  esac
+}
+
 resolve_hermes_model() {
   local provider="$1"
   if [[ -n "${HERMES_DEFAULT_MODEL:-}" ]]; then
@@ -77,6 +113,11 @@ if [[ -z "${SERVER_AUTH_PASSWORD:-}" ]]; then
   exit 1
 fi
 
+if [[ -n "${OPENAI_API_KEY:-}" && -z "${OPENAI_BASE_URL:-}" ]]; then
+  echo "OPENAI_BASE_URL must be set when OPENAI_API_KEY is provided." >&2
+  exit 1
+fi
+
 mkdir -p \
   "$HERMES_HOME_DIR/cron" \
   "$HERMES_HOME_DIR/hooks" \
@@ -95,6 +136,7 @@ fi
 
 HERMES_PROVIDER_VALUE="$(resolve_hermes_provider)"
 HERMES_DEFAULT_MODEL_VALUE="$(resolve_hermes_model "$HERMES_PROVIDER_VALUE")"
+validate_provider_credentials "$HERMES_PROVIDER_VALUE"
 
 cat > "$HERMES_HOME_DIR/config.yaml" <<EOF
 model:
@@ -127,6 +169,7 @@ skills:
   external_dirs:
     - ${ROOT_DIR}/integrations/hermes/skills
 EOF
+chmod 600 "$HERMES_HOME_DIR/config.yaml"
 
 echo "Starting Hermes with HERMES_HOME=$HERMES_HOME_DIR on http://${API_SERVER_HOST}:${API_SERVER_PORT}/v1 using ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
 exec hermes gateway
