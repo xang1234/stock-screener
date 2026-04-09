@@ -161,10 +161,14 @@ const ChartSkeleton = ({ height, isDarkMode }) => {
 // Debounce utility
 const debounce = (fn, ms) => {
   let timer;
-  return (...args) => {
+  const debounced = (...args) => {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), ms);
   };
+  debounced.cancel = () => {
+    clearTimeout(timer);
+  };
+  return debounced;
 };
 
 /**
@@ -580,6 +584,7 @@ function CandlestickChart({
     });
 
     return () => {
+      debouncedRangeChange.cancel();
       if (unsubscribe) unsubscribe();
     };
   }, [onVisibleRangeChange, symbol]);

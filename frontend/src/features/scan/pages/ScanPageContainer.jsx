@@ -181,9 +181,10 @@ function ScanPage() {
         return;
       }
 
+      const knownStatus = scanHistoryRef.current.find((scan) => scan.scan_id === scanId)?.status ?? null;
       setCurrentScanId(scanId);
       setBootstrappedScanId(null);
-      setScanStatus(null);
+      setScanStatus(knownStatus);
       setPage(1);
 
       if (snapshotEnabled) {
@@ -203,8 +204,7 @@ function ScanPage() {
         setScanStatus(status.status);
       } catch (error) {
         console.error('Error loading scan:', error);
-        const fallbackStatus = scanHistoryRef.current.find((scan) => scan.scan_id === scanId)?.status ?? null;
-        setScanStatus(fallbackStatus);
+        setScanStatus(knownStatus);
       }
     },
     [applyScanBootstrapSnapshot, snapshotEnabled]

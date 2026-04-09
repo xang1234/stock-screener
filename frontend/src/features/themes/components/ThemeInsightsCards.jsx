@@ -19,19 +19,20 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import { LinearProgress } from '@mui/material';
 
 export function MomentumBar({ score }) {
-  const color = score >= 70 ? 'success' : score >= 50 ? 'warning' : 'error';
+  const numericScore = Number.isFinite(score) ? Math.max(0, Math.min(score, 100)) : 0;
+  const color = numericScore >= 70 ? 'success' : numericScore >= 50 ? 'warning' : 'error';
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 80 }}>
       <Box sx={{ width: '100%', mr: 0.5 }}>
         <LinearProgress
           variant="determinate"
-          value={Math.min(score, 100)}
+          value={numericScore}
           color={color}
           sx={{ height: 6, borderRadius: 3 }}
         />
       </Box>
       <Box sx={{ minWidth: 28, fontSize: '11px', fontWeight: 600, fontFamily: 'monospace' }}>
-        {score?.toFixed(0)}
+        {numericScore.toFixed(0)}
       </Box>
     </Box>
   );
