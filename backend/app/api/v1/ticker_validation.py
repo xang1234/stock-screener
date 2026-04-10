@@ -9,7 +9,7 @@ from typing import Optional
 import logging
 
 from ...database import get_db
-from ...services.ticker_validation_service import ticker_validation_service
+from ...wiring.bootstrap import get_ticker_validation_service
 from ...schemas.ticker_validation import (
     ValidationReportResponse,
     ValidationSummary,
@@ -46,6 +46,7 @@ async def get_validation_report(
     Tickers remain active - manual deactivation required if confirmed invalid.
     """
     try:
+        ticker_validation_service = get_ticker_validation_service()
         failures = ticker_validation_service.get_unresolved_failures(
             db=db,
             limit=limit,
@@ -79,6 +80,7 @@ async def get_validation_summary(
     Returns aggregate counts by error type, data source, and trigger.
     """
     try:
+        ticker_validation_service = get_ticker_validation_service()
         summary = ticker_validation_service.get_failure_summary(db=db, days_back=days_back)
         return summary
 
@@ -99,6 +101,7 @@ async def get_symbol_history(
     Useful for investigating why a particular ticker keeps failing.
     """
     try:
+        ticker_validation_service = get_ticker_validation_service()
         history = ticker_validation_service.get_symbol_history(
             db=db,
             symbol=symbol.upper(),
@@ -127,6 +130,7 @@ async def resolve_failure(
     Use after manual investigation to clear the report.
     """
     try:
+        ticker_validation_service = get_ticker_validation_service()
         success = ticker_validation_service.resolve_failure(
             db=db,
             log_id=log_id,
@@ -157,6 +161,7 @@ async def resolve_all_for_symbol(
     Use after confirming a ticker is valid (perhaps after temporary API issues).
     """
     try:
+        ticker_validation_service = get_ticker_validation_service()
         count = ticker_validation_service.bulk_resolve_by_symbol(
             db=db,
             symbol=symbol.upper(),

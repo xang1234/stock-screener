@@ -311,7 +311,3 @@ class TechnicalCalculatorService:
                 results[symbol] = {}
 
         return results
-
-
-# Global service instance
-technical_calculator = TechnicalCalculatorService()

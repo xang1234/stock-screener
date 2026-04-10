@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime, repo_root
-from app.services.provider_snapshot_service import provider_snapshot_service
-from app.services.stock_universe_service import stock_universe_service
+from app.services.provider_snapshot_service import ProviderSnapshotService
+from app.wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
 
 
 def _default_output_dir() -> Path:
@@ -73,12 +73,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--latest-manifest-name",
-        default=provider_snapshot_service.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME,
+        default=ProviderSnapshotService.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME,
         help="Filename for the latest-pointer manifest JSON.",
     )
     args = parser.parse_args()
 
     prepare_runtime()
+    provider_snapshot_service = get_provider_snapshot_service()
+    stock_universe_service = get_stock_universe_service()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

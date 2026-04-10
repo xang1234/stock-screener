@@ -779,7 +779,7 @@ class IBDGroupRankService:
         Returns:
             Tuple of (spy_prices_df, {symbol: prices_df}, active_symbols_set, {symbol: market_cap})
         """
-        from .stock_universe_service import stock_universe_service
+        from ..wiring.bootstrap import get_stock_universe_service
 
         logger.info("Pre-fetching all data for optimized backfill...")
 
@@ -800,7 +800,7 @@ class IBDGroupRankService:
         logger.info(f"Fetched SPY data: {len(spy_data)} days")
 
         # 2. Get active symbols from stock_universe (same as bulk scans)
-        active_symbols_list = stock_universe_service.get_active_symbols(db)
+        active_symbols_list = get_stock_universe_service().get_active_symbols(db)
         active_symbols = set(active_symbols_list)
         logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
 

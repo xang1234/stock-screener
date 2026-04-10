@@ -10,7 +10,7 @@ from datetime import datetime
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
-from ..services.stock_universe_service import stock_universe_service
+from ..wiring.bootstrap import get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,8 @@ def refresh_stock_universe(self, exchange_filter: str = None):
     logger.info("=" * 60)
 
     db = SessionLocal()
-
     try:
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.populate_universe(db, exchange_filter=exchange_filter)
 
         logger.info("=" * 60)
@@ -89,8 +89,8 @@ def refresh_sp500_membership(self):
     logger.info("=" * 60)
 
     db = SessionLocal()
-
     try:
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.update_sp500_membership(db)
 
         logger.info("=" * 60)

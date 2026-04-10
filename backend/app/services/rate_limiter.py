@@ -209,7 +209,3 @@ class RedisRateLimiter:
 
         logger.debug(f"Rate limit: key={key} waited=0.000s backend={backend}")
         return 0.0
-
-
-# Module-level singleton
-rate_limiter = RedisRateLimiter()

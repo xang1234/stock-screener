@@ -41,6 +41,12 @@ Process-scoped dependencies are owned by an explicit `RuntimeServices` container
 | `task_registry_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | `data_fetch_lock` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | `groq_key_manager` / `zai_key_manager` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `rate_limiter` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `eps_rating_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `yfinance_service` / `finviz_service` / `alphavantage_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `data_source_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `stock_universe_service` / `ticker_validation_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `provider_snapshot_service` / `hybrid_fundamentals_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | `stock_data_provider` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | `scan_orchestrator` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | `job_backend` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |

@@ -60,6 +60,7 @@ class HybridFundamentalsService:
         yfinance_delay_between_batches: float = 2.0,
         finviz_rate_limit: float = 0.5,
         price_cache: PriceCacheService | None = None,
+        finviz_service: FinvizService | None = None,
     ):
         """
         Initialize HybridFundamentalsService.
@@ -77,12 +78,32 @@ class HybridFundamentalsService:
         self.yfinance_delay_between_batches = yfinance_delay_between_batches
         self.finviz_rate_limit = finviz_rate_limit
 
-        self.bulk_fetcher = BulkDataFetcher()
         self.technical_calc = TechnicalCalculatorService()
-        self.finviz_service = FinvizService()
-        from ..wiring.bootstrap import get_price_cache
+        resolved_rate_limiter = getattr(finviz_service, "_rate_limiter", None)
+        if finviz_service is None:
+            from app.services.rate_limiter import RedisRateLimiter
 
-        self.price_cache = price_cache or get_price_cache()
+            resolved_rate_limiter = RedisRateLimiter()
+            finviz_service = FinvizService(rate_limiter=resolved_rate_limiter)
+        if price_cache is None:
+            from app.database import SessionLocal
+            from app.services.redis_pool import get_redis_client
+
+            price_cache = PriceCacheService(
+                redis_client=get_redis_client(),
+                session_factory=SessionLocal,
+            )
+        if resolved_rate_limiter is None:
+            resolved_rate_limiter = getattr(finviz_service, "_rate_limiter", None)
+        if resolved_rate_limiter is None:
+            from app.services.rate_limiter import RedisRateLimiter
+
+            resolved_rate_limiter = RedisRateLimiter()
+        self._finviz_rate_limiter = resolved_rate_limiter
+        self.bulk_fetcher = BulkDataFetcher(rate_limiter=resolved_rate_limiter)
+
+        self.finviz_service = finviz_service
+        self.price_cache = price_cache
 
     def fetch_fundamentals(
         self,
@@ -357,7 +378,7 @@ class HybridFundamentalsService:
             """Fetch finviz data for a chunk of symbols."""
             chunk_results = {}
             # Create a separate FinvizService instance for thread safety
-            finviz = FinvizService()
+            finviz = FinvizService(rate_limiter=self._finviz_rate_limiter)
             for symbol in chunk_symbols:
                 data = finviz.get_finviz_only_fields(symbol)
                 chunk_results[symbol] = data or {}
@@ -462,16 +483,3 @@ class HybridFundamentalsService:
                 db.close()
 
         return stats
-
-
-def _build_hybrid_fundamentals_service() -> HybridFundamentalsService:
-    from ..wiring.bootstrap import initialize_process_runtime_services
-
-    initialize_process_runtime_services()
-    return HybridFundamentalsService()
-
-
-# Global instance with default settings
-# Legacy compatibility singleton for modules/tests that import this symbol.
-# New call sites should prefer explicit HybridFundamentalsService(...) construction.
-hybrid_fundamentals_service = _build_hybrid_fundamentals_service()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime
-from app.services.provider_snapshot_service import provider_snapshot_service
+from app.wiring.bootstrap import get_provider_snapshot_service
 
 
 def main() -> int:
@@ -20,6 +20,7 @@ def main() -> int:
     args = parser.parse_args()
 
     prepare_runtime()
+    provider_snapshot_service = get_provider_snapshot_service()
 
     with SessionLocal() as db:
         stats = provider_snapshot_service.import_weekly_reference_bundle(

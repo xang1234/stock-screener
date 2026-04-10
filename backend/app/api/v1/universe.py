@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import logging
 
 from ...database import get_db
-from ...services.stock_universe_service import stock_universe_service
+from ...wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +33,7 @@ async def refresh_universe(
     """
     try:
         logger.info(f"Refreshing stock universe (exchange={exchange})")
+        stock_universe_service = get_stock_universe_service()
 
         stats = stock_universe_service.populate_universe(db, exchange)
 
@@ -85,6 +86,7 @@ async def import_csv(
         csv_text = csv_content
 
         # Import stocks
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.populate_from_csv(db, csv_text)
 
         logger.info(
@@ -116,6 +118,7 @@ async def get_universe_stats(db: Session = Depends(get_db)):
         Total stocks, active stocks, breakdown by exchange
     """
     try:
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.get_stats(db)
 
         return {
@@ -153,6 +156,7 @@ async def add_symbol(
         Success message
     """
     try:
+        stock_universe_service = get_stock_universe_service()
         success = stock_universe_service.add_manual_symbol(db, symbol, name)
 
         if success:
@@ -189,6 +193,7 @@ async def deactivate_symbol(
         Success message
     """
     try:
+        stock_universe_service = get_stock_universe_service()
         success = stock_universe_service.deactivate_symbol(db, symbol)
 
         if success:
@@ -222,6 +227,7 @@ async def refresh_sp500(db: Session = Depends(get_db)):
     """
     try:
         logger.info("Refreshing S&P 500 membership")
+        stock_universe_service = get_stock_universe_service()
 
         stats = stock_universe_service.update_sp500_membership(db)
 

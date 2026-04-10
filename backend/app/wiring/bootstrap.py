@@ -36,14 +36,24 @@ if TYPE_CHECKING:
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.providers.stock_data import DataPrepStockDataProvider
     from app.scanners.scan_orchestrator import ScanOrchestrator
+    from app.services.alphavantage_service import AlphaVantageService
     from app.services.benchmark_cache_service import BenchmarkCacheService
+    from app.services.data_source_service import DataSourceService
+    from app.services.eps_rating_service import EPSRatingService
+    from app.services.finviz_service import FinvizService
     from app.services.fundamentals_cache_service import FundamentalsCacheService
+    from app.services.hybrid_fundamentals_service import HybridFundamentalsService
     from app.services.ibd_group_rank_service import IBDGroupRankService
     from app.services.llm.groq_key_manager import GroqKeyManager
     from app.services.llm.zai_key_manager import ZAIKeyManager
     from app.services.price_cache_service import PriceCacheService
+    from app.services.provider_snapshot_service import ProviderSnapshotService
+    from app.services.rate_limiter import RedisRateLimiter
+    from app.services.stock_universe_service import StockUniverseService
     from app.services.task_registry_service import TaskRegistryService
+    from app.services.ticker_validation_service import TickerValidationService
     from app.services.ui_snapshot_service import UISnapshotService
+    from app.services.yfinance_service import YFinanceService
     from app.tasks.data_fetch_lock import DataFetchLock
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailyFeatureSnapshotUseCase,
@@ -89,6 +99,16 @@ class RuntimeServices:
         self._data_fetch_lock: DataFetchLock | None = None
         self._groq_key_manager: GroqKeyManager | None = None
         self._zai_key_manager: ZAIKeyManager | None = None
+        self._rate_limiter: RedisRateLimiter | None = None
+        self._eps_rating_service: EPSRatingService | None = None
+        self._yfinance_service: YFinanceService | None = None
+        self._finviz_service: FinvizService | None = None
+        self._alphavantage_service: AlphaVantageService | None = None
+        self._data_source_service: DataSourceService | None = None
+        self._stock_universe_service: StockUniverseService | None = None
+        self._ticker_validation_service: TickerValidationService | None = None
+        self._provider_snapshot_service: ProviderSnapshotService | None = None
+        self._hybrid_fundamentals_service: HybridFundamentalsService | None = None
         self._stock_data_provider: DataPrepStockDataProvider | None = None
         self._scan_orchestrator: ScanOrchestrator | None = None
 
@@ -197,6 +217,117 @@ class RuntimeServices:
                     )
         return self._zai_key_manager
 
+    def rate_limiter(self) -> RedisRateLimiter:
+        if self._rate_limiter is None:
+            with self._init_lock:
+                if self._rate_limiter is None:
+                    from app.services.rate_limiter import RedisRateLimiter
+
+                    self._rate_limiter = RedisRateLimiter()
+        return self._rate_limiter
+
+    def eps_rating_service(self) -> EPSRatingService:
+        if self._eps_rating_service is None:
+            with self._init_lock:
+                if self._eps_rating_service is None:
+                    from app.services.eps_rating_service import EPSRatingService
+
+                    self._eps_rating_service = EPSRatingService()
+        return self._eps_rating_service
+
+    def yfinance_service(self) -> YFinanceService:
+        if self._yfinance_service is None:
+            with self._init_lock:
+                if self._yfinance_service is None:
+                    from app.services.yfinance_service import YFinanceService
+
+                    self._yfinance_service = YFinanceService(
+                        rate_limiter=self.rate_limiter(),
+                        eps_rating_service=self.eps_rating_service(),
+                    )
+        return self._yfinance_service
+
+    def finviz_service(self) -> FinvizService:
+        if self._finviz_service is None:
+            with self._init_lock:
+                if self._finviz_service is None:
+                    from app.services.finviz_service import FinvizService
+
+                    self._finviz_service = FinvizService(
+                        rate_limiter=self.rate_limiter(),
+                    )
+        return self._finviz_service
+
+    def alphavantage_service(self) -> AlphaVantageService:
+        if self._alphavantage_service is None:
+            with self._init_lock:
+                if self._alphavantage_service is None:
+                    from app.services.alphavantage_service import AlphaVantageService
+
+                    self._alphavantage_service = AlphaVantageService()
+        return self._alphavantage_service
+
+    def data_source_service(self) -> DataSourceService:
+        if self._data_source_service is None:
+            with self._init_lock:
+                if self._data_source_service is None:
+                    from app.services.data_source_service import DataSourceService
+
+                    self._data_source_service = DataSourceService(
+                        finviz_service=self.finviz_service(),
+                        yfinance_service=self.yfinance_service(),
+                        eps_rating_service=self.eps_rating_service(),
+                        rate_limiter=self.rate_limiter(),
+                        prefer_finviz=True,
+                        enable_fallback=True,
+                        strict_validation=True,
+                    )
+        return self._data_source_service
+
+    def stock_universe_service(self) -> StockUniverseService:
+        if self._stock_universe_service is None:
+            with self._init_lock:
+                if self._stock_universe_service is None:
+                    from app.services.stock_universe_service import StockUniverseService
+
+                    self._stock_universe_service = StockUniverseService()
+        return self._stock_universe_service
+
+    def ticker_validation_service(self) -> TickerValidationService:
+        if self._ticker_validation_service is None:
+            with self._init_lock:
+                if self._ticker_validation_service is None:
+                    from app.services.ticker_validation_service import TickerValidationService
+
+                    self._ticker_validation_service = TickerValidationService()
+        return self._ticker_validation_service
+
+    def provider_snapshot_service(self) -> ProviderSnapshotService:
+        if self._provider_snapshot_service is None:
+            with self._init_lock:
+                if self._provider_snapshot_service is None:
+                    from app.services.provider_snapshot_service import ProviderSnapshotService
+
+                    cache_bundle = self.cache_bundle()
+                    self._provider_snapshot_service = ProviderSnapshotService(
+                        price_cache=cache_bundle.price,
+                        fundamentals_cache=cache_bundle.fundamentals,
+                        rate_limiter=self.rate_limiter(),
+                    )
+        return self._provider_snapshot_service
+
+    def hybrid_fundamentals_service(self) -> HybridFundamentalsService:
+        if self._hybrid_fundamentals_service is None:
+            with self._init_lock:
+                if self._hybrid_fundamentals_service is None:
+                    from app.services.hybrid_fundamentals_service import HybridFundamentalsService
+
+                    self._hybrid_fundamentals_service = HybridFundamentalsService(
+                        price_cache=self.cache_bundle().price,
+                        finviz_service=self.finviz_service(),
+                    )
+        return self._hybrid_fundamentals_service
+
     def stock_data_provider(self) -> DataPrepStockDataProvider:
         if self._stock_data_provider is None:
             with self._init_lock:
@@ -232,6 +363,16 @@ class RuntimeServices:
             self._data_fetch_lock = None
             self._groq_key_manager = None
             self._zai_key_manager = None
+            self._rate_limiter = None
+            self._eps_rating_service = None
+            self._yfinance_service = None
+            self._finviz_service = None
+            self._alphavantage_service = None
+            self._data_source_service = None
+            self._stock_universe_service = None
+            self._ticker_validation_service = None
+            self._provider_snapshot_service = None
+            self._hybrid_fundamentals_service = None
             self._stock_data_provider = None
             self._scan_orchestrator = None
 
@@ -397,6 +538,56 @@ def get_groq_key_manager() -> GroqKeyManager:
 def get_zai_key_manager() -> ZAIKeyManager:
     """Return process-scoped Z.AI key manager."""
     return _resolve_runtime_services().zai_key_manager()
+
+
+def get_rate_limiter() -> RedisRateLimiter:
+    """Return process-scoped distributed rate limiter."""
+    return _resolve_runtime_services().rate_limiter()
+
+
+def get_eps_rating_service() -> EPSRatingService:
+    """Return process-scoped EPS rating service."""
+    return _resolve_runtime_services().eps_rating_service()
+
+
+def get_yfinance_service() -> YFinanceService:
+    """Return process-scoped yfinance service wrapper."""
+    return _resolve_runtime_services().yfinance_service()
+
+
+def get_finviz_service() -> FinvizService:
+    """Return process-scoped finviz service wrapper."""
+    return _resolve_runtime_services().finviz_service()
+
+
+def get_alphavantage_service() -> AlphaVantageService:
+    """Return process-scoped Alpha Vantage service wrapper."""
+    return _resolve_runtime_services().alphavantage_service()
+
+
+def get_data_source_service() -> DataSourceService:
+    """Return process-scoped multi-source fundamentals service."""
+    return _resolve_runtime_services().data_source_service()
+
+
+def get_stock_universe_service() -> StockUniverseService:
+    """Return process-scoped stock-universe service."""
+    return _resolve_runtime_services().stock_universe_service()
+
+
+def get_ticker_validation_service() -> TickerValidationService:
+    """Return process-scoped ticker-validation service."""
+    return _resolve_runtime_services().ticker_validation_service()
+
+
+def get_provider_snapshot_service() -> ProviderSnapshotService:
+    """Return process-scoped provider snapshot service."""
+    return _resolve_runtime_services().provider_snapshot_service()
+
+
+def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
+    """Return process-scoped hybrid fundamentals service."""
+    return _resolve_runtime_services().hybrid_fundamentals_service()
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────

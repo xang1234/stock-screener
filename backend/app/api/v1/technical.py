@@ -6,6 +6,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, HTTPException
 import logging
 
+from ...wiring.bootstrap import get_yfinance_service
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -90,9 +92,9 @@ async def get_rs_rating(symbol: str):
     Returns RS rating (0-100) and performance breakdown.
     """
     from ...scanners.criteria.relative_strength import RelativeStrengthCalculator
-    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
+    yfinance_service = get_yfinance_service()
     stock_data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
     spy_data = yfinance_service.get_historical_data("SPY", period="2y")
 
@@ -132,9 +134,9 @@ async def get_stage_analysis(symbol: str):
     Returns stage number, trend information, and confidence score.
     """
     from ...scanners.criteria.stage_analysis import WeinsteinstageAnalyzer
-    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
+    yfinance_service = get_yfinance_service()
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
 
     if data is None:
@@ -185,9 +187,9 @@ async def get_ma_analysis(symbol: str):
     Returns alignment status, scores, and detailed breakdown.
     """
     from ...scanners.criteria.moving_averages import MovingAverageAnalyzer
-    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data (2 years to ensure we have 252+ trading days)
+    yfinance_service = get_yfinance_service()
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
 
     if data is None:
@@ -237,9 +239,9 @@ async def detect_vcp(symbol: str):
     Returns VCP detection status, score, and pattern details.
     """
     from ...scanners.criteria.vcp_detection import VCPDetector
-    from ...services.yfinance_service import yfinance_service
 
     # Fetch price data
+    yfinance_service = get_yfinance_service()
     data = yfinance_service.get_historical_data(symbol.upper(), period="6mo")
 
     if data is None:
@@ -269,9 +271,8 @@ async def get_52w_position(symbol: str):
 
     Returns positioning metrics and whether criteria are met.
     """
-    from ...services.yfinance_service import yfinance_service
-
     # Fetch price data (2 years to ensure we have 252+ trading days)
+    yfinance_service = get_yfinance_service()
     data = yfinance_service.get_historical_data(symbol.upper(), period="2y")
 
     if data is None:

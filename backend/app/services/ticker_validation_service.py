@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, and_
 
 from ..models.ticker_validation import TickerValidationLog
-from ..database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -471,7 +470,3 @@ class TickerValidationService:
             logger.error(f"Error bulk resolving for {symbol}: {e}", exc_info=True)
             db.rollback()
             return 0
-
-
-# Global instance for convenience
-ticker_validation_service = TickerValidationService()

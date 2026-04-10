@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import app.scripts.build_weekly_reference_bundle as build_script
 import app.scripts.import_weekly_reference_bundle as import_script
@@ -19,15 +20,11 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     published_at = datetime(2026, 4, 4, 12, 10, 0)
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
-    monkeypatch.setattr(
-        build_script.stock_universe_service,
-        "populate_universe",
-        lambda db: {"added": 10},
+    stock_universe_service = SimpleNamespace(
+        populate_universe=lambda db: {"added": 10},
     )
-    monkeypatch.setattr(
-        build_script.provider_snapshot_service,
-        "create_snapshot_run",
-        lambda db, run_mode, publish, **kwargs: (
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=lambda db, run_mode, publish, **kwargs: (
             kwargs["progress_callback"](
                 {
                     "stage": "snapshot_fetch_complete",
@@ -41,11 +38,7 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
             )
             or {"published": True, "source_revision": "fundamentals_v1:20260404121000"}
         ),
-    )
-    monkeypatch.setattr(
-        build_script.provider_snapshot_service,
-        "hydrate_published_snapshot",
-        lambda db, allow_yahoo_hydration=True, **kwargs: (
+        hydrate_published_snapshot=lambda db, allow_yahoo_hydration=True, **kwargs: (
             kwargs["progress_callback"](
                 {
                     "stage": "hydrate_start",
@@ -73,11 +66,7 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
             )
             or {"hydrated": 10}
         ),
-    )
-    monkeypatch.setattr(
-        build_script.provider_snapshot_service,
-        "get_published_run",
-        lambda db: type(
+        get_published_run=lambda db: type(
             "Run",
             (),
             {
@@ -87,6 +76,8 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
             },
         )(),
     )
+    monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
 
     export_calls: list[tuple[Path, str, Path]] = []
 
@@ -96,11 +87,7 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
         output_path.write_bytes(b"bundle")
         return {"bundle_path": str(output_path)}
 
-    monkeypatch.setattr(
-        build_script.provider_snapshot_service,
-        "export_weekly_reference_bundle",
-        fake_export,
-    )
+    provider_snapshot_service.export_weekly_reference_bundle = fake_export
 
     monkeypatch.setattr(
         "sys.argv",
@@ -110,7 +97,7 @@ def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypat
     assert build_script.main() == 0
     assert export_calls[0][0] == tmp_path / "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
     assert export_calls[0][1] == "weekly-reference-20260404-fundamentals_v1-20260404121000.json.gz"
-    assert export_calls[0][2] == tmp_path / build_script.provider_snapshot_service.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
+    assert export_calls[0][2] == tmp_path / build_script.ProviderSnapshotService.WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
     stdout = capsys.readouterr().out
     assert "Starting stock universe refresh from Finviz..." in stdout
     assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
@@ -125,11 +112,10 @@ def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_pa
     monkeypatch.setattr(import_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(import_script, "SessionLocal", _fake_session)
     import_calls: list[Path] = []
-    monkeypatch.setattr(
-        import_script.provider_snapshot_service,
-        "import_weekly_reference_bundle",
-        lambda db, input_path: import_calls.append(input_path) or {"rows": 10},
+    provider_snapshot_service = SimpleNamespace(
+        import_weekly_reference_bundle=lambda db, input_path: import_calls.append(input_path) or {"rows": 10},
     )
+    monkeypatch.setattr(import_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
     monkeypatch.setattr(
         "sys.argv",
         ["import_weekly_reference_bundle", "--input", str(bundle_path)],

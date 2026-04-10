@@ -388,14 +388,13 @@ class FundamentalsCacheService:
                 logger.warning("On-demand provider fallback is disabled for %s", symbol)
                 return None
 
-            # Import DataSourceService here to avoid circular dependency
-            from .data_source_service import data_source_service
+            from ..wiring.bootstrap import get_data_source_service
 
             logger.info(f"Fetching fresh fundamental data for {symbol} from data sources")
             self.record_on_demand_fallback()
 
             # Use DataSourceService which handles finviz → yfinance fallback
-            fundamentals = data_source_service.get_fundamentals(symbol)
+            fundamentals = get_data_source_service().get_fundamentals(symbol)
 
             if not fundamentals:
                 logger.warning(f"All data sources failed for {symbol} fundamentals")

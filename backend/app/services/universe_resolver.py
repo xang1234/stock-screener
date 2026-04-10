@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 from sqlalchemy.orm import Session
 
 from ..schemas.universe import UniverseDefinition, UniverseType
-from ..services.stock_universe_service import stock_universe_service
+from ..wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +66,24 @@ def resolve_symbols(
     t = universe_def.type
 
     if t == UniverseType.ALL:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=None, sp500_only=False, limit=limit
         )
 
     elif t == UniverseType.EXCHANGE:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=universe_def.exchange.value, sp500_only=False, limit=limit
         )
 
     elif t == UniverseType.INDEX:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=None, sp500_only=True, limit=limit
         )
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):
         symbols = universe_def.symbols
         if not universe_def.allow_inactive_symbols:
+            stock_universe_service = get_stock_universe_service()
             filtered = stock_universe_service.filter_active_symbols(db, symbols)
             filtered_set = set(filtered)
             dropped = [symbol for symbol in symbols if symbol not in filtered_set]

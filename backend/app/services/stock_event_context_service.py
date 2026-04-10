@@ -12,7 +12,6 @@ from app.models.institutional_ownership import InstitutionalOwnershipHistory
 from app.schemas.strategy_profile import StrategyProfileDetail
 from app.services.price_cache_service import PriceCacheService
 from app.services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
-from app.services.yfinance_service import yfinance_service
 from app.utils.market_hours import EASTERN, to_eastern_date
 
 
@@ -81,9 +80,10 @@ class StockEventContextService:
         price_cache: PriceCacheService | None = None,
         profile_service: StrategyProfileService | None = None,
     ) -> None:
-        from app.wiring.bootstrap import get_price_cache
+        from app.wiring.bootstrap import get_price_cache, get_yfinance_service
 
         self._price_cache = price_cache or get_price_cache()
+        self._yfinance_service = get_yfinance_service()
         self._profile_service = profile_service or StrategyProfileService()
 
     def build(
@@ -175,10 +175,10 @@ class StockEventContextService:
         return next_earnings_date, (next_earnings_date - effective_as_of_date).days
 
     def _get_earnings_history(self, symbol: str) -> pd.DataFrame | None:
-        return yfinance_service.get_earnings_history(symbol.upper())
+        return self._yfinance_service.get_earnings_history(symbol.upper())
 
     def _get_upcoming_earnings_dates(self, symbol: str) -> list[date]:
-        return yfinance_service.get_upcoming_earnings_dates(symbol.upper())
+        return self._yfinance_service.get_upcoming_earnings_dates(symbol.upper())
 
     def _normalize_earnings_history(
         self,

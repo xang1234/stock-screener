@@ -173,7 +173,3 @@ class IBDIndustryService:
         except Exception as e:
             logger.error(f"Error getting all industry groups: {e}")
             return []
-
-
-# Singleton instance
-ibd_industry_service = IBDIndustryService()
