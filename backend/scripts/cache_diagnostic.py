@@ -7,7 +7,7 @@ import logging
 from app.services.cache_manager import CacheManager
 from app.database import SessionLocal
 from app.models.stock import StockPrice
-from app.wiring.bootstrap import get_price_cache
+from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +19,8 @@ test_symbols = ['AAPL', 'MSFT', 'GOOGL']
 print("=" * 80)
 print("DIAGNOSTIC: Tracing Bulk Refresh → Cache → Database Flow")
 print("=" * 80)
+
+initialize_process_runtime_services(session_factory=SessionLocal)
 
 # Step 1: Check what's currently in the database
 print("\n1. CURRENT DATABASE STATE")

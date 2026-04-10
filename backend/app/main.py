@@ -12,10 +12,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
-from .database import engine
+from .database import SessionLocal, engine
 from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
+from .wiring.bootstrap import build_runtime_services, clear_runtime_services, set_runtime_services
 
 logger = logging.getLogger(__name__)
 
@@ -156,18 +157,31 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     initialize_runtime()
+    runtime_services = build_runtime_services(session_factory=SessionLocal)
+    app.state.runtime_services = runtime_services
+    set_runtime_services(runtime_services)
+    if settings.mcp_http_enabled:
+        from .interfaces.mcp.http_transport import create_mcp_http_server
+
+        app.state.mcp_server = create_mcp_http_server(session_factory=SessionLocal)
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
         await trigger_gapfill_on_startup()
     asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
 
-    yield
-
-    # Shutdown
-    logger.info("Shutting down Stock Scanner API")
-    engine.dispose()
-    logger.info("Database connections closed")
+    try:
+        yield
+    finally:
+        # Shutdown
+        logger.info("Shutting down Stock Scanner API")
+        clear_runtime_services()
+        if hasattr(app.state, "runtime_services"):
+            delattr(app.state, "runtime_services")
+        if hasattr(app.state, "mcp_server"):
+            delattr(app.state, "mcp_server")
+        engine.dispose()
+        logger.info("Database connections closed")
 
 
 def _docs_enabled() -> bool:

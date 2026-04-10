@@ -12,7 +12,8 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 import logging
-from app.wiring.bootstrap import get_price_cache
+from app.database import SessionLocal
+from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +42,7 @@ if confirm != "YES":
     exit(0)
 
 try:
+    initialize_process_runtime_services(session_factory=SessionLocal)
     price_cache = get_price_cache()
 
     if not price_cache._redis_client:

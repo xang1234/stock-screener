@@ -7,8 +7,7 @@ same ``MarketCopilotMcpServer`` that powers the stdio transport.
 from __future__ import annotations
 
 import logging
-import threading
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -24,20 +23,24 @@ logger = logging.getLogger(__name__)
 
 mcp_router = APIRouter(tags=["mcp"])
 
-# Lazy singleton — created on first request so the router can be imported at
-# module level without requiring a live database connection.
-_server: MarketCopilotMcpServer | None = None
-_server_lock = threading.Lock()
+SessionFactory = Callable[..., Any]
 
 
-def _get_server() -> MarketCopilotMcpServer:
-    global _server
-    if _server is None:
-        with _server_lock:
-            if _server is None:
-                service = MarketCopilotService(SessionLocal, settings)
-                _server = MarketCopilotMcpServer(service, transport=None)
-    return _server
+def create_mcp_http_server(
+    *,
+    session_factory: SessionFactory = SessionLocal,
+    runtime_settings: Any = settings,
+) -> MarketCopilotMcpServer:
+    """Build the process-scoped MCP HTTP server."""
+    service = MarketCopilotService(session_factory, runtime_settings)
+    return MarketCopilotMcpServer(service, transport=None)
+
+
+def _get_server_from_app_state(request: Request) -> MarketCopilotMcpServer:
+    server = getattr(request.app.state, "mcp_server", None)
+    if server is None:
+        raise RuntimeError("MCP HTTP server is not initialized on app.state.mcp_server")
+    return server
 
 
 @mcp_router.post("/")
@@ -71,7 +74,7 @@ async def mcp_post(request: Request) -> Response:
             media_type="application/json",
         )
 
-    server = _get_server()
+    server = _get_server_from_app_state(request)
     response = await run_in_threadpool(server.dispatch, body)
 
     if response is None:
