@@ -16,7 +16,7 @@ from .database import SessionLocal, engine
 from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
-from .wiring.bootstrap import build_runtime_services, clear_runtime_services, set_runtime_services
+from .wiring.bootstrap import clear_runtime_services, initialize_process_runtime_services
 
 logger = logging.getLogger(__name__)
 
@@ -157,9 +157,8 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     initialize_runtime()
-    runtime_services = build_runtime_services(session_factory=SessionLocal)
+    runtime_services = initialize_process_runtime_services(session_factory=SessionLocal)
     app.state.runtime_services = runtime_services
-    set_runtime_services(runtime_services)
     if settings.mcp_http_enabled:
         from .interfaces.mcp.http_transport import create_mcp_http_server
 

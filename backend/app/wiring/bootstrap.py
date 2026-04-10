@@ -290,9 +290,10 @@ def _resolve_runtime_services(request: Request | None = None) -> RuntimeServices
     context_runtime = _runtime_services_ctx.get()
     if context_runtime is not None:
         return context_runtime
-    # Compatibility bridge for legacy modules that still instantiate
-    # service globals at import time before explicit startup hooks run.
-    return initialize_process_runtime_services()
+    raise RuntimeError(
+        "RuntimeServices are not initialized for this context. "
+        "Call initialize_process_runtime_services() at process startup."
+    )
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────

@@ -69,12 +69,15 @@ _default_scan_profile = get_default_scan_profile()
 
 def _ensure_worker_runtime_services():
     """Create/bind process-scoped runtime services for this Celery worker process."""
+    runtime_pid = getattr(celery_app, "runtime_services_pid", None)
+    current_pid = os.getpid()
     runtime_services = getattr(celery_app, "runtime_services", None)
-    if runtime_services is None:
+    if runtime_services is None or runtime_pid != current_pid:
         from .wiring.bootstrap import build_runtime_services
 
         runtime_services = build_runtime_services()
         celery_app.runtime_services = runtime_services
+        celery_app.runtime_services_pid = current_pid
 
     from .wiring.bootstrap import set_runtime_services
 
@@ -151,6 +154,8 @@ def _graceful_db_shutdown(sender=None, **kwargs):
         clear_runtime_services()
         if hasattr(celery_app, "runtime_services"):
             delattr(celery_app, "runtime_services")
+        if hasattr(celery_app, "runtime_services_pid"):
+            delattr(celery_app, "runtime_services_pid")
         engine.dispose()
         _logger.info("Worker shutdown: DB connections closed")
     except Exception as e:
