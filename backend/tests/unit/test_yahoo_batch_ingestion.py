@@ -26,6 +26,13 @@ from app.tasks.cache_tasks import (
 )
 
 
+def _patch_cache_tasks_session_factory(monkeypatch, module, testing_session_local):
+    if hasattr(module, "get_session_factory"):
+        monkeypatch.setattr(module, "get_session_factory", lambda: testing_session_local)
+    else:
+        monkeypatch.setattr(module, "SessionLocal", testing_session_local)
+
+
 def _price_df(day: date, close: float) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -228,7 +235,7 @@ def test_cleanup_old_price_data_skips_inactive_symbols(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
+    _patch_cache_tasks_session_factory(monkeypatch, module, TestingSessionLocal)
 
     db = TestingSessionLocal()
     cutoff_candidate = date.today() - timedelta(days=366)
@@ -355,7 +362,7 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
+    _patch_cache_tasks_session_factory(monkeypatch, module, TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add(
@@ -437,7 +444,7 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
     import app.tasks.cache_tasks as module
-    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
+    _patch_cache_tasks_session_factory(monkeypatch, module, TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add_all(
@@ -541,7 +548,7 @@ def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
+    _patch_cache_tasks_session_factory(monkeypatch, module, TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add_all(
