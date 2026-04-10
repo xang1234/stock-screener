@@ -53,7 +53,7 @@ def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
 
 def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
     """Refresh recent price bars in batches without Redis or warmup metadata."""
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
     fetcher = BulkDataFetcher()
 
     with SessionLocal() as db:
@@ -208,7 +208,7 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
             f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
             flush=True,
         )
-        stats = IBDGroupRankService.get_instance().fill_gaps_optimized(db, missing_dates)
+        stats = get_group_rank_service().fill_gaps_optimized(db, missing_dates)
         stats.update(
             {
                 "status": "completed",
@@ -269,7 +269,7 @@ def _ensure_breadth_history(
             f"through {as_of_date}.",
             flush=True,
         )
-        stats = BreadthCalculatorService(db).backfill_range(
+        stats = BreadthCalculatorService(db, get_price_cache()).backfill_range(
             start_date=recompute_dates[0],
             end_date=recompute_dates[-1],
             trading_dates=recompute_dates,

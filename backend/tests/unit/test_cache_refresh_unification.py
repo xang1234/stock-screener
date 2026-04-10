@@ -52,7 +52,7 @@ def test_daily_cache_warmup_delegates_to_smart_refresh(monkeypatch):
     mock_lock.acquire.return_value = (True, False)
     mock_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: mock_lock,
     )
 
@@ -87,7 +87,7 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     mock_lock.acquire.return_value = (True, False)
     mock_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: mock_lock,
     )
 
@@ -98,7 +98,7 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
-        "app.services.price_cache_service.PriceCacheService.get_instance",
+        "app.wiring.bootstrap.get_price_cache",
         lambda: fake_price_cache,
     )
 
@@ -128,7 +128,7 @@ def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkey
         lambda: SimpleNamespace(weekday=lambda: 0, hour=9, date=lambda: date(2026, 3, 23)),
     )
     monkeypatch.setattr(
-        "app.services.price_cache_service.PriceCacheService.get_instance",
+        "app.wiring.bootstrap.get_price_cache",
         lambda: fake_price_cache,
     )
     monkeypatch.setattr(
@@ -152,7 +152,7 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     mock_lock.acquire.return_value = (True, False)
     mock_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: mock_lock,
     )
 
@@ -170,7 +170,7 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
-        "app.services.price_cache_service.PriceCacheService.get_instance",
+        "app.wiring.bootstrap.get_price_cache",
         lambda: fake_price_cache,
     )
     monkeypatch.setattr(
@@ -193,7 +193,7 @@ def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
     mock_lock.acquire.return_value = (True, False)
     mock_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: mock_lock,
     )
 
@@ -214,7 +214,7 @@ def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(module, "_fetch_with_backoff", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(
-        "app.services.price_cache_service.PriceCacheService.get_instance",
+        "app.wiring.bootstrap.get_price_cache",
         lambda: fake_price_cache,
     )
     monkeypatch.setattr(
@@ -252,14 +252,14 @@ def test_warm_price_cache_uses_batch_store(monkeypatch):
 
     monkeypatch.setattr(module, "get_redis_client", lambda: None)
     monkeypatch.setattr(
-        module.BenchmarkCacheService,
-        "get_instance",
-        lambda redis_client: benchmark_cache,
+        module,
+        "BenchmarkCacheService",
+        lambda redis_client, session_factory: benchmark_cache,
     )
     monkeypatch.setattr(
-        module.PriceCacheService,
-        "get_instance",
-        lambda redis_client: price_cache,
+        module,
+        "PriceCacheService",
+        lambda redis_client, session_factory: price_cache,
     )
     monkeypatch.setattr(
         "app.services.bulk_data_fetcher.BulkDataFetcher",
@@ -338,7 +338,7 @@ async def test_warm_all_returns_already_running_when_refresh_active(client, monk
         "task_id": "running-123",
         "task_name": "smart_refresh_cache",
     }
-    monkeypatch.setattr(module.DataFetchLock, "get_instance", lambda: mock_lock)
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: mock_lock)
 
     apply_async = MagicMock()
     monkeypatch.setattr(module.smart_refresh_cache, "apply_async", apply_async)
@@ -363,7 +363,7 @@ async def test_warm_all_queues_full_smart_refresh_when_idle(client, monkeypatch)
 
     mock_lock = MagicMock()
     mock_lock.get_current_task.return_value = None
-    monkeypatch.setattr(module.DataFetchLock, "get_instance", lambda: mock_lock)
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: mock_lock)
 
     apply_async = MagicMock(return_value=SimpleNamespace(id="queued-123"))
     monkeypatch.setattr(module.smart_refresh_cache, "apply_async", apply_async)
@@ -389,7 +389,7 @@ async def test_refresh_endpoint_queues_requested_mode(client, monkeypatch):
 
     mock_lock = MagicMock()
     mock_lock.get_current_task.return_value = None
-    monkeypatch.setattr(module.DataFetchLock, "get_instance", lambda: mock_lock)
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: mock_lock)
 
     apply_async = MagicMock(return_value=SimpleNamespace(id="queued-auto"))
     monkeypatch.setattr(module.smart_refresh_cache, "apply_async", apply_async)

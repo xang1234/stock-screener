@@ -111,18 +111,9 @@ class TaskRegistryService:
     - Task status polling via AsyncResult
     """
 
-    _instance = None
-
     def __init__(self):
         """Initialize the service with task imports."""
         self._task_imports = {}
-
-    @classmethod
-    def get_instance(cls):
-        """Get singleton instance."""
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
 
     def _get_task(self, task_name: str):
         """Lazy-load and cache task imports."""

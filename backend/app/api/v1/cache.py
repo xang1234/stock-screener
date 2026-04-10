@@ -32,8 +32,7 @@ from ...tasks.cache_tasks import (
     force_refresh_stale_intraday,
     smart_refresh_cache
 )
-from ...tasks.data_fetch_lock import DataFetchLock
-from ...services.price_cache_service import PriceCacheService
+from ...wiring.bootstrap import get_data_fetch_lock, get_price_cache
 from ...utils.market_hours import format_market_status, is_market_open
 from ...database import SessionLocal
 from ...models.stock import StockFundamental
@@ -43,7 +42,7 @@ router = APIRouter(prefix="/cache", tags=["cache"])
 
 def _get_running_refresh_response() -> SmartRefreshResponse | None:
     """Return the active refresh task when a data-fetch job is already running."""
-    lock = DataFetchLock.get_instance()
+    lock = get_data_fetch_lock()
     running = lock.get_current_task()
     if not running:
         return None
@@ -277,7 +276,7 @@ async def get_staleness_status():
     Use this to determine if force-refresh is needed.
     """
     try:
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
         status = price_cache.get_staleness_status()
         return StalenessStatusResponse(**status)
 
@@ -309,7 +308,7 @@ async def force_refresh_stale_data(
         Task information with task_id for tracking
     """
     try:
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
 
         # Get symbols to refresh
         if request.symbols:
@@ -404,7 +403,7 @@ async def get_cache_health():
         from sqlalchemy import func
         from ...models.stock_universe import StockUniverse
 
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
         health = price_cache.get_cache_health_status()
 
         # Add universe count for frontend display
@@ -472,7 +471,7 @@ async def force_cancel_refresh():
         Status and message
     """
     try:
-        lock = DataFetchLock.get_instance()
+        lock = get_data_fetch_lock()
         running = lock.get_current_task()
 
         if not running:
@@ -482,7 +481,7 @@ async def force_cancel_refresh():
             }
 
         # Check if task is actually stuck
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
         minutes = price_cache._get_minutes_since_heartbeat()
 
         if minutes is not None and minutes < 30:

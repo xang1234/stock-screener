@@ -197,10 +197,10 @@ def weekly_full_refresh(self):
         Dict with refresh results
     """
     import time
-    from ..services.price_cache_service import PriceCacheService
+    from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
 
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
     logger.info("=" * 80)
     logger.info("TASK: Weekly Full Cache Refresh")
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -256,8 +256,8 @@ def weekly_full_refresh(self):
 
         # 4. Batch fetch all symbols (inline, no child task)
         logger.info(f"\n[4/4] Fetching {total} symbols...")
-        from .data_fetch_lock import DataFetchLock
-        lock = DataFetchLock.get_instance()
+        from ..wiring.bootstrap import get_data_fetch_lock
+        lock = get_data_fetch_lock()
         task_id = self.request.id or 'unknown'
 
         batch_size = 100
@@ -860,7 +860,7 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
         Dict with refresh statistics
     """
     import time
-    from ..services.price_cache_service import PriceCacheService
+    from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
 
     logger.info("=" * 80)
@@ -869,7 +869,7 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
 
     try:
@@ -1082,7 +1082,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
         Dict with refresh statistics
     """
     import time
-    from ..services.price_cache_service import PriceCacheService
+    from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..models.stock_universe import StockUniverse
 
@@ -1131,7 +1131,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
             logger.info(f"Skipping smart refresh (auto) - {today} is not a trading day")
             return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat(), 'mode': mode}
 
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
     db = SessionLocal()
 
@@ -1281,8 +1281,8 @@ def smart_refresh_cache(self, mode: str = "auto"):
 
             # Extend lock TTL to prevent expiry during long-running tasks
             task_id = self.request.id or 'unknown'
-            from .data_fetch_lock import DataFetchLock
-            lock = DataFetchLock.get_instance()
+            from ..wiring.bootstrap import get_data_fetch_lock
+            lock = get_data_fetch_lock()
             lock.extend_lock(task_id, 300)
 
             # Rate limit between batches (Redis-backed distributed limiter)
@@ -1482,7 +1482,7 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
         Dict with warming statistics
     """
     from ..models.scan_result import ScanResult
-    from ..services.price_cache_service import PriceCacheService
+    from ..wiring.bootstrap import get_price_cache
 
     logger.info("=" * 80)
     logger.info(f"TASK: Pre-warming Chart Cache for Scan {scan_id}")
@@ -1514,7 +1514,7 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
         logger.info(f"Warming chart cache for {len(symbols)} symbols: {symbols[:5]}...")
 
         # Use PriceCacheService to warm the cache
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
         warmed = 0
         failed = 0
         already_cached = 0

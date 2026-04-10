@@ -85,7 +85,7 @@ finally:
 # Step 4: Try to retrieve from cache
 print("\n4. RETRIEVING FROM CACHE (period=2y)")
 print("-" * 80)
-price_cache = PriceCacheService.get_instance()
+price_cache = get_price_cache()
 
 for symbol in test_symbols:
     data = price_cache.get_historical_data(symbol, period="2y", force_refresh=False)

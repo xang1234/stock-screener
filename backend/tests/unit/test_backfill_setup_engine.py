@@ -231,12 +231,12 @@ class TestRunBackfillDryRun:
 class TestRunBackfillErrorIsolation:
     """Verify that a failed symbol doesn't abort the entire backfill."""
 
-    @patch("scripts.backfill_setup_engine.BenchmarkCacheService")
+    @patch("scripts.backfill_setup_engine.get_benchmark_cache")
     @patch("scripts.backfill_setup_engine._fetch_price_data")
     @patch("scripts.backfill_setup_engine.SetupEngineScanner")
     @patch("scripts.backfill_setup_engine.SessionLocal")
     def test_failed_symbol_continues(
-        self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_bench_cls,
+        self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_get_benchmark_cache,
     ):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
@@ -261,7 +261,7 @@ class TestRunBackfillErrorIsolation:
         # SPY data
         spy_mock = MagicMock()
         spy_mock.get_spy_data.return_value = _make_price_df()
-        mock_bench_cls.get_instance.return_value = spy_mock
+        mock_get_benchmark_cache.return_value = spy_mock
 
         # Scanner returns valid result for MSFT
         scanner_inst = MagicMock()
@@ -351,12 +351,12 @@ class TestRunBackfillIdempotency:
 class TestRunBackfillForceOverwrite:
     """Verify --force reprocesses even schema-matching rows."""
 
-    @patch("scripts.backfill_setup_engine.BenchmarkCacheService")
+    @patch("scripts.backfill_setup_engine.get_benchmark_cache")
     @patch("scripts.backfill_setup_engine._fetch_price_data")
     @patch("scripts.backfill_setup_engine.SetupEngineScanner")
     @patch("scripts.backfill_setup_engine.SessionLocal")
     def test_force_reprocesses_matching_rows(
-        self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_bench_cls,
+        self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_get_benchmark_cache,
     ):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
@@ -376,7 +376,7 @@ class TestRunBackfillForceOverwrite:
         # SPY data
         spy_mock = MagicMock()
         spy_mock.get_spy_data.return_value = _make_price_df()
-        mock_bench_cls.get_instance.return_value = spy_mock
+        mock_get_benchmark_cache.return_value = spy_mock
 
         # Scanner returns updated result
         scanner_inst = MagicMock()

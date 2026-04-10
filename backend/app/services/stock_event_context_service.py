@@ -81,7 +81,9 @@ class StockEventContextService:
         price_cache: PriceCacheService | None = None,
         profile_service: StrategyProfileService | None = None,
     ) -> None:
-        self._price_cache = price_cache or PriceCacheService.get_instance()
+        from app.wiring.bootstrap import get_price_cache
+
+        self._price_cache = price_cache or get_price_cache()
         self._profile_service = profile_service or StrategyProfileService()
 
     def build(

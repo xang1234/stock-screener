@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from app.domain.scanning.ports import StockDataProvider
 from app.scanners.data_preparation import DataPreparationLayer
+from app.wiring.bootstrap import CacheBundle
 
 
 class DataPrepStockDataProvider(StockDataProvider):
     """Delegates to the existing DataPreparationLayer."""
 
     def __init__(
-        self, max_retries: int = 0, retry_base_delay: float = 1.0
+        self,
+        cache_bundle: CacheBundle,
+        max_retries: int = 0,
+        retry_base_delay: float = 1.0,
     ) -> None:
         self._layer = DataPreparationLayer(
+            price_cache=cache_bundle.price,
+            benchmark_cache=cache_bundle.benchmark,
+            fundamentals_cache=cache_bundle.fundamentals,
             max_retries=max_retries,
             retry_base_delay=retry_base_delay,
         )

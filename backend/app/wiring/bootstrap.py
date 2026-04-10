@@ -19,11 +19,22 @@ Example usage in a router::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterator
 
 from app.database import SessionLocal
 from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
 from app.services.job_backend import JobBackend, CeleryJobBackend
+from app.services.redis_pool import get_redis_client
+
+
+@dataclass(frozen=True)
+class CacheBundle:
+    """Shared cache service bundle for explicit dependency injection."""
+
+    price: PriceCacheService
+    fundamentals: FundamentalsCacheService
+    benchmark: BenchmarkCacheService
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -47,6 +58,12 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 _task_dispatcher: TaskDispatcher | None = None
 _job_backend: JobBackend | None = None
 _ui_snapshot_service: UISnapshotService | None = None
+_cache_bundle: CacheBundle | None = None
+_group_rank_service: IBDGroupRankService | None = None
+_task_registry_service: TaskRegistryService | None = None
+_data_fetch_lock: DataFetchLock | None = None
+_groq_key_manager: GroqKeyManager | None = None
+_zai_key_manager: ZAIKeyManager | None = None
 
 
 def get_job_backend() -> JobBackend:
@@ -75,6 +92,97 @@ def get_ui_snapshot_service() -> UISnapshotService:
 
         _ui_snapshot_service = UISnapshotService(session_factory=SessionLocal)
     return _ui_snapshot_service
+
+
+def get_cache_bundle() -> CacheBundle:
+    """Return shared cache services wired with explicit dependencies."""
+    global _cache_bundle
+    if _cache_bundle is None:
+        from app.services.benchmark_cache_service import BenchmarkCacheService
+        from app.services.fundamentals_cache_service import FundamentalsCacheService
+        from app.services.price_cache_service import PriceCacheService
+
+        redis_client = get_redis_client()
+        _cache_bundle = CacheBundle(
+            price=PriceCacheService(
+                redis_client=redis_client,
+                session_factory=SessionLocal,
+            ),
+            fundamentals=FundamentalsCacheService(
+                redis_client=redis_client,
+                session_factory=SessionLocal,
+            ),
+            benchmark=BenchmarkCacheService(
+                redis_client=redis_client,
+                session_factory=SessionLocal,
+            ),
+        )
+    return _cache_bundle
+
+
+def get_price_cache() -> PriceCacheService:
+    return get_cache_bundle().price
+
+
+def get_fundamentals_cache() -> FundamentalsCacheService:
+    return get_cache_bundle().fundamentals
+
+
+def get_benchmark_cache() -> BenchmarkCacheService:
+    return get_cache_bundle().benchmark
+
+
+def get_group_rank_service() -> IBDGroupRankService:
+    """Return shared group-rank service."""
+    global _group_rank_service
+    if _group_rank_service is None:
+        from app.services.ibd_group_rank_service import IBDGroupRankService
+
+        _group_rank_service = IBDGroupRankService(
+            price_cache=get_price_cache(),
+            benchmark_cache=get_benchmark_cache(),
+        )
+    return _group_rank_service
+
+
+def get_task_registry_service() -> TaskRegistryService:
+    """Return shared task-registry service."""
+    global _task_registry_service
+    if _task_registry_service is None:
+        from app.services.task_registry_service import TaskRegistryService
+
+        _task_registry_service = TaskRegistryService()
+    return _task_registry_service
+
+
+def get_data_fetch_lock() -> DataFetchLock:
+    """Return process-wide distributed lock instance."""
+    global _data_fetch_lock
+    if _data_fetch_lock is None:
+        from app.tasks.data_fetch_lock import DataFetchLock
+
+        _data_fetch_lock = DataFetchLock()
+    return _data_fetch_lock
+
+
+def get_groq_key_manager() -> GroqKeyManager:
+    """Return process-wide Groq key manager."""
+    global _groq_key_manager
+    if _groq_key_manager is None:
+        from app.services.llm.groq_key_manager import GroqKeyManager, _get_keys_from_settings
+
+        _groq_key_manager = GroqKeyManager(keys=_get_keys_from_settings() or [])
+    return _groq_key_manager
+
+
+def get_zai_key_manager() -> ZAIKeyManager:
+    """Return process-wide Z.AI key manager."""
+    global _zai_key_manager
+    if _zai_key_manager is None:
+        from app.services.llm.zai_key_manager import ZAIKeyManager, _get_keys_from_settings
+
+        _zai_key_manager = ZAIKeyManager(keys=_get_keys_from_settings() or [])
+    return _zai_key_manager
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────
@@ -190,7 +298,9 @@ def get_stock_data_provider() -> StockDataProvider:
     if _stock_data_provider is None:
         from app.infra.providers.stock_data import DataPrepStockDataProvider
 
-        _stock_data_provider = DataPrepStockDataProvider()
+        _stock_data_provider = DataPrepStockDataProvider(
+            cache_bundle=get_cache_bundle(),
+        )
     return _stock_data_provider
 
 
@@ -211,3 +321,30 @@ def get_scan_orchestrator() -> ScanOrchestrator:
             registry=screener_registry,
         )
     return _scan_orchestrator
+
+
+def _reset_singletons_for_tests() -> None:
+    """Reset bootstrap singletons for test isolation."""
+    global _task_dispatcher
+    global _job_backend
+    global _ui_snapshot_service
+    global _cache_bundle
+    global _group_rank_service
+    global _task_registry_service
+    global _data_fetch_lock
+    global _groq_key_manager
+    global _zai_key_manager
+    global _stock_data_provider
+    global _scan_orchestrator
+
+    _task_dispatcher = None
+    _job_backend = None
+    _ui_snapshot_service = None
+    _cache_bundle = None
+    _group_rank_service = None
+    _task_registry_service = None
+    _data_fetch_lock = None
+    _groq_key_manager = None
+    _zai_key_manager = None
+    _stock_data_provider = None
+    _scan_orchestrator = None

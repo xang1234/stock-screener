@@ -15,7 +15,8 @@ from ...schemas.task import (
     TriggerTaskResponse,
     TaskStatusResponse,
 )
-from ...services.task_registry_service import TaskRegistryService, SCHEDULED_TASKS
+from ...services.task_registry_service import SCHEDULED_TASKS
+from ...wiring.bootstrap import get_task_registry_service
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ async def get_scheduled_tasks(db: Session = Depends(get_db)):
     - Schedule (human-readable)
     - Last execution status and timing
     """
-    service = TaskRegistryService.get_instance()
+    service = get_task_registry_service()
     tasks = service.get_all_scheduled_tasks(db)
 
     return TaskListResponse(
@@ -65,7 +66,7 @@ async def trigger_task(
         )
 
     try:
-        service = TaskRegistryService.get_instance()
+        service = get_task_registry_service()
         result = service.trigger_task(task_name, db)
         return TriggerTaskResponse(**result)
     except Exception as e:
@@ -101,7 +102,7 @@ async def get_task_status(
         )
 
     try:
-        service = TaskRegistryService.get_instance()
+        service = get_task_registry_service()
         result = service.get_task_status(task_name, task_id, db)
         return TaskStatusResponse(**result)
     except Exception as e:

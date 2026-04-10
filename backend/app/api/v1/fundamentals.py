@@ -171,8 +171,8 @@ async def get_fundamentals_cache_statistics():
     try:
         from ...database import SessionLocal
         from ...models.stock_universe import StockUniverse
-        from ...services.fundamentals_cache_service import FundamentalsCacheService
         from ...services.provider_snapshot_service import provider_snapshot_service
+        from ...wiring.bootstrap import get_fundamentals_cache
         from datetime import datetime
 
         db = SessionLocal()
@@ -184,7 +184,7 @@ async def get_fundamentals_cache_statistics():
             ).limit(100).all()
 
             symbols = [s.symbol for s in universe_stocks]
-            cache = FundamentalsCacheService.get_instance()
+            cache = get_fundamentals_cache()
 
             # Collect stats
             total = len(symbols)

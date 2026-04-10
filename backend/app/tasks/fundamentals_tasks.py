@@ -19,7 +19,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..models.stock_universe import StockUniverse
-from ..services.fundamentals_cache_service import FundamentalsCacheService
+from ..wiring.bootstrap import get_fundamentals_cache
 from ..services.hybrid_fundamentals_service import HybridFundamentalsService
 from ..services.provider_snapshot_service import provider_snapshot_service
 from ..services.stock_universe_service import stock_universe_service
@@ -137,7 +137,7 @@ def refresh_all_fundamentals(self):
         logger.info(f"Found {total_stocks} active stocks to refresh")
 
         # Initialize cache service
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
 
         # Statistics
         stats = {
@@ -268,7 +268,7 @@ def refresh_symbol_fundamentals(self, symbol: str):
     logger.info(f"TASK: Refresh Fundamentals for {symbol}")
 
     try:
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
         data = cache.get_fundamentals(symbol.upper(), force_refresh=True)
 
         if data:
@@ -346,7 +346,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
         logger.info(f"Estimated time: {total_stocks * 0.5 / 3600:.1f} hours (at 0.5s per stock)")
 
         # Initialize cache service
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
 
         # Statistics
         stats = {
@@ -481,7 +481,7 @@ def get_cache_stats(symbols: Optional[List[str]] = None):
             ).limit(100).all()  # Check first 100 for quick stats
             symbols = [s.symbol for s in universe_stocks]
 
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
 
         # Collect stats
         total = len(symbols)
@@ -611,7 +611,7 @@ def refresh_all_fundamentals_hybrid(
         )
 
         # Initialize cache for storage
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
 
         def progress_callback(current, total):
             """Log progress updates."""
@@ -757,7 +757,7 @@ def refresh_symbols_hybrid(
 
     try:
         hybrid_service = HybridFundamentalsService(include_finviz=include_finviz)
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
 
         # Fetch fundamentals
         all_data = hybrid_service.fetch_fundamentals_batch(
@@ -898,7 +898,7 @@ def calculate_eps_rating_percentiles(self):
         # Invalidate Redis cache for all updated symbols
         # This forces the next cache read to hit the database and get fresh eps_rating
         logger.info("Invalidating Redis cache for updated symbols...")
-        cache = FundamentalsCacheService.get_instance()
+        cache = get_fundamentals_cache()
         cache_invalidated_count = 0
 
         for i in range(0, len(symbols_to_update), batch_size):

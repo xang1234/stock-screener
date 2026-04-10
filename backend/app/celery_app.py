@@ -89,8 +89,9 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
         return
 
     try:
-        from .tasks.data_fetch_lock import DataFetchLock
-        lock = DataFetchLock.get_instance()
+        from .wiring.bootstrap import get_data_fetch_lock
+
+        lock = get_data_fetch_lock()
         holder = lock.get_current_holder()
         if holder:
             _logger.warning(

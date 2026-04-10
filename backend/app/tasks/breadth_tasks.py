@@ -24,6 +24,7 @@ from ..services.breadth_calculator_service import BreadthCalculatorService
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
+from ..wiring.bootstrap import get_price_cache
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -183,7 +184,7 @@ def calculate_daily_breadth(self, calculation_date: str = None, force_cache_only
 
     try:
         # Initialize breadth calculator service
-        calculator = BreadthCalculatorService(db)
+        calculator = BreadthCalculatorService(db, get_price_cache())
         cache_only = force_cache_only or calc_date == today_et
 
         # Calculate breadth indicators
@@ -382,7 +383,7 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
     start_time = time.time()
 
     try:
-        calculator = BreadthCalculatorService(db)
+        calculator = BreadthCalculatorService(db, get_price_cache())
         result = calculator.backfill_range(start, end, trading_dates=trading_dates)
         total_duration = time.time() - start_time
 
@@ -475,7 +476,7 @@ def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
     }
 
     try:
-        calculator = BreadthCalculatorService(db)
+        calculator = BreadthCalculatorService(db, get_price_cache())
 
         # Step 1: Check if gap-fill is enabled
         if settings.breadth_gapfill_enabled:

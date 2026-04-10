@@ -12,7 +12,7 @@ def _patch_serialized_lock(monkeypatch):
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
     )
 
@@ -27,7 +27,7 @@ def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
-    monkeypatch.setattr(module.FundamentalsCacheService, "get_instance", lambda: (_ for _ in ()).throw(ConnectionError("provider down")))
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: (_ for _ in ()).throw(ConnectionError("provider down")))
 
     retry_calls = []
 
@@ -58,7 +58,7 @@ def test_refresh_all_fundamentals_reraises_soft_time_limit(monkeypatch):
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
-    monkeypatch.setattr(module.FundamentalsCacheService, "get_instance", lambda: (_ for _ in ()).throw(SoftTimeLimitExceeded()))
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: (_ for _ in ()).throw(SoftTimeLimitExceeded()))
 
     with pytest.raises(SoftTimeLimitExceeded):
         module.refresh_all_fundamentals.run()
@@ -79,7 +79,7 @@ def test_refresh_all_fundamentals_reraises_nested_soft_time_limit(monkeypatch):
 
     fake_cache = MagicMock()
     fake_cache.get_fundamentals.side_effect = SoftTimeLimitExceeded()
-    monkeypatch.setattr(module.FundamentalsCacheService, "get_instance", lambda: fake_cache)
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: fake_cache)
 
     with pytest.raises(SoftTimeLimitExceeded):
         module.refresh_all_fundamentals.run()

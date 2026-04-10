@@ -14,7 +14,7 @@ from ...models.user_theme import UserTheme, UserThemeSubgroup, UserThemeStock
 from ...models.stock import StockPrice
 from ...models.stock_universe import StockUniverse
 from ...models.industry import IBDIndustryGroup
-from ...services.price_cache_service import PriceCacheService
+from ...wiring.bootstrap import get_price_cache
 from ...schemas.user_theme import (
     UserThemeCreate, UserThemeUpdate, UserThemeResponse,
     SubgroupCreate, SubgroupUpdate, SubgroupResponse,
@@ -227,7 +227,7 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     }
 
     # Use PriceCacheService for fresh data with automatic updates
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
 
     # Fetch SPY prices for RS calculation (with freshness check)
     spy_df = price_cache.get_historical_data("SPY", period="2y")

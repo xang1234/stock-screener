@@ -31,7 +31,7 @@ class BreadthCalculatorService:
     - 34-day 13% movers (IBD-style)
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, price_cache: PriceCacheService):
         """
         Initialize breadth calculator service.
 
@@ -39,7 +39,7 @@ class BreadthCalculatorService:
             db: SQLAlchemy database session
         """
         self.db = db
-        self.price_cache = PriceCacheService.get_instance()
+        self.price_cache = price_cache
 
     @staticmethod
     def _empty_metrics() -> Dict:

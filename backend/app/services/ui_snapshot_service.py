@@ -55,8 +55,6 @@ from app.schemas.theme import (
     ThemeRankingItem,
     ThemeRankingsResponse,
 )
-from app.services.ibd_group_rank_service import IBDGroupRankService
-from app.services.price_cache_service import PriceCacheService
 from app.services.stock_universe_service import stock_universe_service
 from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
@@ -614,7 +612,9 @@ class UISnapshotService:
         )
 
     def _build_groups_payload(self, db: Session) -> dict[str, Any]:
-        service = IBDGroupRankService.get_instance()
+        from ..wiring.bootstrap import get_group_rank_service
+
+        service = get_group_rank_service()
         rankings = service.get_current_rankings(db, limit=197)
         if not rankings:
             raise GroupsBootstrapUnavailableError("No group rankings are available for bootstrap publication")
@@ -782,7 +782,9 @@ class UISnapshotService:
     def _get_cached_price_history(self, symbol: str, period: str) -> list[dict[str, Any]]:
         import pandas as pd
 
-        cache_service = PriceCacheService.get_instance()
+        from ..wiring.bootstrap import get_price_cache
+
+        cache_service = get_price_cache()
         data = cache_service.get_cached_only(symbol.upper(), period="2y")
         if data is None or len(data) == 0:
             return []
