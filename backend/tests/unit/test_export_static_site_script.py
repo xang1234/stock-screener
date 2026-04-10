@@ -41,6 +41,11 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
+        "_ensure_breadth_history",
+        lambda *, as_of_date: calls.append("breadth_history_refresh") or {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
         "_ensure_group_rank_history",
         lambda *, as_of_date: calls.append("groups_history_refresh") or {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
@@ -70,6 +75,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         "price_refresh",
         "feature_snapshot",
         "breadth_refresh",
+        "breadth_history_refresh",
         "groups_history_refresh",
         "groups_refresh",
         "feature_metadata_refresh",
@@ -124,6 +130,11 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     )
     monkeypatch.setattr(
         export_script,
+        "_ensure_breadth_history",
+        lambda *, as_of_date: calls.append("breadth_history_refresh") or {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
         "_ensure_group_rank_history",
         lambda *, as_of_date: calls.append("groups_history_refresh") or {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
@@ -161,6 +172,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         "price_refresh",
         "feature_snapshot",
         "breadth_refresh",
+        "breadth_history_refresh",
         "groups_history_refresh",
         "groups_refresh",
         "feature_metadata_refresh",
@@ -203,6 +215,11 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_breadth_history",
+        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -269,6 +286,11 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_breadth_history",
+        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,

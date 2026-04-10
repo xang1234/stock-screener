@@ -164,7 +164,13 @@ class BreadthCalculatorService:
 
         return metrics
 
-    def backfill_range(self, start_date: date, end_date: date, trading_dates: Optional[List[date]] = None) -> Dict:
+    def backfill_range(
+        self,
+        start_date: date,
+        end_date: date,
+        trading_dates: Optional[List[date]] = None,
+        cache_only: bool = False,
+    ) -> Dict:
         """
         Calculate and persist breadth for an entire historical range.
 
@@ -217,7 +223,7 @@ class BreadthCalculatorService:
             batch_symbols = [stock.symbol for stock in batch]
             price_data_by_symbol, _ = self._load_price_data_for_batch(
                 batch_symbols=batch_symbols,
-                cache_only=False,
+                cache_only=cache_only,
             )
 
             for stock in batch:

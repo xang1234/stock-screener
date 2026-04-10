@@ -289,3 +289,55 @@ def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
     assert len(records) == 1
     assert records[0].stocks_up_4pct == 0
     assert records[0].stocks_down_4pct == 1
+
+
+def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
+    db = _make_db_session()
+    db.add_all([
+        StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        StockUniverse(symbol="BBB", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+    ])
+    db.commit()
+
+    aaa_df = _make_price_df(date(2026, 3, 20), 100.0)
+    aaa_df.attrs["symbol"] = "AAA"
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only_fresh.return_value = {
+        "AAA": aaa_df,
+        "BBB": None,
+    }
+    price_cache.get_historical_data.side_effect = AssertionError(
+        "cache-only backfill must not fetch per-symbol history"
+    )
+
+    monkeypatch.setattr(
+        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
+        staticmethod(lambda: price_cache),
+    )
+
+    service = BreadthCalculatorService(db)
+    trading_date = date(2026, 3, 12)
+    monkeypatch.setattr(
+        service,
+        "_calculate_stock_metrics_from_prices",
+        lambda prices_df, end_date: {
+            "pct_change_1d": 5.0,
+            "pct_change_21d": 0.0,
+            "pct_change_34d": 0.0,
+            "pct_change_63d": 0.0,
+        },
+    )
+
+    result = service.backfill_range(
+        trading_date,
+        trading_date,
+        trading_dates=[trading_date],
+        cache_only=True,
+    )
+
+    assert result["total_dates"] == 1
+    assert result["processed"] == 1
+    assert result["errors"] == 0
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_historical_data.assert_not_called()

@@ -11,9 +11,11 @@ from sqlalchemy import func
 
 from app.database import SessionLocal
 from app.models.industry import IBDGroupRank
+from app.models.market_breadth import MarketBreadth
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
+from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
 from app.services.ibd_group_rank_service import IBDGroupRankService
@@ -28,6 +30,8 @@ from app.utils.symbol_support import split_supported_price_symbols
 STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
 STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
+STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
+STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 
 
 def _default_output_dir() -> Path:
@@ -216,6 +220,74 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
         return stats
 
 
+def _ensure_breadth_history(
+    *,
+    as_of_date: date,
+    min_trading_days: int = STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS,
+) -> dict[str, Any]:
+    """Backfill recent breadth history so static snapshots include multi-day context."""
+    start_date = as_of_date - timedelta(days=STATIC_BREADTH_HISTORY_LOOKBACK_DAYS)
+    desired_dates = _generate_trading_dates(start_date, as_of_date)
+    target_dates = desired_dates[-min_trading_days:] if min_trading_days > 0 else desired_dates
+    if not target_dates:
+        return {
+            "status": "skipped",
+            "as_of_date": as_of_date.isoformat(),
+            "lookback_start_date": start_date.isoformat(),
+            "target_trading_days": 0,
+            "recomputed_dates": 0,
+        }
+
+    with SessionLocal() as db:
+        existing_dates = {
+            record_date
+            for record_date, in db.query(MarketBreadth.date)
+            .filter(MarketBreadth.date >= target_dates[0], MarketBreadth.date <= as_of_date)
+            .all()
+        }
+        missing_dates = [calc_date for calc_date in target_dates if calc_date not in existing_dates]
+        recompute_dates = sorted(set(missing_dates + [as_of_date]))
+
+        if len(recompute_dates) == 1 and as_of_date in existing_dates:
+            print(
+                f"[static-breadth] Existing breadth history already covers the last "
+                f"{len(target_dates)} trading days through {as_of_date}.",
+                flush=True,
+            )
+            return {
+                "status": "skipped",
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "target_trading_days": len(target_dates),
+                "missing_dates": 0,
+                "recomputed_dates": 0,
+            }
+
+        print(
+            f"[static-breadth] Recomputing {len(recompute_dates)} dates "
+            f"({len(missing_dates)} missing) to ensure {len(target_dates)} trading-day history "
+            f"through {as_of_date}.",
+            flush=True,
+        )
+        stats = BreadthCalculatorService(db).backfill_range(
+            start_date=recompute_dates[0],
+            end_date=recompute_dates[-1],
+            trading_dates=recompute_dates,
+            cache_only=True,
+        )
+        stats.update(
+            {
+                "status": "completed",
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "target_trading_days": len(target_dates),
+                "missing_dates": len(missing_dates),
+                "recomputed_dates": len(recompute_dates),
+            }
+        )
+        return stats
+
+
 def _run_daily_refresh(
     *,
     skip_universe_refresh: bool = False,
@@ -270,6 +342,7 @@ def _run_daily_refresh(
                 calculation_date=as_of_date.isoformat(),
                 force_cache_only=True,
             )
+        results["breadth_history_refresh"] = _ensure_breadth_history(as_of_date=as_of_date)
         results["groups_history_refresh"] = _ensure_group_rank_history(as_of_date=as_of_date)
         with allow_same_day_group_rank_warmup_bypass():
             results["groups_refresh"] = calculate_daily_group_rankings.run(
