@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
+from starlette.responses import Response
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -156,6 +158,35 @@ def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
         logger.error("Background startup task failed", exc_info=exc)
 
 
+async def _drain_startup_background_tasks() -> None:
+    """Cancel/await startup background tasks before tearing down process resources."""
+    pending_tasks = [task for task in _startup_background_tasks if not task.done()]
+    for task in pending_tasks:
+        task.cancel()
+    if pending_tasks:
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+    _startup_background_tasks.clear()
+
+
+def _bind_runtime_to_response_background(
+    response: Response,
+    runtime_services: Any,
+) -> None:
+    """Preserve runtime context for Starlette background callbacks."""
+    background = response.background
+    if background is None:
+        return
+
+    async def _run_background_with_runtime() -> None:
+        token = set_runtime_services(runtime_services)
+        try:
+            await background()
+        finally:
+            reset_runtime_services(token)
+
+    response.background = BackgroundTask(_run_background_with_runtime)
+
+
 def initialize_runtime() -> None:
     """Run the synchronous runtime initialization."""
     logger.info(
@@ -195,12 +226,12 @@ async def lifespan(app: FastAPI):
     finally:
         # Shutdown
         logger.info("Shutting down Stock Scanner API")
+        await _drain_startup_background_tasks()
         clear_runtime_services()
         if hasattr(app.state, "runtime_services"):
             delattr(app.state, "runtime_services")
         if hasattr(app.state, "mcp_server"):
             delattr(app.state, "mcp_server")
-        _startup_background_tasks.clear()
         engine.dispose()
         logger.info("Database connections closed")
 
@@ -233,7 +264,9 @@ async def bind_runtime_services_context(request: Request, call_next):
 
     token = set_runtime_services(runtime_services)
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        _bind_runtime_to_response_background(response, runtime_services)
+        return response
     finally:
         reset_runtime_services(token)
 

@@ -240,6 +240,8 @@ _runtime_services_ctx: ContextVar[RuntimeServices | None] = ContextVar(
     "runtime_services_ctx",
     default=None,
 )
+_process_runtime_services_lock = RLock()
+_process_runtime_services = None  # type: RuntimeServices | None
 
 
 def build_runtime_services(
@@ -252,6 +254,9 @@ def build_runtime_services(
 
 def set_runtime_services(runtime: RuntimeServices) -> Token[RuntimeServices | None]:
     """Bind runtime services to the current context."""
+    global _process_runtime_services
+    with _process_runtime_services_lock:
+        _process_runtime_services = runtime
     return _runtime_services_ctx.set(runtime)
 
 
@@ -265,17 +270,23 @@ def initialize_process_runtime_services(
     session_factory: SessionFactory = SessionLocal,
     force: bool = False,
 ) -> RuntimeServices:
-    """Ensure a runtime services container is bound in the current context."""
-    current = _runtime_services_ctx.get()
-    if current is not None and not force:
-        return current
-    runtime = build_runtime_services(session_factory=session_factory)
+    """Ensure one process-scoped runtime container exists and bind it to context."""
+    global _process_runtime_services
+    with _process_runtime_services_lock:
+        if _process_runtime_services is None or force:
+            _process_runtime_services = build_runtime_services(
+                session_factory=session_factory
+            )
+        runtime = _process_runtime_services
     _runtime_services_ctx.set(runtime)
     return runtime
 
 
 def clear_runtime_services() -> None:
-    """Clear runtime services from the current context."""
+    """Clear runtime services from both process state and current context."""
+    global _process_runtime_services
+    with _process_runtime_services_lock:
+        _process_runtime_services = None
     _runtime_services_ctx.set(None)
 
 
@@ -295,6 +306,9 @@ def _resolve_runtime_services(request: Request | None = None) -> RuntimeServices
     context_runtime = _runtime_services_ctx.get()
     if context_runtime is not None:
         return context_runtime
+    with _process_runtime_services_lock:
+        if _process_runtime_services is not None:
+            return _process_runtime_services
     raise RuntimeError(
         "RuntimeServices are not initialized for this context. "
         "Call initialize_process_runtime_services() at process startup."
