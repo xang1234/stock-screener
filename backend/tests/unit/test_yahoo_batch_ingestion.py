@@ -192,9 +192,7 @@ def test_store_in_database_replaces_latest_day_row(monkeypatch):
 
     import app.services.price_cache_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
-
-    service = PriceCacheService(redis_client=None)
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
     target_day = date(2026, 3, 18)
 
     db = TestingSessionLocal()
@@ -230,7 +228,7 @@ def test_cleanup_old_price_data_skips_inactive_symbols(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
 
     db = TestingSessionLocal()
     cutoff_candidate = date.today() - timedelta(days=366)
@@ -357,7 +355,7 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add(
@@ -394,7 +392,7 @@ def test_track_symbol_failures_commits_success_only_counter_resets(monkeypatch):
 
 
 def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
-    service = PriceCacheService(redis_client=None)
+    service = PriceCacheService(redis_client=None, session_factory=lambda: MagicMock())
     service._redis_client = None
     expected_df = _price_df(date(2026, 3, 18), 123.0)
 
@@ -411,7 +409,7 @@ def test_get_many_without_redis_uses_bulk_database_fallback(monkeypatch):
 
 
 def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
-    service = PriceCacheService(redis_client=None)
+    service = PriceCacheService(redis_client=None, session_factory=lambda: MagicMock())
     fresh_df = _price_df(date(2026, 3, 18), 123.0)
     stale_df = _price_df(date(2026, 3, 17), 111.0)
 
@@ -439,7 +437,7 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
     import app.tasks.cache_tasks as module
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add_all(
@@ -543,7 +541,7 @@ def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
 
     import app.tasks.cache_tasks as module
 
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(module, "get_session_factory", lambda: TestingSessionLocal)
 
     db = TestingSessionLocal()
     db.add_all(

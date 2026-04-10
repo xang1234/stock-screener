@@ -349,17 +349,22 @@ class TestSerializedDataFetchDecorator:
 class TestPrewarmScanCacheImpl:
     """Tests for _prewarm_scan_cache_impl."""
 
-    @patch("app.tasks.cache_tasks.CacheManager")
-    @patch("app.tasks.cache_tasks.SessionLocal")
+    @patch("app.tasks.cache_tasks.get_cache_manager")
+    @patch("app.tasks.cache_tasks.get_session_factory")
     @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
-    def test_impl_with_no_task(self, mock_market, mock_session_local, mock_cache_cls):
+    def test_impl_with_no_task(
+        self,
+        mock_market,
+        mock_get_session_factory,
+        mock_get_cache_manager,
+    ):
         """_prewarm_scan_cache_impl works without Celery task context."""
         from app.tasks.cache_tasks import _prewarm_scan_cache_impl
 
         mock_db = MagicMock()
-        mock_session_local.return_value = mock_db
+        mock_get_session_factory.return_value = MagicMock(return_value=mock_db)
         mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
+        mock_get_cache_manager.return_value = mock_cache
         mock_cache.warm_all_caches.return_value = {
             'warmed': 2, 'failed': 0, 'already_cached': 1
         }
@@ -376,18 +381,20 @@ class TestPrewarmScanCacheImpl:
         assert result['total'] == 3
         assert 'completed_at' in result
         # DB should be opened and closed by impl (owns_db=True)
-        mock_session_local.assert_called_once()
+        mock_get_session_factory.assert_called_once()
+        mock_get_session_factory.return_value.assert_called_once()
+        mock_get_cache_manager.assert_called_once_with(db=mock_db)
         mock_db.close.assert_called_once()
 
-    @patch("app.tasks.cache_tasks.CacheManager")
+    @patch("app.tasks.cache_tasks.get_cache_manager")
     @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
-    def test_impl_with_shared_db(self, mock_market, mock_cache_cls):
+    def test_impl_with_shared_db(self, mock_market, mock_get_cache_manager):
         """_prewarm_scan_cache_impl uses provided db and does not close it."""
         from app.tasks.cache_tasks import _prewarm_scan_cache_impl
 
         mock_db = MagicMock()
         mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
+        mock_get_cache_manager.return_value = mock_cache
         mock_cache.warm_all_caches.return_value = {
             'warmed': 1, 'failed': 0, 'already_cached': 0
         }
@@ -400,6 +407,7 @@ class TestPrewarmScanCacheImpl:
         )
 
         assert result['warmed'] == 1
+        mock_get_cache_manager.assert_called_once_with(db=mock_db)
         # DB should NOT be closed — caller owns it
         mock_db.close.assert_not_called()
 

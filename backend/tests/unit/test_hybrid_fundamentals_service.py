@@ -3,20 +3,18 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-def test_constructor_preserves_injected_finviz_limiter_when_price_cache_missing(
+def test_constructor_preserves_injected_finviz_limiter(
     monkeypatch,
 ):
     import app.services.hybrid_fundamentals_service as module
 
     injected_limiter = object()
-    finviz_service = module.FinvizService(rate_limiter=injected_limiter)
+    finviz_service = MagicMock()
+    finviz_service._rate_limiter = injected_limiter
     fake_price_cache = MagicMock()
 
-    monkeypatch.setattr(module, "PriceCacheService", lambda **kwargs: fake_price_cache)
-    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
-
     service = module.HybridFundamentalsService(
-        price_cache=None,
+        price_cache=fake_price_cache,
         finviz_service=finviz_service,
     )
 
@@ -32,8 +30,13 @@ def test_store_all_caches_uses_injected_session_factory(monkeypatch):
     ownership_service.bulk_update.return_value = 2
     ownership_ctor = MagicMock(return_value=ownership_service)
     monkeypatch.setattr(module, "InstitutionalOwnershipService", ownership_ctor)
+    finviz_service = MagicMock()
+    finviz_service._rate_limiter = MagicMock()
 
-    service = module.HybridFundamentalsService(price_cache=MagicMock())
+    service = module.HybridFundamentalsService(
+        price_cache=MagicMock(),
+        finviz_service=finviz_service,
+    )
     fundamentals_cache = MagicMock()
     fake_db = MagicMock()
     session_factory = MagicMock(return_value=fake_db)
