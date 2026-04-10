@@ -1,7 +1,7 @@
 # Stock Scanner Backend
 
 FastAPI backend implementing CANSLIM, Minervini, IPO, Volume Breakthrough,
-and Custom stock screening with a Feature Store, AI chatbot, and market analysis.
+and Custom stock screening with a Feature Store, Hermes-backed assistant, and market analysis.
 
 > Full project overview and screenshots: [Root README](../README.md)
 > Frontend docs: [Frontend README](../frontend/README.md)
@@ -94,9 +94,7 @@ Interactive docs are disabled by default when server auth is enabled. For truste
 | themes | `themes.py` | Theme discovery and analysis |
 | technical | `technical.py` | Technical indicators |
 | fundamentals | `fundamentals.py` | Fundamental data refresh and stats |
-| chatbot | `chatbot.py` | AI chat sessions and messages |
-| chatbot-folders | `chatbot_folders.py` | Chat folder management |
-| prompt-presets | `prompt_presets.py` | Saved chatbot prompts |
+| assistant | `assistant.py` | Hermes-backed assistant sessions, streaming, and health |
 | user-watchlists | `user_watchlists.py` | Watchlist management |
 | user-themes | `user_themes.py` | User theme management |
 | market-scan | `market_scan.py` | Dashboard market scan lists |
@@ -183,9 +181,9 @@ SPY benchmark refresh uses distributed locking to prevent thundering herd on cac
 
 ### LLM Integration
 
-Supported provider path is Groq for chatbot/research, Minimax for primary theme extraction, Z.AI as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
+Assistant runtime is Hermes-backed via `services/assistant_gateway_service.py` (`HERMES_API_BASE`, optional `HERMES_API_KEY`).
 
-Located in `services/chatbot/` and `services/llm/`.
+For non-assistant workflows, the recommended provider path is Groq for research tasks, Minimax for primary theme extraction, Z.AI as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
 
 ## Database
 
@@ -209,10 +207,10 @@ The supported database is PostgreSQL in both local development and Docker deploy
 `theme_clusters`, `theme_constituents`, `theme_metrics`, `theme_alerts`, `theme_pipeline_runs`, `theme_mentions`, `theme_embeddings`, `theme_merge_suggestions`, `theme_merge_history`, `content_sources`, `content_items`
 
 **User Data:**
-`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_subgroups`, `user_theme_stocks`, `scan_watchlist`, `chatbot_conversations`, `chatbot_messages`, `chatbot_agent_executions`, `chatbot_folders`, `filter_presets`, `prompt_presets`
+`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_subgroups`, `user_theme_stocks`, `scan_watchlist`, `chatbot_conversations`, `chatbot_messages`, `filter_presets`
 
 **System:**
-`app_settings`, `task_execution_history`, `ticker_validation_log`, `document_cache`, `document_chunks`
+`app_settings`, `task_execution_history`, `ticker_validation_log`
 
 Schema changes are versioned under `alembic/` and applied via Alembic. Legacy idempotent scripts remain under `app/db_migrations/` only for one-shot manual reconciliation of older installs.
 
@@ -234,7 +232,7 @@ app/
 │   ├── data_preparation.py  #   Shared data fetching layer
 │   └── ...                  #   5 screener implementations
 ├── services/                # Business logic (70+ service files)
-│   ├── chatbot/             #   LLM agent orchestration
+│   ├── assistant_gateway_service.py # Hermes proxy + transcript orchestration
 │   ├── llm/                 #   Provider adapters
 │   └── ...                  #   Data fetching, caching, analysis
 ├── tasks/                   # Celery background tasks

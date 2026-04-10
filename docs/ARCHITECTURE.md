@@ -7,7 +7,7 @@ Technical overview of StockScreenClaude's system design. For API reference and d
 ```
 ┌─────────────┐     ┌──────────────────────────────┐     ┌─────────────┐
 │   Frontend   │────>│       Backend (FastAPI)       │────>│  PostgreSQL  │
-│  React/Vite  │<────│  /api/v1/*                    │<────│  (or SQLite) │
+│  React/Vite  │<────│  /api/v1/*                    │<────│              │
 │   nginx      │     │                               │     └─────────────┘
 └─────────────┘     │  ┌─────────────────────────┐  │     ┌─────────────┐
                      │  │    Celery Workers        │  │────>│    Redis     │
@@ -64,7 +64,7 @@ All external API tasks route to `data_fetch` to prevent rate limit violations. C
 
 ## Redis Caching Strategy
 
-Three-tier cache: Redis > SQLite/PostgreSQL > External API.
+Three-tier cache: Redis > PostgreSQL > External API.
 
 | DB | Purpose | TTL |
 |----|---------|-----|
@@ -91,8 +91,7 @@ Scan API endpoints read from the latest published run for fast query responses.
 
 | Deployment | Database | Notes |
 |-----------|----------|-------|
-| Local dev / Desktop | SQLite | Absolute path required in `DATABASE_URL` |
-| Docker | PostgreSQL | Configured via `POSTGRES_*` env vars |
+| Local dev / Docker | PostgreSQL | Configured via `DATABASE_URL` / `POSTGRES_*` env vars |
 
 ### Key Tables by Category
 
@@ -112,10 +111,10 @@ Scan API endpoints read from the latest published run for fast query responses.
 `theme_clusters`, `theme_constituents`, `theme_metrics`, `content_sources`, `content_items`
 
 **User Data:**
-`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_stocks`, `filter_presets`, `prompt_presets`
+`user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_stocks`, `filter_presets`
 
-**Chatbot:**
-`chatbot_conversations`, `chatbot_messages`, `chatbot_folders`
+**Assistant:**
+`chatbot_conversations`, `chatbot_messages`
 
 ## Application Pages
 
@@ -126,7 +125,7 @@ Scan API endpoints read from the latest published run for fast query responses.
 | `/breadth` | Market Breadth | StockBee-style breadth indicators and trends |
 | `/groups` | Group Rankings | IBD industry group rankings with movers |
 | `/themes` | Themes | AI-powered theme discovery with trending/emerging detection |
-| `/chatbot` | Chatbot | Multi-provider AI research assistant with web search |
+| `/chatbot` | Assistant | Hermes-backed assistant with internal market tools and web context |
 | `/stock/:symbol` | Stock Detail | Individual stock analysis with charts and fundamentals |
 
 ## API Endpoint Groups
@@ -145,9 +144,7 @@ Interactive Swagger docs available at `http://localhost:8000/docs`.
 - `/api/v1/technical` — Technical indicators
 
 **AI & Research:**
-- `/api/v1/chatbot` — AI chat sessions and messages
-- `/api/v1/chatbot/folders` — Chat folder management
-- `/api/v1/prompt-presets` — Saved chatbot prompts
+- `/api/v1/assistant` — Assistant sessions, streaming, health, and watchlist preview
 
 **User Data:**
 - `/api/v1/user-watchlists` — Watchlist management

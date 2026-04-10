@@ -69,7 +69,6 @@ class AssistantConversationResponse(BaseModel):
     id: int
     conversation_id: str
     title: str | None = None
-    folder_id: int | None = None
     created_at: datetime
     updated_at: datetime
     is_active: bool

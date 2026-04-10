@@ -1,8 +1,6 @@
-"""
-Chatbot models for conversation history and messages.
-Supports multi-agent financial research chatbot.
-"""
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, JSON, ForeignKey, Index
+"""Assistant transcript models for conversation history and messages."""
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -10,7 +8,7 @@ from ..database import Base
 
 
 class Conversation(Base):
-    """A chatbot conversation session."""
+    """An assistant conversation session."""
 
     __tablename__ = "chatbot_conversations"
 
@@ -26,12 +24,8 @@ class Conversation(Base):
     is_active = Column(Boolean, default=True)
     message_count = Column(Integer, default=0)
 
-    # Folder organization
-    folder_id = Column(Integer, ForeignKey("chatbot_folders.id", ondelete="SET NULL"), nullable=True)
-
     # Relationships
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
-    folder = relationship("ChatFolder", back_populates="conversations")
 
 
 class Message(Base):
@@ -74,32 +68,3 @@ class Message(Base):
     __table_args__ = (
         Index("idx_conversation_messages", "conversation_id", "created_at"),
     )
-
-
-class AgentExecution(Base):
-    """Track individual agent executions for debugging/analytics."""
-
-    __tablename__ = "chatbot_agent_executions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    message_id = Column(Integer, ForeignKey("chatbot_messages.id"), nullable=False, index=True)
-
-    # Execution details
-    agent_type = Column(String(50), nullable=False)
-    step_number = Column(Integer)
-
-    # Input/Output
-    input_prompt = Column(Text)
-    raw_output = Column(Text)
-    parsed_output = Column(JSON)
-
-    # Performance
-    tokens_used = Column(Integer)
-    latency_ms = Column(Integer)
-    model_used = Column(String(100))
-
-    # Status
-    status = Column(String(20))  # success, error, timeout
-    error_message = Column(Text)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())

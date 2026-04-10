@@ -6,12 +6,11 @@ StockScreenClaude uses two environment files depending on deployment mode:
 
 ## LLM API Keys
 
-At least one LLM provider key is required for the AI chatbot. Scanning and other features work without API keys.
+At least one LLM provider key is required for assistant and theme extraction workflows. Scanning and other features work without API keys.
 
 | Provider | Env Var | Get Key | Notes |
 |----------|---------|---------|-------|
 | Groq | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) | Fast inference, free tier (recommended to start) |
-| Google Gemini | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Used for theme extraction |
 | Z.AI | `ZAI_API_KEY` | [platform.z.ai](https://platform.z.ai) | GLM models |
 | Minimax | `MINIMAX_API_KEY` | [platform.minimax.io](https://platform.minimax.io) | Default for theme extraction |
 
@@ -19,7 +18,7 @@ Multiple keys for load balancing: `GROQ_API_KEYS=key1,key2,key3` (comma-separate
 
 ## Web Search Keys (Optional)
 
-Enables research mode in the chatbot.
+Enables assistant web research fallback.
 
 | Provider | Env Var | Get Key |
 |----------|---------|---------|
@@ -31,16 +30,6 @@ Enables research mode in the chatbot.
 | Source | Env Var | Get Key | Notes |
 |--------|---------|---------|-------|
 | Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | [alphavantage.co](https://www.alphavantage.co/support/#api-key) | Free tier: 25 req/day |
-
-## LLM Routing (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_DEFAULT_PROVIDER` | `groq` | Primary provider: groq, minimax, zai, gemini |
-| `LLM_CHATBOT_MODEL` | `groq/qwen-qwen3-32b` | Model for chatbot (LiteLLM format: provider/model) |
-| `LLM_RESEARCH_MODEL` | `groq/qwen-qwen3-32b` | Model for research agents |
-| `LLM_FALLBACK_ENABLED` | `true` | Enable automatic fallback to other providers on failure |
-| `LLM_FALLBACK_MODELS` | See `.env.example` | Fallback model chain (comma-separated, tried in order) |
 
 ## Database
 
@@ -118,10 +107,7 @@ Enables research mode in the chatbot.
 | `FUNDAMENTAL_CACHE_TTL` | `604800` | Fundamentals cache TTL (7 days) |
 | `QUARTERLY_CACHE_TTL` | `2592000` | Quarterly data cache TTL (30 days) |
 | `DATA_FETCH_LOCK_WAIT_SECONDS` | `7200` | Max wait for data fetch lock |
-| `RESEARCH_READ_URL_MAX_BYTES` | `5000000` | Max bytes for research URL reads |
 | `SETUP_ENGINE_ENABLED` | `true` | Feature flag for Setup Engine scanner |
-| `SEC_USER_AGENT` | `StockScanner/1.0 (contact@example.com)` | Required for SEC EDGAR API |
-| `INVALID_UNIVERSE_CLEANUP_ENABLED` | `false` | One-time cleanup for legacy scan universes |
 
 ## Scanning
 
