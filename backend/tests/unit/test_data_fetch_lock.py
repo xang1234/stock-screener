@@ -583,3 +583,41 @@ class TestEnsureWorkerRuntimeServices:
 
         assert resolved is runtime
         mock_initialize_runtime.assert_called_once_with(force=True)
+
+    @patch("app.wiring.bootstrap.initialize_process_runtime_services")
+    @patch("app.celery_app.os.getpid")
+    def test_force_rebuild_without_pid_marker(
+        self,
+        mock_getpid,
+        mock_initialize_runtime,
+    ):
+        """Explicit force rebuild must bypass missing runtime PID marker."""
+        from app.celery_app import _ensure_worker_runtime_services, celery_app
+
+        runtime = object()
+        mock_getpid.return_value = 7777
+        mock_initialize_runtime.return_value = runtime
+        if hasattr(celery_app, "runtime_services_pid"):
+            delattr(celery_app, "runtime_services_pid")
+
+        resolved = _ensure_worker_runtime_services(force_rebuild=True)
+
+        assert resolved is runtime
+        mock_initialize_runtime.assert_called_once_with(force=True)
+
+
+class TestWorkerProcessInit:
+    @patch("app.celery_app._ensure_worker_runtime_services")
+    @patch("app.database.engine.dispose")
+    def test_worker_process_init_forces_runtime_rebuild(
+        self,
+        mock_engine_dispose,
+        mock_ensure_runtime,
+    ):
+        """Prefork worker init must force runtime rebuild in child process."""
+        from app.celery_app import _dispose_engine_after_fork
+
+        _dispose_engine_after_fork()
+
+        mock_engine_dispose.assert_called_once()
+        mock_ensure_runtime.assert_called_once_with(force_rebuild=True)

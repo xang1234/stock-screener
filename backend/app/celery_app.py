@@ -67,14 +67,15 @@ _logger = logging.getLogger(__name__)
 _default_scan_profile = get_default_scan_profile()
 
 
-def _ensure_worker_runtime_services():
+def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
     """Create/bind process-scoped runtime services for this Celery worker process."""
     runtime_pid = getattr(celery_app, "runtime_services_pid", None)
     current_pid = os.getpid()
-    force_rebuild = runtime_pid is not None and runtime_pid != current_pid
+    pid_changed = runtime_pid is not None and runtime_pid != current_pid
+    should_force_rebuild = force_rebuild or pid_changed
     from .wiring.bootstrap import initialize_process_runtime_services
 
-    runtime_services = initialize_process_runtime_services(force=force_rebuild)
+    runtime_services = initialize_process_runtime_services(force=should_force_rebuild)
     celery_app.runtime_services = runtime_services
     celery_app.runtime_services_pid = current_pid
     return runtime_services
@@ -134,7 +135,7 @@ def _dispose_engine_after_fork(sender=None, **kwargs):
     try:
         from .database import engine
         engine.dispose()
-        _ensure_worker_runtime_services()
+        _ensure_worker_runtime_services(force_rebuild=True)
         _logger.debug("Disposed inherited DB engine after fork")
     except Exception as e:
         _logger.warning("Failed to dispose engine after fork (non-fatal): %s", e)
