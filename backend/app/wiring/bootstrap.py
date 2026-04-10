@@ -255,6 +255,11 @@ def set_runtime_services(runtime: RuntimeServices) -> Token[RuntimeServices | No
     return _runtime_services_ctx.set(runtime)
 
 
+def reset_runtime_services(token: Token[RuntimeServices | None]) -> None:
+    """Restore runtime services context to a previous token."""
+    _runtime_services_ctx.reset(token)
+
+
 def initialize_process_runtime_services(
     *,
     session_factory: SessionFactory = SessionLocal,

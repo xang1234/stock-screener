@@ -472,4 +472,6 @@ def _build_hybrid_fundamentals_service() -> HybridFundamentalsService:
 
 
 # Global instance with default settings
+# Legacy compatibility singleton for modules/tests that import this symbol.
+# New call sites should prefer explicit HybridFundamentalsService(...) construction.
 hybrid_fundamentals_service = _build_hybrid_fundamentals_service()

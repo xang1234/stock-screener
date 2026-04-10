@@ -4,8 +4,9 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.engine import make_url
@@ -16,9 +17,15 @@ from .database import SessionLocal, engine
 from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
-from .wiring.bootstrap import clear_runtime_services, initialize_process_runtime_services
+from .wiring.bootstrap import (
+    clear_runtime_services,
+    initialize_process_runtime_services,
+    reset_runtime_services,
+    set_runtime_services,
+)
 
 logger = logging.getLogger(__name__)
+_startup_background_tasks: list[asyncio.Task[Any]] = []
 
 
 def _log_critical_error(
@@ -137,6 +144,18 @@ async def trigger_ui_snapshot_rebuild_on_startup():
         )
 
 
+def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except Exception:
+        logger.exception("Background startup task failed while retrieving exception")
+        return
+    if exc is not None:
+        logger.error("Background startup task failed", exc_info=exc)
+
+
 def initialize_runtime() -> None:
     """Run the synchronous runtime initialization."""
     logger.info(
@@ -167,7 +186,9 @@ async def lifespan(app: FastAPI):
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
         await trigger_gapfill_on_startup()
-    asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
+    snapshot_task = asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
+    snapshot_task.add_done_callback(_log_background_task_exception)
+    _startup_background_tasks.append(snapshot_task)
 
     try:
         yield
@@ -179,6 +200,7 @@ async def lifespan(app: FastAPI):
             delattr(app.state, "runtime_services")
         if hasattr(app.state, "mcp_server"):
             delattr(app.state, "mcp_server")
+        _startup_background_tasks.clear()
         engine.dispose()
         logger.info("Database connections closed")
 
@@ -201,6 +223,19 @@ app = FastAPI(
     redoc_url=_redoc_url,
     openapi_url=_openapi_url,
 )
+
+
+@app.middleware("http")
+async def bind_runtime_services_context(request: Request, call_next):
+    runtime_services = getattr(request.app.state, "runtime_services", None)
+    if runtime_services is None:
+        return await call_next(request)
+
+    token = set_runtime_services(runtime_services)
+    try:
+        return await call_next(request)
+    finally:
+        reset_runtime_services(token)
 
 # Configure CORS
 app.add_middleware(

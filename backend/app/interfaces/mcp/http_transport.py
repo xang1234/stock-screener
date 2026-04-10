@@ -7,7 +7,7 @@ same ``MarketCopilotMcpServer`` that powers the stdio transport.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.database import SessionLocal
+from app.wiring.bootstrap import SessionFactory
 
 from .market_copilot import MarketCopilotService
 from .server import MarketCopilotMcpServer
@@ -22,8 +23,6 @@ from .server import MarketCopilotMcpServer
 logger = logging.getLogger(__name__)
 
 mcp_router = APIRouter(tags=["mcp"])
-
-SessionFactory = Callable[..., Any]
 
 
 def create_mcp_http_server(

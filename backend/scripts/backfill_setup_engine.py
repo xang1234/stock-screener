@@ -513,8 +513,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    initialize_process_runtime_services(session_factory=SessionLocal)
     args = build_parser().parse_args()
+    initialize_process_runtime_services(session_factory=SessionLocal)
     run_backfill(args)
 
 

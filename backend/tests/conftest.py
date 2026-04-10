@@ -28,8 +28,10 @@ def runtime_services_context():
     try:
         yield runtime_services
     finally:
-        runtime_services.reset_for_tests()
-        clear_runtime_services()
+        try:
+            runtime_services.reset_for_tests()
+        finally:
+            clear_runtime_services()
 
 
 @pytest.fixture(scope="function")
