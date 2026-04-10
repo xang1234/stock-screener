@@ -24,7 +24,7 @@ def runtime_services_context():
     )
 
     runtime_services = build_runtime_services(session_factory=SessionLocal)
-    set_runtime_services(runtime_services)
+    set_runtime_services(runtime_services, bind_process=True)
     try:
         yield runtime_services
     finally:

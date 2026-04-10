@@ -510,6 +510,19 @@ class TestClearStaleLockOnStartup:
             _clear_stale_data_fetch_lock(sender=sender)
             mock_gi.assert_not_called()
 
+    @patch("app.celery_app._ensure_worker_runtime_services")
+    def test_general_worker_initializes_runtime_services(self, mock_ensure_runtime):
+        """General worker still initializes runtime services on worker_ready."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        sender = MagicMock()
+        sender.hostname = 'general@abc123'
+
+        with patch("app.wiring.bootstrap.get_data_fetch_lock") as mock_gi:
+            _clear_stale_data_fetch_lock(sender=sender)
+            mock_ensure_runtime.assert_called_once()
+            mock_gi.assert_not_called()
+
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_handles_redis_connection_error(self, mock_get_instance):
         """Signal handler catches exceptions and doesn't crash the worker."""

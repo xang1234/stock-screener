@@ -100,14 +100,15 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
     leaving the Redis lock key with its 2-hour TTL. This blocks all
     new data_fetch tasks until the TTL expires.
     """
-    # Only clear for the datafetch worker — the general worker must
-    # NOT clear a lock that the datafetch worker may legitimately hold
-    hostname = getattr(sender, 'hostname', '') or ''
-    if not hostname.startswith('datafetch'):
-        return
-
     try:
         _ensure_worker_runtime_services()
+        # Only clear for the datafetch worker — the general worker must
+        # NOT clear a lock that the datafetch worker may legitimately hold.
+        # Runtime services are still initialized for all worker pools.
+        hostname = getattr(sender, 'hostname', '') or ''
+        if not hostname.startswith('datafetch'):
+            return
+
         from .wiring.bootstrap import get_data_fetch_lock
 
         lock = get_data_fetch_lock()
