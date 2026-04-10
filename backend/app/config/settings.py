@@ -47,15 +47,8 @@ class Settings(BaseSettings):
     xui_bridge_max_cookies: int = 300
     twitter_request_delay: float = 5.0  # Delay between twitter source fetches (seconds)
     benzinga_api_key: str = ""  # For Benzinga news API (optional)
-    tavily_api_key: str = ""  # For web search in chatbot (primary)
-    serper_api_key: str = ""  # For web search in chatbot (fallback)
-
-    # LLM Routing Configuration
-    llm_default_provider: str = "groq"  # Supported providers: groq, minimax, zai
-    llm_chatbot_model: str = "groq/qwen/qwen3-32b"  # Model for chatbot (LiteLLM format)
-    llm_research_model: str = "groq/qwen/qwen3-32b"  # Model for research agents
-    llm_fallback_enabled: bool = True  # Enable automatic fallback to other providers
-    llm_fallback_models: str = "groq/llama-3.3-70b-versatile"
+    tavily_api_key: str = ""  # For web search (primary)
+    serper_api_key: str = ""  # For web search (fallback)
 
     # Runtime profile
     feature_themes: bool = True
@@ -169,21 +162,6 @@ class Settings(BaseSettings):
     data_fetch_lock_timeout: int = 7200  # 2 hours max lock time for long-running tasks
     data_fetch_startup_delay: int = 5  # Seconds to wait before startup task
 
-    # SEC EDGAR Configuration
-    sec_user_agent: str = "StockScanner/1.0 (contact@example.com)"
-    sec_rate_limit_delay: float = 0.15  # 150ms between requests (SEC allows 10 req/sec)
-    sec_cache_ttl_days: int = 30  # Cache SEC filings for 30 days
-
-    # PDF Processing Configuration
-    pdf_max_size_mb: int = 50  # Maximum PDF file size in MB
-    pdf_request_timeout: int = 60  # Timeout for PDF download in seconds
-
-    # Document Context Window Configuration
-    doc_context_window_limit: int = 28000  # Token limit before chunking required
-    doc_chunk_target_tokens: int = 2000  # Target tokens per chunk
-    doc_chunk_max_tokens: int = 4000  # Maximum tokens per chunk
-    doc_chunk_overlap_tokens: int = 200  # Overlap between chunks
-
     # Redis Bulk Pipeline Configuration (for large multi-symbol fetches)
     redis_bulk_socket_timeout: int = 30  # Timeout for bulk pipeline operations (seconds)
     redis_pipeline_chunk_size: int = 500  # Symbols per Redis pipeline chunk
@@ -198,17 +176,6 @@ class Settings(BaseSettings):
     provider_snapshot_on_demand_fallback_enabled: bool = True
     provider_snapshot_min_active_coverage: float = 0.98
     provider_snapshot_max_missing_active_symbols: int = 50
-
-    # Deep Research Configuration
-    deep_research_enabled: bool = True  # Enable deep research mode in chatbot
-    deep_research_max_concurrent_units: int = 3  # Max parallel research units
-    deep_research_max_iterations: int = 5  # Max LLM iterations per unit
-    deep_research_max_tool_calls_per_unit: int = 10  # Max tool calls per unit
-    deep_research_model: str = "qwen/qwen3-32b"  # Model for research agents
-    deep_research_notes_max_tokens: int = 2000  # Max tokens for compression
-    deep_research_report_max_tokens: int = 16000  # Max tokens for final report
-    read_url_timeout: int = 30  # Timeout for URL fetching
-    read_url_max_chars: int = 100000  # Max characters to extract from URLs
 
     # Hermes / MCP integration
     hermes_api_base: str = "http://127.0.0.1:8642/v1"
