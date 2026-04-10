@@ -634,6 +634,7 @@ def refresh_all_fundamentals_hybrid(
         storage_stats = hybrid_service.store_all_caches(
             all_data,
             cache,
+            session_factory=SessionLocal,
             include_quarterly=True
         )
 
@@ -770,6 +771,7 @@ def refresh_symbols_hybrid(
         storage_stats = hybrid_service.store_all_caches(
             all_data,
             cache,
+            session_factory=SessionLocal,
             include_quarterly=True
         )
 

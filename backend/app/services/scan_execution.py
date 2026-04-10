@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import SessionLocal, is_corruption_error, safe_rollback
+from app.database import is_corruption_error, safe_rollback
 from app.models.scan_result import Scan, ScanResult
 
 logger = logging.getLogger(__name__)
+SessionFactory = Callable[[], Session]
 
 
 def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> None:
@@ -215,9 +217,9 @@ def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:
         logger.debug("SE distribution telemetry skipped: %s", exc)
 
 
-def run_post_scan_pipeline(scan_id: str) -> None:
+def run_post_scan_pipeline(scan_id: str, *, session_factory: SessionFactory) -> None:
     """Post-scan pipeline used by both Celery and local desktop runs."""
-    db = SessionLocal()
+    db = session_factory()
     try:
         compute_industry_peer_metrics(db, scan_id)
         _log_setup_engine_distribution(db, scan_id)
@@ -236,7 +238,14 @@ def run_post_scan_pipeline(scan_id: str) -> None:
         db.close()
 
 
-def run_bulk_scan_via_use_case(task_instance, scan_id: str, symbol_list: list[str], criteria: dict | None):
+def run_bulk_scan_via_use_case(
+    task_instance,
+    scan_id: str,
+    symbol_list: list[str],
+    criteria: dict | None,
+    *,
+    session_factory: SessionFactory,
+):
     """Run a scan via the use-case path without importing Celery task modules."""
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.cancellation import DbCancellationToken
@@ -245,10 +254,10 @@ def run_bulk_scan_via_use_case(task_instance, scan_id: str, symbol_list: list[st
     from app.wiring.bootstrap import get_run_bulk_scan_use_case
 
     progress = CeleryProgressSink(task_instance)
-    cancel = DbCancellationToken(SessionLocal, scan_id)
+    cancel = DbCancellationToken(session_factory, scan_id)
 
     try:
-        uow = SqlUnitOfWork(SessionLocal)
+        uow = SqlUnitOfWork(session_factory)
         use_case = get_run_bulk_scan_use_case()
         cmd = RunBulkScanCommand(
             scan_id=scan_id,
@@ -265,7 +274,7 @@ def run_bulk_scan_via_use_case(task_instance, scan_id: str, symbol_list: list[st
         cancel.close()
 
     if result.status == "completed":
-        run_post_scan_pipeline(scan_id)
+        run_post_scan_pipeline(scan_id, session_factory=session_factory)
 
     return {
         "scan_id": result.scan_id,

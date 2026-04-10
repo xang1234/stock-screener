@@ -85,3 +85,82 @@ def test_refresh_all_fundamentals_reraises_nested_soft_time_limit(monkeypatch):
         module.refresh_all_fundamentals.run()
 
     fake_db.rollback.assert_called_once()
+
+
+def test_refresh_all_fundamentals_hybrid_passes_session_factory(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_db.query.return_value = fake_query
+
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    captured: dict = {}
+
+    class _HybridStub:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        @staticmethod
+        def fetch_fundamentals_batch(*args, **kwargs):
+            return {"AAPL": {"symbol": "AAPL"}}
+
+        @staticmethod
+        def store_all_caches(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return {
+                "fundamentals_stored": 1,
+                "quarterly_stored": 1,
+                "failed": 0,
+            }
+
+    monkeypatch.setattr(module, "HybridFundamentalsService", _HybridStub)
+
+    result = module.refresh_all_fundamentals_hybrid.run(include_finviz=False)
+
+    assert result["updated"] == 1
+    assert captured["kwargs"]["session_factory"] is module.SessionLocal
+
+
+def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
+
+    captured: dict = {}
+
+    class _HybridStub:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        @staticmethod
+        def fetch_fundamentals_batch(*args, **kwargs):
+            return {"AAPL": {"symbol": "AAPL"}}
+
+        @staticmethod
+        def store_all_caches(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return {
+                "fundamentals_stored": 1,
+                "quarterly_stored": 1,
+                "failed": 0,
+            }
+
+    monkeypatch.setattr(module, "HybridFundamentalsService", _HybridStub)
+
+    result = module.refresh_symbols_hybrid.run(symbols=["AAPL"], include_finviz=False)
+
+    assert result["updated"] == 1
+    assert captured["kwargs"]["session_factory"] is module.SessionLocal

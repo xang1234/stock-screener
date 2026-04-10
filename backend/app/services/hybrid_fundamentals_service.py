@@ -9,17 +9,19 @@ Orchestrates multiple data sources for optimal performance:
 Target: Reduce full refresh from ~4 hours to 1-2 hours.
 """
 import logging
+from collections.abc import Callable
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+
+from sqlalchemy.orm import Session
 
 from .bulk_data_fetcher import BulkDataFetcher
 from .technical_calculator_service import TechnicalCalculatorService
 from .finviz_service import FinvizService
 from .price_cache_service import PriceCacheService
 from .institutional_ownership_service import InstitutionalOwnershipService
-from ..database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -389,7 +391,10 @@ class HybridFundamentalsService:
     def store_all_caches(
         self,
         results: Dict[str, Dict],
-        fundamentals_cache
+        fundamentals_cache,
+        *,
+        session_factory: Callable[[], Session],
+        include_quarterly: bool = True,  # kept for compatibility with existing task call sites
     ) -> Dict[str, int]:
         """
         Store hybrid results in fundamentals cache.
@@ -409,6 +414,7 @@ class HybridFundamentalsService:
         """
         stats = {
             'fundamentals_stored': 0,
+            'quarterly_stored': 0,
             'ownership_updated': 0,
             'failed': 0
         }
@@ -422,14 +428,17 @@ class HybridFundamentalsService:
                 # Store in fundamentals cache (includes quarterly growth fields)
                 fundamentals_cache.store(symbol, data, data_source='hybrid')
                 stats['fundamentals_stored'] += 1
+                if include_quarterly:
+                    stats['quarterly_stored'] += 1
 
             except Exception as e:
                 logger.warning(f"Error storing {symbol}: {e}")
                 stats['failed'] += 1
 
         # Bulk update institutional ownership history (SCD2)
+        db = None
         try:
-            db = SessionLocal()
+            db = session_factory()
             ownership_service = InstitutionalOwnershipService(db)
 
             # Convert results dict to list for bulk_update
@@ -449,7 +458,8 @@ class HybridFundamentalsService:
         except Exception as e:
             logger.warning(f"Error in bulk ownership update: {e}")
         finally:
-            db.close()
+            if db is not None:
+                db.close()
 
         return stats
 
