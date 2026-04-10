@@ -19,11 +19,13 @@ def _args(**overrides) -> argparse.Namespace:
 
 @patch("scripts.backfill_theme_aliases._save_json")
 @patch("scripts.backfill_theme_aliases.ThemeAliasBackfillService")
-@patch("scripts.backfill_theme_aliases.SessionLocal")
+@patch("scripts.backfill_theme_aliases.get_session_factory")
+@patch("scripts.backfill_theme_aliases.initialize_process_runtime_services")
 @patch("scripts.backfill_theme_aliases._build_parser")
 def test_main_writes_report_for_dry_run(
     mock_build_parser,
-    mock_session_local,
+    mock_initialize_runtime,
+    mock_get_session_factory,
     mock_service_cls,
     mock_save_json,
 ):
@@ -32,7 +34,8 @@ def test_main_writes_report_for_dry_run(
     mock_build_parser.return_value = parser
 
     db = MagicMock()
-    mock_session_local.return_value = db
+    session_factory = MagicMock(return_value=db)
+    mock_get_session_factory.return_value = session_factory
 
     service = MagicMock()
     service.run.return_value = {
@@ -51,6 +54,9 @@ def test_main_writes_report_for_dry_run(
 
     script.main()
 
+    mock_initialize_runtime.assert_called_once_with()
+    mock_get_session_factory.assert_called_once_with()
+    session_factory.assert_called_once_with()
     mock_save_json.assert_called_once()
     saved_path = mock_save_json.call_args.args[0]
     assert str(saved_path) == "/tmp/theme_alias_backfill_report.json"
@@ -59,11 +65,13 @@ def test_main_writes_report_for_dry_run(
 
 @patch("scripts.backfill_theme_aliases._save_json")
 @patch("scripts.backfill_theme_aliases.ThemeAliasBackfillService")
-@patch("scripts.backfill_theme_aliases.SessionLocal")
+@patch("scripts.backfill_theme_aliases.get_session_factory")
+@patch("scripts.backfill_theme_aliases.initialize_process_runtime_services")
 @patch("scripts.backfill_theme_aliases._build_parser")
 def test_main_calls_service_with_mention_limit(
     mock_build_parser,
-    mock_session_local,
+    mock_initialize_runtime,
+    mock_get_session_factory,
     mock_service_cls,
     mock_save_json,
 ):
@@ -72,7 +80,8 @@ def test_main_calls_service_with_mention_limit(
     mock_build_parser.return_value = parser
 
     db = MagicMock()
-    mock_session_local.return_value = db
+    session_factory = MagicMock(return_value=db)
+    mock_get_session_factory.return_value = session_factory
 
     service = MagicMock()
     service.run.return_value = {
@@ -91,5 +100,8 @@ def test_main_calls_service_with_mention_limit(
 
     script.main()
 
+    mock_initialize_runtime.assert_called_once_with()
+    mock_get_session_factory.assert_called_once_with()
+    session_factory.assert_called_once_with()
     service.run.assert_called_once_with(dry_run=False, mention_limit=100)
     mock_save_json.assert_called_once()

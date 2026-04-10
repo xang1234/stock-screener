@@ -25,8 +25,8 @@ sys.path.insert(0, str(backend_dir))
 
 import logging
 from datetime import datetime, timedelta
-from app.database import SessionLocal
 from app.models.scan_result import Scan, ScanResult
+from app.wiring.bootstrap import get_session_factory, initialize_process_runtime_services
 from sqlalchemy import func, text
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,7 +74,8 @@ def main(skip_confirmation: bool = False, do_vacuum: bool = False):
     print("ORPHANED SCAN DATA CLEANUP")
     print("=" * 80)
 
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
 
     try:
         # Show current state

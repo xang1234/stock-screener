@@ -112,6 +112,9 @@ class RuntimeServices:
         self._stock_data_provider: DataPrepStockDataProvider | None = None
         self._scan_orchestrator: ScanOrchestrator | None = None
 
+    def session_factory(self) -> SessionFactory:
+        return self._session_factory
+
     def job_backend(self) -> JobBackend:
         if self._job_backend is None:
             with self._init_lock:
@@ -496,6 +499,11 @@ def get_task_dispatcher() -> TaskDispatcher:
 def get_ui_snapshot_service() -> UISnapshotService:
     """Return the process-scoped UI bootstrap snapshot publisher."""
     return _resolve_runtime_services().ui_snapshot_service()
+
+
+def get_session_factory() -> SessionFactory:
+    """Return runtime-bound SQLAlchemy session factory."""
+    return _resolve_runtime_services().session_factory()
 
 
 def get_cache_bundle() -> CacheBundle:
