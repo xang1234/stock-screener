@@ -2,7 +2,7 @@
 Unified data fetching service that coordinates between yfinance and Alpha Vantage.
 Handles caching and rate limiting.
 """
-from typing import Optional, Dict, Any
+from typing import TYPE_CHECKING, Optional, Dict, Any
 from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from ..utils.rate_limiter import alphavantage_limiter, alphavantage_quota
 from ..models.stock import StockFundamental, StockTechnical, StockIndustry, StockPrice
 from ..config import settings
-from ..wiring.bootstrap import get_alphavantage_service, get_yfinance_service
+
+if TYPE_CHECKING:
+    from .alphavantage_service import AlphaVantageService
+    from .yfinance_service import YFinanceService
 
 logger = logging.getLogger(__name__)
 
@@ -21,16 +24,40 @@ class DataFetcher:
     Implements caching and respects rate limits.
     """
 
-    def __init__(self, db: Optional[Session] = None):
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        *,
+        yfinance_service: "YFinanceService | None" = None,
+        alphavantage_service: "AlphaVantageService | None" = None,
+    ):
         """
         Initialize data fetcher.
 
         Args:
             db: Database session for caching (optional)
+            yfinance_service: Optional injected yfinance service dependency.
+            alphavantage_service: Optional injected Alpha Vantage dependency.
         """
         self.db = db
-        self._yfinance_service = get_yfinance_service()
-        self._alphavantage_service = get_alphavantage_service()
+        self._yfinance_service = yfinance_service or self._build_default_yfinance_service()
+        self._alphavantage_service = (
+            alphavantage_service or self._build_default_alphavantage_service()
+        )
+
+    @staticmethod
+    def _build_default_yfinance_service() -> "YFinanceService":
+        # Standalone construction keeps DataFetcher usable in ad-hoc scripts/tests
+        # without requiring runtime container initialization.
+        from .yfinance_service import YFinanceService
+
+        return YFinanceService()
+
+    @staticmethod
+    def _build_default_alphavantage_service() -> "AlphaVantageService":
+        from .alphavantage_service import AlphaVantageService
+
+        return AlphaVantageService()
 
     def get_stock_fundamentals(
         self,
