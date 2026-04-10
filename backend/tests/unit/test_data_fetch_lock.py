@@ -535,3 +535,51 @@ class TestClearStaleLockOnStartup:
 
         # Should not raise — the handler catches all exceptions
         _clear_stale_data_fetch_lock(sender=sender)
+
+
+class TestEnsureWorkerRuntimeServices:
+    @patch("app.wiring.bootstrap.initialize_process_runtime_services")
+    @patch("app.celery_app.os.getpid")
+    def test_reuses_existing_process_runtime_when_pid_unchanged(
+        self,
+        mock_getpid,
+        mock_initialize_runtime,
+    ):
+        """Do not replace process runtime when worker PID has not changed."""
+        from app.celery_app import _ensure_worker_runtime_services, celery_app
+
+        runtime = object()
+        mock_getpid.return_value = 1234
+        mock_initialize_runtime.return_value = runtime
+
+        if hasattr(celery_app, "runtime_services"):
+            delattr(celery_app, "runtime_services")
+        if hasattr(celery_app, "runtime_services_pid"):
+            delattr(celery_app, "runtime_services_pid")
+
+        resolved = _ensure_worker_runtime_services()
+
+        assert resolved is runtime
+        assert getattr(celery_app, "runtime_services") is runtime
+        assert getattr(celery_app, "runtime_services_pid") == 1234
+        mock_initialize_runtime.assert_called_once_with(force=False)
+
+    @patch("app.wiring.bootstrap.initialize_process_runtime_services")
+    @patch("app.celery_app.os.getpid")
+    def test_rebuilds_process_runtime_after_pid_change(
+        self,
+        mock_getpid,
+        mock_initialize_runtime,
+    ):
+        """Prefork child process must force runtime rebuild after fork."""
+        from app.celery_app import _ensure_worker_runtime_services, celery_app
+
+        runtime = object()
+        mock_getpid.return_value = 4321
+        mock_initialize_runtime.return_value = runtime
+        celery_app.runtime_services_pid = 1111
+
+        resolved = _ensure_worker_runtime_services()
+
+        assert resolved is runtime
+        mock_initialize_runtime.assert_called_once_with(force=True)

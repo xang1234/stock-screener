@@ -71,17 +71,12 @@ def _ensure_worker_runtime_services():
     """Create/bind process-scoped runtime services for this Celery worker process."""
     runtime_pid = getattr(celery_app, "runtime_services_pid", None)
     current_pid = os.getpid()
-    runtime_services = getattr(celery_app, "runtime_services", None)
-    if runtime_services is None or runtime_pid != current_pid:
-        from .wiring.bootstrap import build_runtime_services
+    force_rebuild = runtime_pid is not None and runtime_pid != current_pid
+    from .wiring.bootstrap import initialize_process_runtime_services
 
-        runtime_services = build_runtime_services()
-        celery_app.runtime_services = runtime_services
-        celery_app.runtime_services_pid = current_pid
-
-    from .wiring.bootstrap import set_runtime_services
-
-    set_runtime_services(runtime_services, bind_process=True)
+    runtime_services = initialize_process_runtime_services(force=force_rebuild)
+    celery_app.runtime_services = runtime_services
+    celery_app.runtime_services_pid = current_pid
     return runtime_services
 
 
