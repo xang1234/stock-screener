@@ -3,6 +3,28 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
+def test_constructor_preserves_injected_finviz_limiter_when_price_cache_missing(
+    monkeypatch,
+):
+    import app.services.hybrid_fundamentals_service as module
+
+    injected_limiter = object()
+    finviz_service = module.FinvizService(rate_limiter=injected_limiter)
+    fake_price_cache = MagicMock()
+
+    monkeypatch.setattr(module, "PriceCacheService", lambda **kwargs: fake_price_cache)
+    monkeypatch.setattr("app.services.redis_pool.get_redis_client", lambda: None)
+
+    service = module.HybridFundamentalsService(
+        price_cache=None,
+        finviz_service=finviz_service,
+    )
+
+    assert service.price_cache is fake_price_cache
+    assert service._finviz_rate_limiter is injected_limiter
+    assert service.bulk_fetcher._rate_limiter is injected_limiter
+
+
 def test_store_all_caches_uses_injected_session_factory(monkeypatch):
     import app.services.hybrid_fundamentals_service as module
 
