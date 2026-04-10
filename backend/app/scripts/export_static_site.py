@@ -18,13 +18,12 @@ from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
-from app.services.ibd_group_rank_service import IBDGroupRankService
-from app.services.price_cache_service import PriceCacheService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.services.provider_snapshot_service import provider_snapshot_service
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.utils.market_hours import get_last_market_close, is_trading_day
 from app.utils.symbol_support import split_supported_price_symbols
+from app.wiring.bootstrap import get_group_rank_service, get_price_cache
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
@@ -60,7 +59,7 @@ def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
         active_symbols = [
             symbol
             for symbol, in db.query(StockUniverse.symbol)
-            .filter(StockUniverse.is_active == True)
+            .filter(StockUniverse.is_active.is_(True))
             .order_by(StockUniverse.market_cap.desc().nullslast(), StockUniverse.symbol.asc())
             .all()
         ]

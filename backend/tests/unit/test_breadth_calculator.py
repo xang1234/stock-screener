@@ -16,6 +16,7 @@ from app.database import SessionLocal
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
+from app.wiring.bootstrap import get_price_cache
 
 def test_breadth_calculation():
     """Run a test breadth calculation."""
@@ -39,7 +40,7 @@ def test_breadth_calculation():
             return
 
         # Initialize service
-        calculator = BreadthCalculatorService(db)
+        calculator = BreadthCalculatorService(db, get_price_cache())
 
         # Calculate breadth for today
         print(f"\n🔄 Calculating breadth for today ({datetime.now().date()})...")

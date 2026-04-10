@@ -5,9 +5,9 @@ This will help identify where the 19-day limitation is coming from.
 """
 import logging
 from app.services.cache_manager import CacheManager
-from app.services.price_cache_service import PriceCacheService
 from app.database import SessionLocal
 from app.models.stock import StockPrice
+from app.wiring.bootstrap import get_price_cache
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.INFO)
