@@ -210,7 +210,7 @@ The supported database is PostgreSQL in both local development and Docker deploy
 `user_watchlists`, `watchlist_items`, `user_themes`, `user_theme_subgroups`, `user_theme_stocks`, `scan_watchlist`, `chatbot_conversations`, `chatbot_messages`, `filter_presets`
 
 **System:**
-`app_settings`, `task_execution_history`, `ticker_validation_log`, `document_cache`, `document_chunks`
+`app_settings`, `task_execution_history`, `ticker_validation_log`
 
 Schema changes are versioned under `alembic/` and applied via Alembic. Legacy idempotent scripts remain under `app/db_migrations/` only for one-shot manual reconciliation of older installs.
 

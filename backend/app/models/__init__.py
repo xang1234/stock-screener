@@ -25,15 +25,12 @@ from .theme import (
     ThemeRelationship,
 )
 from .task_execution import TaskExecutionHistory
-from .chatbot import Conversation, Message, AgentExecution
-from .chatbot_folder import ChatFolder
+from .chatbot import Conversation, Message
 from .market_scan import ScanWatchlist
 from .user_theme import UserTheme, UserThemeSubgroup, UserThemeStock
 from .user_watchlist import UserWatchlist, WatchlistItem
 from .ticker_validation import TickerValidationLog
 from .filter_preset import FilterPreset
-from .prompt_preset import PromptPreset
-from .document_cache import DocumentCache, DocumentChunk
 from .institutional_ownership import InstitutionalOwnershipHistory
 from .app_settings import AppSetting
 from .ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
@@ -80,11 +77,9 @@ __all__ = [
     "ThemeRelationship",
     # Task execution
     "TaskExecutionHistory",
-    # Chatbot
+    # Assistant transcripts
     "Conversation",
     "Message",
-    "AgentExecution",
-    "ChatFolder",
     # Market Scan
     "ScanWatchlist",
     # User Themes
@@ -98,11 +93,6 @@ __all__ = [
     "TickerValidationLog",
     # Filter Presets
     "FilterPreset",
-    # Prompt Presets
-    "PromptPreset",
-    # Document Cache
-    "DocumentCache",
-    "DocumentChunk",
     # Institutional Ownership History
     "InstitutionalOwnershipHistory",
     # App Settings
