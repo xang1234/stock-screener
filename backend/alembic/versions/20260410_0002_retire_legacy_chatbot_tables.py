@@ -13,12 +13,24 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_column("chatbot_conversations", "folder_id")
-    op.drop_table("chatbot_agent_executions")
-    op.drop_table("prompt_presets")
-    op.drop_table("document_chunks")
-    op.drop_table("document_cache")
-    op.drop_table("chatbot_folders")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+
+    if "chatbot_conversations" in existing_tables:
+        existing_columns = {column["name"] for column in inspector.get_columns("chatbot_conversations")}
+        if "folder_id" in existing_columns:
+            op.drop_column("chatbot_conversations", "folder_id")
+
+    for table_name in (
+        "chatbot_agent_executions",
+        "prompt_presets",
+        "document_chunks",
+        "document_cache",
+        "chatbot_folders",
+    ):
+        if table_name in existing_tables:
+            op.drop_table(table_name)
 
 
 def downgrade() -> None:
