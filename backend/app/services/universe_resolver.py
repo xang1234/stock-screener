@@ -64,26 +64,26 @@ def resolve_symbols(
     """
     universe_def = normalize_universe_definition(universe_def)
     t = universe_def.type
-    stock_universe_service = get_stock_universe_service()
 
     if t == UniverseType.ALL:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=None, sp500_only=False, limit=limit
         )
 
     elif t == UniverseType.EXCHANGE:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=universe_def.exchange.value, sp500_only=False, limit=limit
         )
 
     elif t == UniverseType.INDEX:
-        return stock_universe_service.get_active_symbols(
+        return get_stock_universe_service().get_active_symbols(
             db, exchange=None, sp500_only=True, limit=limit
         )
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):
         symbols = universe_def.symbols
         if not universe_def.allow_inactive_symbols:
+            stock_universe_service = get_stock_universe_service()
             filtered = stock_universe_service.filter_active_symbols(db, symbols)
             filtered_set = set(filtered)
             dropped = [symbol for symbol in symbols if symbol not in filtered_set]

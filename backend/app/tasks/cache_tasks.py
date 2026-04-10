@@ -829,7 +829,13 @@ def _filter_active_symbols(symbols: List[str]) -> List[str]:
     if not symbols:
         return []
 
-    stock_universe_service = get_stock_universe_service()
+    try:
+        stock_universe_service = get_stock_universe_service()
+    except RuntimeError:
+        # Helper is used directly in tests/scripts outside full runtime bootstrapping.
+        from ..services.stock_universe_service import StockUniverseService
+
+        stock_universe_service = StockUniverseService()
 
     db = SessionLocal()
     try:
@@ -1682,4 +1688,3 @@ def cleanup_orphaned_scans(self):
 
     finally:
         db.close()
-

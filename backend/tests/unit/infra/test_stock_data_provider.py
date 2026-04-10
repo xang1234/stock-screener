@@ -64,11 +64,9 @@ def mock_price_cache():
 
 @pytest.fixture
 def mock_yfinance():
-    with patch(
-        "app.scanners.data_preparation.yfinance_service"
-    ) as svc:
-        svc.get_historical_data.return_value = _make_price_df()
-        yield svc
+    svc = MagicMock()
+    svc.get_historical_data.return_value = _make_price_df()
+    return svc
 
 
 @pytest.fixture
@@ -98,6 +96,8 @@ def data_layer(mock_price_cache, mock_yfinance, mock_benchmark_cache, mock_funda
     layer = DataPreparationLayer.__new__(DataPreparationLayer)
     layer._max_retries = 2
     layer._retry_base_delay = 0.01
+    layer._yfinance_service = mock_yfinance
+    layer._rate_limiter = MagicMock()
     layer.price_cache = mock_price_cache
     layer.benchmark_cache = mock_benchmark_cache
     layer.fundamentals_cache = mock_fundamentals_cache

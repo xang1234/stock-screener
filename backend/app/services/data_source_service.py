@@ -75,8 +75,6 @@ class DataSourceService:
             finviz_service = FinvizService(rate_limiter=rate_limiter)
         self.finviz_service = finviz_service
         self.yfinance_service = yfinance_service
-        self._eps_rating_service = eps_rating_service
-        self._rate_limiter = rate_limiter
 
         # Metrics tracking
         self.metrics = {
@@ -167,37 +165,24 @@ class DataSourceService:
             Dict with EPS rating fields and first_trade_date, or None if error
         """
         try:
-            import yfinance as yf
-            from ..config import settings
-            self._rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
-
-            ticker = yf.Ticker(symbol)
-
-            # Get income statements
-            annual_income = ticker.income_stmt
-            quarterly_income = ticker.quarterly_income_stmt
-
-            # Calculate EPS rating data using the service
-            eps_data = self._eps_rating_service.calculate_eps_rating_data(
-                annual_income,
-                quarterly_income
-            )
-
-            # Also fetch IPO date from ticker info (finviz doesn't have this)
-            try:
-                info = ticker.info
-                if info and info.get("firstTradeDateMilliseconds"):
-                    eps_data["first_trade_date_ms"] = info.get("firstTradeDateMilliseconds")
-                else:
-                    logger.warning(f"Missing IPO date (firstTradeDateMilliseconds) for {symbol} - field not available from yfinance")
-            except Exception as e:
-                logger.warning(f"Failed to fetch IPO date for {symbol}: {e}")
-
-            return eps_data
-
-        except Exception as e:
+            yf_data = self.yfinance_service.get_fundamentals(symbol)
+        except Exception as e:  # pragma: no cover - defensive path
             logger.debug(f"Could not get EPS rating data for {symbol}: {e}")
             return None
+
+        if not yf_data:
+            return None
+
+        keys = (
+            "first_trade_date_ms",
+            "eps_5yr_cagr",
+            "eps_q1_yoy",
+            "eps_q2_yoy",
+            "eps_raw_score",
+            "eps_years_available",
+        )
+        eps_data = {key: yf_data.get(key) for key in keys if yf_data.get(key) is not None}
+        return eps_data or None
 
     def get_quarterly_growth(self, symbol: str) -> Optional[Dict]:
         """

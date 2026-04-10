@@ -42,9 +42,8 @@ def refresh_stock_universe(self, exchange_filter: str = None):
     logger.info("=" * 60)
 
     db = SessionLocal()
-    stock_universe_service = get_stock_universe_service()
-
     try:
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.populate_universe(db, exchange_filter=exchange_filter)
 
         logger.info("=" * 60)
@@ -90,9 +89,8 @@ def refresh_sp500_membership(self):
     logger.info("=" * 60)
 
     db = SessionLocal()
-    stock_universe_service = get_stock_universe_service()
-
     try:
+        stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.update_sp500_membership(db)
 
         logger.info("=" * 60)

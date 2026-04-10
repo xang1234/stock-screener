@@ -9,7 +9,7 @@ Canonical price contract ADR:
 docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
-from typing import List, Dict, Optional, Any
+from typing import TYPE_CHECKING, List, Dict, Optional, Any
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -18,7 +18,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from ..config import settings
-from ..wiring.bootstrap import get_eps_rating_service, get_rate_limiter
+
+if TYPE_CHECKING:
+    from .eps_rating_service import EPSRatingService
+    from .rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +39,30 @@ class BulkDataFetcher:
     PRICE_BATCH_GROWTH_COOLDOWN_BATCHES = 3
     PRICE_BATCH_RETRY_BACKOFF_SECONDS = (30, 60, 120)
 
-    def __init__(self) -> None:
-        self._rate_limiter = get_rate_limiter()
-        self._eps_rating_service = get_eps_rating_service()
+    def __init__(
+        self,
+        *,
+        rate_limiter: "RedisRateLimiter | None" = None,
+        eps_rating_service: "EPSRatingService | None" = None,
+    ) -> None:
+        # Keep standalone construction safe for tests/scripts while allowing
+        # process-scoped injection from runtime wiring where needed.
+        self._rate_limiter = rate_limiter or self._build_default_rate_limiter()
+        self._eps_rating_service = (
+            eps_rating_service or self._build_default_eps_rating_service()
+        )
+
+    @staticmethod
+    def _build_default_rate_limiter() -> "RedisRateLimiter":
+        from .rate_limiter import RedisRateLimiter
+
+        return RedisRateLimiter()
+
+    @staticmethod
+    def _build_default_eps_rating_service() -> "EPSRatingService":
+        from .eps_rating_service import EPSRatingService
+
+        return EPSRatingService()
 
     @staticmethod
     def _build_error_result(symbol: str, error: str) -> Dict[str, Any]:

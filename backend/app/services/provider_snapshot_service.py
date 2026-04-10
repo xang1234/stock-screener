@@ -115,7 +115,7 @@ class ProviderSnapshotService:
         self.fundamentals_cache = fundamentals_cache
         self.rate_limiter = rate_limiter
         self.technical_calc = TechnicalCalculatorService()
-        self.bulk_fetcher = BulkDataFetcher()
+        self.bulk_fetcher = BulkDataFetcher(rate_limiter=rate_limiter)
 
     def _load_screener_class(self, category: str):
         module_name, class_name = self.CATEGORY_LOADERS[category]

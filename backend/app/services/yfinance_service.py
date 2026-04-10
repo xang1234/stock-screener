@@ -11,6 +11,7 @@ import pandas as pd
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
 from datetime import date, datetime, timedelta
 import logging
+from threading import RLock
 
 if TYPE_CHECKING:
     from app.services.eps_rating_service import EPSRatingService
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 class YFinanceService:
     """Service for fetching stock data using yfinance."""
+    _fallback_lock = RLock()
+    _fallback_rate_limiter: "RedisRateLimiter | None" = None
+    _fallback_eps_rating_service: "EPSRatingService | None" = None
 
     def __init__(
         self,
@@ -30,15 +34,29 @@ class YFinanceService:
     ):
         """Initialize yfinance service."""
         if rate_limiter is None:
-            from .rate_limiter import RedisRateLimiter
-
-            rate_limiter = RedisRateLimiter()
+            rate_limiter = self._get_fallback_rate_limiter()
         if eps_rating_service is None:
-            from .eps_rating_service import EPSRatingService
-
-            eps_rating_service = EPSRatingService()
+            eps_rating_service = self._get_fallback_eps_rating_service()
         self._rate_limiter = rate_limiter
         self._eps_rating_service = eps_rating_service
+
+    @classmethod
+    def _get_fallback_rate_limiter(cls) -> "RedisRateLimiter":
+        with cls._fallback_lock:
+            if cls._fallback_rate_limiter is None:
+                from .rate_limiter import RedisRateLimiter
+
+                cls._fallback_rate_limiter = RedisRateLimiter()
+            return cls._fallback_rate_limiter
+
+    @classmethod
+    def _get_fallback_eps_rating_service(cls) -> "EPSRatingService":
+        with cls._fallback_lock:
+            if cls._fallback_eps_rating_service is None:
+                from .eps_rating_service import EPSRatingService
+
+                cls._fallback_eps_rating_service = EPSRatingService()
+            return cls._fallback_eps_rating_service
 
     def _wait_for_yfinance_rate_limit(self) -> None:
         from ..config import settings

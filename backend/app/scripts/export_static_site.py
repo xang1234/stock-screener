@@ -313,7 +313,6 @@ def _run_daily_refresh(
 
     warnings: list[str] = []
     as_of_date = _resolve_latest_completed_us_trading_date()
-    provider_snapshot_service = get_provider_snapshot_service()
     with disable_serialized_data_fetch_lock():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:
@@ -323,6 +322,7 @@ def _run_daily_refresh(
             results["fundamentals_refresh"] = refresh_all_fundamentals.run()
 
         if hydrate_published_snapshot:
+            provider_snapshot_service = get_provider_snapshot_service()
             with SessionLocal() as db:
                 results["fundamentals_hydrate"] = provider_snapshot_service.hydrate_published_snapshot(
                     db,

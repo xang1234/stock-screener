@@ -1,7 +1,6 @@
 from app.services.alphavantage_service import AlphaVantageService
 from app.services.data_fetcher import DataFetcher
 from app.services.yfinance_service import YFinanceService
-from app.wiring.bootstrap import clear_runtime_services
 
 
 def test_data_fetcher_supports_explicit_dependency_injection():
@@ -17,10 +16,20 @@ def test_data_fetcher_supports_explicit_dependency_injection():
     assert fetcher._alphavantage_service is alphavantage_service
 
 
-def test_data_fetcher_constructs_without_runtime_container():
-    clear_runtime_services()
-
+def test_data_fetcher_constructs_without_runtime_container(monkeypatch):
+    expected_yfinance = YFinanceService()
+    expected_alphavantage = AlphaVantageService()
+    monkeypatch.setattr(
+        DataFetcher,
+        "_build_default_yfinance_service",
+        staticmethod(lambda: expected_yfinance),
+    )
+    monkeypatch.setattr(
+        DataFetcher,
+        "_build_default_alphavantage_service",
+        staticmethod(lambda: expected_alphavantage),
+    )
     fetcher = DataFetcher()
 
-    assert isinstance(fetcher._yfinance_service, YFinanceService)
-    assert isinstance(fetcher._alphavantage_service, AlphaVantageService)
+    assert fetcher._yfinance_service is expected_yfinance
+    assert fetcher._alphavantage_service is expected_alphavantage
