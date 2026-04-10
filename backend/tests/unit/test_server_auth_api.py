@@ -38,23 +38,25 @@ async def test_server_auth_status_reports_required_and_unauthenticated(client, m
 
 @pytest.mark.asyncio
 async def test_protected_route_requires_login_and_accepts_session_cookie(client, monkeypatch):
+    from app.services import assistant_gateway_service
     from app.services import server_auth
 
 
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
     monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
+    monkeypatch.setattr(assistant_gateway_service.settings, "hermes_api_base", "")
 
-    unauthenticated = await client.get("/api/v1/chatbot/health")
+    unauthenticated = await client.get("/api/v1/assistant/health")
     assert unauthenticated.status_code == 401
 
     login = await client.post("/api/v1/auth/login", json={"password": "secret-pass"})
     assert login.status_code == 200
     assert login.json()["authenticated"] is True
 
-    authenticated = await client.get("/api/v1/chatbot/health")
+    authenticated = await client.get("/api/v1/assistant/health")
     assert authenticated.status_code == 200
-    assert authenticated.json()["status"] == "healthy"
+    assert authenticated.json()["status"] == "misconfigured"
 
 
 @pytest.mark.asyncio
@@ -94,7 +96,7 @@ async def test_protected_route_returns_503_when_auth_required_but_not_configured
     monkeypatch.setattr(server_auth.settings, "admin_api_key", "")
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "")
 
-    response = await client.get("/api/v1/chatbot/health")
+    response = await client.get("/api/v1/assistant/health")
 
     assert response.status_code == 503
     assert "SERVER_AUTH_PASSWORD" in response.json()["detail"]
@@ -110,7 +112,7 @@ async def test_admin_api_key_does_not_authenticate_general_server_routes(client,
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "signing-secret")
     monkeypatch.setattr(server_auth.settings, "admin_api_key", "admin-secret")
 
-    response = await client.get("/api/v1/chatbot/health", headers={"X-Admin-Key": "admin-secret"})
+    response = await client.get("/api/v1/assistant/health", headers={"X-Admin-Key": "admin-secret"})
 
     assert response.status_code == 401
 
@@ -125,7 +127,7 @@ async def test_admin_api_key_alone_does_not_configure_server_auth(client, monkey
     monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "")
     monkeypatch.setattr(server_auth.settings, "admin_api_key", "admin-secret")
 
-    response = await client.get("/api/v1/chatbot/health")
+    response = await client.get("/api/v1/assistant/health")
 
     assert response.status_code == 503
 

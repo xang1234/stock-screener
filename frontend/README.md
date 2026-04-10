@@ -1,6 +1,6 @@
 # Stock Scanner Frontend
 
-React 18 SPA for stock screening, market analysis, AI research, and portfolio tracking.
+React 18 SPA for stock screening, market analysis, assistant workflows, and portfolio tracking.
 
 > Full project overview and screenshots: [Root README](../README.md)
 > Backend docs: [Backend README](../backend/README.md)
@@ -30,7 +30,7 @@ Requires backend API running on port 8000. See [Backend README](../backend/READM
 | lightweight-charts | TradingView-style candlestick charts |
 | Recharts | Area charts, sparklines, breadth visualizations |
 | @hello-pangea/dnd | Drag-and-drop (watchlist ordering, folders) |
-| react-markdown | Markdown rendering in chatbot responses |
+| react-markdown | Markdown rendering in assistant responses |
 | axios | HTTP client |
 | react-router-dom | Client-side routing |
 | date-fns | Date formatting and manipulation |
@@ -44,7 +44,7 @@ Requires backend API running on port 8000. See [Backend README](../backend/READM
 | `/breadth` | `BreadthPage` | Lazy | StockBee-style breadth indicators and trends |
 | `/groups` | `GroupRankingsPage` | Lazy | IBD industry group rankings with movers |
 | `/themes` | `ThemesPage` | Lazy | AI-powered theme discovery with trending/emerging detection |
-| `/chatbot` | `ChatbotPage` | Lazy | Multi-provider AI research assistant with web search |
+| `/chatbot` | `ChatbotPage` | Lazy | Hermes-backed assistant with streaming, citations, and watchlist actions |
 | `/stock/:symbol` | `StockDetails` | Eager | Individual stock analysis with charts and fundamentals |
 
 ## Project Structure
@@ -61,12 +61,11 @@ src/
 │   ├── breadth.js               #   Market breadth
 │   ├── groups.js                #   Group rankings
 │   ├── themes.js                #   Theme discovery
-│   ├── chatbot.js               #   Chat sessions/messages
+│   ├── assistant.js             #   Assistant sessions/messages
 │   ├── userWatchlists.js        #   Watchlist CRUD
 │   ├── userThemes.js            #   User themes
 │   ├── marketScan.js            #   Dashboard scan lists
 │   ├── filterPresets.js         #   Saved filter configs
-│   ├── promptPresets.js         #   Saved chatbot prompts
 │   ├── priceHistory.js          #   Price/chart data
 │   ├── tasks.js                 #   Background task polling
 │   └── cache.js                 #   Cache management
@@ -76,14 +75,14 @@ src/
 │   ├── BreadthPage.jsx          #   Market breadth
 │   ├── GroupRankingsPage.jsx    #   Group rankings
 │   ├── ThemesPage.jsx           #   Theme discovery
-│   └── ChatbotPage.jsx          #   AI chatbot
+│   └── ChatbotPage.jsx          #   Assistant page route
 ├── components/                  # Shared and feature components
 │   ├── Layout/                  #   App shell, navigation
 │   ├── Scan/                    #   Scanner UI (filters, results table)
 │   ├── MarketScan/              #   Dashboard cards, watchlist table
 │   ├── Stock/                   #   StockDetails view
 │   ├── Charts/                  #   Chart modal, candlestick charts
-│   ├── Chatbot/                 #   Chat interface, message list
+│   ├── AssistantChat/           #   Assistant interface and message rendering
 │   ├── Themes/                  #   Theme rankings, emerging panel
 │   ├── Technical/               #   Technical indicator displays
 │   ├── Settings/                #   App settings
@@ -94,10 +93,9 @@ src/
 ├── hooks/                       # Custom hooks
 │   ├── useChartNavigation.js    #   Keyboard nav for chart modal
 │   ├── useFilterPresets.js      #   Filter preset CRUD
-│   ├── usePromptPresets.js      #   Prompt preset CRUD
-│   └── useToolSelection.js      #   Chatbot tool selection
+│   └── ...                      #   Additional feature hooks
 ├── config/                      # Static configuration
-│   └── chatbotTools.js          #   Available chatbot tool definitions
+│   └── runtimeMode.js           #   Static export mode flags
 └── utils/                       # Pure utility functions
     ├── colorUtils.js            #   Color calculations
     ├── filterUtils.js           #   Filter logic helpers

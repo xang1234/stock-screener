@@ -13,7 +13,7 @@ TARGET_MODULES = [
     ROOT / "app/api/v1/themes_content_pipeline.py",
     ROOT / "app/services/theme_extraction_service.py",
     ROOT / "app/services/theme_merging_service.py",
-    ROOT / "app/services/chatbot/tools/web_search.py",
+    ROOT / "app/services/assistant_gateway_service.py",
     ROOT / "app/services/cache/price_cache_freshness.py",
     ROOT / "app/services/cache/price_cache_warmup.py",
     ROOT / "app/services/cache/price_cache_failure_telemetry.py",
