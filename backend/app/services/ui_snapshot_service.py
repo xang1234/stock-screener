@@ -55,12 +55,12 @@ from app.schemas.theme import (
     ThemeRankingItem,
     ThemeRankingsResponse,
 )
-from app.services.stock_universe_service import stock_universe_service
 from app.services.theme_discovery_service import ThemeDiscoveryService
 from app.services.theme_pipeline_state_service import compute_pipeline_observability
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery, GetScanResultsUseCase
+from app.wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -465,7 +465,7 @@ class UISnapshotService:
                 None,
             )
             payload: dict[str, Any] = {
-                "universe_stats": stock_universe_service.get_stats(uow.session),
+                "universe_stats": get_stock_universe_service().get_stats(uow.session),
                 "recent_scans": recent_scans,
                 "selected_scan": None,
                 "selected_scan_status": None,

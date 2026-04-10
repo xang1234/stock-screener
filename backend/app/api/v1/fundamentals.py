@@ -171,8 +171,7 @@ async def get_fundamentals_cache_statistics():
     try:
         from ...database import SessionLocal
         from ...models.stock_universe import StockUniverse
-        from ...services.provider_snapshot_service import provider_snapshot_service
-        from ...wiring.bootstrap import get_fundamentals_cache
+        from ...wiring.bootstrap import get_fundamentals_cache, get_provider_snapshot_service
         from datetime import datetime
 
         db = SessionLocal()
@@ -211,6 +210,7 @@ async def get_fundamentals_cache_statistics():
             latest = db.query(StockFundamental).order_by(
                 StockFundamental.updated_at.desc()
             ).first()
+            provider_snapshot_service = get_provider_snapshot_service()
             snapshot_stats = provider_snapshot_service.get_snapshot_stats(db)
 
             return FundamentalsCacheStats(

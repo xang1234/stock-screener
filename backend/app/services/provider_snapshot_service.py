@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -25,6 +25,11 @@ from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .technical_calculator_service import TechnicalCalculatorService
+
+if TYPE_CHECKING:
+    from app.services.fundamentals_cache_service import FundamentalsCacheService
+    from app.services.price_cache_service import PriceCacheService
+    from app.services.rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +84,36 @@ class ProviderSnapshotService:
     WEEKLY_REFERENCE_RELEASE_TAG = WEEKLY_REFERENCE_RELEASE_TAG
     WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
 
-    def __init__(self) -> None:
-        from ..wiring.bootstrap import get_fundamentals_cache, get_price_cache
+    def __init__(
+        self,
+        *,
+        price_cache: PriceCacheService | None = None,
+        fundamentals_cache: FundamentalsCacheService | None = None,
+        rate_limiter: RedisRateLimiter | None = None,
+    ) -> None:
+        if rate_limiter is None:
+            from .rate_limiter import RedisRateLimiter
 
+            rate_limiter = RedisRateLimiter()
+        if price_cache is None or fundamentals_cache is None:
+            from app.database import SessionLocal
+            from app.services.redis_pool import get_redis_client
+            from app.services.fundamentals_cache_service import FundamentalsCacheService
+            from app.services.price_cache_service import PriceCacheService
+
+            redis_client = get_redis_client()
+            price_cache = price_cache or PriceCacheService(
+                redis_client=redis_client,
+                session_factory=SessionLocal,
+            )
+            fundamentals_cache = fundamentals_cache or FundamentalsCacheService(
+                redis_client=redis_client,
+                session_factory=SessionLocal,
+            )
         self.parser = FinvizParser()
-        self.price_cache = get_price_cache()
-        self.fundamentals_cache = get_fundamentals_cache()
+        self.price_cache = price_cache
+        self.fundamentals_cache = fundamentals_cache
+        self.rate_limiter = rate_limiter
         self.technical_calc = TechnicalCalculatorService()
         self.bulk_fetcher = BulkDataFetcher()
 
@@ -238,14 +267,13 @@ class ProviderSnapshotService:
         return (not warnings), warnings
 
     def _fetch_yahoo_only_fields(self, symbol: str) -> Dict[str, Any]:
-        from .rate_limiter import rate_limiter
         import yfinance as yf
 
         yahoo_payload: Dict[str, Any] = {}
         now_iso = datetime.utcnow().isoformat()
 
         try:
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self.rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
             ticker = yf.Ticker(symbol)
         except Exception as exc:
             logger.warning("Failed to initialize Yahoo hydrator for %s: %s", symbol, exc)
@@ -840,13 +868,3 @@ class ProviderSnapshotService:
             "last_fetch_failure_at": _deserialize_datetime(row.get("last_fetch_failure_at")),
             "updated_at": _deserialize_datetime(row.get("updated_at")),
         }
-
-
-def _build_provider_snapshot_service() -> ProviderSnapshotService:
-    from ..wiring.bootstrap import initialize_process_runtime_services
-
-    initialize_process_runtime_services()
-    return ProviderSnapshotService()
-
-
-provider_snapshot_service = _build_provider_snapshot_service()

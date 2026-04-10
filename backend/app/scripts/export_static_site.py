@@ -19,11 +19,14 @@ from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
 from app.services.static_site_export_service import StaticSiteExportService
-from app.services.provider_snapshot_service import provider_snapshot_service
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.utils.market_hours import get_last_market_close, is_trading_day
 from app.utils.symbol_support import split_supported_price_symbols
-from app.wiring.bootstrap import get_group_rank_service, get_price_cache
+from app.wiring.bootstrap import (
+    get_group_rank_service,
+    get_price_cache,
+    get_provider_snapshot_service,
+)
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
@@ -310,6 +313,7 @@ def _run_daily_refresh(
 
     warnings: list[str] = []
     as_of_date = _resolve_latest_completed_us_trading_date()
+    provider_snapshot_service = get_provider_snapshot_service()
     with disable_serialized_data_fetch_lock():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:

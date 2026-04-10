@@ -217,7 +217,3 @@ class AlphaVantageService:
         except (ValueError, TypeError, KeyError, IndexError) as e:
             logger.error(f"Error parsing income statement for {symbol}: {e}")
             return None
-
-
-# Global service instance
-alphavantage_service = AlphaVantageService()

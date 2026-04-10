@@ -18,6 +18,7 @@ from app.models.stock_universe import (
 )
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.price_cache_service import PriceCacheService
+from app.services.stock_universe_service import StockUniverseService
 from app.tasks.cache_tasks import (
     _force_refresh_stale_intraday_impl,
     _track_symbol_failures,
@@ -168,7 +169,7 @@ def test_fetch_prices_in_batches_delays_growth_until_cooldown_expires(monkeypatc
             return None
 
     monkeypatch.setattr(fetcher, "_fetch_price_batch_with_retries", fake_fetch_price_batch_with_retries)
-    monkeypatch.setattr("app.services.rate_limiter.rate_limiter", _StubRateLimiter())
+    monkeypatch.setattr(fetcher, "_rate_limiter", _StubRateLimiter())
     monkeypatch.setattr("app.services.bulk_data_fetcher.settings.yfinance_batch_rate_limit_interval", 0)
 
     symbols = [f"SYM{i}" for i in range(550)]
@@ -310,9 +311,8 @@ def test_get_many_reloads_after_close_if_redis_meta_marks_intraday_stale(monkeyp
         ]
     )
 
-    service = PriceCacheService(redis_client=fake_redis)
+    service = PriceCacheService(redis_client=fake_redis, session_factory=TestingSessionLocal)
 
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(module, "get_bulk_redis_client", lambda: None)
     monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 3, 18, 17, 0, 0))
     monkeypatch.setattr(module, "is_market_open", lambda now=None: False)
@@ -432,8 +432,6 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
     import app.tasks.cache_tasks as module
-    import app.services.stock_universe_service as universe_module
-
     monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
 
     db = TestingSessionLocal()
@@ -460,18 +458,16 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
     db.commit()
     db.close()
 
-    original = universe_module.stock_universe_service.record_fetch_success
+    stock_universe_service = StockUniverseService()
+    original = stock_universe_service.record_fetch_success
 
     def corrupt_one_symbol(session, symbol):
         if symbol == "MSFT":
             raise sqlite3.DatabaseError("database disk image is malformed")
         return original(session, symbol)
 
-    monkeypatch.setattr(
-        universe_module.stock_universe_service,
-        "record_fetch_success",
-        corrupt_one_symbol,
-    )
+    monkeypatch.setattr(stock_universe_service, "record_fetch_success", corrupt_one_symbol)
+    monkeypatch.setattr(module, "get_stock_universe_service", lambda: stock_universe_service)
 
     class _StubPriceCache:
         SYMBOL_FAILURE_THRESHOLD = 5
@@ -498,7 +494,6 @@ def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(m
 
 def test_track_symbol_failures_passes_updated_deactivation_threshold(monkeypatch):
     import app.tasks.cache_tasks as module
-    import app.services.stock_universe_service as universe_module
 
     captured = {}
 
@@ -507,11 +502,9 @@ def test_track_symbol_failures_passes_updated_deactivation_threshold(monkeypatch
         captured["deactivate_threshold"] = kwargs["deactivate_threshold"]
         return {"deactivated": kwargs["deactivate_threshold"] <= 5}
 
-    monkeypatch.setattr(
-        universe_module.stock_universe_service,
-        "record_fetch_failure",
-        record_fetch_failure,
-    )
+    stock_universe_service = StockUniverseService()
+    monkeypatch.setattr(stock_universe_service, "record_fetch_failure", record_fetch_failure)
+    monkeypatch.setattr(module, "get_stock_universe_service", lambda: stock_universe_service)
 
     class _StubPriceCache:
         SYMBOL_FAILURE_THRESHOLD = 5
@@ -583,8 +576,7 @@ def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
         return {symbol: _success_result(symbol) for symbol in symbols}
 
     monkeypatch.setattr(
-        module,
-        "get_price_cache",
+        "app.wiring.bootstrap.get_price_cache",
         lambda: _StubPriceCache(),
     )
     monkeypatch.setattr(

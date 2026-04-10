@@ -3,13 +3,18 @@ finvizfinance Service
 
 Wrapper for finvizfinance library with rate limiting and error handling.
 """
+from __future__ import annotations
+
 import logging
 import time
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 from finvizfinance.quote import finvizfinance
 
 from .finviz_parser import FinvizParser
 from .finviz_validator import FinvizValidator
+
+if TYPE_CHECKING:
+    from app.services.rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +22,15 @@ logger = logging.getLogger(__name__)
 class FinvizService:
     """Service for fetching and parsing finvizfinance data"""
 
-    def __init__(self):
+    def __init__(self, *, rate_limiter: RedisRateLimiter | None = None):
         """Initialize FinvizService."""
+        if rate_limiter is None:
+            from .rate_limiter import RedisRateLimiter
+
+            rate_limiter = RedisRateLimiter()
         self.parser = FinvizParser()
         self.validator = FinvizValidator()
+        self._rate_limiter = rate_limiter
 
     def _rate_limited_call(self, func, *args, **kwargs):
         """
@@ -33,9 +43,8 @@ class FinvizService:
         Returns:
             Result from function
         """
-        from .rate_limiter import rate_limiter
         from ..config import settings
-        rate_limiter.wait("finviz", min_interval_s=settings.finviz_rate_limit_interval)
+        self._rate_limiter.wait("finviz", min_interval_s=settings.finviz_rate_limit_interval)
         return func(*args, **kwargs)
 
     def get_fundamentals(self, symbol: str) -> Optional[Dict]:
@@ -360,7 +369,3 @@ class FinvizService:
         logger.info(f"Finviz-only batch complete: {success_count}/{total} successful")
 
         return results
-
-
-# Global instance
-finviz_service = FinvizService()

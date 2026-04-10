@@ -4,11 +4,17 @@ yfinance service wrapper for fetching stock data.
 Canonical price contract ADR:
 docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
+from __future__ import annotations
+
 import yfinance as yf
 import pandas as pd
-from typing import Optional, Dict, Any, List
+from typing import TYPE_CHECKING, Optional, Dict, Any, List
 from datetime import date, datetime, timedelta
 import logging
+
+if TYPE_CHECKING:
+    from app.services.eps_rating_service import EPSRatingService
+    from app.services.rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +22,31 @@ logger = logging.getLogger(__name__)
 class YFinanceService:
     """Service for fetching stock data using yfinance."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        rate_limiter: RedisRateLimiter | None = None,
+        eps_rating_service: EPSRatingService | None = None,
+    ):
         """Initialize yfinance service."""
-        pass
+        if rate_limiter is None:
+            from .rate_limiter import RedisRateLimiter
+
+            rate_limiter = RedisRateLimiter()
+        if eps_rating_service is None:
+            from .eps_rating_service import EPSRatingService
+
+            eps_rating_service = EPSRatingService()
+        self._rate_limiter = rate_limiter
+        self._eps_rating_service = eps_rating_service
+
+    def _wait_for_yfinance_rate_limit(self) -> None:
+        from ..config import settings
+
+        self._rate_limiter.wait(
+            "yfinance",
+            min_interval_s=1.0 / settings.yfinance_rate_limit,
+        )
 
     def get_stock_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
@@ -31,9 +59,7 @@ class YFinanceService:
             Dict with stock info or None if error
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             logger.info(f"Fetching stock info for {symbol}")
             ticker = yf.Ticker(symbol)
@@ -115,9 +141,7 @@ class YFinanceService:
 
         # Direct fetch from yfinance (either cache disabled or cache failed)
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
             data = ticker.history(period=period, interval=interval)
@@ -143,9 +167,7 @@ class YFinanceService:
             Dict with 52-week range data
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
             info = ticker.info
@@ -171,9 +193,7 @@ class YFinanceService:
             Dict with fundamental data including EPS rating fields
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
             info = ticker.info
@@ -229,8 +249,6 @@ class YFinanceService:
                 'eps_years_available': int
             }
         """
-        from .eps_rating_service import eps_rating_service
-
         result = {
             'eps_5yr_cagr': None,
             'eps_q1_yoy': None,
@@ -245,7 +263,7 @@ class YFinanceService:
             quarterly_income = ticker.quarterly_income_stmt
 
             # Calculate EPS rating data using the service
-            eps_data = eps_rating_service.calculate_eps_rating_data(
+            eps_data = self._eps_rating_service.calculate_eps_rating_data(
                 annual_income,
                 quarterly_income
             )
@@ -269,9 +287,7 @@ class YFinanceService:
             DataFrame with earnings history
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
             earnings = ticker.earnings_history
@@ -298,10 +314,7 @@ class YFinanceService:
             List of upcoming earnings dates normalized to Python dates
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
             earnings_dates = ticker.earnings_dates
@@ -355,9 +368,7 @@ class YFinanceService:
             }
         """
         try:
-            from .rate_limiter import rate_limiter
-            from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
 
@@ -525,7 +536,3 @@ class YFinanceService:
         except Exception as e:
             logger.error(f"Error fetching volume data for {symbol}: {e}")
             return None
-
-
-# Global service instance
-yfinance_service = YFinanceService()

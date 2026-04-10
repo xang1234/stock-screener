@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 from sqlalchemy.orm import Session
 
 from ..schemas.universe import UniverseDefinition, UniverseType
-from ..services.stock_universe_service import stock_universe_service
+from ..wiring.bootstrap import get_stock_universe_service
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ def resolve_symbols(
     """
     universe_def = normalize_universe_definition(universe_def)
     t = universe_def.type
+    stock_universe_service = get_stock_universe_service()
 
     if t == UniverseType.ALL:
         return stock_universe_service.get_active_symbols(

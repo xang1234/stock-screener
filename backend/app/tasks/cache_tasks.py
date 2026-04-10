@@ -22,6 +22,7 @@ from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.cache_manager import CacheManager
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
+from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -327,8 +328,10 @@ def weekly_full_refresh(self):
 
             # Rate limit between batches
             if batch_start + batch_size < total:
-                from ..services.rate_limiter import rate_limiter
-                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
+                get_rate_limiter().wait(
+                    "yfinance:batch",
+                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                )
 
         # Save final metadata
         success_rate = refreshed / total if total > 0 else 0
@@ -741,7 +744,7 @@ def _track_symbol_failures(
 
     try:
         # Clear failure counters for successful symbols
-        from ..services.stock_universe_service import stock_universe_service
+        stock_universe_service = get_stock_universe_service()
 
         skipped_corrupt_symbols: List[str] = []
 
@@ -826,7 +829,7 @@ def _filter_active_symbols(symbols: List[str]) -> List[str]:
     if not symbols:
         return []
 
-    from ..services.stock_universe_service import stock_universe_service
+    stock_universe_service = get_stock_universe_service()
 
     db = SessionLocal()
     try:
@@ -961,8 +964,10 @@ def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None
 
             # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:
-                from ..services.rate_limiter import rate_limiter
-                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
+                get_rate_limiter().wait(
+                    "yfinance:batch",
+                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                )
 
         logger.info("=" * 80)
         logger.info(f"✓ Force refresh completed:")
@@ -1287,8 +1292,10 @@ def smart_refresh_cache(self, mode: str = "auto"):
 
             # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:
-                from ..services.rate_limiter import rate_limiter
-                rate_limiter.wait("yfinance:batch", min_interval_s=settings.yfinance_batch_rate_limit_interval)
+                get_rate_limiter().wait(
+                    "yfinance:batch",
+                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                )
 
         # Save final warmup metadata (treat >95% success as "completed")
         success_rate = refreshed / total if total > 0 else 0
@@ -1675,5 +1682,4 @@ def cleanup_orphaned_scans(self):
 
     finally:
         db.close()
-
 

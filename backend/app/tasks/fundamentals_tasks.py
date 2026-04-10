@@ -19,11 +19,15 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..models.stock_universe import StockUniverse
-from ..wiring.bootstrap import get_fundamentals_cache
+from ..wiring.bootstrap import (
+    get_eps_rating_service,
+    get_fundamentals_cache,
+    get_provider_snapshot_service,
+    get_stock_universe_service,
+    get_ticker_validation_service,
+)
 from ..services.hybrid_fundamentals_service import HybridFundamentalsService
-from ..services.provider_snapshot_service import provider_snapshot_service
-from ..services.stock_universe_service import stock_universe_service
-from ..services.ticker_validation_service import ticker_validation_service, TickerValidationService
+from ..services.ticker_validation_service import TickerValidationService
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
 
@@ -52,6 +56,8 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     the universe first, hydrates stock_fundamentals/cache, and returns the
     published revision metadata.
     """
+    stock_universe_service = get_stock_universe_service()
+    provider_snapshot_service = get_provider_snapshot_service()
     universe_stats = None
     if publish:
         universe_stats = stock_universe_service.populate_universe(db)
@@ -105,6 +111,7 @@ def refresh_all_fundamentals(self):
 
     db = SessionLocal()
     start_time = time.time()
+    ticker_validation_service = get_ticker_validation_service()
 
     try:
         if settings.provider_snapshot_cutover_enabled:
@@ -324,6 +331,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
 
     db = SessionLocal()
     start_time = time.time()
+    ticker_validation_service = get_ticker_validation_service()
 
     try:
         # Get all active stocks from universe
@@ -558,6 +566,7 @@ def refresh_all_fundamentals_hybrid(
 
     db = SessionLocal()
     start_time = time.time()
+    ticker_validation_service = get_ticker_validation_service()
 
     try:
         if settings.provider_snapshot_cutover_enabled or settings.provider_snapshot_ingestion_enabled:
@@ -822,10 +831,10 @@ def calculate_eps_rating_percentiles(self):
     logger.info("=" * 60)
 
     from ..models.stock import StockFundamental
-    from ..services.eps_rating_service import eps_rating_service
 
     db = SessionLocal()
     start_time = time.time()
+    eps_rating_service = get_eps_rating_service()
 
     try:
         # Get all fundamentals with raw scores

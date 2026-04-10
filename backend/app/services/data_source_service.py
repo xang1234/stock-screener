@@ -3,13 +3,19 @@ Data Source Service
 
 Coordinates between finvizfinance (primary) and yfinance (fallback) data sources.
 """
+from __future__ import annotations
+
 import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 from datetime import datetime
 
-from .finviz_service import finviz_service
-from .yfinance_service import yfinance_service
 from .finviz_validator import FinvizValidator
+
+if TYPE_CHECKING:
+    from app.services.eps_rating_service import EPSRatingService
+    from app.services.finviz_service import FinvizService
+    from app.services.rate_limiter import RedisRateLimiter
+    from app.services.yfinance_service import YFinanceService
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +33,11 @@ class DataSourceService:
 
     def __init__(
         self,
+        *,
+        finviz_service: FinvizService | None = None,
+        yfinance_service: YFinanceService | None = None,
+        eps_rating_service: EPSRatingService | None = None,
+        rate_limiter: RedisRateLimiter | None = None,
         prefer_finviz: bool = True,
         enable_fallback: bool = True,
         strict_validation: bool = True,
@@ -43,6 +54,29 @@ class DataSourceService:
         self.enable_fallback = enable_fallback
         self.strict_validation = strict_validation
         self.validator = FinvizValidator()
+        if rate_limiter is None:
+            from .rate_limiter import RedisRateLimiter
+
+            rate_limiter = RedisRateLimiter()
+        if eps_rating_service is None:
+            from .eps_rating_service import EPSRatingService
+
+            eps_rating_service = EPSRatingService()
+        if yfinance_service is None:
+            from .yfinance_service import YFinanceService
+
+            yfinance_service = YFinanceService(
+                rate_limiter=rate_limiter,
+                eps_rating_service=eps_rating_service,
+            )
+        if finviz_service is None:
+            from .finviz_service import FinvizService
+
+            finviz_service = FinvizService(rate_limiter=rate_limiter)
+        self.finviz_service = finviz_service
+        self.yfinance_service = yfinance_service
+        self._eps_rating_service = eps_rating_service
+        self._rate_limiter = rate_limiter
 
         # Metrics tracking
         self.metrics = {
@@ -69,7 +103,7 @@ class DataSourceService:
         if self.prefer_finviz:
             logger.debug(f"Attempting to fetch {symbol} fundamentals from finvizfinance")
 
-            finviz_data = finviz_service.get_fundamentals(symbol)
+            finviz_data = self.finviz_service.get_fundamentals(symbol)
 
             if finviz_data:
                 # Validate data (range checks produce warnings, not blocking errors)
@@ -108,7 +142,7 @@ class DataSourceService:
             self.metrics['yfinance_primary'] += 1
 
         # Fetch from yfinance (now includes EPS rating data)
-        yf_data = yfinance_service.get_fundamentals(symbol)
+        yf_data = self.yfinance_service.get_fundamentals(symbol)
 
         if yf_data:
             yf_data['data_source'] = 'yfinance'
@@ -134,10 +168,8 @@ class DataSourceService:
         """
         try:
             import yfinance as yf
-            from .eps_rating_service import eps_rating_service
-            from .rate_limiter import rate_limiter
             from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 
             ticker = yf.Ticker(symbol)
 
@@ -146,7 +178,7 @@ class DataSourceService:
             quarterly_income = ticker.quarterly_income_stmt
 
             # Calculate EPS rating data using the service
-            eps_data = eps_rating_service.calculate_eps_rating_data(
+            eps_data = self._eps_rating_service.calculate_eps_rating_data(
                 annual_income,
                 quarterly_income
             )
@@ -183,7 +215,7 @@ class DataSourceService:
         if self.prefer_finviz:
             logger.debug(f"Attempting to fetch {symbol} quarterly growth from finvizfinance")
 
-            finviz_data = finviz_service.get_quarterly_growth(symbol)
+            finviz_data = self.finviz_service.get_quarterly_growth(symbol)
 
             if finviz_data:
                 # Validate growth metrics (range checks produce warnings, not blocking errors)
@@ -215,7 +247,7 @@ class DataSourceService:
             self.metrics['yfinance_primary'] += 1
 
         # Fetch from yfinance
-        yf_data = yfinance_service.get_quarterly_growth(symbol)
+        yf_data = self.yfinance_service.get_quarterly_growth(symbol)
 
         if yf_data:
             yf_data['data_source'] = 'yfinance'
@@ -245,7 +277,7 @@ class DataSourceService:
         if self.prefer_finviz:
             logger.debug(f"Attempting to fetch {symbol} combined data from finvizfinance")
 
-            combined_data = finviz_service.get_combined_data(symbol, validate=self.strict_validation)
+            combined_data = self.finviz_service.get_combined_data(symbol, validate=self.strict_validation)
 
             if combined_data:
                 self.metrics['finviz_success'] += 1
@@ -275,8 +307,8 @@ class DataSourceService:
             self.metrics['yfinance_primary'] += 1
 
         # Fetch from yfinance (requires two API calls)
-        fundamentals = yfinance_service.get_fundamentals(symbol)
-        growth = yfinance_service.get_quarterly_growth(symbol)
+        fundamentals = self.yfinance_service.get_fundamentals(symbol)
+        growth = self.yfinance_service.get_quarterly_growth(symbol)
 
         if fundamentals and growth:
             timestamp = datetime.utcnow()
@@ -322,11 +354,3 @@ class DataSourceService:
         """Reset metrics counters"""
         for key in self.metrics:
             self.metrics[key] = 0
-
-
-# Global instance
-data_source_service = DataSourceService(
-    prefer_finviz=True,
-    enable_fallback=True,
-    strict_validation=True,
-)

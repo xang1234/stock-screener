@@ -22,7 +22,6 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
-from ..database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -1008,7 +1007,3 @@ class StockUniverseService:
             logger.error(f"Error updating S&P 500 membership: {e}", exc_info=True)
             db.rollback()
             return {'sp500_count': 0, 'updated': 0}
-
-
-# Global instance
-stock_universe_service = StockUniverseService()

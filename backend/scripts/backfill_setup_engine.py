@@ -109,8 +109,7 @@ def _fetch_price_data(
 ) -> Optional[pd.DataFrame]:
     """Fetch full price history for a symbol via PriceCacheService → yfinance."""
     try:
-        from app.wiring.bootstrap import get_price_cache
-        from app.services.yfinance_service import yfinance_service
+        from app.wiring.bootstrap import get_price_cache, get_yfinance_service
 
         price_cache = get_price_cache()
         price_data = price_cache.get_historical_data(symbol, period="5y")
@@ -118,6 +117,7 @@ def _fetch_price_data(
         if price_data is None or price_data.empty:
             logger.debug("Cache MISS for %s — fetching from yfinance", symbol)
             time.sleep(fetch_delay)
+            yfinance_service = get_yfinance_service()
             price_data = yfinance_service.get_historical_data(
                 symbol, period="5y", use_cache=False,
             )

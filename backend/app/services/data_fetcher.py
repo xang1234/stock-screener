@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
 
-from .yfinance_service import yfinance_service
-from .alphavantage_service import alphavantage_service
 from ..utils.rate_limiter import alphavantage_limiter, alphavantage_quota
 from ..models.stock import StockFundamental, StockTechnical, StockIndustry, StockPrice
 from ..config import settings
+from ..wiring.bootstrap import get_alphavantage_service, get_yfinance_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +29,8 @@ class DataFetcher:
             db: Database session for caching (optional)
         """
         self.db = db
+        self._yfinance_service = get_yfinance_service()
+        self._alphavantage_service = get_alphavantage_service()
 
     def get_stock_fundamentals(
         self,
@@ -61,7 +62,7 @@ class DataFetcher:
             alphavantage_limiter.wait_if_needed()
 
             # Get overview data
-            overview = alphavantage_service.get_company_overview(symbol)
+            overview = self._alphavantage_service.get_company_overview(symbol)
             if overview:
                 alphavantage_quota.record_request()
 
@@ -69,7 +70,7 @@ class DataFetcher:
             earnings = None
             if alphavantage_quota.can_make_request():
                 alphavantage_limiter.wait_if_needed()
-                earnings = alphavantage_service.get_earnings(symbol)
+                earnings = self._alphavantage_service.get_earnings(symbol)
                 if earnings:
                     alphavantage_quota.record_request()
 
@@ -91,7 +92,7 @@ class DataFetcher:
 
         # Fallback to yfinance (rate limiting handled inside yfinance_service)
         logger.info(f"Fetching fundamentals from yfinance for {symbol}")
-        data = yfinance_service.get_fundamentals(symbol)
+        data = self._yfinance_service.get_fundamentals(symbol)
 
         if data and self.db:
             self._cache_fundamentals(symbol, data)
@@ -124,17 +125,17 @@ class DataFetcher:
         logger.info(f"Calculating technicals for {symbol}")
 
         # Get price range
-        price_range = yfinance_service.get_price_range(symbol)
+        price_range = self._yfinance_service.get_price_range(symbol)
         if not price_range:
             return None
 
         # Get moving averages
-        mas = yfinance_service.calculate_moving_averages(symbol)
+        mas = self._yfinance_service.calculate_moving_averages(symbol)
         if not mas:
             return None
 
         # Get volume data
-        volume = yfinance_service.get_volume_data(symbol)
+        volume = self._yfinance_service.get_volume_data(symbol)
 
         # Combine data
         data = {
@@ -173,7 +174,7 @@ class DataFetcher:
                 return cached
 
         # Fetch from yfinance (rate limiting handled inside yfinance_service)
-        info = yfinance_service.get_stock_info(symbol)
+        info = self._yfinance_service.get_stock_info(symbol)
 
         if not info:
             return None

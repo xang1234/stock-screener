@@ -13,11 +13,11 @@ import pandas as pd
 
 from .base_screener import DataRequirements, StockData
 from ..domain.common.errors import DataFetchError
-from ..services.yfinance_service import yfinance_service
 from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
+from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,8 @@ class DataPreparationLayer:
         self.fundamentals_cache = fundamentals_cache
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
+        self._yfinance_service = get_yfinance_service()
+        self._rate_limiter = get_rate_limiter()
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -129,7 +131,7 @@ class DataPreparationLayer:
                 # (yfinance_service has its own rate limiter)
                 logger.debug(f"Cache MISS for {symbol} - fetching from yfinance")
                 price_data = self._fetch_with_retry(
-                    yfinance_service.get_historical_data,
+                    self._yfinance_service.get_historical_data,
                     symbol,
                     period=requirements.price_period,
                     use_cache=False,  # Already checked cache
@@ -277,7 +279,7 @@ class DataPreparationLayer:
                     # (yfinance_service has its own rate limiter)
                     try:
                         price_data = self._fetch_with_retry(
-                            yfinance_service.get_historical_data,
+                            self._yfinance_service.get_historical_data,
                             symbol,
                             period=requirements.price_period,
                         )
@@ -354,9 +356,8 @@ class DataPreparationLayer:
         """
         try:
             import yfinance as yf
-            from ..services.rate_limiter import rate_limiter
             from ..config import settings
-            rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
+            self._rate_limiter.wait("yfinance", min_interval_s=1.0 / settings.yfinance_rate_limit)
 
             ticker = yf.Ticker(symbol)
             info = ticker.info

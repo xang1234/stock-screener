@@ -117,9 +117,11 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     benchmark_cache.get_spy_data.side_effect = AssertionError("benchmark fetch should not be used")
     service.benchmark_cache = benchmark_cache
 
+    stock_universe_service = Mock()
+    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
     monkeypatch.setattr(
-        "app.services.stock_universe_service.stock_universe_service.get_active_symbols",
-        lambda db: ["AAPL"],
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: stock_universe_service,
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -169,9 +171,11 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
     benchmark_cache.get_spy_data.side_effect = AssertionError("benchmark fetch should not be used")
     service.benchmark_cache = benchmark_cache
 
+    stock_universe_service = Mock()
+    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
     monkeypatch.setattr(
-        "app.services.stock_universe_service.stock_universe_service.get_active_symbols",
-        lambda db: ["AAPL"],
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: stock_universe_service,
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -220,9 +224,11 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
     benchmark_cache.get_spy_data.return_value = spy_data
     service.benchmark_cache = benchmark_cache
 
+    stock_universe_service = Mock()
+    stock_universe_service.get_active_symbols.return_value = ["AAPL"]
     monkeypatch.setattr(
-        "app.services.stock_universe_service.stock_universe_service.get_active_symbols",
-        lambda db: ["AAPL"],
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: stock_universe_service,
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
@@ -271,9 +277,11 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
     benchmark_cache.get_spy_data.return_value = spy_data
     service.benchmark_cache = benchmark_cache
 
+    stock_universe_service = Mock()
+    stock_universe_service.get_active_symbols.return_value = ["AAPL", "MZYX-U"]
     monkeypatch.setattr(
-        "app.services.stock_universe_service.stock_universe_service.get_active_symbols",
-        lambda db: ["AAPL", "MZYX-U"],
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: stock_universe_service,
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",

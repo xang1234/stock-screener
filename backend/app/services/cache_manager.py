@@ -206,8 +206,9 @@ class CacheManager:
                     consecutive_backoffs = 0  # Reset on successful batch
                     # Normal rate limiting between batches (Redis-backed distributed limiter)
                     if rate_limit > 0 and batch_num < total_batches - 1:
-                        from .rate_limiter import rate_limiter
-                        rate_limiter.wait("yfinance:batch", min_interval_s=rate_limit)
+                        from ..wiring.bootstrap import get_rate_limiter
+
+                        get_rate_limiter().wait("yfinance:batch", min_interval_s=rate_limit)
 
             except Exception as e:
                 logger.error(f"Error warming batch {batch_num + 1}: {e}", exc_info=True)

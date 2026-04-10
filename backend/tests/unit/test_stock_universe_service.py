@@ -5,7 +5,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
-from app.services.stock_universe_service import stock_universe_service
+from app.services.stock_universe_service import StockUniverseService
+
+stock_universe_service = StockUniverseService()
 
 
 def _make_session():

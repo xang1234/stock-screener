@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from ..config import settings
+from ..wiring.bootstrap import get_eps_rating_service, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class BulkDataFetcher:
     PRICE_BATCH_SUCCESS_STREAK_TO_GROW = 5
     PRICE_BATCH_GROWTH_COOLDOWN_BATCHES = 3
     PRICE_BATCH_RETRY_BACKOFF_SECONDS = (30, 60, 120)
+
+    def __init__(self) -> None:
+        self._rate_limiter = get_rate_limiter()
+        self._eps_rating_service = get_eps_rating_service()
 
     @staticmethod
     def _build_error_result(symbol: str, error: str) -> Dict[str, Any]:
@@ -319,8 +324,6 @@ class BulkDataFetcher:
                 'eps_years_available': int
             }
         """
-        from .eps_rating_service import eps_rating_service
-
         result = {
             'eps_5yr_cagr': None,
             'eps_q1_yoy': None,
@@ -337,7 +340,7 @@ class BulkDataFetcher:
             quarterly_income = ticker.quarterly_income_stmt
 
             # Use EPS rating service to calculate all components
-            eps_data = eps_rating_service.calculate_eps_rating_data(
+            eps_data = self._eps_rating_service.calculate_eps_rating_data(
                 annual_income,
                 quarterly_income
             )
@@ -471,8 +474,6 @@ class BulkDataFetcher:
         if not symbols:
             return {}
 
-        from .rate_limiter import rate_limiter
-
         batch_size = max(
             self.MIN_PRICE_BATCH_SIZE,
             min(start_batch_size or self.DEFAULT_PRICE_BATCH_SIZE, self.MAX_PRICE_BATCH_SIZE),
@@ -510,7 +511,7 @@ class BulkDataFetcher:
                     success_streak = 0
 
             if batch_start + len(batch_symbols) < len(symbols):
-                rate_limiter.wait(
+                self._rate_limiter.wait(
                     "yfinance:batch",
                     min_interval_s=settings.yfinance_batch_rate_limit_interval,
                 )
@@ -674,8 +675,7 @@ class BulkDataFetcher:
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
-                        from .rate_limiter import rate_limiter
-                        rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
+                        self._rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
 
             except Exception as e:
                 logger.error(f"Batch error: {e}")
@@ -696,8 +696,7 @@ class BulkDataFetcher:
                 consecutive_backoffs = 0  # Reset on successful batch
                 # Normal rate limit between batches
                 if batch_num < total_batches - 1:
-                    from .rate_limiter import rate_limiter
-                    rate_limiter.wait("yfinance:batch", min_interval_s=delay_between_batches)
+                    self._rate_limiter.wait("yfinance:batch", min_interval_s=delay_between_batches)
 
         success_count = len([r for r in all_results.values() if not r.get('has_error', False)])
         logger.info(f"Batch fundamentals complete: {success_count}/{len(symbols)} successful")
@@ -769,8 +768,7 @@ class BulkDataFetcher:
 
                     # Rate limit between individual ticker fetches
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
-                        from .rate_limiter import rate_limiter
-                        rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
+                        self._rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
 
             except Exception as e:
                 logger.warning(f"Batch error: {e}")

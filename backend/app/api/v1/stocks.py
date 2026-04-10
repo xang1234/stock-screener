@@ -26,7 +26,12 @@ from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfil
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
-from ...wiring.bootstrap import get_fundamentals_cache, get_price_cache, get_uow
+from ...wiring.bootstrap import (
+    get_fundamentals_cache,
+    get_price_cache,
+    get_uow,
+    get_yfinance_service,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,9 +50,7 @@ def _get_strategy_profile_service():
 
 
 def _get_yfinance_service():
-    from ...services.yfinance_service import yfinance_service
-
-    return yfinance_service
+    return get_yfinance_service()
 
 
 def _build_data_fetcher(db: Session):

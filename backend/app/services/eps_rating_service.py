@@ -373,7 +373,3 @@ class EPSRatingService:
             ratings[symbol] = eps_rating
 
         return ratings
-
-
-# Singleton instance
-eps_rating_service = EPSRatingService()
