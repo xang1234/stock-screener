@@ -181,9 +181,9 @@ SPY benchmark refresh uses distributed locking to prevent thundering herd on cac
 
 ### LLM Integration
 
-Supported provider path is Groq for assistant/research, Minimax for primary theme extraction, Z.AI as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
+Assistant runtime is Hermes-backed via `services/assistant_gateway_service.py` (`HERMES_API_BASE`, optional `HERMES_API_KEY`).
 
-Assistant gateway lives in `services/assistant_gateway_service.py`; model/provider routing lives under `services/llm/`.
+For non-assistant workflows, the recommended provider path is Groq for research tasks, Minimax for primary theme extraction, Z.AI as extraction fallback, and Tavily/Serper for web search. Additional provider hooks may still exist in code, but they are not part of the recommended deployment contract.
 
 ## Database
 
