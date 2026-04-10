@@ -95,6 +95,7 @@ class HybridFundamentalsService:
             )
         if resolved_rate_limiter is None:
             resolved_rate_limiter = getattr(finviz_service, "_rate_limiter", None)
+        self._finviz_rate_limiter = resolved_rate_limiter
         self.bulk_fetcher = BulkDataFetcher(rate_limiter=resolved_rate_limiter)
 
         self.finviz_service = finviz_service
@@ -373,9 +374,7 @@ class HybridFundamentalsService:
             """Fetch finviz data for a chunk of symbols."""
             chunk_results = {}
             # Create a separate FinvizService instance for thread safety
-            from ..wiring.bootstrap import get_rate_limiter
-
-            finviz = FinvizService(rate_limiter=get_rate_limiter())
+            finviz = FinvizService(rate_limiter=self._finviz_rate_limiter)
             for symbol in chunk_symbols:
                 data = finviz.get_finviz_only_fields(symbol)
                 chunk_results[symbol] = data or {}

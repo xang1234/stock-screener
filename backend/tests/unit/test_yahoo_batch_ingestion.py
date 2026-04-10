@@ -92,6 +92,13 @@ def test_fetch_batch_prices_uses_required_yfinance_flags(monkeypatch):
     assert captured["actions"] is True
 
 
+def test_bulk_data_fetcher_reuses_fallback_rate_limiter():
+    fetcher_one = BulkDataFetcher()
+    fetcher_two = BulkDataFetcher()
+
+    assert fetcher_one._rate_limiter is fetcher_two._rate_limiter
+
+
 def test_fetch_price_batch_with_retries_degrades_batch_size(monkeypatch):
     fetcher = BulkDataFetcher()
     calls = []

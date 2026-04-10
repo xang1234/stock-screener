@@ -10,6 +10,7 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
 from typing import TYPE_CHECKING, List, Dict, Optional, Any
+from threading import RLock
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -38,6 +39,8 @@ class BulkDataFetcher:
     PRICE_BATCH_SUCCESS_STREAK_TO_GROW = 5
     PRICE_BATCH_GROWTH_COOLDOWN_BATCHES = 3
     PRICE_BATCH_RETRY_BACKOFF_SECONDS = (30, 60, 120)
+    _fallback_lock = RLock()
+    _fallback_rate_limiter: "RedisRateLimiter | None" = None
 
     def __init__(
         self,
@@ -47,16 +50,19 @@ class BulkDataFetcher:
     ) -> None:
         # Keep standalone construction safe for tests/scripts while allowing
         # process-scoped injection from runtime wiring where needed.
-        self._rate_limiter = rate_limiter or self._build_default_rate_limiter()
+        self._rate_limiter = rate_limiter or self._get_fallback_rate_limiter()
         self._eps_rating_service = (
             eps_rating_service or self._build_default_eps_rating_service()
         )
 
-    @staticmethod
-    def _build_default_rate_limiter() -> "RedisRateLimiter":
-        from .rate_limiter import RedisRateLimiter
+    @classmethod
+    def _get_fallback_rate_limiter(cls) -> "RedisRateLimiter":
+        with cls._fallback_lock:
+            if cls._fallback_rate_limiter is None:
+                from .rate_limiter import RedisRateLimiter
 
-        return RedisRateLimiter()
+                cls._fallback_rate_limiter = RedisRateLimiter()
+            return cls._fallback_rate_limiter
 
     @staticmethod
     def _build_default_eps_rating_service() -> "EPSRatingService":
