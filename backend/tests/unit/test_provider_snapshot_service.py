@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 from datetime import date, datetime
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -69,6 +70,18 @@ def _make_session():
     return TestingSessionLocal
 
 
+def _make_provider_snapshot_service(
+    *,
+    fundamentals_cache=None,
+    price_cache=None,
+):
+    return ProviderSnapshotService(
+        price_cache=price_cache or _StubPriceCache(),
+        fundamentals_cache=fundamentals_cache or _StubFundamentalsCache(),
+        rate_limiter=MagicMock(),
+    )
+
+
 def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -92,7 +105,7 @@ def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkey
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     monkeypatch.setattr(
         service,
         "_build_snapshot_rows",
@@ -160,7 +173,7 @@ def test_hydrate_published_snapshot_fetches_yahoo_only_fields_for_missing_scan_d
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache()
     service.price_cache = _StubPriceCache()
     service.technical_calc = _StubTechnicalCalc()
@@ -234,7 +247,7 @@ def test_hydrate_published_snapshot_can_skip_yahoo_when_disabled():
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache()
     service.price_cache = _StubPriceCache()
     service.technical_calc = _StubTechnicalCalc()
@@ -312,7 +325,7 @@ def test_hydrate_published_snapshot_skips_unsupported_yahoo_symbols():
             self.cached_only_fresh_calls.append((list(symbols), period))
             return {symbol: None for symbol in symbols}
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache()
     service.price_cache = _RecordingPriceCache()
     service.technical_calc = _StubTechnicalCalc()
@@ -370,7 +383,7 @@ def test_hydrate_published_snapshot_emits_progress_events():
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache()
     service.price_cache = _StubPriceCache()
     service.technical_calc = _StubTechnicalCalc()
@@ -413,7 +426,7 @@ def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(mon
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     monkeypatch.setattr(
         service,
         "_build_snapshot_rows",
@@ -491,7 +504,7 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache(
         cached={
             "AAPL": {
@@ -624,7 +637,7 @@ def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp
     )
     db.commit()
 
-    service = ProviderSnapshotService()
+    service = _make_provider_snapshot_service()
     service.fundamentals_cache = _StubFundamentalsCache(
         cached={
             "AAPL": {
@@ -651,10 +664,12 @@ def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp
     )
     service.import_weekly_reference_bundle(db, input_path=bundle_path)
 
-    monkeypatch.setattr(fundamentals_cache_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
 
-    service.fundamentals_cache = FundamentalsCacheService()
+    service.fundamentals_cache = FundamentalsCacheService(
+        redis_client=None,
+        session_factory=TestingSessionLocal,
+    )
     service.price_cache = _StubPriceCache()
     service.technical_calc = _StubTechnicalCalc()
 
@@ -667,7 +682,11 @@ def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp
 
 
 def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required_fields(monkeypatch):
-    service = FundamentalsCacheService(redis_client=None)
+    monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
+    service = FundamentalsCacheService(
+        redis_client=None,
+        session_factory=lambda: MagicMock(),
+    )
     incomplete = {
         "sector": "Technology",
         "industry": "Software",

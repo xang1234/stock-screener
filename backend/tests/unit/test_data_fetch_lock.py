@@ -349,17 +349,31 @@ class TestSerializedDataFetchDecorator:
 class TestPrewarmScanCacheImpl:
     """Tests for _prewarm_scan_cache_impl."""
 
-    @patch("app.tasks.cache_tasks.CacheManager")
-    @patch("app.tasks.cache_tasks.SessionLocal")
-    @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
-    def test_impl_with_no_task(self, mock_market, mock_session_local, mock_cache_cls):
+    def test_impl_with_no_task(self, monkeypatch):
         """_prewarm_scan_cache_impl works without Celery task context."""
-        from app.tasks.cache_tasks import _prewarm_scan_cache_impl
+        import app.tasks.cache_tasks as module
+
+        monkeypatch.setattr(module, "format_market_status", lambda: "closed")
+        _prewarm_scan_cache_impl = module._prewarm_scan_cache_impl
 
         mock_db = MagicMock()
-        mock_session_local.return_value = mock_db
+        mock_session_local = MagicMock(return_value=mock_db)
         mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
+        if hasattr(module, "get_session_factory"):
+            mock_get_session_factory = MagicMock(return_value=mock_session_local)
+            monkeypatch.setattr(module, "get_session_factory", mock_get_session_factory)
+        else:
+            mock_get_session_factory = None
+            monkeypatch.setattr(module, "SessionLocal", mock_session_local)
+
+        if hasattr(module, "get_cache_manager"):
+            mock_get_cache_manager = MagicMock(return_value=mock_cache)
+            monkeypatch.setattr(module, "get_cache_manager", mock_get_cache_manager)
+        else:
+            mock_get_cache_manager = None
+            mock_cache_cls = MagicMock(return_value=mock_cache)
+            monkeypatch.setattr(module, "CacheManager", mock_cache_cls)
+
         mock_cache.warm_all_caches.return_value = {
             'warmed': 2, 'failed': 0, 'already_cached': 1
         }
@@ -376,18 +390,30 @@ class TestPrewarmScanCacheImpl:
         assert result['total'] == 3
         assert 'completed_at' in result
         # DB should be opened and closed by impl (owns_db=True)
+        if mock_get_session_factory is not None:
+            mock_get_session_factory.assert_called_once()
         mock_session_local.assert_called_once()
+        if mock_get_cache_manager is not None:
+            mock_get_cache_manager.assert_called_once_with(db=mock_db)
         mock_db.close.assert_called_once()
 
-    @patch("app.tasks.cache_tasks.CacheManager")
-    @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
-    def test_impl_with_shared_db(self, mock_market, mock_cache_cls):
+    def test_impl_with_shared_db(self, monkeypatch):
         """_prewarm_scan_cache_impl uses provided db and does not close it."""
-        from app.tasks.cache_tasks import _prewarm_scan_cache_impl
+        import app.tasks.cache_tasks as module
+
+        monkeypatch.setattr(module, "format_market_status", lambda: "closed")
+        _prewarm_scan_cache_impl = module._prewarm_scan_cache_impl
 
         mock_db = MagicMock()
         mock_cache = MagicMock()
-        mock_cache_cls.return_value = mock_cache
+        if hasattr(module, "get_cache_manager"):
+            mock_get_cache_manager = MagicMock(return_value=mock_cache)
+            monkeypatch.setattr(module, "get_cache_manager", mock_get_cache_manager)
+        else:
+            mock_get_cache_manager = None
+            mock_cache_cls = MagicMock(return_value=mock_cache)
+            monkeypatch.setattr(module, "CacheManager", mock_cache_cls)
+
         mock_cache.warm_all_caches.return_value = {
             'warmed': 1, 'failed': 0, 'already_cached': 0
         }
@@ -400,6 +426,8 @@ class TestPrewarmScanCacheImpl:
         )
 
         assert result['warmed'] == 1
+        if mock_get_cache_manager is not None:
+            mock_get_cache_manager.assert_called_once_with(db=mock_db)
         # DB should NOT be closed — caller owns it
         mock_db.close.assert_not_called()
 
