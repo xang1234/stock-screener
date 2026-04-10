@@ -22,7 +22,7 @@ from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.cache_manager import CacheManager
-from app.services.price_cache_service import PriceCacheService
+from app.wiring.bootstrap import get_price_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +58,7 @@ try:
 
     # Step 2: Clear Redis cache
     print("\n2. Clearing Redis price cache...")
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
 
     if price_cache._redis_client:
         price_keys = price_cache._redis_client.keys("price:*")

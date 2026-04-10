@@ -51,13 +51,7 @@ def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
     price_cache.get_historical_data.side_effect = AssertionError(
         "breadth should not use per-symbol historical fetches"
     )
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    calculator = BreadthCalculatorService(db)
+    calculator = BreadthCalculatorService(db, price_cache)
     monkeypatch.setattr(
         calculator,
         "_calculate_ratios",
@@ -87,13 +81,7 @@ def test_calculate_daily_breadth_counts_fresh_cache_misses(monkeypatch):
         "AAA": _make_price_df(date(2026, 3, 20), 100.0),
         "BBB": None,
     }
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    calculator = BreadthCalculatorService(db)
+    calculator = BreadthCalculatorService(db, price_cache)
     monkeypatch.setattr(
         calculator,
         "_calculate_ratios",
@@ -119,13 +107,7 @@ def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch
         "AAA": _make_price_df(date(2026, 3, 19), 100.0),
         "BBB": None,
     }
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    calculator = BreadthCalculatorService(db)
+    calculator = BreadthCalculatorService(db, price_cache)
     price_cache.get_historical_data.return_value = _make_price_df(date(2026, 3, 19), 150.0)
     monkeypatch.setattr(
         calculator,
@@ -145,13 +127,7 @@ def test_calculate_stock_metrics_reads_cached_only(monkeypatch):
     db = MagicMock(spec=[])
     price_cache = MagicMock()
     price_cache.get_historical_data.return_value = _make_price_df(date(2026, 3, 20), 150.0)
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    calculator = BreadthCalculatorService(db)
+    calculator = BreadthCalculatorService(db, price_cache)
     metrics = calculator._calculate_stock_metrics("AAA", date(2026, 3, 20))
 
     assert metrics is not None
@@ -194,13 +170,7 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     price_cache = MagicMock()
     price_cache.get_many_cached_only.return_value = {"AAA": aaa_df, "BBB": None}
     price_cache.get_historical_data.return_value = bbb_df
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    service = BreadthCalculatorService(db)
+    service = BreadthCalculatorService(db, price_cache)
     trading_dates = [date(2026, 3, 12), date(2026, 3, 13)]
 
     def fake_stock_metrics(prices_df, end_date):
@@ -251,13 +221,7 @@ def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
 
     price_cache = MagicMock()
     price_cache.get_many_cached_only.return_value = {"AAA": aaa_df}
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    service = BreadthCalculatorService(db)
+    service = BreadthCalculatorService(db, price_cache)
     trading_date = date(2026, 3, 12)
 
     monkeypatch.setattr(
@@ -310,13 +274,7 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
     price_cache.get_historical_data.side_effect = AssertionError(
         "cache-only backfill must not fetch per-symbol history"
     )
-
-    monkeypatch.setattr(
-        "app.services.breadth_calculator_service.PriceCacheService.get_instance",
-        staticmethod(lambda: price_cache),
-    )
-
-    service = BreadthCalculatorService(db)
+    service = BreadthCalculatorService(db, price_cache)
     trading_date = date(2026, 3, 12)
     monkeypatch.setattr(
         service,

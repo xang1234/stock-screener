@@ -51,7 +51,7 @@ from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.scanners.base_screener import DataRequirements, StockData
 from app.scanners.setup_engine_scanner import attach_setup_engine
 from app.scanners.setup_engine_screener import SetupEngineScanner
-from app.services.benchmark_cache_service import BenchmarkCacheService
+from app.wiring.bootstrap import get_benchmark_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,10 +109,10 @@ def _fetch_price_data(
 ) -> Optional[pd.DataFrame]:
     """Fetch full price history for a symbol via PriceCacheService → yfinance."""
     try:
-        from app.services.price_cache_service import PriceCacheService
+        from app.wiring.bootstrap import get_price_cache
         from app.services.yfinance_service import yfinance_service
 
-        price_cache = PriceCacheService.get_instance()
+        price_cache = get_price_cache()
         price_data = price_cache.get_historical_data(symbol, period="5y")
 
         if price_data is None or price_data.empty:
@@ -304,7 +304,7 @@ def run_backfill(args: argparse.Namespace) -> None:
 
         # ── 6. Fetch SPY benchmark data ONCE ──────────────────────────
         logger.info("Fetching SPY benchmark data...")
-        benchmark_svc = BenchmarkCacheService.get_instance()
+        benchmark_svc = get_benchmark_cache()
         spy_data = benchmark_svc.get_spy_data(period="2y")
         if spy_data is None or spy_data.empty:
             logger.error("Failed to fetch SPY benchmark data. Cannot proceed.")

@@ -7,7 +7,7 @@ and to force-release a stuck lock if needed.
 from fastapi import APIRouter, HTTPException
 
 from ...schemas.data_fetch_status import DataFetchStatusResponse, ForceReleaseLockResponse
-from ...tasks.data_fetch_lock import DataFetchLock
+from ...wiring.bootstrap import get_data_fetch_lock
 
 router = APIRouter(prefix="/data-fetch", tags=["data-fetch"])
 
@@ -25,7 +25,7 @@ async def get_data_fetch_status():
         - is_running: Whether a data-fetch task is currently running
         - current_task: Info about the running task (task_name, task_id, started_at, ttl_seconds)
     """
-    lock = DataFetchLock.get_instance()
+    lock = get_data_fetch_lock()
     holder = lock.get_current_holder()
 
     return DataFetchStatusResponse(
@@ -47,7 +47,7 @@ async def force_release_lock():
     Returns:
         ForceReleaseLockResponse with success status and message
     """
-    lock = DataFetchLock.get_instance()
+    lock = get_data_fetch_lock()
 
     # Check if lock exists
     if not lock.is_locked():

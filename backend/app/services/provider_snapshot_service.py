@@ -24,8 +24,6 @@ from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
-from .fundamentals_cache_service import FundamentalsCacheService
-from .price_cache_service import PriceCacheService
 from .technical_calculator_service import TechnicalCalculatorService
 
 logger = logging.getLogger(__name__)
@@ -82,9 +80,11 @@ class ProviderSnapshotService:
     WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
 
     def __init__(self) -> None:
+        from ..wiring.bootstrap import get_fundamentals_cache, get_price_cache
+
         self.parser = FinvizParser()
-        self.price_cache = PriceCacheService.get_instance()
-        self.fundamentals_cache = FundamentalsCacheService.get_instance()
+        self.price_cache = get_price_cache()
+        self.fundamentals_cache = get_fundamentals_cache()
         self.technical_calc = TechnicalCalculatorService()
         self.bulk_fetcher = BulkDataFetcher()
 

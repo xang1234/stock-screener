@@ -19,10 +19,12 @@ from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreReposito
 from app.models.stock import StockPrice
 from app.schemas.groups import GroupRankResponse, GroupRankingsResponse, MoversResponse
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
-from app.services.fundamentals_cache_service import FundamentalsCacheService
-from app.services.ibd_group_rank_service import IBDGroupRankService
-from app.services.price_cache_service import PriceCacheService
 from app.services.ui_snapshot_service import UISnapshotService
+from app.wiring.bootstrap import (
+    get_fundamentals_cache,
+    get_group_rank_service,
+    get_price_cache,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -73,8 +75,8 @@ class StaticSiteExportService:
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
         self._ui_snapshot_service = UISnapshotService(session_factory)
-        self._price_cache = PriceCacheService.get_instance()
-        self._fundamentals_cache = FundamentalsCacheService.get_instance()
+        self._price_cache = get_price_cache()
+        self._fundamentals_cache = get_fundamentals_cache()
 
     def export(self, output_dir: Path, *, clean: bool = True) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
@@ -439,7 +441,7 @@ class StaticSiteExportService:
         generated_at: str,
         expected_as_of_date: date,
     ) -> dict[str, Any]:
-        service = IBDGroupRankService.get_instance()
+        service = get_group_rank_service()
         rankings = service.get_current_rankings(
             db,
             limit=197,

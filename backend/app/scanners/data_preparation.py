@@ -16,6 +16,7 @@ from ..domain.common.errors import DataFetchError
 from ..services.yfinance_service import yfinance_service
 from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..services.fundamentals_cache_service import FundamentalsCacheService
+from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
 
 logger = logging.getLogger(__name__)
@@ -31,10 +32,19 @@ class DataPreparationLayer:
     multiple screeners, then shares that data across all screeners.
     """
 
-    def __init__(self, max_retries: int = 0, retry_base_delay: float = 1.0):
+    def __init__(
+        self,
+        *,
+        price_cache: PriceCacheService,
+        benchmark_cache: BenchmarkCacheService,
+        fundamentals_cache: FundamentalsCacheService,
+        max_retries: int = 0,
+        retry_base_delay: float = 1.0,
+    ):
         """Initialize data preparation layer."""
-        self.benchmark_cache = BenchmarkCacheService.get_instance()
-        self.fundamentals_cache = FundamentalsCacheService.get_instance()
+        self.price_cache = price_cache
+        self.benchmark_cache = benchmark_cache
+        self.fundamentals_cache = fundamentals_cache
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
 
@@ -110,12 +120,9 @@ class DataPreparationLayer:
         # OPTIMIZATION: Check cache first to avoid rate limiting on cache hits
         price_data = None
         try:
-            from ..services.price_cache_service import PriceCacheService
-            price_cache = PriceCacheService.get_instance()
-
             # Check cache first (no rate limiting)
             # Note: get_historical_data() handles Redis → DB fallback internally and ensures sufficient data
-            price_data = price_cache.get_historical_data(symbol, period=requirements.price_period)
+            price_data = self.price_cache.get_historical_data(symbol, period=requirements.price_period)
 
             if price_data is None or price_data.empty:
                 # Cache miss or insufficient - fetch directly
@@ -232,13 +239,10 @@ class DataPreparationLayer:
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
         # Instead of N individual Redis calls, make 2 pipeline calls (1 per cache type)
-        from ..services.price_cache_service import PriceCacheService
-        price_cache = PriceCacheService.get_instance()
-
         # Get cached data for all symbols in parallel
         # Price data is always needed (no needs_price_data flag)
         # IMPORTANT: Pass period so get_many() can fall back to database if Redis only has 30 days
-        cached_prices = price_cache.get_many(symbols, period=requirements.price_period)
+        cached_prices = self.price_cache.get_many(symbols, period=requirements.price_period)
         # Fundamentals cache now includes quarterly growth data (consolidated)
         cached_fundamentals = self.fundamentals_cache.get_many(symbols) if requirements.needs_fundamentals else {}
 

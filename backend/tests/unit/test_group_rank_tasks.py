@@ -14,7 +14,7 @@ def _patch_serialized_lock(monkeypatch):
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
     )
 
@@ -42,15 +42,7 @@ def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypat
     fake_service = MagicMock()
     fake_service.price_cache = fake_price_cache
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     result = module.calculate_daily_group_rankings.run()
 
@@ -83,15 +75,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
         {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
     ]
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     with module.allow_same_day_group_rank_warmup_bypass():
         result = module.calculate_daily_group_rankings.run()
@@ -137,15 +121,7 @@ def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(m
         }
     )
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     result = module.calculate_daily_group_rankings.run()
 
@@ -176,15 +152,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
         {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
     ]
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     result = module.calculate_daily_group_rankings.run("2026-03-19")
 
@@ -218,15 +186,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
         {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
     ]
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     result = module.calculate_daily_group_rankings.run(
         "2026-04-02",
@@ -267,15 +227,7 @@ def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
     fake_service.price_cache = fake_price_cache
     fake_service.calculate_group_rankings.side_effect = ConnectionError("network down")
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     retry_calls = []
 
@@ -319,15 +271,7 @@ def test_daily_group_rankings_reraises_soft_time_limit(monkeypatch):
     fake_service.price_cache = fake_price_cache
     fake_service.calculate_group_rankings.side_effect = SoftTimeLimitExceeded()
 
-    monkeypatch.setattr(
-        module,
-        "IBDGroupRankService",
-        type(
-            "FakeGroupRankServiceFacade",
-            (),
-            {"get_instance": staticmethod(lambda: fake_service)},
-        ),
-    )
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
     with pytest.raises(SoftTimeLimitExceeded):
         module.calculate_daily_group_rankings.run()

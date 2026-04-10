@@ -37,8 +37,15 @@ def _make_session():
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
 
+def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: Mock | None = None):
+    return IBDGroupRankService(
+        price_cache=price_cache or Mock(),
+        benchmark_cache=benchmark_cache or Mock(),
+    )
+
+
 def test_get_historical_rank_picks_closest_date():
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
     current_date = date(2024, 1, 22)
@@ -60,7 +67,7 @@ def test_get_historical_rank_picks_closest_date():
 
 
 def test_get_historical_rank_prefers_earlier_on_tie():
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
     current_date = date(2024, 1, 22)
@@ -96,7 +103,7 @@ def _price_frame() -> pd.DataFrame:
 
 
 def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     spy_data = _price_frame()
     aapl_data = _price_frame()
 
@@ -149,7 +156,7 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
 
 
 def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     spy_data = _price_frame()
 
     price_cache = Mock()
@@ -200,7 +207,7 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
 
 
 def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     spy_data = _price_frame()
     aapl_data = _price_frame()
 
@@ -252,7 +259,7 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
 
 
 def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     spy_data = _price_frame()
     aapl_data = _price_frame()
 
@@ -295,7 +302,7 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
 
 
 def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     price_data = _price_frame()
 
     monkeypatch.setattr(
@@ -334,7 +341,7 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
 
 
 def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     price_data = _price_frame()
 
     monkeypatch.setattr(
@@ -369,7 +376,7 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
 
 
 def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     price_data = _price_frame()
 
     monkeypatch.setattr(
@@ -395,7 +402,7 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
 
 
 def test_get_current_rankings_can_target_explicit_date():
-    service = IBDGroupRankService.get_instance()
+    service = _make_group_rank_service()
     db_session = _make_session()
     group = f"TEST_GROUP_UNIT_{uuid4().hex}"
 

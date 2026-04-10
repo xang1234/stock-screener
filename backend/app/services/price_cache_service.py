@@ -13,7 +13,7 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 import json
 import logging
 import pickle
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, Callable
 from datetime import datetime, timedelta, date, time
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -55,10 +55,6 @@ class PriceCacheService:
     - Merge cached + new data on retrieval
     """
 
-    # Class-level singleton instance
-    _instance = None
-    _redis_client = None
-
     # Redis keys
     REDIS_KEY_PREFIX = "price:"
     REDIS_KEY_RECENT = "price:{symbol}:recent"
@@ -69,8 +65,13 @@ class PriceCacheService:
     CACHE_TTL_SECONDS = 604800  # 7 days (aligned with config.cache_ttl_seconds)
     RECENT_DAYS = 1825  # Keep last 5 years in Redis (for 5-year volume analysis)
 
-    def __init__(self, redis_client: Optional[redis.Redis] = None):
+    def __init__(
+        self,
+        redis_client: Optional[redis.Redis] = None,
+        session_factory: Optional[Callable[[], Session]] = None,
+    ):
         """Initialize price cache service."""
+        self._session_factory = session_factory or SessionLocal
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -102,17 +103,6 @@ class PriceCacheService:
             key_template=self.SYMBOL_FAILURE_KEY,
             ttl_seconds=self.SYMBOL_FAILURE_TTL,
         )
-
-    @classmethod
-    def get_instance(cls, redis_client: Optional[redis.Redis] = None):
-        """
-        Get singleton instance of PriceCacheService.
-
-        Thread-safe singleton pattern.
-        """
-        if cls._instance is None:
-            cls._instance = cls(redis_client)
-        return cls._instance
 
     def get_historical_data(
         self,
@@ -286,7 +276,7 @@ class PriceCacheService:
         Returns:
             Tuple of (DataFrame, last_date) or (None, None)
         """
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Calculate date range
@@ -362,7 +352,7 @@ class PriceCacheService:
         if not symbols:
             return {}
 
-        db = SessionLocal()
+        db = self._session_factory()
         results = {}
 
         try:
@@ -807,8 +797,8 @@ class PriceCacheService:
                 }
 
             # Check if a refresh task is currently running
-            from ..tasks.data_fetch_lock import DataFetchLock
-            lock = DataFetchLock.get_instance()
+            from ..wiring.bootstrap import get_data_fetch_lock
+            lock = get_data_fetch_lock()
             current_holder = lock.get_current_holder()
 
             if current_holder and current_holder.get('task_name'):
@@ -1277,7 +1267,7 @@ class PriceCacheService:
         Uses insert for historical rows and upsert/replace for the latest row so
         intraday partial bars can be corrected after the close.
         """
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Reset index to get Date as a column
@@ -1500,7 +1490,7 @@ class PriceCacheService:
         if not batch_data:
             return
 
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             symbols = list(batch_data.keys())
@@ -1819,7 +1809,7 @@ class PriceCacheService:
 
         from .bulk_data_fetcher import BulkDataFetcher
 
-        active_query_db = SessionLocal()
+        active_query_db = self._session_factory()
         try:
             active_symbols = {
                 row[0]
@@ -1922,7 +1912,7 @@ class PriceCacheService:
                 logger.debug(f"Error checking Redis stats for {symbol}: {e}")
 
         # Check Database
-        db = SessionLocal()
+        db = self._session_factory()
         try:
             count = db.query(StockPrice).filter(StockPrice.symbol == symbol).count()
 

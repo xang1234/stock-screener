@@ -98,6 +98,7 @@ def data_layer(mock_price_cache, mock_yfinance, mock_benchmark_cache, mock_funda
     layer = DataPreparationLayer.__new__(DataPreparationLayer)
     layer._max_retries = 2
     layer._retry_base_delay = 0.01
+    layer.price_cache = mock_price_cache
     layer.benchmark_cache = mock_benchmark_cache
     layer.fundamentals_cache = mock_fundamentals_cache
     return layer
@@ -456,7 +457,13 @@ class TestAdapterDelegation:
     def test_adapter_delegates_prepare_data(self):
         with patch.object(DataPreparationLayer, "prepare_data") as mock_pd:
             mock_pd.return_value = MagicMock(spec=StockData)
-            adapter = DataPrepStockDataProvider()
+            adapter = DataPrepStockDataProvider(
+                cache_bundle=MagicMock(
+                    price=MagicMock(),
+                    benchmark=MagicMock(),
+                    fundamentals=MagicMock(),
+                )
+            )
             adapter.prepare_data("AAPL", REQUIREMENTS)
 
             mock_pd.assert_called_once_with("AAPL", REQUIREMENTS, allow_partial=True)
@@ -464,7 +471,13 @@ class TestAdapterDelegation:
     def test_adapter_delegates_prepare_data_bulk(self):
         with patch.object(DataPreparationLayer, "prepare_data_bulk") as mock_pdb:
             mock_pdb.return_value = {}
-            adapter = DataPrepStockDataProvider()
+            adapter = DataPrepStockDataProvider(
+                cache_bundle=MagicMock(
+                    price=MagicMock(),
+                    benchmark=MagicMock(),
+                    fundamentals=MagicMock(),
+                )
+            )
             adapter.prepare_data_bulk(["AAPL", "MSFT"], REQUIREMENTS)
 
             mock_pdb.assert_called_once_with(
@@ -478,7 +491,13 @@ class TestAdapterDelegation:
     def test_adapter_delegates_prepare_data_bulk_batch_only_flags(self):
         with patch.object(DataPreparationLayer, "prepare_data_bulk") as mock_pdb:
             mock_pdb.return_value = {}
-            adapter = DataPrepStockDataProvider()
+            adapter = DataPrepStockDataProvider(
+                cache_bundle=MagicMock(
+                    price=MagicMock(),
+                    benchmark=MagicMock(),
+                    fundamentals=MagicMock(),
+                )
+            )
             adapter.prepare_data_bulk(
                 ["AAPL", "MSFT"],
                 REQUIREMENTS,
@@ -497,7 +516,13 @@ class TestAdapterDelegation:
     def test_adapter_forwards_allow_partial(self):
         with patch.object(DataPreparationLayer, "prepare_data") as mock_pd:
             mock_pd.return_value = MagicMock(spec=StockData)
-            adapter = DataPrepStockDataProvider()
+            adapter = DataPrepStockDataProvider(
+                cache_bundle=MagicMock(
+                    price=MagicMock(),
+                    benchmark=MagicMock(),
+                    fundamentals=MagicMock(),
+                )
+            )
             adapter.prepare_data("AAPL", REQUIREMENTS, allow_partial=False)
 
             mock_pd.assert_called_once_with("AAPL", REQUIREMENTS, allow_partial=False)

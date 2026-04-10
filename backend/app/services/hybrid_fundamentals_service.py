@@ -56,7 +56,8 @@ class HybridFundamentalsService:
         yfinance_batch_size: int = 50,
         yfinance_delay_per_ticker: float = 1.5,
         yfinance_delay_between_batches: float = 2.0,
-        finviz_rate_limit: float = 0.5
+        finviz_rate_limit: float = 0.5,
+        price_cache: PriceCacheService | None = None,
     ):
         """
         Initialize HybridFundamentalsService.
@@ -77,7 +78,9 @@ class HybridFundamentalsService:
         self.bulk_fetcher = BulkDataFetcher()
         self.technical_calc = TechnicalCalculatorService()
         self.finviz_service = FinvizService()
-        self.price_cache = PriceCacheService.get_instance()
+        from ..wiring.bootstrap import get_price_cache
+
+        self.price_cache = price_cache or get_price_cache()
 
     def fetch_fundamentals(
         self,

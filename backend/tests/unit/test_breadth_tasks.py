@@ -12,7 +12,7 @@ def _patch_serialized_lock(monkeypatch):
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
     monkeypatch.setattr(
-        "app.tasks.data_fetch_lock.DataFetchLock.get_instance",
+        "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
     )
 
@@ -55,7 +55,7 @@ def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkey
         "cache_miss_stocks": 25,
         "error_stocks": 0,
     }
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: fake_calculator)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: fake_calculator)
 
     result = module.calculate_daily_breadth.run()
 
@@ -115,7 +115,7 @@ def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
         "cache_miss_stocks": 0,
         "error_stocks": 0,
     }
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: fake_calculator)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: fake_calculator)
 
     result = module.calculate_daily_breadth.run("2026-04-02", force_cache_only=True)
 
@@ -148,7 +148,7 @@ def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):
         "errors": 0,
         "error_dates": [],
     }
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: fake_service)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: fake_service)
 
     result = module.backfill_breadth_data.run("2026-01-01", "2026-01-05")
 
@@ -173,7 +173,7 @@ def test_breadth_gapfill_retries_transient_outer_failures(monkeypatch):
     monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)
     monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=ConnectionError("network down")))
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: MagicMock())
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: MagicMock())
 
     retry_calls = []
 
@@ -204,7 +204,7 @@ def test_breadth_gapfill_reraises_soft_time_limit(monkeypatch):
     monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)
     monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(module, "calculate_daily_breadth", MagicMock(side_effect=SoftTimeLimitExceeded()))
-    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db: MagicMock())
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: MagicMock())
 
     with pytest.raises(SoftTimeLimitExceeded):
         module.calculate_daily_breadth_with_gapfill.run()

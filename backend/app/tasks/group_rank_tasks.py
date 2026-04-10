@@ -20,9 +20,9 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.ibd_group_rank_service import (
-    IBDGroupRankService,
     IncompleteGroupRankingCacheError,
 )
+from ..wiring.bootstrap import get_group_rank_service
 from ..utils.market_hours import is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
@@ -130,7 +130,7 @@ def calculate_daily_group_rankings(self, calculation_date: str = None, force_cac
 
     try:
         # Initialize service
-        service = IBDGroupRankService.get_instance()
+        service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_et
 
         if same_day_cache_only:
@@ -282,7 +282,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str):
 
     try:
         # Initialize service
-        service = IBDGroupRankService.get_instance()
+        service = get_group_rank_service()
 
         # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
         result = service.backfill_rankings_optimized(db, start, end)
@@ -364,7 +364,7 @@ def gapfill_group_rankings(self, max_days: int = 365):
     start_time = time.time()
 
     try:
-        service = IBDGroupRankService.get_instance()
+        service = get_group_rank_service()
 
         # Find missing dates
         missing_dates = service.find_missing_dates(db, lookback_days=max_days)
@@ -445,7 +445,7 @@ def backfill_group_rankings_1year(self):
     start_time = time.time()
 
     try:
-        service = IBDGroupRankService.get_instance()
+        service = get_group_rank_service()
 
         # Calculate date range
         end_date = get_eastern_now().date()

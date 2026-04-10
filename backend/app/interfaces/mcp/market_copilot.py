@@ -21,7 +21,8 @@ from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeConstituent, ThemeMetrics
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.schemas.scanning import ExplainResponse
-from app.services.task_registry_service import SCHEDULED_TASKS, TaskRegistryService
+from app.services.task_registry_service import SCHEDULED_TASKS
+from app.wiring.bootstrap import get_group_rank_service, get_task_registry_service
 from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase, CompareRunsQuery
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
 
@@ -833,10 +834,8 @@ class MarketCopilotService:
         )
 
     def _group_rankings(self, args: GroupRankingsArgs) -> ToolEnvelope:
-        from app.services.ibd_group_rank_service import IBDGroupRankService
-
         with self._session_scope() as db:
-            service = IBDGroupRankService.get_instance()
+            service = get_group_rank_service()
             rankings = service.get_current_rankings(db, limit=args.limit)
             movers = service.get_rank_movers(db, period=args.period, limit=min(args.limit, 10))
 
@@ -1423,7 +1422,7 @@ class MarketCopilotService:
         )
 
     def _task_rows(self, db: Session) -> list[dict[str, Any]]:
-        rows = TaskRegistryService.get_instance().get_all_scheduled_tasks(db)
+        rows = get_task_registry_service().get_all_scheduled_tasks(db)
         rows.sort(key=lambda row: row["name"])
         return rows
 

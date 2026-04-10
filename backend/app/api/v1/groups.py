@@ -26,7 +26,7 @@ from ...schemas.groups import (
     BackfillResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
-from ...wiring.bootstrap import get_ui_snapshot_service
+from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,7 @@ router = APIRouter()
 
 
 def _get_group_rank_service():
-    from ...services.ibd_group_rank_service import IBDGroupRankService
-
-    return IBDGroupRankService.get_instance()
+    return get_group_rank_service()
 
 
 def _require_task_controls() -> None:
@@ -378,7 +376,7 @@ async def get_ranking_gaps(
     Returns:
         Gap statistics and list of missing dates (limited to first 50)
     """
-    service = IBDGroupRankService.get_instance()
+    service = get_group_rank_service()
 
     missing_dates = service.find_missing_dates(db, lookback_days=max_days)
 

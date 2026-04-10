@@ -103,8 +103,6 @@ class DataFetchLock:
     serialization for defense-in-depth.
     """
 
-    _instance = None
-
     def __init__(self):
         if redis is None:
             raise RuntimeError("Redis package is not installed; DataFetchLock is unavailable")
@@ -116,13 +114,6 @@ class DataFetchLock:
         self.lock_timeout = getattr(settings, 'data_fetch_lock_timeout', 7200)
         self._release_script = self.redis.register_script(_RELEASE_LUA)
         self._extend_script = self.redis.register_script(_EXTEND_LUA)
-
-    @classmethod
-    def get_instance(cls) -> 'DataFetchLock':
-        """Get singleton instance of DataFetchLock."""
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
 
     def acquire(self, task_name: str, task_id: str) -> Tuple[bool, bool]:
         """
@@ -315,7 +306,9 @@ def serialized_data_fetch(task_name: str):
                 logger.info("Bypassing distributed data-fetch lock for %s", task_name)
                 return func(*args, **kwargs)
 
-            lock = DataFetchLock.get_instance()
+            from ..wiring.bootstrap import get_data_fetch_lock
+
+            lock = get_data_fetch_lock()
 
             # Get task ID from Celery request if available
             task_id = 'unknown'

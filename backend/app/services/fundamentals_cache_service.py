@@ -7,7 +7,7 @@ Uses Redis for hot cache and database for persistence.
 """
 import logging
 import pickle
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Callable
 from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
 
@@ -36,10 +36,6 @@ class FundamentalsCacheService:
     - Fetch only when missing or stale (> 7 days old)
     - Graceful fallback: Redis → Database → Live API
     """
-
-    # Class-level singleton instance
-    _instance = None
-    _redis_client = None
 
     # Redis keys
     REDIS_KEY_PREFIX = "fundamentals:"
@@ -102,8 +98,13 @@ class FundamentalsCacheService:
             normalized["ipo_date"] = self._coerce_date(normalized.get("ipo_date"))
         return normalized
 
-    def __init__(self, redis_client: Optional[redis.Redis] = None):
+    def __init__(
+        self,
+        redis_client: Optional[redis.Redis] = None,
+        session_factory: Optional[Callable[[], Session]] = None,
+    ):
         """Initialize fundamentals cache service."""
+        self._session_factory = session_factory or SessionLocal
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -115,17 +116,6 @@ class FundamentalsCacheService:
                 logger.warning("Redis connection failed. Will use database fallback.")
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
-
-    @classmethod
-    def get_instance(cls, redis_client: Optional[redis.Redis] = None):
-        """
-        Get singleton instance of FundamentalsCacheService.
-
-        Thread-safe singleton pattern.
-        """
-        if cls._instance is None:
-            cls._instance = cls(redis_client)
-        return cls._instance
 
     def get_fundamentals(
         self,
@@ -242,7 +232,7 @@ class FundamentalsCacheService:
         Returns:
             Tuple of (fundamentals_dict, last_update_datetime) or (None, None)
         """
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Query StockFundamental table
@@ -486,7 +476,7 @@ class FundamentalsCacheService:
 
         Uses upsert to handle existing records gracefully.
         """
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Check if record exists
@@ -842,7 +832,7 @@ class FundamentalsCacheService:
         if not symbols:
             return {}
 
-        db = SessionLocal()
+        db = self._session_factory()
         results = {}
 
         try:
@@ -1219,7 +1209,7 @@ class FundamentalsCacheService:
                 logger.debug(f"Error checking Redis stats for {symbol}: {e}")
 
         # Check Database
-        db = SessionLocal()
+        db = self._session_factory()
         try:
             record = db.query(StockFundamental).filter(
                 StockFundamental.symbol == symbol

@@ -21,10 +21,6 @@ DEFAULT_COOLDOWN_SECONDS = 60.0
 MAX_COOLDOWN_SECONDS = 300.0
 ROTATION_PROBABILITY = 0.5
 
-# Module-level singleton storage (not in dataclass)
-_zai_key_manager_instance: Optional["ZAIKeyManager"] = None
-_zai_key_manager_lock = threading.Lock()
-
 
 @dataclass
 class KeyState:
@@ -53,7 +49,7 @@ class ZAIKeyManager:
     """
     Manages multiple Z.AI API keys with rate-limit-aware rotation.
 
-    Thread-safe singleton that:
+    Thread-safe manager that:
     - Tracks multiple keys with usage stats
     - Rotates keys probabilistically AFTER rate limits (not during retry)
     - Provides stats for monitoring
@@ -71,31 +67,6 @@ class ZAIKeyManager:
         for key in self.keys:
             if key not in self._key_states:
                 self._key_states[key] = KeyState(key=key)
-
-    @classmethod
-    def get_instance(cls, keys: Optional[List[str]] = None) -> "ZAIKeyManager":
-        """Get or create the singleton instance."""
-        global _zai_key_manager_instance
-
-        if _zai_key_manager_instance is None:
-            with _zai_key_manager_lock:
-                if _zai_key_manager_instance is None:
-                    if keys is None:
-                        keys = _get_keys_from_settings()
-
-                    _zai_key_manager_instance = cls(keys=keys or [])
-                    if keys:
-                        logger.info("ZAIKeyManager initialized with %s key(s)", len(keys))
-                    else:
-                        logger.debug("ZAIKeyManager initialized with no keys")
-        return _zai_key_manager_instance
-
-    @classmethod
-    def reset_instance(cls):
-        """Reset singleton (for testing)."""
-        global _zai_key_manager_instance
-        with _zai_key_manager_lock:
-            _zai_key_manager_instance = None
 
     def get_key(self) -> Optional[str]:
         """Get the current API key, potentially rotating after a rate limit."""
@@ -247,5 +218,7 @@ def _get_keys_from_settings() -> List[str]:
 
 
 def get_zai_key_manager() -> ZAIKeyManager:
-    """Get the singleton ZAIKeyManager instance."""
-    return ZAIKeyManager.get_instance()
+    """Get the process-wide ZAIKeyManager instance from bootstrap wiring."""
+    from ...wiring.bootstrap import get_zai_key_manager as _provider
+
+    return _provider()

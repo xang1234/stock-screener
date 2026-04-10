@@ -98,9 +98,9 @@ class YFinanceService:
         if should_cache:
             try:
                 # Import here to avoid circular dependency at module level
-                from .price_cache_service import PriceCacheService
+                from ..wiring.bootstrap import get_price_cache
 
-                cache_service = PriceCacheService.get_instance()
+                cache_service = get_price_cache()
                 cached_data = cache_service.get_historical_data(symbol, period=period)
 
                 if cached_data is not None:

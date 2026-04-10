@@ -189,7 +189,7 @@ class TestExtendLock:
 class TestSerializedDataFetchDecorator:
     """Tests for the @serialized_data_fetch decorator."""
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_releases_on_success(self, mock_settings, mock_get_instance):
         """Lock is released after successful completion."""
@@ -208,7 +208,7 @@ class TestSerializedDataFetchDecorator:
         mock_lock.acquire.assert_called_once()
         mock_lock.release.assert_called_once()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_releases_on_error(self, mock_settings, mock_get_instance):
         """Lock is released after an exception."""
@@ -226,7 +226,7 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_releases_on_retry(self, mock_settings, mock_get_instance):
         """Lock is released when the task raises Celery Retry."""
@@ -244,7 +244,7 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_releases_on_soft_time_limit(self, mock_settings, mock_get_instance):
         """Lock is released when the task exceeds its soft time limit."""
@@ -262,7 +262,7 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_skips_release_on_reentrant(self, mock_settings, mock_get_instance):
         """Re-entrant acquire does NOT call release."""
@@ -280,7 +280,7 @@ class TestSerializedDataFetchDecorator:
         assert result == "ok"
         mock_lock.release.assert_not_called()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_skips_when_lock_held(self, mock_settings, mock_get_instance):
         """When acquire fails, the decorated function returns a skip payload."""
@@ -311,7 +311,7 @@ class TestSerializedDataFetchDecorator:
         assert result["task_id"] == "live-task-id"
         mock_lock.acquire.assert_called_once()  # no retry loop
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
     def test_decorator_does_not_release_unacquired_lock(self, mock_settings, mock_get_instance):
         """When lock was never acquired, release() is NOT called."""
@@ -328,7 +328,7 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_not_called()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_decorator_can_bypass_lock_for_in_process_workflows(self, mock_get_instance):
         """Export/bootstrap flows can skip the distributed lock in a single process."""
         @serialized_data_fetch("test_task")
@@ -408,7 +408,7 @@ class TestForceRefreshStaleIntradayImpl:
     """Tests for _force_refresh_stale_intraday_impl."""
 
     @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
-    @patch("app.services.price_cache_service.PriceCacheService.get_instance")
+    @patch("app.wiring.bootstrap.get_price_cache")
     @patch("app.services.bulk_data_fetcher.BulkDataFetcher.__init__", return_value=None)
     def test_impl_with_no_task(self, mock_bf_init, mock_pcs_get, mock_market):
         """_force_refresh_stale_intraday_impl works without Celery task context."""
@@ -425,7 +425,7 @@ class TestForceRefreshStaleIntradayImpl:
 
     @patch("app.tasks.cache_tasks.format_market_status", return_value="closed")
     @patch("app.tasks.cache_tasks._fetch_with_backoff")
-    @patch("app.services.price_cache_service.PriceCacheService.get_instance")
+    @patch("app.wiring.bootstrap.get_price_cache")
     @patch("app.services.bulk_data_fetcher.BulkDataFetcher.__init__", return_value=None)
     def test_impl_with_symbols(self, mock_bf_init, mock_pcs_get, mock_fetch, mock_market):
         """_force_refresh_stale_intraday_impl processes provided symbols."""
@@ -460,7 +460,7 @@ class TestForceRefreshStaleIntradayImpl:
 class TestClearStaleLockOnStartup:
     """Tests for the @worker_ready signal handler in celery_app.py."""
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_clears_stale_lock_for_datafetch_worker(self, mock_get_instance):
         """Datafetch worker clears an existing stale lock on startup."""
         from app.celery_app import _clear_stale_data_fetch_lock
@@ -481,7 +481,7 @@ class TestClearStaleLockOnStartup:
 
         mock_lock.force_release.assert_called_once()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_no_op_when_no_lock_exists(self, mock_get_instance):
         """Datafetch worker does nothing when no lock is held."""
         from app.celery_app import _clear_stale_data_fetch_lock
@@ -506,11 +506,11 @@ class TestClearStaleLockOnStartup:
 
         # If DataFetchLock were instantiated, the test would fail
         # because we don't mock it — the early return prevents that
-        with patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance") as mock_gi:
+        with patch("app.wiring.bootstrap.get_data_fetch_lock") as mock_gi:
             _clear_stale_data_fetch_lock(sender=sender)
             mock_gi.assert_not_called()
 
-    @patch("app.tasks.data_fetch_lock.DataFetchLock.get_instance")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
     def test_handles_redis_connection_error(self, mock_get_instance):
         """Signal handler catches exceptions and doesn't crash the worker."""
         from app.celery_app import _clear_stale_data_fetch_lock

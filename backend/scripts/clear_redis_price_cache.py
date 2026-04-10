@@ -12,7 +12,7 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 import logging
-from app.services.price_cache_service import PriceCacheService
+from app.wiring.bootstrap import get_price_cache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,7 +41,7 @@ if confirm != "YES":
     exit(0)
 
 try:
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
 
     if not price_cache._redis_client:
         logger.error("Redis not available")

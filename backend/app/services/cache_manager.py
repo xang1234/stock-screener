@@ -9,6 +9,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
+from ..database import SessionLocal
 from .benchmark_cache_service import BenchmarkCacheService
 from .price_cache_service import PriceCacheService
 from .redis_pool import get_redis_client, is_redis_enabled
@@ -46,8 +47,14 @@ class CacheManager:
             logger.info("Redis disabled for this runtime. Cache manager will use fallback mode.")
 
         # Initialize cache services (they'll use their own pool connections)
-        self.benchmark_cache = BenchmarkCacheService.get_instance(self.redis_client)
-        self.price_cache = PriceCacheService.get_instance(self.redis_client)
+        self.benchmark_cache = BenchmarkCacheService(
+            redis_client=self.redis_client,
+            session_factory=SessionLocal,
+        )
+        self.price_cache = PriceCacheService(
+            redis_client=self.redis_client,
+            session_factory=SessionLocal,
+        )
 
         self.db = db
 

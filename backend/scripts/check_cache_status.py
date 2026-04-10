@@ -15,7 +15,7 @@ import logging
 from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
-from app.services.price_cache_service import PriceCacheService
+from app.wiring.bootstrap import get_price_cache
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.WARNING)  # Quiet output
@@ -25,7 +25,7 @@ print("CACHE STATUS DIAGNOSTIC")
 print("=" * 80)
 
 db = SessionLocal()
-price_cache = PriceCacheService.get_instance()
+price_cache = get_price_cache()
 
 try:
     # Sample 10 active stocks

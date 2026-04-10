@@ -19,6 +19,10 @@ async def client():
 
 @pytest.mark.asyncio
 async def test_get_current_rankings_returns_404_when_no_rankings_exist(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
     class _FakeGroupRankService:
         def get_current_rankings(self, db, limit=197):  # noqa: ARG002
             return []
@@ -35,7 +39,11 @@ async def test_get_current_rankings_returns_404_when_no_rankings_exist(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_get_groups_bootstrap_returns_404_when_snapshot_not_published(client):
+async def test_get_groups_bootstrap_returns_404_when_snapshot_not_published(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
     class _FakeSnapshotService:
         def get_groups_bootstrap(self):
             return None

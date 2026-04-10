@@ -7,7 +7,7 @@ during bulk scans. Uses Redis for hot cache with database persistence.
 import logging
 import pickle
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -37,10 +37,6 @@ class BenchmarkCacheService:
     - Automatic refresh if data is stale
     """
 
-    # Class-level singleton instance
-    _instance = None
-    _redis_client = None
-
     # Redis keys
     REDIS_KEY_PREFIX = "benchmark:"
     REDIS_KEY_SPY_2Y = "benchmark:SPY:2y"
@@ -52,8 +48,13 @@ class BenchmarkCacheService:
     LOCK_TIMEOUT_SECONDS = 10  # Max time to wait for lock
     LOCK_EXPIRY_SECONDS = 30  # Lock auto-expires after 30 seconds
 
-    def __init__(self, redis_client: Optional[redis.Redis] = None):
+    def __init__(
+        self,
+        redis_client: Optional[redis.Redis] = None,
+        session_factory: Optional[Callable[[], Session]] = None,
+    ):
         """Initialize benchmark cache service."""
+        self._session_factory = session_factory or SessionLocal
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -65,17 +66,6 @@ class BenchmarkCacheService:
                 logger.warning("Redis connection failed. Will use database fallback.")
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
-
-    @classmethod
-    def get_instance(cls, redis_client: Optional[redis.Redis] = None):
-        """
-        Get singleton instance of BenchmarkCacheService.
-
-        Thread-safe singleton pattern.
-        """
-        if cls._instance is None:
-            cls._instance = cls(redis_client)
-        return cls._instance
 
     def get_spy_data(
         self,
@@ -143,7 +133,7 @@ class BenchmarkCacheService:
 
     def _get_from_database(self, period: str) -> Optional[pd.DataFrame]:
         """Get cached SPY data from database."""
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Calculate date range
@@ -297,7 +287,7 @@ class BenchmarkCacheService:
 
         Uses bulk insert for efficiency (same pattern as PriceCacheService).
         """
-        db = SessionLocal()
+        db = self._session_factory()
 
         try:
             # Reset index to get Date as a column

@@ -398,7 +398,7 @@ def test_build_groups_payload_requires_target_date(service_and_session_factory, 
         get_current_rankings=lambda db, limit=197, calculation_date=None: rankings_calls.append((limit, calculation_date)) or [],
         get_rank_movers=lambda db, period="3m", limit=10, calculation_date=None: movers_calls.append((period, limit, calculation_date)) or {"period": period, "gainers": [], "losers": []},
     )
-    monkeypatch.setattr(export_module.IBDGroupRankService, "get_instance", lambda: fake_service)
+    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
 
     with session_factory() as db, pytest.raises(StaticSiteSectionUnavailableError, match="No group rankings are available"):
         service._build_groups_payload(  # noqa: SLF001 - intentional unit coverage

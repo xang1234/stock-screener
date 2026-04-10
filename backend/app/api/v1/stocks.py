@@ -26,7 +26,7 @@ from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfil
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
-from ...wiring.bootstrap import get_uow
+from ...wiring.bootstrap import get_fundamentals_cache, get_price_cache, get_uow
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -93,9 +93,7 @@ def _get_stock_info_or_404(symbol: str):
 
 
 def _get_stock_fundamentals_payload(symbol: str, *, force_refresh: bool = False):
-    from ...services.fundamentals_cache_service import FundamentalsCacheService
-
-    cache = FundamentalsCacheService.get_instance()
+    cache = get_fundamentals_cache()
     data = cache.get_fundamentals(symbol.upper(), force_refresh=force_refresh)
     if not data:
         return None
@@ -119,8 +117,6 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
 
     import pandas as pd
 
-    from ...services.price_cache_service import PriceCacheService
-
     period_days = {
         "1mo": 30,
         "3mo": 90,
@@ -133,7 +129,7 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
     if days is None:
         raise HTTPException(status_code=422, detail=f"Unsupported period: {period}")
 
-    cache_service = PriceCacheService.get_instance()
+    cache_service = get_price_cache()
     cache_period = "5y" if period == "5y" else "2y"
     data = cache_service.get_cached_only(symbol.upper(), period=cache_period)
 

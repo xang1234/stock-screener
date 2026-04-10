@@ -11,7 +11,6 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc
 
-from ..database import SessionLocal
 from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
 from ..models.scan_result import Scan, ScanResult
@@ -50,20 +49,17 @@ class IBDGroupRankService:
     5. Store daily snapshot in IBDGroupRank table
     """
 
-    _instance = None
-
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        price_cache: PriceCacheService,
+        benchmark_cache: BenchmarkCacheService,
+        rs_calculator: RelativeStrengthCalculator | None = None,
+    ):
         """Initialize the service."""
-        self.price_cache = PriceCacheService.get_instance()
-        self.benchmark_cache = BenchmarkCacheService.get_instance()
-        self.rs_calculator = RelativeStrengthCalculator()
-
-    @classmethod
-    def get_instance(cls):
-        """Get singleton instance."""
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+        self.price_cache = price_cache
+        self.benchmark_cache = benchmark_cache
+        self.rs_calculator = rs_calculator or RelativeStrengthCalculator()
 
     def calculate_group_rankings(
         self,

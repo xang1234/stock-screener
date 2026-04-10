@@ -235,7 +235,7 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
 
     from ...scanners.criteria.price_sparkline import PriceSparklineCalculator
     from ...scanners.criteria.rs_sparkline import RSSparklineCalculator
-    from ...services.price_cache_service import PriceCacheService
+    from ...wiring.bootstrap import get_price_cache
 
     result = {}
 
@@ -263,7 +263,7 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     }
 
     # Use PriceCacheService for fresh data with automatic updates
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
 
     # Fetch SPY prices for RS calculation (with freshness check)
     spy_df = price_cache.get_historical_data("SPY", period="2y")

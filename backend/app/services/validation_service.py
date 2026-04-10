@@ -460,7 +460,9 @@ class ValidationService:
         outcome_calculator: PriceOutcomeCalculator | None = None,
         failure_cluster_builder: FailureClusterBuilder | None = None,
     ) -> None:
-        price_cache = PriceCacheService.get_instance()
+        from app.wiring.bootstrap import get_price_cache
+
+        price_cache = get_price_cache()
         self._scan_pick_source = scan_pick_source or ScanPickValidationSource()
         self._theme_alert_source = theme_alert_source or ThemeAlertValidationSource()
         self._outcome_calculator = outcome_calculator or PriceOutcomeCalculator(price_cache)

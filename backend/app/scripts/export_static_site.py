@@ -18,13 +18,12 @@ from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.breadth_calculator_service import BreadthCalculatorService
 from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
-from app.services.ibd_group_rank_service import IBDGroupRankService
-from app.services.price_cache_service import PriceCacheService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.services.provider_snapshot_service import provider_snapshot_service
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.utils.market_hours import get_last_market_close, is_trading_day
 from app.utils.symbol_support import split_supported_price_symbols
+from app.wiring.bootstrap import get_group_rank_service, get_price_cache
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = "7d"
@@ -53,14 +52,14 @@ def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
 
 def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
     """Refresh recent price bars in batches without Redis or warmup metadata."""
-    price_cache = PriceCacheService.get_instance()
+    price_cache = get_price_cache()
     fetcher = BulkDataFetcher()
 
     with SessionLocal() as db:
         active_symbols = [
             symbol
             for symbol, in db.query(StockUniverse.symbol)
-            .filter(StockUniverse.is_active == True)
+            .filter(StockUniverse.is_active.is_(True))
             .order_by(StockUniverse.market_cap.desc().nullslast(), StockUniverse.symbol.asc())
             .all()
         ]
@@ -208,7 +207,7 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
             f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
             flush=True,
         )
-        stats = IBDGroupRankService.get_instance().fill_gaps_optimized(db, missing_dates)
+        stats = get_group_rank_service().fill_gaps_optimized(db, missing_dates)
         stats.update(
             {
                 "status": "completed",
@@ -269,7 +268,7 @@ def _ensure_breadth_history(
             f"through {as_of_date}.",
             flush=True,
         )
-        stats = BreadthCalculatorService(db).backfill_range(
+        stats = BreadthCalculatorService(db, get_price_cache()).backfill_range(
             start_date=recompute_dates[0],
             end_date=recompute_dates[-1],
             trading_dates=recompute_dates,

@@ -21,10 +21,6 @@ DEFAULT_COOLDOWN_SECONDS = 60.0   # If no retry_after provided
 MAX_COOLDOWN_SECONDS = 300.0     # Cap at 5 minutes
 ROTATION_PROBABILITY = 0.5       # 50% chance to switch on next call after rate limit
 
-# Module-level singleton storage (not in dataclass)
-_groq_key_manager_instance: Optional['GroqKeyManager'] = None
-_groq_key_manager_lock = threading.Lock()
-
 
 @dataclass
 class KeyState:
@@ -52,13 +48,12 @@ class GroqKeyManager:
     """
     Manages multiple Groq API keys with rate-limit-aware rotation.
 
-    Thread-safe singleton that:
+    Thread-safe manager that:
     - Tracks multiple keys with usage stats
     - Rotates keys probabilistically AFTER rate limits (not during retry)
     - Provides stats for monitoring
 
     Usage:
-        manager = GroqKeyManager.get_instance()
         key = manager.get_key()
         # ... make API call ...
         # On rate limit:
@@ -78,37 +73,6 @@ class GroqKeyManager:
         for key in self.keys:
             if key not in self._key_states:
                 self._key_states[key] = KeyState(key=key)
-
-    @classmethod
-    def get_instance(cls, keys: Optional[List[str]] = None) -> 'GroqKeyManager':
-        """
-        Get or create the singleton instance.
-
-        Args:
-            keys: List of API keys (only used on first call)
-        """
-        global _groq_key_manager_instance
-
-        if _groq_key_manager_instance is None:
-            with _groq_key_manager_lock:
-                # Double-check after acquiring lock
-                if _groq_key_manager_instance is None:
-                    if keys is None:
-                        keys = _get_keys_from_settings()
-
-                    _groq_key_manager_instance = cls(keys=keys or [])
-                    if keys:
-                        logger.info(f"GroqKeyManager initialized with {len(keys)} key(s)")
-                    else:
-                        logger.debug("GroqKeyManager initialized with no keys")
-        return _groq_key_manager_instance
-
-    @classmethod
-    def reset_instance(cls):
-        """Reset singleton (for testing)."""
-        global _groq_key_manager_instance
-        with _groq_key_manager_lock:
-            _groq_key_manager_instance = None
 
     def get_key(self) -> Optional[str]:
         """
@@ -291,5 +255,7 @@ def _get_keys_from_settings() -> List[str]:
 
 # Module-level convenience function
 def get_groq_key_manager() -> GroqKeyManager:
-    """Get the singleton GroqKeyManager instance."""
-    return GroqKeyManager.get_instance()
+    """Get the process-wide GroqKeyManager instance from bootstrap wiring."""
+    from ...wiring.bootstrap import get_groq_key_manager as _provider
+
+    return _provider()

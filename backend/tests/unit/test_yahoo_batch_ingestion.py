@@ -583,7 +583,8 @@ def test_force_refresh_stale_intraday_skips_inactive_symbols(monkeypatch):
         return {symbol: _success_result(symbol) for symbol in symbols}
 
     monkeypatch.setattr(
-        "app.services.price_cache_service.PriceCacheService.get_instance",
+        module,
+        "get_price_cache",
         lambda: _StubPriceCache(),
     )
     monkeypatch.setattr(
