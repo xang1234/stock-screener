@@ -106,7 +106,6 @@ class TestMcpHttpTransport:
         from app.interfaces.mcp.http_transport import mcp_router
         from app.interfaces.mcp.market_copilot import MarketCopilotService
         from app.interfaces.mcp.server import MarketCopilotMcpServer
-        import app.interfaces.mcp.http_transport as http_mod
 
         database_path = tmp_path / "mcp-http.sqlite3"
         database_url = f"sqlite:///{database_path}"
@@ -121,21 +120,17 @@ class TestMcpHttpTransport:
         test_service = MarketCopilotService(session_factory, test_settings)
         test_server = MarketCopilotMcpServer(test_service, transport=None)
 
-        # Override the lazy singleton so the router uses our test server
-        original_server = http_mod._server
-        http_mod._server = test_server
-
         try:
             # Build an isolated app with only the MCP router — avoids dependency
             # on app.main's import-time MCP_HTTP_ENABLED gate.
             test_app = FastAPI()
+            test_app.state.mcp_server = test_server
             test_app.include_router(mcp_router, prefix="/mcp")
 
             transport = httpx.ASGITransport(app=test_app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 yield client
         finally:
-            http_mod._server = original_server
             test_engine.dispose()
 
     async def test_initialize_returns_capabilities(self, client):

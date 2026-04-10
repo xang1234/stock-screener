@@ -842,4 +842,11 @@ class ProviderSnapshotService:
         }
 
 
-provider_snapshot_service = ProviderSnapshotService()
+def _build_provider_snapshot_service() -> ProviderSnapshotService:
+    from ..wiring.bootstrap import initialize_process_runtime_services
+
+    initialize_process_runtime_services()
+    return ProviderSnapshotService()
+
+
+provider_snapshot_service = _build_provider_snapshot_service()

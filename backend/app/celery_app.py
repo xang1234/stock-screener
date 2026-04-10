@@ -67,6 +67,20 @@ _logger = logging.getLogger(__name__)
 _default_scan_profile = get_default_scan_profile()
 
 
+def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
+    """Create/bind process-scoped runtime services for this Celery worker process."""
+    runtime_pid = getattr(celery_app, "runtime_services_pid", None)
+    current_pid = os.getpid()
+    pid_changed = runtime_pid is not None and runtime_pid != current_pid
+    should_force_rebuild = force_rebuild or pid_changed
+    from .wiring.bootstrap import initialize_process_runtime_services
+
+    runtime_services = initialize_process_runtime_services(force=should_force_rebuild)
+    celery_app.runtime_services = runtime_services
+    celery_app.runtime_services_pid = current_pid
+    return runtime_services
+
+
 @celery_app.on_after_configure.connect
 def _log_timezone(sender, **kwargs):
     _logger.info("Celery timezone: %s (enable_utc=%s)", settings.celery_timezone, True)
@@ -82,13 +96,15 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
     leaving the Redis lock key with its 2-hour TTL. This blocks all
     new data_fetch tasks until the TTL expires.
     """
-    # Only clear for the datafetch worker — the general worker must
-    # NOT clear a lock that the datafetch worker may legitimately hold
-    hostname = getattr(sender, 'hostname', '') or ''
-    if not hostname.startswith('datafetch'):
-        return
-
     try:
+        _ensure_worker_runtime_services()
+        # Only clear for the datafetch worker — the general worker must
+        # NOT clear a lock that the datafetch worker may legitimately hold.
+        # Runtime services are still initialized for all worker pools.
+        hostname = getattr(sender, 'hostname', '') or ''
+        if not hostname.startswith('datafetch'):
+            return
+
         from .wiring.bootstrap import get_data_fetch_lock
 
         lock = get_data_fetch_lock()
@@ -119,6 +135,7 @@ def _dispose_engine_after_fork(sender=None, **kwargs):
     try:
         from .database import engine
         engine.dispose()
+        _ensure_worker_runtime_services(force_rebuild=True)
         _logger.debug("Disposed inherited DB engine after fork")
     except Exception as e:
         _logger.warning("Failed to dispose engine after fork (non-fatal): %s", e)
@@ -129,6 +146,13 @@ def _graceful_db_shutdown(sender=None, **kwargs):
     """Close DB connections on worker shutdown."""
     try:
         from .database import engine
+        from .wiring.bootstrap import clear_runtime_services
+
+        clear_runtime_services()
+        if hasattr(celery_app, "runtime_services"):
+            delattr(celery_app, "runtime_services")
+        if hasattr(celery_app, "runtime_services_pid"):
+            delattr(celery_app, "runtime_services_pid")
         engine.dispose()
         _logger.info("Worker shutdown: DB connections closed")
     except Exception as e:

@@ -19,9 +19,13 @@ Example usage in a router::
 
 from __future__ import annotations
 
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from threading import RLock
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Callable, Iterator, TypeAlias
+
+from fastapi import Request
+from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.domain.scanning.ports import StockDataProvider, TaskDispatcher
@@ -58,6 +62,9 @@ if TYPE_CHECKING:
     from app.use_cases.scanning.run_bulk_scan import RunBulkScanUseCase
 
 
+SessionFactory: TypeAlias = Callable[[], Session]
+
+
 @dataclass(frozen=True)
 class CacheBundle:
     """Shared cache service bundle for explicit dependency injection."""
@@ -65,6 +72,255 @@ class CacheBundle:
     price: PriceCacheService
     fundamentals: FundamentalsCacheService
     benchmark: BenchmarkCacheService
+
+
+class RuntimeServices:
+    """Process-scoped service container with lazy, lock-protected initialization."""
+
+    def __init__(self, *, session_factory: SessionFactory = SessionLocal) -> None:
+        self._session_factory = session_factory
+        self._init_lock = RLock()
+        self._task_dispatcher: TaskDispatcher | None = None
+        self._job_backend: JobBackend | None = None
+        self._ui_snapshot_service: UISnapshotService | None = None
+        self._cache_bundle: CacheBundle | None = None
+        self._group_rank_service: IBDGroupRankService | None = None
+        self._task_registry_service: TaskRegistryService | None = None
+        self._data_fetch_lock: DataFetchLock | None = None
+        self._groq_key_manager: GroqKeyManager | None = None
+        self._zai_key_manager: ZAIKeyManager | None = None
+        self._stock_data_provider: DataPrepStockDataProvider | None = None
+        self._scan_orchestrator: ScanOrchestrator | None = None
+
+    def job_backend(self) -> JobBackend:
+        if self._job_backend is None:
+            with self._init_lock:
+                if self._job_backend is None:
+                    self._job_backend = CeleryJobBackend()
+        return self._job_backend
+
+    def task_dispatcher(self) -> TaskDispatcher:
+        if self._task_dispatcher is None:
+            with self._init_lock:
+                if self._task_dispatcher is None:
+                    from app.infra.tasks.dispatcher import CeleryTaskDispatcher
+
+                    self._task_dispatcher = CeleryTaskDispatcher()
+        return self._task_dispatcher
+
+    def ui_snapshot_service(self) -> UISnapshotService:
+        if self._ui_snapshot_service is None:
+            with self._init_lock:
+                if self._ui_snapshot_service is None:
+                    from app.services.ui_snapshot_service import UISnapshotService
+
+                    self._ui_snapshot_service = UISnapshotService(
+                        session_factory=self._session_factory
+                    )
+        return self._ui_snapshot_service
+
+    def cache_bundle(self) -> CacheBundle:
+        if self._cache_bundle is None:
+            with self._init_lock:
+                if self._cache_bundle is None:
+                    from app.services.benchmark_cache_service import BenchmarkCacheService
+                    from app.services.fundamentals_cache_service import FundamentalsCacheService
+                    from app.services.price_cache_service import PriceCacheService
+
+                    redis_client = get_redis_client()
+                    self._cache_bundle = CacheBundle(
+                        price=PriceCacheService(
+                            redis_client=redis_client,
+                            session_factory=self._session_factory,
+                        ),
+                        fundamentals=FundamentalsCacheService(
+                            redis_client=redis_client,
+                            session_factory=self._session_factory,
+                        ),
+                        benchmark=BenchmarkCacheService(
+                            redis_client=redis_client,
+                            session_factory=self._session_factory,
+                        ),
+                    )
+        return self._cache_bundle
+
+    def group_rank_service(self) -> IBDGroupRankService:
+        if self._group_rank_service is None:
+            with self._init_lock:
+                if self._group_rank_service is None:
+                    from app.services.ibd_group_rank_service import IBDGroupRankService
+
+                    cache_bundle = self.cache_bundle()
+                    self._group_rank_service = IBDGroupRankService(
+                        price_cache=cache_bundle.price,
+                        benchmark_cache=cache_bundle.benchmark,
+                    )
+        return self._group_rank_service
+
+    def task_registry_service(self) -> TaskRegistryService:
+        if self._task_registry_service is None:
+            with self._init_lock:
+                if self._task_registry_service is None:
+                    from app.services.task_registry_service import TaskRegistryService
+
+                    self._task_registry_service = TaskRegistryService()
+        return self._task_registry_service
+
+    def data_fetch_lock(self) -> DataFetchLock:
+        if self._data_fetch_lock is None:
+            with self._init_lock:
+                if self._data_fetch_lock is None:
+                    from app.tasks.data_fetch_lock import DataFetchLock
+
+                    self._data_fetch_lock = DataFetchLock()
+        return self._data_fetch_lock
+
+    def groq_key_manager(self) -> GroqKeyManager:
+        if self._groq_key_manager is None:
+            with self._init_lock:
+                if self._groq_key_manager is None:
+                    from app.services.llm.groq_key_manager import GroqKeyManager, _get_keys_from_settings
+
+                    self._groq_key_manager = GroqKeyManager(
+                        keys=_get_keys_from_settings() or []
+                    )
+        return self._groq_key_manager
+
+    def zai_key_manager(self) -> ZAIKeyManager:
+        if self._zai_key_manager is None:
+            with self._init_lock:
+                if self._zai_key_manager is None:
+                    from app.services.llm.zai_key_manager import ZAIKeyManager, _get_keys_from_settings
+
+                    self._zai_key_manager = ZAIKeyManager(
+                        keys=_get_keys_from_settings() or []
+                    )
+        return self._zai_key_manager
+
+    def stock_data_provider(self) -> DataPrepStockDataProvider:
+        if self._stock_data_provider is None:
+            with self._init_lock:
+                if self._stock_data_provider is None:
+                    from app.infra.providers.stock_data import DataPrepStockDataProvider
+
+                    self._stock_data_provider = DataPrepStockDataProvider(
+                        cache_bundle=self.cache_bundle(),
+                    )
+        return self._stock_data_provider
+
+    def scan_orchestrator(self) -> ScanOrchestrator:
+        if self._scan_orchestrator is None:
+            with self._init_lock:
+                if self._scan_orchestrator is None:
+                    from app.scanners.scan_orchestrator import ScanOrchestrator
+                    from app.scanners.screener_registry import screener_registry
+
+                    self._scan_orchestrator = ScanOrchestrator(
+                        data_provider=self.stock_data_provider(),
+                        registry=screener_registry,
+                    )
+        return self._scan_orchestrator
+
+    def reset_for_tests(self) -> None:
+        with self._init_lock:
+            self._task_dispatcher = None
+            self._job_backend = None
+            self._ui_snapshot_service = None
+            self._cache_bundle = None
+            self._group_rank_service = None
+            self._task_registry_service = None
+            self._data_fetch_lock = None
+            self._groq_key_manager = None
+            self._zai_key_manager = None
+            self._stock_data_provider = None
+            self._scan_orchestrator = None
+
+
+_runtime_services_ctx: ContextVar[RuntimeServices | None] = ContextVar(
+    "runtime_services_ctx",
+    default=None,
+)
+_process_runtime_services_lock = RLock()
+_process_runtime_services = None  # type: RuntimeServices | None
+
+
+def build_runtime_services(
+    *,
+    session_factory: SessionFactory = SessionLocal,
+) -> RuntimeServices:
+    """Create a new process-scoped runtime services container."""
+    return RuntimeServices(session_factory=session_factory)
+
+
+def set_runtime_services(
+    runtime: RuntimeServices,
+    *,
+    bind_process: bool = False,
+) -> Token[RuntimeServices | None]:
+    """Bind runtime services to the current context.
+
+    Set ``bind_process`` only at process lifecycle boundaries.
+    """
+    global _process_runtime_services
+    if bind_process:
+        with _process_runtime_services_lock:
+            _process_runtime_services = runtime
+    return _runtime_services_ctx.set(runtime)
+
+
+def reset_runtime_services(token: Token[RuntimeServices | None]) -> None:
+    """Restore runtime services context to a previous token."""
+    _runtime_services_ctx.reset(token)
+
+
+def initialize_process_runtime_services(
+    *,
+    session_factory: SessionFactory = SessionLocal,
+    force: bool = False,
+) -> RuntimeServices:
+    """Ensure one process-scoped runtime container exists and bind it to context."""
+    global _process_runtime_services
+    with _process_runtime_services_lock:
+        if _process_runtime_services is None or force:
+            _process_runtime_services = build_runtime_services(
+                session_factory=session_factory
+            )
+        runtime = _process_runtime_services
+    set_runtime_services(runtime, bind_process=True)
+    return runtime
+
+
+def clear_runtime_services() -> None:
+    """Clear runtime services from both process state and current context."""
+    global _process_runtime_services
+    with _process_runtime_services_lock:
+        _process_runtime_services = None
+    _runtime_services_ctx.set(None)
+
+
+def get_runtime_services(request: Request) -> RuntimeServices:
+    """FastAPI dependency getter for process runtime services."""
+    runtime = getattr(request.app.state, "runtime_services", None)
+    if runtime is None:
+        raise RuntimeError("RuntimeServices are not initialized on app.state.runtime_services")
+    return runtime
+
+
+def _resolve_runtime_services(request: Request | None = None) -> RuntimeServices:
+    if request is not None:
+        request_runtime = getattr(request.app.state, "runtime_services", None)
+        if request_runtime is not None:
+            return request_runtime
+    context_runtime = _runtime_services_ctx.get()
+    if context_runtime is not None:
+        return context_runtime
+    with _process_runtime_services_lock:
+        if _process_runtime_services is not None:
+            return _process_runtime_services
+    raise RuntimeError(
+        "RuntimeServices are not initialized for this context. "
+        "Call initialize_process_runtime_services() at process startup."
+    )
 
 
 # ── Unit of Work ─────────────────────────────────────────────────────────
@@ -85,78 +341,25 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
 
 # ── Task Dispatchers ────────────────────────────────────────────────────
 
-_task_dispatcher: TaskDispatcher | None = None
-_job_backend: JobBackend | None = None
-_ui_snapshot_service: UISnapshotService | None = None
-_cache_bundle: CacheBundle | None = None
-_group_rank_service: IBDGroupRankService | None = None
-_task_registry_service: TaskRegistryService | None = None
-_data_fetch_lock: DataFetchLock | None = None
-_groq_key_manager: GroqKeyManager | None = None
-_zai_key_manager: ZAIKeyManager | None = None
-_singleton_init_lock = RLock()
-
 
 def get_job_backend() -> JobBackend:
     """Return the configured async job backend."""
-    global _job_backend
-    if _job_backend is None:
-        with _singleton_init_lock:
-            if _job_backend is None:
-                _job_backend = CeleryJobBackend()
-    return _job_backend
+    return _resolve_runtime_services().job_backend()
 
 
 def get_task_dispatcher() -> TaskDispatcher:
     """Return the Celery task dispatcher."""
-    global _task_dispatcher
-    if _task_dispatcher is None:
-        with _singleton_init_lock:
-            if _task_dispatcher is None:
-                from app.infra.tasks.dispatcher import CeleryTaskDispatcher
-
-                _task_dispatcher = CeleryTaskDispatcher()
-    return _task_dispatcher
+    return _resolve_runtime_services().task_dispatcher()
 
 
 def get_ui_snapshot_service() -> UISnapshotService:
-    """Return the singleton UI bootstrap snapshot publisher."""
-    global _ui_snapshot_service
-    if _ui_snapshot_service is None:
-        with _singleton_init_lock:
-            if _ui_snapshot_service is None:
-                from app.services.ui_snapshot_service import UISnapshotService
-
-                _ui_snapshot_service = UISnapshotService(session_factory=SessionLocal)
-    return _ui_snapshot_service
+    """Return the process-scoped UI bootstrap snapshot publisher."""
+    return _resolve_runtime_services().ui_snapshot_service()
 
 
 def get_cache_bundle() -> CacheBundle:
     """Return shared cache services wired with explicit dependencies."""
-    global _cache_bundle
-    if _cache_bundle is None:
-        with _singleton_init_lock:
-            if _cache_bundle is None:
-                from app.services.benchmark_cache_service import BenchmarkCacheService
-                from app.services.fundamentals_cache_service import FundamentalsCacheService
-                from app.services.price_cache_service import PriceCacheService
-
-                redis_client = get_redis_client()
-                _cache_bundle = CacheBundle(
-                    price=PriceCacheService(
-                        redis_client=redis_client,
-                        session_factory=SessionLocal,
-                    ),
-                    fundamentals=FundamentalsCacheService(
-                        redis_client=redis_client,
-                        session_factory=SessionLocal,
-                    ),
-                    benchmark=BenchmarkCacheService(
-                        redis_client=redis_client,
-                        session_factory=SessionLocal,
-                    ),
-                )
-    return _cache_bundle
+    return _resolve_runtime_services().cache_bundle()
 
 
 def get_price_cache() -> PriceCacheService:
@@ -172,66 +375,28 @@ def get_benchmark_cache() -> BenchmarkCacheService:
 
 
 def get_group_rank_service() -> IBDGroupRankService:
-    """Return shared group-rank service."""
-    global _group_rank_service
-    if _group_rank_service is None:
-        with _singleton_init_lock:
-            if _group_rank_service is None:
-                from app.services.ibd_group_rank_service import IBDGroupRankService
-
-                _group_rank_service = IBDGroupRankService(
-                    price_cache=get_price_cache(),
-                    benchmark_cache=get_benchmark_cache(),
-                )
-    return _group_rank_service
+    """Return process-scoped group-rank service."""
+    return _resolve_runtime_services().group_rank_service()
 
 
 def get_task_registry_service() -> TaskRegistryService:
-    """Return shared task-registry service."""
-    global _task_registry_service
-    if _task_registry_service is None:
-        with _singleton_init_lock:
-            if _task_registry_service is None:
-                from app.services.task_registry_service import TaskRegistryService
-
-                _task_registry_service = TaskRegistryService()
-    return _task_registry_service
+    """Return process-scoped task-registry service."""
+    return _resolve_runtime_services().task_registry_service()
 
 
 def get_data_fetch_lock() -> DataFetchLock:
-    """Return process-wide distributed lock instance."""
-    global _data_fetch_lock
-    if _data_fetch_lock is None:
-        with _singleton_init_lock:
-            if _data_fetch_lock is None:
-                from app.tasks.data_fetch_lock import DataFetchLock
-
-                _data_fetch_lock = DataFetchLock()
-    return _data_fetch_lock
+    """Return process-scoped distributed lock instance."""
+    return _resolve_runtime_services().data_fetch_lock()
 
 
 def get_groq_key_manager() -> GroqKeyManager:
-    """Return process-wide Groq key manager."""
-    global _groq_key_manager
-    if _groq_key_manager is None:
-        with _singleton_init_lock:
-            if _groq_key_manager is None:
-                from app.services.llm.groq_key_manager import GroqKeyManager, _get_keys_from_settings
-
-                _groq_key_manager = GroqKeyManager(keys=_get_keys_from_settings() or [])
-    return _groq_key_manager
+    """Return process-scoped Groq key manager."""
+    return _resolve_runtime_services().groq_key_manager()
 
 
 def get_zai_key_manager() -> ZAIKeyManager:
-    """Return process-wide Z.AI key manager."""
-    global _zai_key_manager
-    if _zai_key_manager is None:
-        with _singleton_init_lock:
-            if _zai_key_manager is None:
-                from app.services.llm.zai_key_manager import ZAIKeyManager, _get_keys_from_settings
-
-                _zai_key_manager = ZAIKeyManager(keys=_get_keys_from_settings() or [])
-    return _zai_key_manager
+    """Return process-scoped Z.AI key manager."""
+    return _resolve_runtime_services().zai_key_manager()
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────
@@ -338,66 +503,23 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
 
 # ── Providers ────────────────────────────────────────────────────────────
 
-_stock_data_provider: DataPrepStockDataProvider | None = None
-
 
 def get_stock_data_provider() -> StockDataProvider:
-    """Return a singleton StockDataProvider (wraps DataPreparationLayer)."""
-    global _stock_data_provider
-    if _stock_data_provider is None:
-        with _singleton_init_lock:
-            if _stock_data_provider is None:
-                from app.infra.providers.stock_data import DataPrepStockDataProvider
-
-                _stock_data_provider = DataPrepStockDataProvider(
-                    cache_bundle=get_cache_bundle(),
-                )
-    return _stock_data_provider
+    """Return a process-scoped StockDataProvider (wraps DataPreparationLayer)."""
+    return _resolve_runtime_services().stock_data_provider()
 
 
 # ── Orchestrator ────────────────────────────────────────────────────
 
-_scan_orchestrator: ScanOrchestrator | None = None
-
 
 def get_scan_orchestrator() -> ScanOrchestrator:
-    """Return a singleton ScanOrchestrator wired with production dependencies."""
-    global _scan_orchestrator
-    if _scan_orchestrator is None:
-        with _singleton_init_lock:
-            if _scan_orchestrator is None:
-                from app.scanners.scan_orchestrator import ScanOrchestrator
-                from app.scanners.screener_registry import screener_registry
-
-                _scan_orchestrator = ScanOrchestrator(
-                    data_provider=get_stock_data_provider(),
-                    registry=screener_registry,
-                )
-    return _scan_orchestrator
+    """Return a process-scoped ScanOrchestrator wired with production dependencies."""
+    return _resolve_runtime_services().scan_orchestrator()
 
 
 def _reset_singletons_for_tests() -> None:
-    """Reset bootstrap singletons for test isolation."""
-    global _task_dispatcher
-    global _job_backend
-    global _ui_snapshot_service
-    global _cache_bundle
-    global _group_rank_service
-    global _task_registry_service
-    global _data_fetch_lock
-    global _groq_key_manager
-    global _zai_key_manager
-    global _stock_data_provider
-    global _scan_orchestrator
-
-    _task_dispatcher = None
-    _job_backend = None
-    _ui_snapshot_service = None
-    _cache_bundle = None
-    _group_rank_service = None
-    _task_registry_service = None
-    _data_fetch_lock = None
-    _groq_key_manager = None
-    _zai_key_manager = None
-    _stock_data_provider = None
-    _scan_orchestrator = None
+    """Reset runtime-scoped singletons for test isolation."""
+    runtime = _runtime_services_ctx.get()
+    if runtime is not None:
+        runtime.reset_for_tests()
+    clear_runtime_services()

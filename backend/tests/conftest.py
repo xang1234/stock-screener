@@ -14,6 +14,26 @@ sys.path.insert(0, str(backend_dir))
 from app.database import SessionLocal, engine, Base
 
 
+@pytest.fixture(autouse=True)
+def runtime_services_context():
+    """Provide a fresh runtime container for each test."""
+    from app.wiring.bootstrap import (
+        build_runtime_services,
+        clear_runtime_services,
+        set_runtime_services,
+    )
+
+    runtime_services = build_runtime_services(session_factory=SessionLocal)
+    set_runtime_services(runtime_services, bind_process=True)
+    try:
+        yield runtime_services
+    finally:
+        try:
+            runtime_services.reset_for_tests()
+        finally:
+            clear_runtime_services()
+
+
 @pytest.fixture(scope="function")
 def db_session():
     """

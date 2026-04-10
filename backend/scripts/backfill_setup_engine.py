@@ -51,7 +51,7 @@ from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.scanners.base_screener import DataRequirements, StockData
 from app.scanners.setup_engine_scanner import attach_setup_engine
 from app.scanners.setup_engine_screener import SetupEngineScanner
-from app.wiring.bootstrap import get_benchmark_cache
+from app.wiring.bootstrap import get_benchmark_cache, initialize_process_runtime_services
 
 logging.basicConfig(
     level=logging.INFO,
@@ -514,6 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    initialize_process_runtime_services(session_factory=SessionLocal)
     run_backfill(args)
 
 

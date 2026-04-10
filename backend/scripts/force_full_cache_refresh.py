@@ -22,7 +22,7 @@ from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.services.cache_manager import CacheManager
-from app.wiring.bootstrap import get_price_cache
+from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +45,7 @@ if confirm != "YES":
     exit(0)
 
 db = SessionLocal()
+initialize_process_runtime_services(session_factory=SessionLocal)
 
 try:
     # Step 1: Clear price data from database

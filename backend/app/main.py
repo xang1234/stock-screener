@@ -4,20 +4,30 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
+from starlette.responses import Response
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
-from .database import engine
+from .database import SessionLocal, engine
 from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
+from .wiring.bootstrap import (
+    clear_runtime_services,
+    initialize_process_runtime_services,
+    reset_runtime_services,
+    set_runtime_services,
+)
 
 logger = logging.getLogger(__name__)
+_startup_background_tasks: list[asyncio.Task[Any]] = []
 
 
 def _log_critical_error(
@@ -136,6 +146,47 @@ async def trigger_ui_snapshot_rebuild_on_startup():
         )
 
 
+def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except Exception:
+        logger.exception("Background startup task failed while retrieving exception")
+        return
+    if exc is not None:
+        logger.error("Background startup task failed", exc_info=exc)
+
+
+async def _drain_startup_background_tasks() -> None:
+    """Cancel/await startup background tasks before tearing down process resources."""
+    pending_tasks = [task for task in _startup_background_tasks if not task.done()]
+    for task in pending_tasks:
+        task.cancel()
+    if pending_tasks:
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
+    _startup_background_tasks.clear()
+
+
+def _bind_runtime_to_response_background(
+    response: Response,
+    runtime_services: Any,
+) -> None:
+    """Preserve runtime context for Starlette background callbacks."""
+    background = response.background
+    if background is None:
+        return
+
+    async def _run_background_with_runtime() -> None:
+        token = set_runtime_services(runtime_services)
+        try:
+            await background()
+        finally:
+            reset_runtime_services(token)
+
+    response.background = BackgroundTask(_run_background_with_runtime)
+
+
 def initialize_runtime() -> None:
     """Run the synchronous runtime initialization."""
     logger.info(
@@ -156,18 +207,33 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     initialize_runtime()
+    runtime_services = initialize_process_runtime_services(session_factory=SessionLocal)
+    app.state.runtime_services = runtime_services
+    if settings.mcp_http_enabled:
+        from .interfaces.mcp.http_transport import create_mcp_http_server
+
+        app.state.mcp_server = create_mcp_http_server(session_factory=SessionLocal)
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):
         await trigger_gapfill_on_startup()
-    asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
+    snapshot_task = asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
+    snapshot_task.add_done_callback(_log_background_task_exception)
+    _startup_background_tasks.append(snapshot_task)
 
-    yield
-
-    # Shutdown
-    logger.info("Shutting down Stock Scanner API")
-    engine.dispose()
-    logger.info("Database connections closed")
+    try:
+        yield
+    finally:
+        # Shutdown
+        logger.info("Shutting down Stock Scanner API")
+        await _drain_startup_background_tasks()
+        clear_runtime_services()
+        if hasattr(app.state, "runtime_services"):
+            delattr(app.state, "runtime_services")
+        if hasattr(app.state, "mcp_server"):
+            delattr(app.state, "mcp_server")
+        engine.dispose()
+        logger.info("Database connections closed")
 
 
 def _docs_enabled() -> bool:
@@ -188,6 +254,21 @@ app = FastAPI(
     redoc_url=_redoc_url,
     openapi_url=_openapi_url,
 )
+
+
+@app.middleware("http")
+async def bind_runtime_services_context(request: Request, call_next):
+    runtime_services = getattr(request.app.state, "runtime_services", None)
+    if runtime_services is None:
+        return await call_next(request)
+
+    token = set_runtime_services(runtime_services)
+    try:
+        response = await call_next(request)
+        _bind_runtime_to_response_background(response, runtime_services)
+        return response
+    finally:
+        reset_runtime_services(token)
 
 # Configure CORS
 app.add_middleware(

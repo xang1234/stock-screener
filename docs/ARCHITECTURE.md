@@ -30,6 +30,24 @@ Clean separation of concerns following Domain-Driven Design:
 
 Dependency injection wired in `wiring/bootstrap.py`. Services layer (`services/`) contains 70+ business logic modules.
 
+## Runtime Provider Lifecycle
+
+Process-scoped dependencies are owned by an explicit `RuntimeServices` container and lifecycle-bound by the host runtime (FastAPI app startup, Celery worker process init, or CLI script startup).
+
+| Provider | Scope | Owner | Init | Teardown |
+|----------|-------|-------|------|----------|
+| `cache_bundle` (`price`, `fundamentals`, `benchmark`) | Process | `RuntimeServices` | Lazy on first provider access | Container dropped at process shutdown |
+| `group_rank_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `task_registry_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `data_fetch_lock` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `groq_key_manager` / `zai_key_manager` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `stock_data_provider` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `scan_orchestrator` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `job_backend` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `task_dispatcher` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| `ui_snapshot_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
+| MCP HTTP server | Process | FastAPI app state (`app.state.mcp_server`) | Created during FastAPI startup when MCP HTTP is enabled | Removed from app state on shutdown |
+
 ## Multi-Screener Orchestrator
 
 The scan orchestrator (`scanners/scan_orchestrator.py`) coordinates all screener types:

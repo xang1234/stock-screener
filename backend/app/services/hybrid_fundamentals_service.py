@@ -464,5 +464,14 @@ class HybridFundamentalsService:
         return stats
 
 
+def _build_hybrid_fundamentals_service() -> HybridFundamentalsService:
+    from ..wiring.bootstrap import initialize_process_runtime_services
+
+    initialize_process_runtime_services()
+    return HybridFundamentalsService()
+
+
 # Global instance with default settings
-hybrid_fundamentals_service = HybridFundamentalsService()
+# Legacy compatibility singleton for modules/tests that import this symbol.
+# New call sites should prefer explicit HybridFundamentalsService(...) construction.
+hybrid_fundamentals_service = _build_hybrid_fundamentals_service()
