@@ -81,7 +81,7 @@ def _ensure_worker_runtime_services():
 
     from .wiring.bootstrap import set_runtime_services
 
-    set_runtime_services(runtime_services)
+    set_runtime_services(runtime_services, bind_process=True)
     return runtime_services
 
 

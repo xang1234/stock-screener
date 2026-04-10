@@ -252,11 +252,19 @@ def build_runtime_services(
     return RuntimeServices(session_factory=session_factory)
 
 
-def set_runtime_services(runtime: RuntimeServices) -> Token[RuntimeServices | None]:
-    """Bind runtime services to the current context."""
+def set_runtime_services(
+    runtime: RuntimeServices,
+    *,
+    bind_process: bool = False,
+) -> Token[RuntimeServices | None]:
+    """Bind runtime services to the current context.
+
+    Set ``bind_process`` only at process lifecycle boundaries.
+    """
     global _process_runtime_services
-    with _process_runtime_services_lock:
-        _process_runtime_services = runtime
+    if bind_process:
+        with _process_runtime_services_lock:
+            _process_runtime_services = runtime
     return _runtime_services_ctx.set(runtime)
 
 
@@ -278,7 +286,7 @@ def initialize_process_runtime_services(
                 session_factory=session_factory
             )
         runtime = _process_runtime_services
-    _runtime_services_ctx.set(runtime)
+    set_runtime_services(runtime, bind_process=True)
     return runtime
 
 
