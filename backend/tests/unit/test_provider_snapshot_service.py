@@ -549,6 +549,12 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     assert hk_row["timezone"] == "Asia/Hong_Kong"
     assert hk_row["local_code"] == "0700"
 
+    # Simulate backward-compatible bundle with market present but currency/timezone missing.
+    hk_row.pop("currency", None)
+    hk_row.pop("timezone", None)
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True, default=str)
+
     manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert manifest["bundle_asset_name"] == bundle_path.name
     assert manifest["sha256"]
@@ -594,6 +600,7 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     assert imported_payload["ipo_date"] == "2020-01-02"
     assert imported_symbols == ["0700.HK", "AAPL"]
     assert imported_hk_row.market == "HK"
+    # Missing bundle values should hydrate from market-aware defaults.
     assert imported_hk_row.currency == "HKD"
     assert imported_hk_row.timezone == "Asia/Hong_Kong"
     assert imported_hk_row.local_code == "0700"

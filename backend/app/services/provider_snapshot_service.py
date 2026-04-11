@@ -823,13 +823,22 @@ class ProviderSnapshotService:
 
     @staticmethod
     def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        market = row.get("market") or "US"
+        market_defaults = {
+            "HK": ("HKD", "Asia/Hong_Kong"),
+            "JP": ("JPY", "Asia/Tokyo"),
+            "TW": ("TWD", "Asia/Taipei"),
+        }
+        default_currency, default_timezone = market_defaults.get(
+            market, ("USD", "America/New_York")
+        )
         return {
             "symbol": row["symbol"],
             "name": row.get("name"),
-            "market": row.get("market", "US"),
+            "market": market,
             "exchange": row.get("exchange"),
-            "currency": row.get("currency", "USD"),
-            "timezone": row.get("timezone", "America/New_York"),
+            "currency": row.get("currency") or default_currency,
+            "timezone": row.get("timezone") or default_timezone,
             "local_code": row.get("local_code"),
             "sector": row.get("sector"),
             "industry": row.get("industry"),
