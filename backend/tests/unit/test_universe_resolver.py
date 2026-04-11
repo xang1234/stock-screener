@@ -6,6 +6,7 @@ import pytest
 from app.schemas.universe import (
     Exchange,
     IndexName,
+    Market,
     UniverseDefinition,
     UniverseType,
 )
@@ -61,7 +62,19 @@ class TestResolveSymbols:
 
         assert result == ["AAPL", "MSFT", "GOOGL"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=False, limit=None
+            mock_db, market=None, exchange=None, sp500_only=False, limit=None
+        )
+
+    @patch("app.services.universe_resolver.get_stock_universe_service")
+    def test_market_passes_market_param(self, mock_service, mock_db):
+        mock_service.return_value.get_active_symbols.return_value = ["0700.HK", "9988.HK"]
+
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.HK)
+        result = resolve_symbols(mock_db, u)
+
+        assert result == ["0700.HK", "9988.HK"]
+        mock_service.return_value.get_active_symbols.assert_called_once_with(
+            mock_db, market="HK", exchange=None, sp500_only=False, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -73,7 +86,7 @@ class TestResolveSymbols:
 
         assert result == ["IBM", "GE"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange="NYSE", sp500_only=False, limit=None
+            mock_db, market=None, exchange="NYSE", sp500_only=False, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -84,7 +97,7 @@ class TestResolveSymbols:
         resolve_symbols(mock_db, u)
 
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange="NASDAQ", sp500_only=False, limit=None
+            mock_db, market=None, exchange="NASDAQ", sp500_only=False, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -96,7 +109,7 @@ class TestResolveSymbols:
 
         assert result == ["AAPL", "MSFT"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=True, limit=None
+            mock_db, market=None, exchange=None, sp500_only=True, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -107,7 +120,9 @@ class TestResolveSymbols:
         result = resolve_symbols(mock_db, u)
 
         assert result == ["AAPL"]
-        mock_service.return_value.filter_active_symbols.assert_called_once_with(mock_db, ["AAPL", "TSLA"])
+        mock_service.return_value.filter_active_symbols.assert_called_once_with(
+            mock_db, ["AAPL", "TSLA"]
+        )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
     def test_test_filters_to_active_symbols_by_default(self, mock_service, mock_db):
@@ -117,7 +132,9 @@ class TestResolveSymbols:
         result = resolve_symbols(mock_db, u)
 
         assert result == ["SPY"]
-        mock_service.return_value.filter_active_symbols.assert_called_once_with(mock_db, ["SPY", "QQQ"])
+        mock_service.return_value.filter_active_symbols.assert_called_once_with(
+            mock_db, ["SPY", "QQQ"]
+        )
 
     def test_custom_can_include_inactive_symbols(self, mock_db):
         u = UniverseDefinition(
@@ -136,7 +153,7 @@ class TestResolveSymbols:
         resolve_symbols(mock_db, u, limit=10)
 
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=False, limit=10
+            mock_db, market=None, exchange=None, sp500_only=False, limit=10
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -156,7 +173,7 @@ class TestResolveSymbols:
 
         assert result == ["AAPL", "MSFT"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=False, limit=None
+            mock_db, market=None, exchange=None, sp500_only=False, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -167,7 +184,7 @@ class TestResolveSymbols:
 
         assert result == ["AAPL"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=False, limit=None
+            mock_db, market=None, exchange=None, sp500_only=False, limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
@@ -178,7 +195,7 @@ class TestResolveSymbols:
 
         assert result == ["AAPL"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, exchange=None, sp500_only=False, limit=None
+            mock_db, market=None, exchange=None, sp500_only=False, limit=None
         )
 
 

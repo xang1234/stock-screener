@@ -92,6 +92,25 @@ class TestCreateScanUseCase:
         assert scan.universe_type == "exchange"
         assert scan.universe_exchange == "NYSE"
 
+    def test_stores_market_universe_metadata(self):
+        uow = _make_uow(["0700.HK"])
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        cmd = _make_command(
+            universe_label="Hong Kong Market",
+            universe_key="market:HK",
+            universe_type="market",
+            universe_market="HK",
+        )
+        uc.execute(uow, cmd)
+
+        scan = uow.scans.rows[0]
+        assert scan.universe == "Hong Kong Market"
+        assert scan.universe_key == "market:HK"
+        assert scan.universe_type == "market"
+        assert scan.universe_market == "HK"
+
     def test_empty_universe_raises_validation_error(self):
         uow = _make_uow([])
         dispatcher = FakeTaskDispatcher()

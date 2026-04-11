@@ -18,7 +18,7 @@ def upgrade() -> None:
 
     market_inference_expr = (
         "CASE "
-        "WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK') "
+        "WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'XHKG') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' THEN 'HK' "
         "WHEN UPPER(COALESCE(exchange, '')) IN ('TSE', 'JPX', 'XTKS') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' THEN 'JP' "
@@ -28,11 +28,40 @@ def upgrade() -> None:
         "ELSE 'US' END"
     )
     non_us_inference_condition = (
-        "UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'TSE', 'JPX', 'XTKS', 'TWSE', 'TPEX', 'XTAI') "
+        "UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'XHKG', 'TSE', 'JPX', 'XTKS', 'TWSE', 'TPEX', 'XTAI') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TW' "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TWO'"
+    )
+    inferred_currency_expr = (
+        f"CASE {market_inference_expr} "
+        "WHEN 'HK' THEN 'HKD' "
+        "WHEN 'JP' THEN 'JPY' "
+        "WHEN 'TW' THEN 'TWD' "
+        "ELSE 'USD' END"
+    )
+    inferred_timezone_expr = (
+        f"CASE {market_inference_expr} "
+        "WHEN 'HK' THEN 'Asia/Hong_Kong' "
+        "WHEN 'JP' THEN 'Asia/Tokyo' "
+        "WHEN 'TW' THEN 'Asia/Taipei' "
+        "ELSE 'America/New_York' END"
+    )
+    needs_backfill_condition = (
+        "(NULLIF(market, '') IS NULL OR (market = 'US' AND "
+        f"{market_inference_expr} <> 'US')) "
+        "OR (NULLIF(currency, '') IS NULL OR (currency = 'USD' AND "
+        f"{market_inference_expr} <> 'US')) "
+        "OR (NULLIF(timezone, '') IS NULL OR (timezone = 'America/New_York' AND "
+        f"{market_inference_expr} <> 'US')) "
+        "OR NULLIF(local_code, '') IS NULL"
+    )
+    needs_null_fill_condition = (
+        "NULLIF(market, '') IS NULL "
+        "OR NULLIF(currency, '') IS NULL "
+        "OR NULLIF(timezone, '') IS NULL "
+        "OR NULLIF(local_code, '') IS NULL"
     )
 
     if dialect == "postgresql":
@@ -55,23 +84,22 @@ def upgrade() -> None:
 
     with op.batch_alter_table("stock_universe") as batch_op:
         batch_op.add_column(
-            sa.Column("market", sa.String(length=8), nullable=True, server_default=sa.text("'US'"))
+            sa.Column("market", sa.String(length=8), nullable=True)
         )
         batch_op.add_column(
-            sa.Column("currency", sa.String(length=8), nullable=True, server_default=sa.text("'USD'"))
+            sa.Column("currency", sa.String(length=8), nullable=True)
         )
         batch_op.add_column(
             sa.Column(
                 "timezone",
                 sa.String(length=64),
                 nullable=True,
-                server_default=sa.text("'America/New_York'"),
             )
         )
         batch_op.add_column(sa.Column("local_code", sa.String(length=32), nullable=True))
 
     # Backfill existing rows with market-aware inference.
-    # If no non-US signal is present, default to US baseline.
+    # Rows are updated only when fields are empty, or when US defaults must be corrected for inferred non-US rows.
     op.execute(
         sa.text(
             f"""
@@ -84,42 +112,23 @@ def upgrade() -> None:
                 END,
                 currency = CASE
                     WHEN NULLIF(currency, '') IS NULL THEN
-                    CASE {market_inference_expr}
-                        WHEN 'HK' THEN 'HKD'
-                        WHEN 'JP' THEN 'JPY'
-                        WHEN 'TW' THEN 'TWD'
-                        ELSE 'USD'
-                    END
+                    {inferred_currency_expr}
                     WHEN currency = 'USD' AND {market_inference_expr} <> 'US' THEN
-                    CASE {market_inference_expr}
-                        WHEN 'HK' THEN 'HKD'
-                        WHEN 'JP' THEN 'JPY'
-                        WHEN 'TW' THEN 'TWD'
-                        ELSE 'USD'
-                    END
+                    {inferred_currency_expr}
                     ELSE currency
                 END,
                 timezone = CASE
                     WHEN NULLIF(timezone, '') IS NULL THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'Asia/Hong_Kong'
-                            WHEN 'JP' THEN 'Asia/Tokyo'
-                            WHEN 'TW' THEN 'Asia/Taipei'
-                            ELSE 'America/New_York'
-                        END
+                        {inferred_timezone_expr}
                     WHEN timezone = 'America/New_York' AND {market_inference_expr} <> 'US' THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'Asia/Hong_Kong'
-                            WHEN 'JP' THEN 'Asia/Tokyo'
-                            WHEN 'TW' THEN 'Asia/Taipei'
-                            ELSE 'America/New_York'
-                        END
+                        {inferred_timezone_expr}
                     ELSE timezone
                 END,
                 local_code = COALESCE(
                     NULLIF(local_code, ''),
                     {local_code_from_symbol_expr}
                 )
+            WHERE {needs_backfill_condition}
             """
         )
     )
@@ -137,42 +146,23 @@ def upgrade() -> None:
                 END,
                 currency = CASE
                     WHEN NULLIF(currency, '') IS NULL THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'HKD'
-                            WHEN 'JP' THEN 'JPY'
-                            WHEN 'TW' THEN 'TWD'
-                            ELSE 'USD'
-                        END
+                        {inferred_currency_expr}
                     WHEN currency = 'USD' AND {market_inference_expr} <> 'US' THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'HKD'
-                            WHEN 'JP' THEN 'JPY'
-                            WHEN 'TW' THEN 'TWD'
-                            ELSE 'USD'
-                        END
+                        {inferred_currency_expr}
                     ELSE currency
                 END,
                 timezone = CASE
                     WHEN NULLIF(timezone, '') IS NULL THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'Asia/Hong_Kong'
-                            WHEN 'JP' THEN 'Asia/Tokyo'
-                            WHEN 'TW' THEN 'Asia/Taipei'
-                            ELSE 'America/New_York'
-                        END
+                        {inferred_timezone_expr}
                     WHEN timezone = 'America/New_York' AND {market_inference_expr} <> 'US' THEN
-                        CASE {market_inference_expr}
-                            WHEN 'HK' THEN 'Asia/Hong_Kong'
-                            WHEN 'JP' THEN 'Asia/Tokyo'
-                            WHEN 'TW' THEN 'Asia/Taipei'
-                            ELSE 'America/New_York'
-                        END
+                        {inferred_timezone_expr}
                     ELSE timezone
                 END,
                 local_code = COALESCE(
                     NULLIF(local_code, ''),
                     {local_code_from_symbol_expr}
                 )
+            WHERE {needs_null_fill_condition}
             """
         )
     )

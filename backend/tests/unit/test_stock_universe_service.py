@@ -59,3 +59,45 @@ def test_normalize_status_treats_active_status_plus_inactive_flag_as_inactive():
     normalized = stock_universe_service._normalize_status(record)
 
     assert normalized != UNIVERSE_STATUS_ACTIVE
+
+
+def test_get_active_symbols_market_filter_falls_back_to_exchange_when_market_blank():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                exchange="NASDAQ",
+                market="US",
+                market_cap=1000,
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="Present in Finviz universe sync",
+            ),
+            StockUniverse(
+                symbol="IBM",
+                exchange="NYSE",
+                market="",
+                market_cap=500,
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="Present in Finviz universe sync",
+            ),
+            StockUniverse(
+                symbol="2330.TW",
+                exchange="TWSE",
+                market="",
+                market_cap=1200,
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="Present in source universe sync",
+            ),
+        ]
+    )
+    db.commit()
+
+    symbols = stock_universe_service.get_active_symbols(db, market="US")
+
+    assert symbols == ["AAPL", "IBM"]
+    db.close()

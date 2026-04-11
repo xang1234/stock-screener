@@ -9,7 +9,8 @@ import apiClient from './client';
  * @param {string} params.universe - Universe filter: 'all', 'nyse', 'nasdaq', 'amex', 'sp500', 'custom', or 'test'
  * @param {Array<string>} params.symbols - Custom symbol list (required if universe='custom' or 'test')
  * @param {Object} [params.universe_def] - Structured universe definition (takes precedence over legacy universe field)
- * @param {string} params.universe_def.type - Universe type: 'all', 'exchange', 'index', 'custom', 'test'
+ * @param {string} params.universe_def.type - Universe type: 'all', 'market', 'exchange', 'index', 'custom', 'test'
+ * @param {string} [params.universe_def.market] - Market code: 'US', 'HK', 'JP', 'TW' (if type='market')
  * @param {string} [params.universe_def.exchange] - Exchange name: 'NYSE', 'NASDAQ', 'AMEX' (if type='exchange')
  * @param {string} [params.universe_def.index] - Index name: 'SP500' (if type='index')
  * @param {Array<string>} [params.universe_def.symbols] - Symbol list (if type='custom' or 'test')
@@ -21,6 +22,7 @@ import apiClient from './client';
 export const createScan = async ({
   universe = 'all',
   symbols = [],
+  universe_def = undefined,
   criteria = {},
   screeners = ['minervini'],
   composite_method = 'weighted_average'
@@ -28,6 +30,7 @@ export const createScan = async ({
   const response = await apiClient.post('/v1/scans', {
     universe,
     symbols,
+    universe_def,
     criteria,
     screeners,
     composite_method,

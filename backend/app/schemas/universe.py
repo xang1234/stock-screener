@@ -14,10 +14,19 @@ from pydantic import BaseModel, field_validator, model_validator
 class UniverseType(str, Enum):
     """Type of stock universe to scan."""
     ALL = "all"
+    MARKET = "market"
     EXCHANGE = "exchange"
     INDEX = "index"
     CUSTOM = "custom"
     TEST = "test"
+
+
+class Market(str, Enum):
+    """Supported market scopes."""
+    US = "US"
+    HK = "HK"
+    JP = "JP"
+    TW = "TW"
 
 
 class Exchange(str, Enum):
@@ -38,11 +47,13 @@ class UniverseDefinition(BaseModel):
 
     Validates that the right fields are populated for each universe type:
     - ALL: no extra fields
+    - MARKET: market required
     - EXCHANGE: exchange required
     - INDEX: index required
     - CUSTOM/TEST: symbols required (non-empty, max 500)
     """
     type: UniverseType
+    market: Optional[Market] = None
     exchange: Optional[Exchange] = None
     index: Optional[IndexName] = None
     symbols: Optional[List[str]] = None
@@ -73,29 +84,53 @@ class UniverseDefinition(BaseModel):
         if t == UniverseType.ALL:
             if (
                 self.exchange is not None
+                or self.market is not None
                 or self.index is not None
                 or self.symbols is not None
                 or self.allow_inactive_symbols
             ):
-                raise ValueError("ALL universe must not specify exchange, index, or symbols")
+                raise ValueError("ALL universe must not specify market, exchange, index, or symbols")
+
+        elif t == UniverseType.MARKET:
+            if self.market is None:
+                raise ValueError("MARKET universe requires 'market' field")
+            if (
+                self.exchange is not None
+                or self.index is not None
+                or self.symbols is not None
+                or self.allow_inactive_symbols
+            ):
+                raise ValueError("MARKET universe must not specify exchange, index, or symbols")
 
         elif t == UniverseType.EXCHANGE:
             if self.exchange is None:
                 raise ValueError("EXCHANGE universe requires 'exchange' field")
-            if self.index is not None or self.symbols is not None or self.allow_inactive_symbols:
-                raise ValueError("EXCHANGE universe must not specify index or symbols")
+            if (
+                self.market is not None
+                or self.index is not None
+                or self.symbols is not None
+                or self.allow_inactive_symbols
+            ):
+                raise ValueError("EXCHANGE universe must not specify market, index, or symbols")
 
         elif t == UniverseType.INDEX:
             if self.index is None:
                 raise ValueError("INDEX universe requires 'index' field")
-            if self.exchange is not None or self.symbols is not None or self.allow_inactive_symbols:
-                raise ValueError("INDEX universe must not specify exchange or symbols")
+            if (
+                self.market is not None
+                or self.exchange is not None
+                or self.symbols is not None
+                or self.allow_inactive_symbols
+            ):
+                raise ValueError("INDEX universe must not specify market, exchange, or symbols")
 
         elif t in (UniverseType.CUSTOM, UniverseType.TEST):
             if not self.symbols:
                 raise ValueError(f"{t.value.upper()} universe requires a non-empty 'symbols' list")
             if len(self.symbols) > 500:
                 raise ValueError(f"Symbol list too long ({len(self.symbols)}). Maximum is 500.")
+            if self.market is not None or self.exchange is not None or self.index is not None:
+                raise ValueError(f"{t.value.upper()} universe must not specify market, exchange, or index")
 
         return self
 
@@ -106,6 +141,7 @@ class UniverseDefinition(BaseModel):
         Returns:
             Deterministic string key:
             - "all"
+            - "market:US"
             - "exchange:NYSE"
             - "index:SP500"
             - "custom:<sha256[:12]>"
@@ -113,6 +149,8 @@ class UniverseDefinition(BaseModel):
         """
         if self.type == UniverseType.ALL:
             return "all"
+        elif self.type == UniverseType.MARKET:
+            return f"market:{self.market.value}"
         elif self.type == UniverseType.EXCHANGE:
             return f"exchange:{self.exchange.value}"
         elif self.type == UniverseType.INDEX:
@@ -129,10 +167,18 @@ class UniverseDefinition(BaseModel):
         Human-readable label for display.
 
         Returns:
-            e.g. "All Stocks", "NYSE", "S&P 500", "Custom (25 symbols)", "Test (5 symbols)"
+            e.g. "All Stocks", "US Market", "NYSE", "S&P 500", "Custom (25 symbols)", "Test (5 symbols)"
         """
         if self.type == UniverseType.ALL:
             return "All Stocks"
+        elif self.type == UniverseType.MARKET:
+            market_labels = {
+                Market.US: "US Market",
+                Market.HK: "Hong Kong Market",
+                Market.JP: "Japan Market",
+                Market.TW: "Taiwan Market",
+            }
+            return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
             return self.exchange.value
         elif self.type == UniverseType.INDEX:
@@ -155,6 +201,10 @@ class UniverseDefinition(BaseModel):
 
         Supports backward compatibility with existing API calls:
         - "all" -> ALL
+        - "market:us" -> MARKET:US
+        - "market:hk" -> MARKET:HK
+        - "market:jp" -> MARKET:JP
+        - "market:tw" -> MARKET:TW
         - "nyse" -> EXCHANGE:NYSE
         - "nasdaq" -> EXCHANGE:NASDAQ
         - "amex" -> EXCHANGE:AMEX
@@ -176,9 +226,20 @@ class UniverseDefinition(BaseModel):
             "nasdaq": Exchange.NASDAQ,
             "amex": Exchange.AMEX,
         }
+        market_map = {
+            "us": Market.US,
+            "hk": Market.HK,
+            "jp": Market.JP,
+            "tw": Market.TW,
+        }
 
         if u == "all":
             return cls(type=UniverseType.ALL)
+        elif u.startswith("market:"):
+            raw_market = u.split(":", 1)[1].strip().lower()
+            if raw_market in market_map:
+                return cls(type=UniverseType.MARKET, market=market_map[raw_market])
+            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, JP, TW")
         elif u in exchange_map:
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":
@@ -194,5 +255,6 @@ class UniverseDefinition(BaseModel):
                 return cls(type=UniverseType.CUSTOM, symbols=symbols)
             raise ValueError(
                 f"Unknown universe '{universe}' and no symbols provided. "
-                f"Valid values: all, nyse, nasdaq, amex, sp500, custom, test"
+                f"Valid values: all, market:us, market:hk, market:jp, market:tw, "
+                f"nyse, nasdaq, amex, sp500, custom, test"
             )

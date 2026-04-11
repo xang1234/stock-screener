@@ -5,7 +5,7 @@ Handles creating scans, checking progress, and retrieving results.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from typing import List, Literal, Any
 from pydantic import ValidationError
@@ -76,6 +76,7 @@ async def list_scans(
                     trigger_source=getattr(scan, "trigger_source", "manual") or "manual",
                     universe=scan.universe or "unknown",
                     universe_type=scan.universe_type,
+                    universe_market=getattr(scan, "universe_market", None),
                     universe_exchange=scan.universe_exchange,
                     universe_index=scan.universe_index,
                     universe_symbols_count=symbols_count,
@@ -96,6 +97,7 @@ async def list_scans(
 @router.post("", response_model=ScanCreateResponse)
 async def create_scan(
     request: ScanCreateRequest,
+    response: Response,
     uow: Any = Depends(get_uow),
     use_case: Any = Depends(get_create_scan_use_case),
 ):
@@ -103,12 +105,18 @@ async def create_scan(
     from ...domain.common.errors import ValidationError as DomainValidationError
     from ...use_cases.scanning.create_scan import CreateScanCommand
 
-    universe_def = _build_universe_def(request)
+    universe_resolution = _build_universe_resolution(request)
+    universe_def = universe_resolution.universe_def
+    if universe_resolution.used_legacy:
+        logger.warning(universe_resolution.deprecation_log_message())
+        for key, value in universe_resolution.deprecation_headers().items():
+            response.headers[key] = value
     cmd = CreateScanCommand(
         universe_def=universe_def,
         universe_label=universe_def.label(),
         universe_key=universe_def.key(),
         universe_type=universe_def.type.value,
+        universe_market=universe_def.market.value if universe_def.market else None,
         universe_exchange=universe_def.exchange.value if universe_def.exchange else None,
         universe_index=universe_def.index.value if universe_def.index else None,
         universe_symbols=universe_def.symbols,
@@ -146,12 +154,19 @@ async def create_scan(
 
 def _build_universe_def(request: ScanCreateRequest):
     """Convert request fields into a typed UniverseDefinition."""
-    from ...schemas.universe import UniverseDefinition
+    return _build_universe_resolution(request).universe_def
 
-    if request.universe_def is not None:
-        return request.universe_def
+
+def _build_universe_resolution(request: ScanCreateRequest):
+    """Resolve request fields into typed universe metadata + compat diagnostics."""
+    from ...services.universe_compat_adapter import resolve_scan_universe_request
+
     try:
-        return UniverseDefinition.from_legacy(request.universe, request.symbols)
+        return resolve_scan_universe_request(
+            universe_def=request.universe_def,
+            legacy_universe=request.universe,
+            legacy_symbols=request.symbols,
+        )
     except (ValueError, ValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
