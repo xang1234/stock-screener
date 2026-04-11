@@ -25,6 +25,21 @@ MarketCalendarService must use the following canonical `exchange_calendars` IDs:
 
 No alias IDs or market-specific substitutes may be used in production without a superseding ADR revision.
 
+Canonical timezone mapping (for deterministic rendering and audit labeling):
+
+- US (`XNYS`) -> `America/New_York`
+- HK (`XHKG`) -> `Asia/Hong_Kong`
+- JP (`XTKS`) -> `Asia/Tokyo`
+- TW (`XTAI`) -> `Asia/Taipei`
+
+### Normalization Rules (Normative)
+
+1. Calendar lookups must be performed only with the canonical IDs above.
+2. Session boundaries returned by `exchange_calendars` are interpreted in exchange-local time, then normalized to UTC for all freshness/scheduler comparisons.
+3. Internal comparisons and persisted freshness references must use UTC timestamps only.
+4. User-facing surfaces and logs must render session boundaries with both UTC and canonical market-local timezone context.
+5. Naive (timezone-less) timestamps are not valid inputs to MarketCalendarService APIs and must be rejected or normalized before invocation by callers.
+
 ### Service Contract
 
 MarketCalendarService provides deterministic primitives:
