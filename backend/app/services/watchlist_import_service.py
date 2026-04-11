@@ -15,6 +15,7 @@ _HEADER_TOKENS = {
     "code",
 }
 _SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+_SYMBOL_HEURISTIC_PATTERN = re.compile(r"^(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
 
 def parse_watchlist_import_symbols(
@@ -52,7 +53,8 @@ def parse_watchlist_import_symbols(
 
 
 def _looks_like_symbol_token(token: str) -> bool:
-    return bool(_SYMBOL_PATTERN.match(token.strip().upper()))
+    # Heuristic parser should reject numeric-only cells (price/volume columns).
+    return bool(_SYMBOL_HEURISTIC_PATTERN.match(token.strip().upper()))
 
 
 def _parse_tabular_symbols(content: str) -> list[str]:

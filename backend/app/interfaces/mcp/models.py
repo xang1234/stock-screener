@@ -102,7 +102,7 @@ class FindCandidatesArgs(BaseModel):
 class ExplainSymbolArgs(BaseModel):
     """Arguments for explain_symbol."""
 
-    symbol: str = Field(..., min_length=1, max_length=10)
+    symbol: str = Field(..., min_length=1, max_length=20)
     depth: Literal["brief", "full"] = "brief"
 
     @field_validator("symbol")
@@ -162,7 +162,7 @@ class GroupRankingsArgs(BaseModel):
 class StockLookupArgs(BaseModel):
     """Arguments for stock_lookup."""
 
-    symbol: str = Field(..., min_length=1, max_length=10)
+    symbol: str = Field(..., min_length=1, max_length=20)
     include_technicals: bool = False
 
     @field_validator("symbol")
@@ -177,7 +177,7 @@ class StockLookupArgs(BaseModel):
 class StockSnapshotArgs(BaseModel):
     """Arguments for stock_snapshot."""
 
-    symbol: str = Field(..., min_length=1, max_length=10)
+    symbol: str = Field(..., min_length=1, max_length=20)
 
     @field_validator("symbol")
     @classmethod

@@ -20,6 +20,31 @@ OLD_LEN = 10
 NEW_LEN = 20
 
 
+def _lock_tables_for_downgrade() -> None:
+    """Acquire write-blocking locks before downgrade preflight checks."""
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+
+    tables = [
+        "watchlist",
+        "provider_snapshot_rows",
+        "theme_constituents",
+        "ibd_group_ranks",
+        "ibd_group_peer_cache",
+        "ibd_industry_groups",
+        "stock_universe_status_events",
+        "stock_universe",
+        "scan_results",
+        "stock_industry",
+        "stock_technicals",
+        "stock_fundamentals",
+        "stock_prices",
+    ]
+    for table_name in tables:
+        bind.execute(sa.text(f"LOCK TABLE {table_name} IN ACCESS EXCLUSIVE MODE"))
+
+
 def _alter_length(table_name: str, column_name: str, from_len: int, to_len: int) -> None:
     """Alter VARCHAR length with batch mode for cross-dialect safety."""
     with op.batch_alter_table(table_name) as batch_op:
@@ -75,6 +100,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Prevent concurrent writes between preflight and shrink operations.
+    _lock_tables_for_downgrade()
+
     # Preflight safety checks before any shrinking operation.
     _assert_max_length("watchlist", "symbol", OLD_LEN)
     _assert_max_length("provider_snapshot_rows", "symbol", OLD_LEN)

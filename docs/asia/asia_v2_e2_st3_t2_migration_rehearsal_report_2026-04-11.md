@@ -28,12 +28,27 @@ Validate migration safety and rollback viability on a production-like dataset be
 |---|---|---|
 | Upgrade to `20260410_0002` | Success | 24.67s |
 | Upgrade to `20260411_0003` | Success | 2.48s |
+| Upgrade to `20260411_0004` (initial pass) | Success | 1.08s |
 | Downgrade `0004` -> `0003` (rollback drill) | Success | 1.55s |
 | Re-upgrade `0003` -> `0004` (post-seed) | Success | 1.16s |
 
 Notes:
 - Additional downgrade/re-upgrade cycles were executed during drill iterations (`~1.05s` and `~1.10s`) with no migration errors.
-- Full command evidence is captured in `/tmp/asia_rehearsal.log` during rehearsal execution.
+
+### Durable command evidence (excerpt)
+
+```bash
+cd backend
+export DATABASE_URL=postgresql://stockscanner:stockscanner@127.0.0.1:55432/stockscanner_asia_rehearsal
+/usr/bin/time -p uv run --python 3.11 --with-requirements requirements-server.txt alembic upgrade 20260411_0004
+```
+
+```text
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 20260411_0003 -> 20260411_0004, Add explicit market identity fields to stock_universe and backfill US baseline.
+real 1.08
+```
 
 ## Backfill Validation (`asia.2.2`)
 
