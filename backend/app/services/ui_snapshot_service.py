@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import math
 import json
 import logging
 from threading import Lock
@@ -852,6 +853,11 @@ def _json_safe(value: Any) -> Any:
         return [_json_safe(item) for item in value]
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, float):
+        # Postgres JSON/JSONB rejects non-finite numbers. Coerce NaN/Inf to null.
+        if not math.isfinite(value):
+            return None
+        return value
     return value
 
 
