@@ -23,6 +23,7 @@ import {
   sortStaticScanRows,
 } from '../scanClient';
 import StaticChartViewerModal from '../StaticChartViewerModal';
+import ScreeningPresetBar from '../components/ScreeningPresetBar';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -42,6 +43,7 @@ function StaticScanPage() {
   const [perPage, setPerPage] = useState(50);
   const [sortBy, setSortBy] = useState('composite_score');
   const [sortOrder, setSortOrder] = useState('desc');
+  const [activePresetId, setActivePresetId] = useState(null);
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
   const [hydrationState, setHydrationState] = useState({
@@ -61,6 +63,40 @@ function StaticScanPage() {
   const manifestDefaultFilters = useMemo(
     () => applyScanFilterDefaults(scanManifestQuery.data?.default_filters),
     [scanManifestQuery.data?.default_filters]
+  );
+
+  const screeningPresets = useMemo(
+    () => scanManifestQuery.data?.screening_presets || [],
+    [scanManifestQuery.data?.screening_presets]
+  );
+
+  const handleSelectPreset = useCallback(
+    (presetId) => {
+      if (!presetId) {
+        setActivePresetId(null);
+        setFilters(manifestDefaultFilters);
+        if (scanManifestQuery.data?.sort?.field) {
+          setSortBy(scanManifestQuery.data.sort.field);
+          setSortOrder(scanManifestQuery.data.sort.order || 'desc');
+        }
+        setPage(1);
+        return;
+      }
+
+      const preset = screeningPresets.find((p) => p.id === presetId);
+      if (!preset) {
+        return;
+      }
+
+      setActivePresetId(presetId);
+      setFilters(applyScanFilterDefaults(preset.filters));
+      if (preset.sort?.field) {
+        setSortBy(preset.sort.field);
+        setSortOrder(preset.sort.order || 'desc');
+      }
+      setPage(1);
+    },
+    [manifestDefaultFilters, scanManifestQuery.data?.sort, screeningPresets]
   );
 
   useEffect(() => {
@@ -271,11 +307,23 @@ function StaticScanPage() {
         </Alert>
       ) : null}
 
+      {screeningPresets.length > 0 && (
+        <ScreeningPresetBar
+          presets={screeningPresets}
+          activePresetId={activePresetId}
+          onSelectPreset={handleSelectPreset}
+          disabled={!hydrationComplete}
+        />
+      )}
+
       {hydrationComplete && (
         <FilterPanel
           filters={filters}
           onFilterChange={setFilters}
-          onReset={() => setFilters(manifestDefaultFilters)}
+          onReset={() => {
+            setFilters(manifestDefaultFilters);
+            setActivePresetId(null);
+          }}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
