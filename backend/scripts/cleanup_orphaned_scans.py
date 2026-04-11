@@ -164,7 +164,9 @@ def main(skip_confirmation: bool = False, do_vacuum: bool = False):
 
         # Close session before space reclamation.
         # Derive maintenance target from the same runtime-bound session bind.
-        database_url = str(db.get_bind().url)
+        bind_url = db.get_bind().url
+        database_url = bind_url.render_as_string(hide_password=False)
+        safe_database_url = bind_url.render_as_string(hide_password=True)
         db.close()
 
         # Get database path
@@ -173,7 +175,7 @@ def main(skip_confirmation: bool = False, do_vacuum: bool = False):
         if not database_url.startswith("sqlite:///"):
             raise RuntimeError(
                 "cleanup_orphaned_scans.py only supports sqlite databases; "
-                f"resolved runtime DB URL is {database_url}"
+                f"resolved runtime DB URL is {safe_database_url}"
             )
         db_path = database_url.replace("sqlite:///", "", 1)
         size_before = os.path.getsize(db_path) / (1024 * 1024)  # MB
