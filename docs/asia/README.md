@@ -18,6 +18,7 @@ This folder contains the authoritative architecture decision records for ASIA ex
 7. [ASIA v2 Feature Flag Matrix and Rollback Runbook](./asia_v2_flag_matrix_and_rollback_runbook.md)
 8. [ASIA v2 Symbol Constraint Inventory Matrix (ST1)](./asia_v2_symbol_constraint_inventory_matrix.md)
 9. [ASIA v2 Objective Launch-Gate Charter](./asia_v2_launch_gate_charter.md)
+10. [ASIA v2 E2 Migration Rehearsal Report (ST3 + T2, 2026-04-11)](./asia_v2_e2_st3_t2_migration_rehearsal_report_2026-04-11.md)
 
 ## Consumption Rules
 

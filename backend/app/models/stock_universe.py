@@ -22,7 +22,11 @@ class StockUniverse(Base):
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, unique=True, index=True)
     name = Column(String(255))
+    market = Column(String(8), nullable=False, default="US", index=True)  # US, HK, JP, TW
     exchange = Column(String(20), index=True)  # NYSE, NASDAQ, AMEX
+    currency = Column(String(8), nullable=False, default="USD")
+    timezone = Column(String(64), nullable=False, default="America/New_York")
+    local_code = Column(String(32), nullable=True)  # Exchange-local identifier when different from symbol
     sector = Column(String(100), index=True)
     industry = Column(String(100))
     market_cap = Column(Float, nullable=True)

@@ -62,8 +62,10 @@ Primary blockers are not a single regex but **distributed assumptions**:
 - [ ] Remove hard `len(symbol) > 10` guardrails from API paths.
 - [ ] Extend typed universe contracts for market-aware payloads.
 - [ ] Add non-US fixtures/tests across API, service, and UI contract layers.
-- [ ] Run upgrade/downgrade rehearsal and record timings/blockers.
+- [x] Run upgrade/downgrade rehearsal and record timings/blockers.
 
 ## Notes for Migration PR Linking
 
 This ST1 artifact is intended to be linked from the ST2 migration PR as the authoritative pre-change inventory.
+
+Rehearsal evidence: `docs/asia/asia_v2_e2_st3_t2_migration_rehearsal_report_2026-04-11.md`.
