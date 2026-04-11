@@ -142,10 +142,12 @@ class SecurityMasterResolver:
                 resolved_local_code = normalized_symbol
 
         canonical_symbol = normalized_symbol
-        if normalized_market != "US" and "." not in canonical_symbol and resolved_local_code:
+        if normalized_market != "US" and resolved_local_code:
             suffix = self._resolve_suffix(normalized_market, normalized_exchange)
             if suffix:
-                canonical_symbol = f"{resolved_local_code}{suffix}"
+                expected_canonical = f"{resolved_local_code}{suffix}"
+                if canonical_symbol != expected_canonical:
+                    canonical_symbol = expected_canonical
 
         return SecurityIdentity(
             normalized_symbol=normalized_symbol,

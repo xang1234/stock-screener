@@ -1,4 +1,5 @@
 import pandas as pd
+from datetime import datetime
 
 from app.services.benchmark_cache_service import BenchmarkCacheService
 
@@ -97,3 +98,17 @@ def test_get_benchmark_data_uses_fallback_when_primary_fails():
 
     assert calls[:2] == ["^HSI", "2800.HK"]
     assert result is fallback_df
+
+
+def test_is_data_fresh_fallback_allows_weekend_without_calendar(monkeypatch):
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday
+    service._market_calendar.last_completed_trading_day = lambda market: None  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        pd.Timestamp,
+        "utcnow",
+        lambda: pd.Timestamp(datetime(2026, 4, 12, 12, 0), tz="UTC"),
+    )
+
+    assert service._is_data_fresh(data, market="HK") is True

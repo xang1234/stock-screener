@@ -482,14 +482,9 @@ class BenchmarkCacheService:
             except Exception:
                 expected = None
             if expected is None:
-                # Fallback freshness check when expected trading date cannot be computed.
-                latest_allowed = pd.Timestamp.utcnow() - pd.Timedelta(hours=max_age_hours)
-                last_ts = pd.Timestamp(last_date)
-                if last_ts.tzinfo is None:
-                    last_ts = last_ts.tz_localize("UTC")
-                else:
-                    last_ts = last_ts.tz_convert("UTC")
-                return last_ts >= latest_allowed
+                # Calendar fallback: avoid weekend/holiday false-stale by allowing data
+                # through the next business day when exchange calendar lookup is unavailable.
+                return self._is_data_fresh_without_calendar(last_date, max_age_hours=max_age_hours)
 
             is_fresh = last_date.date() >= expected
             if not is_fresh:
@@ -504,6 +499,31 @@ class BenchmarkCacheService:
         except Exception as e:
             logger.warning(f"Error checking data freshness: {e}")
             return False
+
+    @staticmethod
+    def _is_data_fresh_without_calendar(last_date: pd.Timestamp, max_age_hours: int = 24) -> bool:
+        """Fallback freshness policy when exchange calendar is unavailable."""
+        last_ts = pd.Timestamp(last_date)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize("UTC")
+        else:
+            last_ts = last_ts.tz_convert("UTC")
+
+        now_utc = pd.Timestamp.utcnow()
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.tz_localize("UTC")
+
+        latest_allowed = now_utc - pd.Timedelta(hours=max_age_hours)
+        if last_ts >= latest_allowed:
+            return True
+
+        # Allow Friday (or latest business-day) data to remain fresh until the end of
+        # the next business day when calendars are unavailable (e.g., lookup failure).
+        business_days_after_last = pd.bdate_range(
+            start=last_ts.date() + timedelta(days=1),
+            end=now_utc.date(),
+        )
+        return len(business_days_after_last) <= 1
 
     def invalidate_cache(self, period: str = None) -> None:
         """

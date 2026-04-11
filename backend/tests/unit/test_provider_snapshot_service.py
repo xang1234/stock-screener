@@ -768,7 +768,25 @@ def test_deserialize_universe_row_infers_hk_from_xhkg_exchange():
         }
     )
 
+    assert row["symbol"] == "0700.HK"
     assert row["market"] == "HK"
     assert row["currency"] == "HKD"
     assert row["timezone"] == "Asia/Hong_Kong"
     assert row["local_code"] == "0700"
+
+
+def test_deserialize_universe_row_normalizes_tpex_symbol_to_two_suffix():
+    row = ProviderSnapshotService._deserialize_universe_row(
+        {
+            "symbol": "3008.TW",
+            "exchange": "TPEX",
+            "market": "TW",
+            "currency": "TWD",
+            "timezone": "Asia/Taipei",
+            "local_code": "3008",
+        }
+    )
+
+    assert row["symbol"] == "3008.TWO"
+    assert row["exchange"] == "TPEX"
+    assert row["market"] == "TW"

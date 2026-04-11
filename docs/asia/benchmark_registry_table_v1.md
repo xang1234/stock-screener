@@ -1,7 +1,7 @@
 # ASIA Benchmark Registry Table v1
 
 - Version: `2026-04-11.v1`
-- Owner Bead: `StockScreenClaude-asia.3.6`
+- Owner: `StockScreenClaude-asia.3.6`
 - Policy: index-primary with configured ETF fallback; non-US paths must not fall back to SPY.
 
 | Market | Primary Symbol | Primary Kind | Fallback Symbol | Fallback Kind | Notes |

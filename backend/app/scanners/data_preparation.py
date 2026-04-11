@@ -165,7 +165,8 @@ class DataPreparationLayer:
         if requirements.needs_benchmark:
             try:
                 benchmark_data = self._fetch_with_retry(
-                    self.benchmark_cache.get_spy_data,
+                    self.benchmark_cache.get_benchmark_data,
+                    market=identity.market,
                     period=requirements.price_period,
                 )
                 if benchmark_data is None or benchmark_data.empty:
@@ -280,18 +281,22 @@ class DataPreparationLayer:
             else {}
         )
 
-        # Get benchmark data once (shared by all stocks)
-        benchmark_data = None
+        # Get benchmark data once per market (shared by symbols in that market)
+        benchmark_data_by_market: dict[str, pd.DataFrame | None] = {}
         all_errors: dict[str, str] = {}
         if requirements.needs_benchmark:
-            try:
-                benchmark_data = self._fetch_with_retry(
-                    self.benchmark_cache.get_spy_data,
-                    period=requirements.price_period,
-                )
-            except Exception as e:
-                logger.warning(f"Error fetching benchmark data: {e}")
-                all_errors["<bulk>/benchmark_data"] = str(e)
+            unique_markets = sorted({identity.market for identity in identities})
+            for market in unique_markets:
+                try:
+                    benchmark_data_by_market[market] = self._fetch_with_retry(
+                        self.benchmark_cache.get_benchmark_data,
+                        market=market,
+                        period=requirements.price_period,
+                    )
+                except Exception as e:
+                    logger.warning("Error fetching benchmark data for market %s: %s", market, e)
+                    all_errors[f"<bulk>/benchmark_data:{market}"] = str(e)
+                    benchmark_data_by_market[market] = None
 
         # Build StockData for each symbol
         results = {}
@@ -362,7 +367,11 @@ class DataPreparationLayer:
             results[symbol] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
-                benchmark_data=benchmark_data if benchmark_data is not None else pd.DataFrame(),
+                benchmark_data=(
+                    benchmark_data_by_market.get(identity.market)
+                    if requirements.needs_benchmark
+                    else None
+                ) or pd.DataFrame(),
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,

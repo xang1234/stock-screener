@@ -72,7 +72,7 @@ def mock_yfinance():
 @pytest.fixture
 def mock_benchmark_cache():
     bc = MagicMock()
-    bc.get_spy_data.return_value = _make_price_df(days=252, price=450.0)
+    bc.get_benchmark_data.return_value = _make_price_df(days=252, price=450.0)
     return bc
 
 
@@ -126,7 +126,7 @@ class TestPartialFailureAllowPartialTrue:
     def test_benchmark_failure_does_not_crash(
         self, data_layer, mock_benchmark_cache,
     ):
-        mock_benchmark_cache.get_spy_data.side_effect = TimeoutError("SPY timeout")
+        mock_benchmark_cache.get_benchmark_data.side_effect = TimeoutError("SPY timeout")
 
         result = data_layer.prepare_data("AAPL", REQUIREMENTS)
 
@@ -150,7 +150,7 @@ class TestPartialFailureAllowPartialTrue:
     ):
         mock_price_cache.get_historical_data.return_value = None
         mock_yfinance.get_historical_data.side_effect = ConnectionError("no net")
-        mock_benchmark_cache.get_spy_data.side_effect = TimeoutError("spy down")
+        mock_benchmark_cache.get_benchmark_data.side_effect = TimeoutError("spy down")
         mock_fundamentals_cache.get_fundamentals.side_effect = RuntimeError("db")
 
         result = data_layer.prepare_data("AAPL", REQUIREMENTS)
@@ -277,7 +277,7 @@ class TestRetryWithBackoff:
     def test_retry_on_benchmark_and_fundamentals(
         self, data_layer, mock_benchmark_cache, mock_fundamentals_cache, mock_sleep,
     ):
-        mock_benchmark_cache.get_spy_data.side_effect = [
+        mock_benchmark_cache.get_benchmark_data.side_effect = [
             TimeoutError("timeout"),
             _make_price_df(days=252, price=450.0),
         ]
@@ -290,8 +290,17 @@ class TestRetryWithBackoff:
 
         assert "benchmark_data" not in result.fetch_errors
         assert result.fundamentals == FUNDAMENTALS
-        assert mock_benchmark_cache.get_spy_data.call_count == 2
+        assert mock_benchmark_cache.get_benchmark_data.call_count == 2
         assert mock_fundamentals_cache.get_fundamentals.call_count == 2
+
+    def test_non_us_symbol_routes_benchmark_by_market(self, data_layer, mock_benchmark_cache):
+        result = data_layer.prepare_data("700.HK", REQUIREMENTS)
+
+        assert "benchmark_data" not in result.fetch_errors
+        mock_benchmark_cache.get_benchmark_data.assert_called_once_with(
+            market="HK",
+            period="2y",
+        )
 
 
 # ===================================================================
@@ -425,9 +434,31 @@ class TestBulkDataPreparation:
         results = data_layer.prepare_data_bulk(["AAPL", "MSFT"], REQUIREMENTS)
 
         # Benchmark fetched once, shared across both symbols
-        mock_benchmark_cache.get_spy_data.assert_called_once()
+        mock_benchmark_cache.get_benchmark_data.assert_called_once_with(
+            market="US",
+            period="2y",
+        )
         # Both symbols should have the same benchmark_data reference
         assert results["AAPL"].benchmark_data is results["MSFT"].benchmark_data
+
+    def test_bulk_fetches_benchmark_once_per_market_for_mixed_symbols(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        hk_df = _make_price_df(price=280.0)
+        us_df = _make_price_df(price=450.0)
+        mock_benchmark_cache.get_benchmark_data.side_effect = lambda *, market, period: (
+            hk_df if market == "HK" else us_df
+        )
+        mock_price_cache.get_many.return_value = {
+            "AAPL": _make_price_df(),
+            "0700.HK": _make_price_df(),
+        }
+
+        results = data_layer.prepare_data_bulk(["AAPL", "0700.HK"], REQUIREMENTS)
+
+        assert mock_benchmark_cache.get_benchmark_data.call_count == 2
+        assert results["AAPL"].benchmark_data is us_df
+        assert results["0700.HK"].benchmark_data is hk_df
 
     def test_bulk_batch_only_prices_never_falls_back_to_per_symbol_fetch(
         self, data_layer, mock_price_cache, mock_yfinance,

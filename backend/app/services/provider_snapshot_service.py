@@ -862,7 +862,7 @@ class ProviderSnapshotService:
         )
 
         return {
-            "symbol": identity.normalized_symbol,
+            "symbol": identity.canonical_symbol,
             "name": row.get("name"),
             "market": identity.market,
             "exchange": identity.exchange,
