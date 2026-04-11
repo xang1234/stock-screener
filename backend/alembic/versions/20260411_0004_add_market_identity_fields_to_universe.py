@@ -18,7 +18,7 @@ def upgrade() -> None:
 
     market_inference_expr = (
         "CASE "
-        "WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK') "
+        "WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'XHKG') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' THEN 'HK' "
         "WHEN UPPER(COALESCE(exchange, '')) IN ('TSE', 'JPX', 'XTKS') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' THEN 'JP' "
@@ -28,7 +28,7 @@ def upgrade() -> None:
         "ELSE 'US' END"
     )
     non_us_inference_condition = (
-        "UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'TSE', 'JPX', 'XTKS', 'TWSE', 'TPEX', 'XTAI') "
+        "UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'XHKG', 'TSE', 'JPX', 'XTKS', 'TWSE', 'TPEX', 'XTAI') "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' "
         "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TW' "
