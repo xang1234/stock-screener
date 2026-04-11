@@ -480,6 +480,59 @@ class TestBulkDataPreparation:
         assert results["AAPL"].benchmark_data is us_df
         assert results["0700.HK"].benchmark_data is hk_df
 
+    def test_bulk_results_preserve_requested_input_key_for_unsuffixed_symbol(
+        self, data_layer, mock_price_cache
+    ):
+        data_layer._resolve_identity = MagicMock(side_effect=[
+            MagicMock(
+                normalized_symbol="700",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            )
+        ])
+        mock_price_cache.get_many.return_value = {"0700.HK": _make_price_df(price=380.0)}
+
+        results = data_layer.prepare_data_bulk(["700"], REQUIREMENTS)
+
+        assert "700" in results
+        assert "0700.HK" not in results
+        assert results["700"].symbol == "0700.HK"
+
+    def test_bulk_keeps_entries_for_aliases_that_share_same_canonical_symbol(
+        self, data_layer, mock_price_cache
+    ):
+        data_layer._resolve_identity = MagicMock(side_effect=[
+            MagicMock(
+                normalized_symbol="700",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            ),
+            MagicMock(
+                normalized_symbol="0700.HK",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            ),
+        ])
+        mock_price_cache.get_many.return_value = {"0700.HK": _make_price_df(price=380.0)}
+
+        results = data_layer.prepare_data_bulk(["700", "0700.HK"], REQUIREMENTS)
+
+        assert set(results.keys()) == {"700", "0700.HK"}
+        assert results["700"].symbol == "0700.HK"
+        assert results["0700.HK"].symbol == "0700.HK"
+
     def test_bulk_records_benchmark_error_when_market_benchmark_missing(
         self, data_layer, mock_price_cache, mock_benchmark_cache
     ):

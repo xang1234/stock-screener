@@ -260,11 +260,10 @@ class DataPreparationLayer:
             return {}
 
         logger.info(f"Preparing data for {len(symbols)} symbols using bulk cache operations")
+        requested_keys = [self._security_master.normalize_symbol(symbol) for symbol in symbols]
         identities = [self._resolve_identity(symbol) for symbol in symbols]
         canonical_symbols = [identity.canonical_symbol for identity in identities]
-        identity_by_symbol = {
-            identity.canonical_symbol: identity for identity in identities
-        }
+        unique_canonical_symbols = list(dict.fromkeys(canonical_symbols))
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
         # Instead of N individual Redis calls, make 2 pipeline calls (1 per cache type)
@@ -272,12 +271,12 @@ class DataPreparationLayer:
         # Price data is always needed (no needs_price_data flag)
         # IMPORTANT: Pass period so get_many() can fall back to database if Redis only has 30 days
         cached_prices = self.price_cache.get_many(
-            canonical_symbols,
+            unique_canonical_symbols,
             period=requirements.price_period,
         )
         # Fundamentals cache now includes quarterly growth data (consolidated)
         cached_fundamentals = (
-            self.fundamentals_cache.get_many(canonical_symbols)
+            self.fundamentals_cache.get_many(unique_canonical_symbols)
             if requirements.needs_fundamentals
             else {}
         )
@@ -307,9 +306,9 @@ class DataPreparationLayer:
 
         # Build StockData for each symbol
         results = {}
-        for symbol in canonical_symbols:
+        for requested_key, identity in zip(requested_keys, identities):
+            symbol = identity.canonical_symbol
             fetch_errors = {}
-            identity = identity_by_symbol[symbol]
 
             # Get price data (from cache or fetch)
             # Note: get_many() already handles sufficiency checks and database fallback
@@ -380,7 +379,7 @@ class DataPreparationLayer:
                 market_benchmark_data is None or market_benchmark_data.empty
             ):
                 fetch_errors["benchmark_data"] = f"No benchmark data returned for market {identity.market}"
-            results[symbol] = StockData(
+            results[requested_key] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
                 benchmark_data=(
@@ -401,7 +400,7 @@ class DataPreparationLayer:
 
             # Collect per-symbol errors into namespaced dict for bulk error reporting
             for key, msg in fetch_errors.items():
-                all_errors[f"{symbol}/{key}"] = msg
+                all_errors[f"{requested_key}/{key}"] = msg
 
         logger.info(f"Bulk data preparation completed for {len(results)} symbols")
 
