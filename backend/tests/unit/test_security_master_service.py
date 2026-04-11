@@ -40,6 +40,16 @@ def test_resolve_identity_infers_market_from_suffix_when_exchange_missing():
     assert identity.local_code == "2330"
 
 
+def test_resolve_identity_uses_tpex_suffix_for_unsuffixed_tw_symbol():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="3008", exchange="TPEX")
+
+    assert identity.market == "TW"
+    assert identity.exchange == "TPEX"
+    assert identity.canonical_symbol == "3008.TWO"
+
+
 def test_normalize_symbol_strips_dollar_prefix():
     resolver = SecurityMasterResolver()
 

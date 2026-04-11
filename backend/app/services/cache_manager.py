@@ -58,32 +58,38 @@ class CacheManager:
 
         self.db = db
 
-    def warm_benchmark_cache(self, period: str = "2y") -> bool:
+    def warm_benchmark_cache(self, period: str = "2y", market: str = "US") -> bool:
         """
-        Warm SPY benchmark cache.
+        Warm market benchmark cache.
 
         Args:
             period: Time period to cache
+            market: Market code for benchmark resolution (US, HK, JP, TW)
 
         Returns:
             True if successful
         """
         try:
-            logger.info(f"Warming SPY benchmark cache ({period})...")
+            benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(market)
+            logger.info(f"Warming {market} benchmark cache ({benchmark_symbol}, {period})...")
             start_time = time.time()
 
-            spy_data = self.benchmark_cache.get_spy_data(period=period, force_refresh=False)
+            benchmark_data = self.benchmark_cache.get_benchmark_data(
+                market=market,
+                period=period,
+                force_refresh=False,
+            )
 
-            if spy_data is not None and not spy_data.empty:
+            if benchmark_data is not None and not benchmark_data.empty:
                 elapsed = time.time() - start_time
-                logger.info(f"✓ SPY cache warmed: {len(spy_data)} rows in {elapsed:.2f}s")
+                logger.info(f"✓ {market} benchmark cache warmed: {len(benchmark_data)} rows in {elapsed:.2f}s")
                 return True
             else:
-                logger.warning("Failed to warm SPY cache")
+                logger.warning(f"Failed to warm {market} benchmark cache")
                 return False
 
         except Exception as e:
-            logger.error(f"Error warming SPY cache: {e}", exc_info=True)
+            logger.error(f"Error warming {market} benchmark cache: {e}", exc_info=True)
             return False
 
     def warm_price_cache(

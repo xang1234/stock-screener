@@ -49,6 +49,12 @@ _SUFFIX_BY_MARKET: dict[str, str] = {
     "TW": ".TW",
 }
 
+_SUFFIX_BY_EXCHANGE: dict[str, str] = {
+    "TWSE": ".TW",
+    "XTAI": ".TW",
+    "TPEX": ".TWO",
+}
+
 
 @dataclass(frozen=True)
 class SecurityIdentity:
@@ -97,6 +103,12 @@ class SecurityMasterResolver:
                 return market
         return "US"
 
+    def _resolve_suffix(self, market: str, exchange: str | None) -> str | None:
+        normalized_exchange = self.normalize_exchange(exchange)
+        if normalized_exchange and normalized_exchange in _SUFFIX_BY_EXCHANGE:
+            return _SUFFIX_BY_EXCHANGE[normalized_exchange]
+        return _SUFFIX_BY_MARKET.get(market)
+
     def resolve_identity(
         self,
         *,
@@ -131,7 +143,7 @@ class SecurityMasterResolver:
 
         canonical_symbol = normalized_symbol
         if normalized_market != "US" and "." not in canonical_symbol and resolved_local_code:
-            suffix = _SUFFIX_BY_MARKET.get(normalized_market)
+            suffix = self._resolve_suffix(normalized_market, normalized_exchange)
             if suffix:
                 canonical_symbol = f"{resolved_local_code}{suffix}"
 

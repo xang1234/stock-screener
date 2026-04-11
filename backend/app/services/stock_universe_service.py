@@ -321,17 +321,29 @@ class StockUniverseService:
             added_count = 0
             updated_count = 0
             now = datetime.utcnow()
+            resolved_rows: list[tuple[dict[str, Any], Any, str, str]] = []
+            lookup_symbols: set[str] = set()
+            for stock_data in stocks:
+                identity = self._resolved_identity(stock_data)
+                source_symbol = stock_data["symbol"]
+                canonical_symbol = identity.canonical_symbol
+                resolved_rows.append((stock_data, identity, source_symbol, canonical_symbol))
+                lookup_symbols.add(source_symbol)
+                lookup_symbols.add(canonical_symbol)
+
             stock_map = {
                 stock.symbol: stock
                 for stock in db.query(StockUniverse).filter(
-                    StockUniverse.symbol.in_([row["symbol"] for row in stocks])
+                    StockUniverse.symbol.in_(list(lookup_symbols))
                 ).all()
             }
 
-            for stock_data in stocks:
-                symbol = stock_data["symbol"]
-                identity = self._resolved_identity(stock_data)
-                existing = stock_map.get(symbol)
+            for stock_data, identity, source_symbol, canonical_symbol in resolved_rows:
+                existing = stock_map.get(canonical_symbol) or stock_map.get(source_symbol)
+                if existing and existing.symbol != canonical_symbol and canonical_symbol not in stock_map:
+                    stock_map.pop(existing.symbol, None)
+                    existing.symbol = canonical_symbol
+                    stock_map[canonical_symbol] = existing
 
                 if existing:
                     existing.name = stock_data["name"] or existing.name
@@ -357,7 +369,7 @@ class StockUniverseService:
                     updated_count += 1
                 else:
                     new_stock = StockUniverse(
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         name=stock_data["name"],
                         market=identity.market,
                         exchange=identity.exchange,
@@ -378,7 +390,7 @@ class StockUniverseService:
                     db.add(new_stock)
                     self._add_status_event(
                         db,
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="csv_import",
@@ -477,15 +489,24 @@ class StockUniverseService:
                 stock.symbol: stock
                 for stock in db.query(StockUniverse).all()
             }
-            fetched_symbols = {stock_data["symbol"] for stock_data in stocks}
-
+            resolved_rows: list[tuple[dict[str, Any], Any, str, str]] = []
+            fetched_symbols: set[str] = set()
             for stock_data in stocks:
-                symbol = stock_data["symbol"]
                 identity = self._resolved_identity(stock_data)
-                existing = existing_stocks.get(symbol)
+                source_symbol = stock_data["symbol"]
+                canonical_symbol = identity.canonical_symbol
+                resolved_rows.append((stock_data, identity, source_symbol, canonical_symbol))
+                fetched_symbols.add(canonical_symbol)
+
+            for stock_data, identity, source_symbol, canonical_symbol in resolved_rows:
+                existing = existing_stocks.get(canonical_symbol) or existing_stocks.get(source_symbol)
+                if existing and existing.symbol != canonical_symbol and canonical_symbol not in existing_stocks:
+                    existing_stocks.pop(existing.symbol, None)
+                    existing.symbol = canonical_symbol
+                    existing_stocks[canonical_symbol] = existing
                 if existing is None:
                     new_stock = StockUniverse(
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         name=stock_data["name"],
                         market=identity.market,
                         exchange=identity.exchange,
@@ -507,7 +528,7 @@ class StockUniverseService:
                     db.add(new_stock)
                     self._add_status_event(
                         db,
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="finviz_sync",
