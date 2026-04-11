@@ -20,7 +20,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.cache_manager import CacheManager
-from ..services.benchmark_cache_service import BenchmarkCacheService
+from ..services.benchmark_registry_service import benchmark_registry
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
@@ -39,7 +39,7 @@ def _active_benchmark_markets(db) -> List[str]:
     from sqlalchemy import distinct
     from ..models.stock_universe import StockUniverse
 
-    supported = set(BenchmarkCacheService.BENCHMARK_BY_MARKET.keys())
+    supported = set(benchmark_registry.supported_markets())
     rows = (
         db.query(distinct(StockUniverse.market))
         .filter(StockUniverse.is_active == True)
@@ -59,7 +59,7 @@ def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
     """Resolve benchmark markets for a specific symbol set from active universe metadata."""
     from ..models.stock_universe import StockUniverse
 
-    supported = set(BenchmarkCacheService.BENCHMARK_BY_MARKET.keys())
+    supported = set(benchmark_registry.supported_markets())
     rows = (
         db.query(StockUniverse.market)
         .filter(StockUniverse.symbol.in_(symbols))

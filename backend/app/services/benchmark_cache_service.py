@@ -22,6 +22,7 @@ from ..models.stock import StockPrice
 from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
+from .benchmark_registry_service import benchmark_registry
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,6 @@ class BenchmarkCacheService:
     LOCK_TIMEOUT_SECONDS = 10  # Max time to wait for lock
     LOCK_EXPIRY_SECONDS = 30  # Lock auto-expires after 30 seconds
 
-    BENCHMARK_BY_MARKET: dict[str, str] = {
-        "US": "SPY",
-        "HK": "^HSI",
-        "JP": "^N225",
-        "TW": "^TWII",
-    }
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
@@ -71,16 +66,16 @@ class BenchmarkCacheService:
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
         self._market_calendar = MarketCalendarService()
+        self._benchmark_registry = benchmark_registry
 
     def _normalize_market(self, market: str | None) -> str:
-        normalized = (market or "US").strip().upper()
-        if normalized not in self.BENCHMARK_BY_MARKET:
-            raise ValueError(f"Unsupported market for benchmark cache: {market}")
-        return normalized
+        return self._benchmark_registry.normalize_market(market)
 
     def get_benchmark_symbol(self, market: str = "US") -> str:
-        normalized_market = self._normalize_market(market)
-        return self.BENCHMARK_BY_MARKET[normalized_market]
+        return self._benchmark_registry.get_primary_symbol(market)
+
+    def get_benchmark_candidates(self, market: str = "US") -> list[str]:
+        return self._benchmark_registry.get_candidate_symbols(market)
 
     def _redis_data_key(self, benchmark_symbol: str, period: str) -> str:
         return f"{self.REDIS_KEY_PREFIX}{benchmark_symbol}:{period}"
@@ -127,46 +122,75 @@ class BenchmarkCacheService:
         5. Return to all waiting callers
         """
         normalized_market = self._normalize_market(market)
-        benchmark_symbol = self.get_benchmark_symbol(normalized_market)
+        candidates = self.get_benchmark_candidates(normalized_market)
 
-        if force_refresh:
+        for idx, benchmark_symbol in enumerate(candidates):
+            role = "primary" if idx == 0 else "fallback"
+            if force_refresh:
+                logger.info(
+                    "Force refresh requested for %s benchmark %s (%s, %s)",
+                    normalized_market,
+                    benchmark_symbol,
+                    period,
+                    role,
+                )
+                fetched = self._fetch_and_cache_benchmark(
+                    benchmark_symbol=benchmark_symbol,
+                    market=normalized_market,
+                    period=period,
+                )
+                if fetched is not None and not fetched.empty:
+                    return fetched
+                continue
+
+            # Try Redis cache first
+            cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
+            if cached_data is not None:
+                logger.info(
+                    "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
+                    normalized_market,
+                    benchmark_symbol,
+                    period,
+                    role,
+                )
+                return cached_data
+
+            # Try database cache as fallback
+            cached_data = self._get_from_database(
+                benchmark_symbol=benchmark_symbol,
+                period=period,
+                market=normalized_market,
+            )
+            if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
+                logger.info(
+                    "Cache HIT for %s benchmark %s (%s, %s) (Database)",
+                    normalized_market,
+                    benchmark_symbol,
+                    period,
+                    role,
+                )
+                # Store in Redis for next time
+                self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
+                return cached_data
+
+            # Cache MISS - attempt fetch for this candidate
             logger.info(
-                "Force refresh requested for %s benchmark %s (%s)",
+                "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance",
                 normalized_market,
                 benchmark_symbol,
                 period,
+                role,
             )
-            return self._fetch_and_cache_benchmark(
+            fetched = self._fetch_and_cache_benchmark(
                 benchmark_symbol=benchmark_symbol,
                 market=normalized_market,
                 period=period,
             )
+            if fetched is not None and not fetched.empty:
+                return fetched
 
-        # Try Redis cache first
-        cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
-        if cached_data is not None:
-            logger.info("Cache HIT for %s benchmark %s (%s) (Redis)", normalized_market, benchmark_symbol, period)
-            return cached_data
-
-        # Try database cache as fallback
-        cached_data = self._get_from_database(
-            benchmark_symbol=benchmark_symbol,
-            period=period,
-            market=normalized_market,
-        )
-        if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-            logger.info("Cache HIT for %s benchmark %s (%s) (Database)", normalized_market, benchmark_symbol, period)
-            # Store in Redis for next time
-            self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
-            return cached_data
-
-        # Cache MISS - need to fetch from yfinance
-        logger.info("Cache MISS for %s benchmark %s (%s) - fetching from yfinance", normalized_market, benchmark_symbol, period)
-        return self._fetch_and_cache_benchmark(
-            benchmark_symbol=benchmark_symbol,
-            market=normalized_market,
-            period=period,
-        )
+        logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
+        return None
 
     def _get_from_redis(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
         """Get cached benchmark data from Redis."""
@@ -494,14 +518,17 @@ class BenchmarkCacheService:
 
         try:
             keys: list[str]
+            symbols = set()
+            for market in self._benchmark_registry.supported_markets():
+                symbols.update(self._benchmark_registry.get_candidate_symbols(market))
             if period:
                 keys = [
                     self._redis_data_key(symbol, period)
-                    for symbol in self.BENCHMARK_BY_MARKET.values()
+                    for symbol in symbols
                 ]
             else:
                 keys = []
-                for symbol in self.BENCHMARK_BY_MARKET.values():
+                for symbol in symbols:
                     keys.append(self._redis_data_key(symbol, "1y"))
                     keys.append(self._redis_data_key(symbol, "2y"))
 

@@ -12,6 +12,14 @@ def test_get_benchmark_symbol_supports_all_markets():
     assert service.get_benchmark_symbol("TW") == "^TWII"
 
 
+def test_non_us_candidates_do_not_include_spy():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+
+    assert "SPY" not in service.get_benchmark_candidates("HK")
+    assert "SPY" not in service.get_benchmark_candidates("JP")
+    assert "SPY" not in service.get_benchmark_candidates("TW")
+
+
 def test_get_spy_data_delegates_to_market_api():
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
 
@@ -65,3 +73,27 @@ def test_fetch_and_cache_benchmark_without_redis_fetches_directly_and_persists()
     assert result is data
     assert calls["wait"] == 0
     assert calls["store_db"] == 1
+
+
+def test_get_benchmark_data_uses_fallback_when_primary_fails():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    calls = []
+    fallback_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-10"]))
+
+    def fake_fetch(symbol, period):
+        calls.append(symbol)
+        if symbol == "^HSI":
+            return pd.DataFrame()
+        if symbol == "2800.HK":
+            return fallback_df
+        return pd.DataFrame()
+
+    service._fetch_from_yfinance = fake_fetch  # type: ignore[assignment]
+    service._store_in_database = lambda **kwargs: None  # type: ignore[assignment]
+
+    result = service.get_benchmark_data(market="HK", period="2y", force_refresh=True)
+
+    assert calls[:2] == ["^HSI", "2800.HK"]
+    assert result is fallback_df

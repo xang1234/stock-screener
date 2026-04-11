@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from .benchmark_cache_service import BenchmarkCacheService
+from .benchmark_registry_service import benchmark_registry
 from .price_cache_service import PriceCacheService
 from .redis_pool import get_redis_client, is_redis_enabled
 from ..config import settings
@@ -313,6 +314,10 @@ class CacheManager:
                 'total_keys': 0,
                 'symbols_cached': 0
             },
+            'benchmark_registry': {
+                'version': benchmark_registry.TABLE_VERSION,
+                'table': benchmark_registry.mapping_table(),
+            },
             'redis_memory': None
         }
 
@@ -322,17 +327,29 @@ class CacheManager:
         try:
             # Benchmark cache stats by market
             benchmark_stats: Dict[str, Dict[str, Optional[int] | bool | str]] = {}
-            for market, symbol in self.benchmark_cache.BENCHMARK_BY_MARKET.items():
-                key_2y = f"benchmark:{symbol}:2y"
-                key_1y = f"benchmark:{symbol}:1y"
+            for market in benchmark_registry.supported_markets():
+                entry = benchmark_registry.get_entry(market)
+                primary_symbol = entry.primary_symbol
+                fallback_symbol = entry.fallback_symbol
+                key_2y = f"benchmark:{primary_symbol}:2y"
+                key_1y = f"benchmark:{primary_symbol}:1y"
+                fallback_key_2y = f"benchmark:{fallback_symbol}:2y" if fallback_symbol else None
+                fallback_key_1y = f"benchmark:{fallback_symbol}:1y" if fallback_symbol else None
                 has_2y = self.redis_client.exists(key_2y) > 0
                 has_1y = self.redis_client.exists(key_1y) > 0
+                fallback_has_2y = self.redis_client.exists(fallback_key_2y) > 0 if fallback_key_2y else False
+                fallback_has_1y = self.redis_client.exists(fallback_key_1y) > 0 if fallback_key_1y else False
                 benchmark_stats[market] = {
-                    'symbol': symbol,
+                    'symbol': primary_symbol,
+                    'fallback_symbol': fallback_symbol,
                     '2y_cached': has_2y,
                     '1y_cached': has_1y,
                     '2y_ttl': self.redis_client.ttl(key_2y) if has_2y else None,
                     '1y_ttl': self.redis_client.ttl(key_1y) if has_1y else None,
+                    'fallback_2y_cached': fallback_has_2y,
+                    'fallback_1y_cached': fallback_has_1y,
+                    'fallback_2y_ttl': self.redis_client.ttl(fallback_key_2y) if fallback_has_2y and fallback_key_2y else None,
+                    'fallback_1y_ttl': self.redis_client.ttl(fallback_key_1y) if fallback_has_1y and fallback_key_1y else None,
                 }
             stats['benchmark_cache'] = benchmark_stats
             # Backward compatibility for existing consumers.
