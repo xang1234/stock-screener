@@ -50,8 +50,8 @@ def _active_benchmark_markets(db) -> List[str]:
         normalized = (market or "US").strip().upper()
         if normalized in supported:
             markets.append(normalized)
-    if "US" not in markets:
-        markets.insert(0, "US")
+    if not markets:
+        markets.append("US")
     return sorted(set(markets))
 
 
@@ -70,7 +70,7 @@ def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
         normalized = (market or "US").strip().upper()
         if normalized in supported:
             markets.append(normalized)
-    if "US" not in markets:
+    if not markets:
         markets.append("US")
     return sorted(set(markets))
 

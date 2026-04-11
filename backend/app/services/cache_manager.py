@@ -306,6 +306,8 @@ class CacheManager:
             'redis_connected': self.redis_client is not None,
             'market_status': format_market_status(),
             'benchmark_cache': {},
+            # Backward compatibility key expected by existing response schema/clients.
+            'spy_cache': {},
             'price_cache': {
                 'total_keys': 0,
                 'symbols_cached': 0
