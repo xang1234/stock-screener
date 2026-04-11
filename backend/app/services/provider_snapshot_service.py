@@ -845,6 +845,18 @@ class ProviderSnapshotService:
         default_currency, default_timezone = market_defaults.get(
             market, ("USD", "America/New_York")
         )
+        raw_local_code = row.get("local_code")
+        if raw_local_code:
+            local_code = str(raw_local_code).strip()
+        else:
+            local_code = None
+        if not local_code:
+            symbol = str(row.get("symbol") or "").strip()
+            if market != "US" and "." in symbol:
+                local_code = symbol.split(".", 1)[0]
+            elif symbol:
+                local_code = symbol
+
         return {
             "symbol": row["symbol"],
             "name": row.get("name"),
@@ -852,7 +864,7 @@ class ProviderSnapshotService:
             "exchange": row.get("exchange"),
             "currency": row.get("currency") or default_currency,
             "timezone": row.get("timezone") or default_timezone,
-            "local_code": row.get("local_code"),
+            "local_code": local_code,
             "sector": row.get("sector"),
             "industry": row.get("industry"),
             "market_cap": row.get("market_cap"),

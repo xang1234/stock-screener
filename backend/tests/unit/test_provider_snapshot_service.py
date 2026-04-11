@@ -554,6 +554,7 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     hk_row["exchange"] = " sehk "
     hk_row.pop("currency", None)
     hk_row.pop("timezone", None)
+    hk_row.pop("local_code", None)
     with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True, default=str)
 
