@@ -823,7 +823,7 @@ class ProviderSnapshotService:
 
     @staticmethod
     def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
-        market = row.get("market") or "US"
+        market = str(row.get("market") or "US").strip().upper()
         market_defaults = {
             "HK": ("HKD", "Asia/Hong_Kong"),
             "JP": ("JPY", "Asia/Tokyo"),
