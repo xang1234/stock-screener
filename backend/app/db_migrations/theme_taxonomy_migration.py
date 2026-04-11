@@ -32,6 +32,7 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
         is_postgres = dialect_name(conn) == "postgresql"
         timestamp_type = "TIMESTAMP WITH TIME ZONE" if is_postgres else "DATETIME"
         true_literal = "TRUE" if is_postgres else "1"
+        false_literal = "FALSE" if is_postgres else "0"
 
         add_statements = {
             "parent_cluster_id": f"ALTER TABLE {THEME_TABLE} ADD COLUMN parent_cluster_id INTEGER",
@@ -59,11 +60,11 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
                     f"""
                     UPDATE {THEME_TABLE}
                     SET taxonomy_level = CASE
-                        WHEN is_l1 = {true_literal} THEN 1
+                        WHEN COALESCE(is_l1, {false_literal}) = {true_literal} THEN 1
                         ELSE 2
                     END
-                    WHERE (is_l1 = {true_literal} AND taxonomy_level != 1)
-                       OR (is_l1 != {true_literal} AND taxonomy_level != 2)
+                    WHERE (COALESCE(is_l1, {false_literal}) = {true_literal} AND taxonomy_level != 1)
+                       OR (COALESCE(is_l1, {false_literal}) != {true_literal} AND taxonomy_level != 2)
                     """
                 )
             )
