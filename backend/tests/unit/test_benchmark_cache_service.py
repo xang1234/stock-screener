@@ -100,6 +100,32 @@ def test_get_benchmark_data_uses_fallback_when_primary_fails():
     assert result is fallback_df
 
 
+def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    fallback_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-10"]))
+    calls = []
+
+    def fake_get_from_db(*, benchmark_symbol, period, market):
+        if benchmark_symbol == "2800.HK":
+            return fallback_df
+        return None
+
+    def fake_fetch(*, benchmark_symbol, market, period):
+        calls.append(benchmark_symbol)
+        return pd.DataFrame()
+
+    service._get_from_database = fake_get_from_db  # type: ignore[assignment]
+    service._is_data_fresh = lambda data, market="US", max_age_hours=24: True  # type: ignore[assignment]
+    service._fetch_and_cache_benchmark = fake_fetch  # type: ignore[assignment]
+
+    result = service.get_benchmark_data(market="HK", period="2y", force_refresh=False)
+
+    assert result is fallback_df
+    assert calls == []
+
+
 def test_is_data_fresh_fallback_allows_weekend_without_calendar(monkeypatch):
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday

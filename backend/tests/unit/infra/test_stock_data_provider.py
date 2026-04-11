@@ -460,6 +460,28 @@ class TestBulkDataPreparation:
         assert results["AAPL"].benchmark_data is us_df
         assert results["0700.HK"].benchmark_data is hk_df
 
+    def test_bulk_records_benchmark_error_when_market_benchmark_missing(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        mock_benchmark_cache.get_benchmark_data.return_value = None
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df()}
+
+        results = data_layer.prepare_data_bulk(["AAPL"], REQUIREMENTS)
+
+        assert results["AAPL"].benchmark_data.empty
+        assert "benchmark_data" in results["AAPL"].fetch_errors
+
+    def test_bulk_strict_mode_raises_when_market_benchmark_missing(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        mock_benchmark_cache.get_benchmark_data.return_value = None
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df()}
+
+        with pytest.raises(DataFetchError) as exc_info:
+            data_layer.prepare_data_bulk(["AAPL"], REQUIREMENTS, allow_partial=False)
+
+        assert "AAPL/benchmark_data" in exc_info.value.errors
+
     def test_bulk_batch_only_prices_never_falls_back_to_per_symbol_fetch(
         self, data_layer, mock_price_cache, mock_yfinance,
         mock_fundamentals_cache,

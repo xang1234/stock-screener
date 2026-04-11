@@ -775,17 +775,26 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        rows = [
-            ProviderSnapshotRow(
-                run_id=run.id,
-                symbol=row["symbol"],
+        rows = []
+        for row in snapshot_rows:
+            identity = security_master_resolver.resolve_identity(
+                symbol=str(row.get("symbol") or ""),
+                market=row.get("market"),
                 exchange=row.get("exchange"),
-                row_hash=row["row_hash"],
-                normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
-                raw_payload_json=None,
+                currency=row.get("currency"),
+                timezone=row.get("timezone"),
+                local_code=row.get("local_code"),
             )
-            for row in snapshot_rows
-        ]
+            rows.append(
+                ProviderSnapshotRow(
+                    run_id=run.id,
+                    symbol=identity.canonical_symbol,
+                    exchange=identity.exchange,
+                    row_hash=row["row_hash"],
+                    normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
+                    raw_payload_json=None,
+                )
+            )
         if rows:
             db.bulk_save_objects(rows)
 

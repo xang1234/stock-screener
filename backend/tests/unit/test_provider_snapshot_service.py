@@ -719,6 +719,53 @@ def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp
     db.close()
 
 
+def test_import_weekly_reference_bundle_canonicalizes_snapshot_row_symbol(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    bundle_path = tmp_path / "weekly_reference_bundle.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": service.SNAPSHOT_KEY_FUNDAMENTALS,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "3008.TW",
+                    "exchange": "TPEX",
+                    "row_hash": "row-hash-1",
+                    "normalized_payload": {"symbol": "3008.TW", "exchange": "TPEX"},
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "3008.TW",
+                "exchange": "TPEX",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    run = service.get_published_run(db)
+    row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == run.id).one()
+    assert row.symbol == "3008.TWO"
+    assert row.exchange == "TPEX"
+    db.close()
+
+
 def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required_fields(monkeypatch):
     monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
     service = FundamentalsCacheService(

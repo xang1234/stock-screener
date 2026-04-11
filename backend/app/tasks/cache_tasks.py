@@ -57,8 +57,8 @@ def _active_benchmark_markets(db) -> List[str]:
         )
         if normalized in supported:
             markets.append(normalized)
-    if not markets:
-        markets.append("US")
+    # Preserve US benchmark warmups for legacy SPY consumers until migration is complete.
+    markets.append("US")
     return sorted(set(markets))
 
 
@@ -73,13 +73,22 @@ def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
         .all()
     )
     markets = []
+    matched_symbols = set()
     for market, exchange, symbol in rows:
+        matched_symbols.add((symbol or "").upper())
         normalized = security_master_resolver.normalize_market(market) or security_master_resolver.infer_market(
             symbol=symbol or "",
             exchange=exchange,
         )
         if normalized in supported:
             markets.append(normalized)
+    for symbol in symbols:
+        normalized_symbol = (symbol or "").upper()
+        if normalized_symbol in matched_symbols:
+            continue
+        inferred = security_master_resolver.infer_market(symbol=symbol or "")
+        if inferred in supported:
+            markets.append(inferred)
     if not markets:
         markets.append("US")
     return sorted(set(markets))
@@ -119,11 +128,15 @@ def warm_spy_cache():
 
         # Warm both 1y and 2y periods for each active market
         by_market = {}
+        failed_periods: list[str] = []
         for market in markets:
             by_market[market] = {
                 '2y': cache_manager.warm_benchmark_cache(period="2y", market=market),
                 '1y': cache_manager.warm_benchmark_cache(period="1y", market=market),
             }
+            for period, ok in by_market[market].items():
+                if not ok:
+                    failed_periods.append(f"{market}:{period}")
 
         results = {
             'by_market': by_market,
@@ -133,6 +146,11 @@ def warm_spy_cache():
             'market_status': format_market_status(),
             'timestamp': datetime.now().isoformat()
         }
+
+        if failed_periods:
+            raise RuntimeError(
+                "Benchmark warm failed for " + ", ".join(failed_periods)
+            )
 
         logger.info("✓ Market benchmark cache warming task completed")
         return results

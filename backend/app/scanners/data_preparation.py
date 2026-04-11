@@ -288,11 +288,17 @@ class DataPreparationLayer:
             unique_markets = sorted({identity.market for identity in identities})
             for market in unique_markets:
                 try:
-                    benchmark_data_by_market[market] = self._fetch_with_retry(
+                    benchmark_data = self._fetch_with_retry(
                         self.benchmark_cache.get_benchmark_data,
                         market=market,
                         period=requirements.price_period,
                     )
+                    if benchmark_data is None or benchmark_data.empty:
+                        logger.warning("No benchmark data returned for market %s", market)
+                        all_errors[f"<bulk>/benchmark_data:{market}"] = "No benchmark data returned"
+                        benchmark_data_by_market[market] = None
+                    else:
+                        benchmark_data_by_market[market] = benchmark_data
                 except Exception as e:
                     logger.warning("Error fetching benchmark data for market %s: %s", market, e)
                     all_errors[f"<bulk>/benchmark_data:{market}"] = str(e)
@@ -369,6 +375,10 @@ class DataPreparationLayer:
                 if requirements.needs_benchmark
                 else None
             )
+            if requirements.needs_benchmark and (
+                market_benchmark_data is None or market_benchmark_data.empty
+            ):
+                fetch_errors["benchmark_data"] = f"No benchmark data returned for market {identity.market}"
             results[symbol] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),

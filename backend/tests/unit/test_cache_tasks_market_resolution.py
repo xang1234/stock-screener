@@ -1,4 +1,5 @@
 from app.tasks.cache_tasks import _active_benchmark_markets, _benchmark_markets_for_symbols
+import app.tasks.cache_tasks as cache_tasks
 
 
 class _FakeQuery:
@@ -46,3 +47,40 @@ def test_benchmark_markets_for_symbols_infers_market_from_symbol_suffix():
 
     assert markets == ["TW"]
 
+
+def test_benchmark_markets_for_symbols_infers_market_when_db_has_no_rows():
+    db = _FakeDB([])
+
+    markets = _benchmark_markets_for_symbols(db, symbols=["0700.HK"])
+
+    assert markets == ["HK"]
+
+
+def test_active_benchmark_markets_always_includes_us():
+    db = _FakeDB([("HK", "XHKG", "0700.HK")])
+
+    markets = _active_benchmark_markets(db)
+
+    assert markets == ["HK", "US"]
+
+
+def test_warm_spy_cache_returns_error_when_any_market_warm_fails(monkeypatch):
+    class _FakeCacheManager:
+        @staticmethod
+        def warm_benchmark_cache(*, period, market):
+            return not (market == "HK" and period == "1y")
+
+    class _FakeSession:
+        @staticmethod
+        def close():
+            return None
+
+    monkeypatch.setattr(cache_tasks, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(cache_tasks, "CacheManager", lambda: _FakeCacheManager())
+    monkeypatch.setattr(cache_tasks, "_active_benchmark_markets", lambda _db: ["HK", "US"])
+    monkeypatch.setattr(cache_tasks, "format_market_status", lambda: "closed")
+
+    result = cache_tasks.warm_spy_cache()
+
+    assert "error" in result
+    assert "HK:1y" in result["error"]

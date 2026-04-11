@@ -124,6 +124,38 @@ class BenchmarkCacheService:
         normalized_market = self._normalize_market(market)
         candidates = self.get_benchmark_candidates(normalized_market)
 
+        # Pass 1: Prefer any cached candidate before triggering network fetches.
+        if not force_refresh:
+            for idx, benchmark_symbol in enumerate(candidates):
+                role = "primary" if idx == 0 else "fallback"
+                cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
+                if cached_data is not None:
+                    logger.info(
+                        "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
+                    return cached_data
+
+                cached_data = self._get_from_database(
+                    benchmark_symbol=benchmark_symbol,
+                    period=period,
+                    market=normalized_market,
+                )
+                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
+                    logger.info(
+                        "Cache HIT for %s benchmark %s (%s, %s) (Database)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
+                    self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
+                    return cached_data
+
+        # Pass 2: Fetch candidates in deterministic order.
         for idx, benchmark_symbol in enumerate(candidates):
             role = "primary" if idx == 0 else "fallback"
             if force_refresh:
@@ -142,36 +174,6 @@ class BenchmarkCacheService:
                 if fetched is not None and not fetched.empty:
                     return fetched
                 continue
-
-            # Try Redis cache first
-            cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
-            if cached_data is not None:
-                logger.info(
-                    "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
-                    normalized_market,
-                    benchmark_symbol,
-                    period,
-                    role,
-                )
-                return cached_data
-
-            # Try database cache as fallback
-            cached_data = self._get_from_database(
-                benchmark_symbol=benchmark_symbol,
-                period=period,
-                market=normalized_market,
-            )
-            if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
-                logger.info(
-                    "Cache HIT for %s benchmark %s (%s, %s) (Database)",
-                    normalized_market,
-                    benchmark_symbol,
-                    period,
-                    role,
-                )
-                # Store in Redis for next time
-                self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
-                return cached_data
 
             # Cache MISS - attempt fetch for this candidate
             logger.info(
