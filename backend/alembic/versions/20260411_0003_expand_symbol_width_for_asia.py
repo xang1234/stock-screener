@@ -30,6 +30,27 @@ def _alter_length(table_name: str, column_name: str, from_len: int, to_len: int)
         )
 
 
+def _assert_max_length(table_name: str, column_name: str, max_len: int) -> None:
+    """
+    Ensure downgrade safety before shrinking column width.
+
+    We fail fast with a deterministic error instead of partially applying
+    a downgrade that can break once long symbols exist in production data.
+    """
+    bind = op.get_bind()
+    stmt = sa.text(
+        f"SELECT 1 FROM {table_name} "
+        f"WHERE {column_name} IS NOT NULL AND LENGTH({column_name}) > :max_len "
+        "LIMIT 1"
+    )
+    row = bind.execute(stmt, {"max_len": max_len}).first()
+    if row is not None:
+        raise RuntimeError(
+            f"Cannot shrink {table_name}.{column_name} to {max_len}: "
+            "found existing values exceeding target length."
+        )
+
+
 def upgrade() -> None:
     # Core stock/fundamental/scan persistence paths
     _alter_length("stock_prices", "symbol", OLD_LEN, NEW_LEN)
@@ -54,6 +75,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Preflight safety checks before any shrinking operation.
+    _assert_max_length("watchlist", "symbol", OLD_LEN)
+    _assert_max_length("provider_snapshot_rows", "symbol", OLD_LEN)
+    _assert_max_length("theme_constituents", "symbol", OLD_LEN)
+    _assert_max_length("ibd_group_ranks", "top_symbol", OLD_LEN)
+    _assert_max_length("ibd_group_peer_cache", "top_symbol", OLD_LEN)
+    _assert_max_length("ibd_industry_groups", "symbol", OLD_LEN)
+    _assert_max_length("stock_universe_status_events", "symbol", OLD_LEN)
+    _assert_max_length("stock_universe", "symbol", OLD_LEN)
+    _assert_max_length("scan_results", "symbol", OLD_LEN)
+    _assert_max_length("stock_industry", "symbol", OLD_LEN)
+    _assert_max_length("stock_technicals", "symbol", OLD_LEN)
+    _assert_max_length("stock_fundamentals", "symbol", OLD_LEN)
+    _assert_max_length("stock_prices", "symbol", OLD_LEN)
+
     # Revert in reverse conceptual order.
     _alter_length("watchlist", "symbol", NEW_LEN, OLD_LEN)
     _alter_length("provider_snapshot_rows", "symbol", NEW_LEN, OLD_LEN)

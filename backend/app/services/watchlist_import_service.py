@@ -14,7 +14,7 @@ _HEADER_TOKENS = {
     "tickers",
     "code",
 }
-_SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
 
 def parse_watchlist_import_symbols(
