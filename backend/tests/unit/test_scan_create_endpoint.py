@@ -78,6 +78,10 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
         "message": "Scan completed instantly for 2500 stocks",
         "feature_run_id": 17,
     }
+    assert response.headers["deprecation"] == "true"
+    assert "sunset" in response.headers
+    assert response.headers["x-universe-compat-mode"] == "legacy"
+    assert response.headers["x-universe-legacy-value"] == "all"
     assert fake_use_case.received_uow is fake_uow
     assert fake_use_case.received_cmd.universe_type == "all"
     assert fake_use_case.received_cmd.universe_market is None
@@ -119,6 +123,8 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
         "message": "Scan queued for 99 stocks",
         "feature_run_id": None,
     }
+    assert response.headers["deprecation"] == "true"
+    assert response.headers["x-universe-legacy-value"] == "all"
     assert fake_use_case.received_uow is fake_uow
     assert fake_use_case.received_cmd.universe_market is None
     assert mock_publish.call_count == 0
@@ -149,6 +155,8 @@ async def test_create_scan_accepts_market_universe_def(client):
         app.dependency_overrides.pop(get_create_scan_use_case, None)
 
     assert response.status_code == 200
+    assert "deprecation" not in response.headers
+    assert "x-universe-compat-mode" not in response.headers
     assert fake_use_case.received_cmd.universe_type == "market"
     assert fake_use_case.received_cmd.universe_market == "HK"
     assert fake_use_case.received_cmd.universe_key == "market:HK"
