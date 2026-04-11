@@ -1,4 +1,4 @@
-"""Add explicit market identity fields to stock_universe and backfill US baseline."""
+"""Add explicit market identity fields to stock_universe with market-aware backfill."""
 
 from __future__ import annotations
 
@@ -19,16 +19,57 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("timezone", sa.String(length=64), nullable=True))
         batch_op.add_column(sa.Column("local_code", sa.String(length=32), nullable=True))
 
-    # Backfill existing US baseline rows.
+    # Backfill existing rows with market-aware inference.
+    # If no non-US signal is present, default to US baseline.
     op.execute(
         sa.text(
             """
-            UPDATE stock_universe
+            WITH inferred AS (
+                SELECT
+                    id,
+                    CASE
+                        WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK')
+                            OR symbol LIKE '%.HK' THEN 'HK'
+                        WHEN UPPER(COALESCE(exchange, '')) IN ('TSE', 'JPX', 'XTKS')
+                            OR symbol LIKE '%.T' THEN 'JP'
+                        WHEN UPPER(COALESCE(exchange, '')) IN ('TWSE', 'TPEX', 'XTAI')
+                            OR symbol LIKE '%.TW'
+                            OR symbol LIKE '%.TWO' THEN 'TW'
+                        ELSE 'US'
+                    END AS inferred_market
+                FROM stock_universe
+            )
+            UPDATE stock_universe AS su
             SET
-                market = COALESCE(NULLIF(market, ''), 'US'),
-                currency = COALESCE(NULLIF(currency, ''), 'USD'),
-                timezone = COALESCE(NULLIF(timezone, ''), 'America/New_York'),
-                local_code = COALESCE(NULLIF(local_code, ''), symbol)
+                market = COALESCE(NULLIF(su.market, ''), inferred.inferred_market),
+                currency = COALESCE(
+                    NULLIF(su.currency, ''),
+                    CASE inferred.inferred_market
+                        WHEN 'HK' THEN 'HKD'
+                        WHEN 'JP' THEN 'JPY'
+                        WHEN 'TW' THEN 'TWD'
+                        ELSE 'USD'
+                    END
+                ),
+                timezone = COALESCE(
+                    NULLIF(su.timezone, ''),
+                    CASE inferred.inferred_market
+                        WHEN 'HK' THEN 'Asia/Hong_Kong'
+                        WHEN 'JP' THEN 'Asia/Tokyo'
+                        WHEN 'TW' THEN 'Asia/Taipei'
+                        ELSE 'America/New_York'
+                    END
+                ),
+                local_code = COALESCE(
+                    NULLIF(su.local_code, ''),
+                    CASE
+                        WHEN inferred.inferred_market IN ('HK', 'JP', 'TW') AND su.symbol LIKE '%.%'
+                            THEN split_part(su.symbol, '.', 1)
+                        ELSE su.symbol
+                    END
+                )
+            FROM inferred
+            WHERE su.id = inferred.id
             """
         )
     )

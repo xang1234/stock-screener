@@ -40,7 +40,7 @@ Notes:
 After upgrading to `20260411_0004` on the seeded dataset:
 
 - `rows_total = 5006`
-- `backfill_metrics = (0, 0, 0, 0, 0, 0, 0, 0)` where tuple fields are:
+- `backfill_metrics = (0, 0, 0, 0, 6, 6, 6, 6)` on the mixed-market fixture where tuple fields are:
   - `market_missing`
   - `currency_missing`
   - `timezone_missing`
@@ -52,13 +52,13 @@ After upgrading to `20260411_0004` on the seeded dataset:
 
 Sample spot-check rows:
 
-- `0700.HK` -> `(market='US', currency='USD', timezone='America/New_York', local_code='0700.HK')`
-- `2330.TW` -> `(market='US', currency='USD', timezone='America/New_York', local_code='2330.TW')`
-- `7203.T` -> `(market='US', currency='USD', timezone='America/New_York', local_code='7203.T')`
+- `0700.HK` -> `(market='HK', currency='HKD', timezone='Asia/Hong_Kong', local_code='0700')`
+- `2330.TW` -> `(market='TW', currency='TWD', timezone='Asia/Taipei', local_code='2330')`
+- `7203.T` -> `(market='JP', currency='JPY', timezone='Asia/Tokyo', local_code='7203')`
 
 Interpretation:
-- Existing rows were backfilled deterministically to US baseline as required by `asia.2.2`.
-- `local_code` fallback-to-`symbol` behavior is functioning.
+- Existing rows were backfilled deterministically using exchange/suffix inference with US fallback.
+- `local_code` derives exchange-local identifiers for suffixed non-US symbols and falls back to `symbol` otherwise.
 
 ## Rollback Viability (`asia.2.1.3`)
 
@@ -95,4 +95,3 @@ Conclusion: rollback path is operational and re-entrant for this migration pair.
 - `StockScreenClaude-asia.2.2`: Met.
   - Migration applied.
   - Backfill validated on representative seeded dataset.
-
