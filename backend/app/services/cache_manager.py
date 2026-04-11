@@ -24,7 +24,7 @@ class CacheManager:
     Centralized cache management and orchestration.
 
     Coordinates:
-    - SPY benchmark caching (BenchmarkCacheService)
+    - Market benchmark caching (BenchmarkCacheService)
     - Stock price caching (PriceCacheService)
     - Cache warming operations
     - Cache statistics and monitoring
@@ -234,13 +234,21 @@ class CacheManager:
 
         return stats
 
-    def warm_all_caches(self, symbols: List[str], force_refresh: bool = True) -> Dict:
+    def warm_all_caches(
+        self,
+        symbols: List[str],
+        force_refresh: bool = True,
+        benchmark_markets: Optional[List[str]] = None,
+        warm_benchmarks: bool = True,
+    ) -> Dict:
         """
-        Warm all caches (SPY + stock prices).
+        Warm all caches (benchmarks + stock prices).
 
         Args:
             symbols: List of stock symbols
             force_refresh: Force fetch even if cached (default True)
+            benchmark_markets: Optional explicit markets to warm benchmark for
+            warm_benchmarks: Whether benchmark warmup should run in this call
 
         Returns:
             Combined statistics with warmed, failed, already_cached counts
@@ -251,8 +259,12 @@ class CacheManager:
 
         start_time = time.time()
 
-        # 1. Warm SPY benchmark cache
-        spy_success = self.warm_benchmark_cache()
+        # 1. Warm benchmark cache for requested markets
+        benchmark_results: Dict[str, bool] = {}
+        if warm_benchmarks:
+            markets_to_warm = benchmark_markets or ["US"]
+            for market in markets_to_warm:
+                benchmark_results[market] = self.warm_benchmark_cache(market=market)
 
         # 2. Warm price cache for all symbols
         price_stats = self.warm_price_cache(
@@ -274,7 +286,10 @@ class CacheManager:
             'warmed': price_stats['successful'],
             'failed': price_stats['failed'],
             'already_cached': price_stats['skipped'],
-            'spy_warmed': spy_success,
+            'benchmarks_warmed': benchmark_results,
+            'benchmark_warmed': all(benchmark_results.values()) if benchmark_results else False,
+            # Backward compatibility for older consumers expecting this field.
+            'spy_warmed': benchmark_results.get("US", False),
             'total_time': total_time,
             'details': price_stats
         }
@@ -284,12 +299,12 @@ class CacheManager:
         Get comprehensive cache statistics.
 
         Returns:
-            Dict with cache statistics for SPY, prices, and fundamentals
+            Dict with cache statistics for benchmarks, prices, and fundamentals
         """
         stats = {
             'redis_connected': self.redis_client is not None,
             'market_status': format_market_status(),
-            'spy_cache': {},
+            'benchmark_cache': {},
             'price_cache': {
                 'total_keys': 0,
                 'symbols_cached': 0
@@ -305,16 +320,23 @@ class CacheManager:
             return stats
 
         try:
-            # SPY cache stats
-            spy_key_2y = "benchmark:SPY:2y"
-            spy_key_1y = "benchmark:SPY:1y"
-
-            stats['spy_cache'] = {
-                '2y_cached': self.redis_client.exists(spy_key_2y) > 0,
-                '1y_cached': self.redis_client.exists(spy_key_1y) > 0,
-                '2y_ttl': self.redis_client.ttl(spy_key_2y) if self.redis_client.exists(spy_key_2y) else None,
-                '1y_ttl': self.redis_client.ttl(spy_key_1y) if self.redis_client.exists(spy_key_1y) else None,
-            }
+            # Benchmark cache stats by market
+            benchmark_stats: Dict[str, Dict[str, Optional[int] | bool | str]] = {}
+            for market, symbol in self.benchmark_cache.BENCHMARK_BY_MARKET.items():
+                key_2y = f"benchmark:{symbol}:2y"
+                key_1y = f"benchmark:{symbol}:1y"
+                has_2y = self.redis_client.exists(key_2y) > 0
+                has_1y = self.redis_client.exists(key_1y) > 0
+                benchmark_stats[market] = {
+                    'symbol': symbol,
+                    '2y_cached': has_2y,
+                    '1y_cached': has_1y,
+                    '2y_ttl': self.redis_client.ttl(key_2y) if has_2y else None,
+                    '1y_ttl': self.redis_client.ttl(key_1y) if has_1y else None,
+                }
+            stats['benchmark_cache'] = benchmark_stats
+            # Backward compatibility for existing consumers.
+            stats['spy_cache'] = benchmark_stats.get("US", {})
 
             # Price cache stats
             price_keys = self.redis_client.keys("price:*")

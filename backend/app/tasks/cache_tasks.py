@@ -20,6 +20,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.cache_manager import CacheManager
+from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
@@ -31,6 +32,47 @@ _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
     "smart_refresh_time_window_bypass",
     default=False,
 )
+
+
+def _active_benchmark_markets(db) -> List[str]:
+    """Return distinct active markets that have configured benchmarks."""
+    from sqlalchemy import distinct
+    from ..models.stock_universe import StockUniverse
+
+    supported = set(BenchmarkCacheService.BENCHMARK_BY_MARKET.keys())
+    rows = (
+        db.query(distinct(StockUniverse.market))
+        .filter(StockUniverse.is_active == True)
+        .all()
+    )
+    markets = []
+    for (market,) in rows:
+        normalized = (market or "US").strip().upper()
+        if normalized in supported:
+            markets.append(normalized)
+    if "US" not in markets:
+        markets.insert(0, "US")
+    return sorted(set(markets))
+
+
+def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
+    """Resolve benchmark markets for a specific symbol set from active universe metadata."""
+    from ..models.stock_universe import StockUniverse
+
+    supported = set(BenchmarkCacheService.BENCHMARK_BY_MARKET.keys())
+    rows = (
+        db.query(StockUniverse.market)
+        .filter(StockUniverse.symbol.in_(symbols))
+        .all()
+    )
+    markets = []
+    for (market,) in rows:
+        normalized = (market or "US").strip().upper()
+        if normalized in supported:
+            markets.append(normalized)
+    if "US" not in markets:
+        markets.append("US")
+    return sorted(set(markets))
 
 
 @contextmanager
@@ -46,31 +88,43 @@ def allow_smart_refresh_time_window_bypass():
 @celery_app.task(name='app.tasks.cache_tasks.warm_spy_cache')
 def warm_spy_cache():
     """
-    Warm SPY benchmark cache.
+    Warm benchmark cache for active markets.
 
     This task is typically run after market close to ensure
-    the next day's scans have fresh SPY data cached.
+    the next day's scans have fresh benchmark data cached.
 
     Returns:
         Dict with task results
     """
     logger.info("=" * 60)
-    logger.info("TASK: Warming SPY Benchmark Cache")
+    logger.info("TASK: Warming Market Benchmark Cache")
     logger.info(f"Market status: {format_market_status()}")
     logger.info("=" * 60)
 
+    db = SessionLocal()
     try:
         cache_manager = CacheManager()
+        markets = _active_benchmark_markets(db)
+        logger.info(f"Warming benchmark cache for markets: {markets}")
 
-        # Warm both 1y and 2y periods
+        # Warm both 1y and 2y periods for each active market
+        by_market = {}
+        for market in markets:
+            by_market[market] = {
+                '2y': cache_manager.warm_benchmark_cache(period="2y", market=market),
+                '1y': cache_manager.warm_benchmark_cache(period="1y", market=market),
+            }
+
         results = {
-            '2y': cache_manager.warm_benchmark_cache(period="2y"),
-            '1y': cache_manager.warm_benchmark_cache(period="1y"),
+            'by_market': by_market,
+            # Backward compatibility aliases for legacy SPY consumers.
+            '2y': by_market.get("US", {}).get("2y", False),
+            '1y': by_market.get("US", {}).get("1y", False),
             'market_status': format_market_status(),
             'timestamp': datetime.now().isoformat()
         }
 
-        logger.info("✓ SPY cache warming task completed")
+        logger.info("✓ Market benchmark cache warming task completed")
         return results
 
     except Exception as e:
@@ -79,6 +133,8 @@ def warm_spy_cache():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }
+    finally:
+        db.close()
 
 
 @celery_app.task(name='app.tasks.cache_tasks.warm_top_symbols')
@@ -141,8 +197,13 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
 
         cache_manager = CacheManager(db)
 
+        benchmark_markets = _benchmark_markets_for_symbols(db, symbols)
+
         # Warm all caches
-        results = cache_manager.warm_all_caches(symbols)
+        results = cache_manager.warm_all_caches(
+            symbols,
+            benchmark_markets=benchmark_markets,
+        )
 
         logger.info("✓ Symbol cache warming task completed")
         return results
@@ -166,7 +227,7 @@ def daily_cache_warmup(self):
 
     The scheduler and manual refresh entrypoints now use the batched smart refresh
     path directly. This task remains as a stable compatibility name for legacy
-    callers, but delegates to the same SPY-first, full-universe batch refresh
+    callers, but delegates to the same benchmark-first, full-universe batch refresh
     implementation used by ``smart_refresh_cache(mode="full")``.
 
     Returns:
@@ -187,7 +248,7 @@ def weekly_full_refresh(self):
     Weekly full cache refresh.
 
     Cleans up orphaned cache keys (delisted/deactivated symbols),
-    warms SPY, then performs a full universe refresh inline.
+    warms required benchmarks, then performs a full universe refresh inline.
     Typically runs Sunday morning before markets open.
 
     NOTE: Previously this task called smart_refresh_cache.delay(mode="full"),
@@ -226,9 +287,9 @@ def weekly_full_refresh(self):
         orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
         logger.info(f"✓ Cleaned up {orphan_count} orphaned cache entries")
 
-        # 2. Warm SPY cache
-        logger.info("\n[2/4] Re-warming SPY benchmark cache...")
-        spy_results = warm_spy_cache()
+        # 2. Warm benchmark cache for active markets
+        logger.info("\n[2/4] Re-warming market benchmark cache...")
+        benchmark_results = warm_spy_cache()
 
         # 3. Get all active symbols ordered by market cap
         logger.info(f"\n[3/4] Preparing full universe refresh ({len(active_symbols)} symbols)...")
@@ -244,7 +305,8 @@ def weekly_full_refresh(self):
             price_cache.save_warmup_metadata("completed", 0, 0)
             return {
                 'orphans_cleaned': orphan_count,
-                'spy': spy_results,
+                'benchmark': benchmark_results,
+                'spy': benchmark_results.get("by_market", {}).get("US", {}),
                 'refreshed': 0,
                 'universe_size': 0,
                 'completed_at': datetime.now().isoformat()
@@ -348,7 +410,8 @@ def weekly_full_refresh(self):
 
         return {
             'orphans_cleaned': orphan_count,
-            'spy': spy_results,
+            'benchmark': benchmark_results,
+            'spy': benchmark_results.get("by_market", {}).get("US", {}),
             'status': status,
             'refreshed': refreshed,
             'failed': failed,
@@ -479,11 +542,16 @@ def _prewarm_scan_cache_impl(task, symbol_list: List[str], priority: str = 'norm
         chunk_size = 50
         chunks = [symbol_list[i:i + chunk_size] for i in range(0, total, chunk_size)]
 
+        benchmark_markets = _benchmark_markets_for_symbols(db, symbol_list)
         for chunk_num, chunk in enumerate(chunks, 1):
             chunk_start = datetime.now()
 
             # Warm this chunk
-            result = cache_manager.warm_all_caches(chunk)
+            result = cache_manager.warm_all_caches(
+                chunk,
+                benchmark_markets=benchmark_markets,
+                warm_benchmarks=(chunk_num == 1),
+            )
 
             # Update counters
             warmed += result.get('warmed', 0)
@@ -1079,7 +1147,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
     between daily_cache_warmup and force_refresh_stale_intraday.
 
     Key features:
-    1. Always warms SPY first (required for RS calculations)
+    1. Always warms benchmarks first (required for RS calculations)
     2. Fetches symbols in market cap order (high cap first)
     3. Updates heartbeat for stuck detection
     4. Saves warmup metadata for partial completion tracking
@@ -1151,11 +1219,11 @@ def smart_refresh_cache(self, mode: str = "auto"):
     failed_symbols = []
 
     try:
-        # Step 1: Always warm SPY first (required for RS calculations)
-        logger.info("[1/3] Warming SPY benchmark...")
-        spy_result = warm_spy_cache()
-        if spy_result.get('error'):
-            logger.error(f"SPY warmup failed: {spy_result.get('error')}")
+        # Step 1: Always warm market benchmarks first (required for RS calculations)
+        logger.info("[1/3] Warming market benchmarks...")
+        benchmark_result = warm_spy_cache()
+        if benchmark_result.get('error'):
+            logger.error(f"Benchmark warmup failed: {benchmark_result.get('error')}")
 
         # Step 2: Get symbols to refresh, ordered by market cap
         logger.info(f"[2/3] Determining symbols to refresh (mode={mode})...")
