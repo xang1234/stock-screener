@@ -148,9 +148,7 @@ def warm_spy_cache():
         }
 
         if failed_periods:
-            raise RuntimeError(
-                "Benchmark warm failed for " + ", ".join(failed_periods)
-            )
+            results["error"] = "Benchmark warm failed for " + ", ".join(failed_periods)
 
         logger.info("✓ Market benchmark cache warming task completed")
         return results

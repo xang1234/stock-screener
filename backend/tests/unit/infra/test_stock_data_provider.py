@@ -144,6 +144,26 @@ class TestPartialFailureAllowPartialTrue:
         assert result.fundamentals is None
         assert "fundamentals" in result.fetch_errors
 
+    def test_prepare_data_uses_canonical_symbol_for_price_and_fundamentals(
+        self, data_layer, mock_price_cache, mock_fundamentals_cache
+    ):
+        data_layer._resolve_identity = MagicMock(return_value=MagicMock(
+            normalized_symbol="700",
+            canonical_symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+            local_code="0700",
+        ))
+        mock_price_cache.get_historical_data.return_value = _make_price_df()
+
+        result = data_layer.prepare_data("700", REQUIREMENTS)
+
+        assert result.symbol == "0700.HK"
+        mock_price_cache.get_historical_data.assert_called_once_with("0700.HK", period="2y")
+        mock_fundamentals_cache.get_fundamentals.assert_called_once_with("0700.HK", force_refresh=False)
+
     def test_all_components_fail_returns_stock_data_with_all_errors(
         self, data_layer, mock_price_cache, mock_yfinance,
         mock_benchmark_cache, mock_fundamentals_cache,

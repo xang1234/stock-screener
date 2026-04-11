@@ -126,6 +126,35 @@ def test_get_benchmark_data_prefers_cached_fallback_before_primary_network_fetch
     assert calls == []
 
 
+def test_get_benchmark_data_skips_stale_redis_hit():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    stale_df = pd.DataFrame({"Close": [1.0]}, index=pd.to_datetime(["2026-04-01"]))
+    fresh_df = pd.DataFrame({"Close": [2.0]}, index=pd.to_datetime(["2026-04-10"]))
+
+    def fake_get_from_redis(*, benchmark_symbol, period):
+        if benchmark_symbol == "^HSI":
+            return stale_df
+        return None
+
+    def fake_get_from_db(*, benchmark_symbol, period, market):
+        if benchmark_symbol == "2800.HK":
+            return fresh_df
+        return None
+
+    def fake_is_fresh(data, market="US", max_age_hours=24):
+        return data is fresh_df
+
+    service._get_from_redis = fake_get_from_redis  # type: ignore[assignment]
+    service._get_from_database = fake_get_from_db  # type: ignore[assignment]
+    service._is_data_fresh = fake_is_fresh  # type: ignore[assignment]
+
+    result = service.get_benchmark_data(market="HK", period="2y", force_refresh=False)
+
+    assert result is fresh_df
+
+
 def test_is_data_fresh_fallback_allows_weekend_without_calendar(monkeypatch):
     service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
     data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday

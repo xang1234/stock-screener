@@ -129,7 +129,7 @@ class BenchmarkCacheService:
             for idx, benchmark_symbol in enumerate(candidates):
                 role = "primary" if idx == 0 else "fallback"
                 cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
-                if cached_data is not None:
+                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
                     logger.info(
                         "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
                         normalized_market,
@@ -138,6 +138,14 @@ class BenchmarkCacheService:
                         role,
                     )
                     return cached_data
+                if cached_data is not None:
+                    logger.info(
+                        "Cache STALE for %s benchmark %s (%s, %s) (Redis)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
 
                 cached_data = self._get_from_database(
                     benchmark_symbol=benchmark_symbol,

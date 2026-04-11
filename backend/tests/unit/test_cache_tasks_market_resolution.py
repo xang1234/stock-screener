@@ -84,3 +84,5 @@ def test_warm_spy_cache_returns_error_when_any_market_warm_fails(monkeypatch):
 
     assert "error" in result
     assert "HK:1y" in result["error"]
+    assert "by_market" in result
+    assert result["by_market"]["US"]["2y"] is True

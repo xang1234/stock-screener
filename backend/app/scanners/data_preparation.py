@@ -124,6 +124,7 @@ class DataPreparationLayer:
         """
         identity = self._resolve_identity(symbol)
         normalized_symbol = identity.normalized_symbol
+        canonical_symbol = identity.canonical_symbol
         fetch_errors = {}
 
         # 1. Fetch price data (always needed)
@@ -133,7 +134,7 @@ class DataPreparationLayer:
             # Check cache first (no rate limiting)
             # Note: get_historical_data() handles Redis → DB fallback internally and ensures sufficient data
             price_data = self.price_cache.get_historical_data(
-                normalized_symbol,
+                canonical_symbol,
                 period=requirements.price_period,
             )
 
@@ -143,7 +144,7 @@ class DataPreparationLayer:
                 logger.debug(f"Cache MISS for {normalized_symbol} - fetching from yfinance")
                 price_data = self._fetch_with_retry(
                     self._yfinance_service.get_historical_data,
-                    normalized_symbol,
+                    canonical_symbol,
                     period=requirements.price_period,
                     use_cache=False,  # Already checked cache
                 )
@@ -182,7 +183,7 @@ class DataPreparationLayer:
                 # Use cache service instead of direct API call (no rate limiting needed - cache handles it)
                 fundamentals = self._fetch_with_retry(
                     self.fundamentals_cache.get_fundamentals,
-                    normalized_symbol,
+                    canonical_symbol,
                     force_refresh=False,  # Use cache by default
                 )
                 if fundamentals is None:
@@ -209,7 +210,7 @@ class DataPreparationLayer:
 
         # Create StockData container
         stock_data = StockData(
-            symbol=normalized_symbol,
+            symbol=canonical_symbol,
             price_data=price_data if price_data is not None else pd.DataFrame(),
             benchmark_data=benchmark_data if benchmark_data is not None else pd.DataFrame(),
             fundamentals=fundamentals,
@@ -224,7 +225,7 @@ class DataPreparationLayer:
         )
 
         if not allow_partial and fetch_errors:
-            raise DataFetchError(normalized_symbol, fetch_errors, partial_data=stock_data)
+            raise DataFetchError(canonical_symbol, fetch_errors, partial_data=stock_data)
 
         return stock_data
 
@@ -260,9 +261,9 @@ class DataPreparationLayer:
 
         logger.info(f"Preparing data for {len(symbols)} symbols using bulk cache operations")
         identities = [self._resolve_identity(symbol) for symbol in symbols]
-        normalized_symbols = [identity.normalized_symbol for identity in identities]
+        canonical_symbols = [identity.canonical_symbol for identity in identities]
         identity_by_symbol = {
-            identity.normalized_symbol: identity for identity in identities
+            identity.canonical_symbol: identity for identity in identities
         }
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
@@ -271,12 +272,12 @@ class DataPreparationLayer:
         # Price data is always needed (no needs_price_data flag)
         # IMPORTANT: Pass period so get_many() can fall back to database if Redis only has 30 days
         cached_prices = self.price_cache.get_many(
-            normalized_symbols,
+            canonical_symbols,
             period=requirements.price_period,
         )
         # Fundamentals cache now includes quarterly growth data (consolidated)
         cached_fundamentals = (
-            self.fundamentals_cache.get_many(normalized_symbols)
+            self.fundamentals_cache.get_many(canonical_symbols)
             if requirements.needs_fundamentals
             else {}
         )
@@ -306,7 +307,7 @@ class DataPreparationLayer:
 
         # Build StockData for each symbol
         results = {}
-        for symbol in normalized_symbols:
+        for symbol in canonical_symbols:
             fetch_errors = {}
             identity = identity_by_symbol[symbol]
 
