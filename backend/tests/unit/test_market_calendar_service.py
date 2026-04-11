@@ -13,7 +13,7 @@ class _FakeCalendar:
         ]
         self.schedule = pd.DataFrame(
             {
-                "market_close": [
+                "close": [
                     pd.Timestamp("2026-04-09 08:00:00+00:00"),
                     pd.Timestamp("2026-04-10 08:00:00+00:00"),
                 ],

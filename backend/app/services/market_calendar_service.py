@@ -95,7 +95,7 @@ class MarketCalendarService:
         if schedule.empty:
             return calendar.previous_session(current_session).date()
 
-        market_close = schedule.iloc[0]["market_close"]
+        market_close = schedule.iloc[0]["close"] if "close" in schedule.columns else schedule.iloc[0]["market_close"]
         if market_close.tzinfo is None:
             market_close = market_close.tz_localize("UTC")
         close_with_buffer = (

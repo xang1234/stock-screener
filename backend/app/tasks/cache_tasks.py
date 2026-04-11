@@ -24,6 +24,7 @@ from ..services.benchmark_registry_service import benchmark_registry
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
+from ..services.security_master_service import security_master_resolver
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -36,18 +37,24 @@ _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
 
 def _active_benchmark_markets(db) -> List[str]:
     """Return distinct active markets that have configured benchmarks."""
-    from sqlalchemy import distinct
     from ..models.stock_universe import StockUniverse
 
     supported = set(benchmark_registry.supported_markets())
     rows = (
-        db.query(distinct(StockUniverse.market))
+        db.query(
+            StockUniverse.market,
+            StockUniverse.exchange,
+            StockUniverse.symbol,
+        )
         .filter(StockUniverse.is_active == True)
         .all()
     )
     markets = []
-    for (market,) in rows:
-        normalized = (market or "US").strip().upper()
+    for market, exchange, symbol in rows:
+        normalized = security_master_resolver.normalize_market(market) or security_master_resolver.infer_market(
+            symbol=symbol or "",
+            exchange=exchange,
+        )
         if normalized in supported:
             markets.append(normalized)
     if not markets:
@@ -61,13 +68,16 @@ def _benchmark_markets_for_symbols(db, symbols: List[str]) -> List[str]:
 
     supported = set(benchmark_registry.supported_markets())
     rows = (
-        db.query(StockUniverse.market)
+        db.query(StockUniverse.market, StockUniverse.exchange, StockUniverse.symbol)
         .filter(StockUniverse.symbol.in_(symbols))
         .all()
     )
     markets = []
-    for (market,) in rows:
-        normalized = (market or "US").strip().upper()
+    for market, exchange, symbol in rows:
+        normalized = security_master_resolver.normalize_market(market) or security_master_resolver.infer_market(
+            symbol=symbol or "",
+            exchange=exchange,
+        )
         if normalized in supported:
             markets.append(normalized)
     if not markets:

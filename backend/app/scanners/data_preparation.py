@@ -364,14 +364,19 @@ class DataPreparationLayer:
             earnings_history = None
 
             # Create StockData
+            market_benchmark_data = (
+                benchmark_data_by_market.get(identity.market)
+                if requirements.needs_benchmark
+                else None
+            )
             results[symbol] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
                 benchmark_data=(
-                    benchmark_data_by_market.get(identity.market)
-                    if requirements.needs_benchmark
-                    else None
-                ) or pd.DataFrame(),
+                    market_benchmark_data
+                    if market_benchmark_data is not None
+                    else pd.DataFrame()
+                ),
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,

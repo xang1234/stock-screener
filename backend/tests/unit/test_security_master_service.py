@@ -61,6 +61,16 @@ def test_resolve_identity_rewrites_mismatched_tw_suffix_for_tpex_symbol():
     assert identity.canonical_symbol == "3008.TWO"
 
 
+def test_resolve_identity_preserves_explicit_two_suffix_without_exchange_override():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="3008.TWO")
+
+    assert identity.market == "TW"
+    assert identity.exchange is None
+    assert identity.canonical_symbol == "3008.TWO"
+
+
 def test_normalize_symbol_strips_dollar_prefix():
     resolver = SecurityMasterResolver()
 

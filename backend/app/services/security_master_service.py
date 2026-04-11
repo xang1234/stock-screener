@@ -109,6 +109,13 @@ class SecurityMasterResolver:
             return _SUFFIX_BY_EXCHANGE[normalized_exchange]
         return _SUFFIX_BY_MARKET.get(market)
 
+    def _recognized_symbol_suffix(self, symbol: str) -> str | None:
+        normalized_symbol = self.normalize_symbol(symbol)
+        for suffix, _ in _MARKET_BY_SUFFIX:
+            if normalized_symbol.endswith(suffix):
+                return suffix
+        return None
+
     def resolve_identity(
         self,
         *,
@@ -143,11 +150,15 @@ class SecurityMasterResolver:
 
         canonical_symbol = normalized_symbol
         if normalized_market != "US" and resolved_local_code:
-            suffix = self._resolve_suffix(normalized_market, normalized_exchange)
-            if suffix:
-                expected_canonical = f"{resolved_local_code}{suffix}"
-                if canonical_symbol != expected_canonical:
-                    canonical_symbol = expected_canonical
+            # Preserve explicit non-US suffix when no exchange override is provided.
+            if normalized_exchange is None and self._recognized_symbol_suffix(normalized_symbol):
+                canonical_symbol = normalized_symbol
+            else:
+                suffix = self._resolve_suffix(normalized_market, normalized_exchange)
+                if suffix:
+                    expected_canonical = f"{resolved_local_code}{suffix}"
+                    if canonical_symbol != expected_canonical:
+                        canonical_symbol = expected_canonical
 
         return SecurityIdentity(
             normalized_symbol=normalized_symbol,
