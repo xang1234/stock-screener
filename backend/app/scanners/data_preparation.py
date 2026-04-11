@@ -260,7 +260,8 @@ class DataPreparationLayer:
             return {}
 
         logger.info(f"Preparing data for {len(symbols)} symbols using bulk cache operations")
-        requested_keys = [self._security_master.normalize_symbol(symbol) for symbol in symbols]
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        requested_keys = [resolver.normalize_symbol(symbol) for symbol in symbols]
         identities = [self._resolve_identity(symbol) for symbol in symbols]
         canonical_symbols = [identity.canonical_symbol for identity in identities]
         unique_canonical_symbols = list(dict.fromkeys(canonical_symbols))
