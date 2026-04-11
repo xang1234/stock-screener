@@ -14,6 +14,17 @@ Current scheduling/freshness checks assume NYSE/US-Eastern semantics. ASIA rollo
 
 Use a unified `exchange_calendars` implementation for US/HK/JP/TW in MarketCalendarService.
 
+### Canonical Calendar Mapping
+
+MarketCalendarService must use the following canonical `exchange_calendars` IDs:
+
+- US -> `XNYS`
+- HK -> `XHKG`
+- JP -> `XTKS`
+- TW -> `XTAI`
+
+No alias IDs or market-specific substitutes may be used in production without a superseding ADR revision.
+
 ### Service Contract
 
 MarketCalendarService provides deterministic primitives:
@@ -28,6 +39,12 @@ MarketCalendarService provides deterministic primitives:
 - Calendar logic is centralized; no subsystem-specific calendar math.
 - US parity behavior must be preserved under migration.
 - HK/JP lunch-break/session conventions and TW session-day correctness are first-class requirements.
+- All schedule/freshness comparisons normalize timestamps to UTC internally.
+- User-facing and audit/log outputs must include the market-local timezone label for rendered session boundaries:
+  - US: `America/New_York`
+  - HK: `Asia/Hong_Kong`
+  - JP: `Asia/Tokyo`
+  - TW: `Asia/Taipei`
 
 ## Consequences
 
