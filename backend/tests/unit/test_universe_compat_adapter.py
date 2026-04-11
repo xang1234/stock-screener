@@ -1,5 +1,7 @@
 """Unit tests for legacy universe compatibility adapter."""
 
+import json
+
 from app.schemas.universe import Exchange, UniverseDefinition, UniverseType
 from app.services.universe_compat_adapter import (
     LEGACY_UNIVERSE_SUNSET_HTTP,
@@ -33,6 +35,10 @@ def test_legacy_universe_maps_to_typed_definition_with_headers():
     assert headers["Sunset"] == LEGACY_UNIVERSE_SUNSET_HTTP
     assert headers["X-Universe-Legacy-Value"] == "nyse"
     assert headers["X-Universe-Compat-Mode"] == "legacy"
+    assert json.loads(headers["X-Universe-Migration-Hint"]) == {
+        "type": "exchange",
+        "exchange": "NYSE",
+    }
 
 
 def test_unknown_legacy_value_with_symbols_falls_back_to_custom():

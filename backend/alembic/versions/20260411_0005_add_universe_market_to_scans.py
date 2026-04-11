@@ -41,7 +41,7 @@ def upgrade() -> None:
                     THEN {market_from_key_expr}
                 WHEN LOWER(COALESCE(universe_type, '')) IN ('all', 'exchange', 'index')
                     THEN 'US'
-                ELSE universe_market
+                ELSE NULL
             END
             WHERE universe_market IS NULL OR TRIM(universe_market) = ''
             """

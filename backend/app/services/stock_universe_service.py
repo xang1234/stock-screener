@@ -11,7 +11,7 @@ import pandas as pd
 from typing import Any, Dict, Iterable, List, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from datetime import datetime
 
 from ..models.stock_universe import (
@@ -24,6 +24,13 @@ from ..models.stock_universe import (
 )
 
 logger = logging.getLogger(__name__)
+
+MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "US": ("NYSE", "NASDAQ", "AMEX"),
+    "HK": ("HKEX", "SEHK", "XHKG"),
+    "JP": ("TSE", "JPX", "XTKS"),
+    "TW": ("TWSE", "TPEX", "XTAI"),
+}
 
 
 class StockUniverseService:
@@ -641,7 +648,23 @@ class StockUniverseService:
                 query = query.filter(StockUniverse.is_sp500 == True)
 
             if market:
-                query = query.filter(StockUniverse.market == market.upper())
+                normalized_market = market.upper()
+                fallback_exchanges = MARKET_EXCHANGE_FALLBACKS.get(normalized_market)
+                if fallback_exchanges:
+                    query = query.filter(
+                        or_(
+                            StockUniverse.market == normalized_market,
+                            and_(
+                                or_(
+                                    StockUniverse.market.is_(None),
+                                    func.trim(StockUniverse.market) == "",
+                                ),
+                                StockUniverse.exchange.in_(fallback_exchanges),
+                            ),
+                        )
+                    )
+                else:
+                    query = query.filter(StockUniverse.market == normalized_market)
 
             if exchange:
                 query = query.filter(StockUniverse.exchange == exchange.upper())

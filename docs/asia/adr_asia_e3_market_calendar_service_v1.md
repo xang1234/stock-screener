@@ -40,6 +40,23 @@ Canonical timezone mapping (for deterministic rendering and audit labeling):
 4. User-facing surfaces and logs must render session boundaries with both UTC and canonical market-local timezone context.
 5. Naive (timezone-less) timestamps are not valid inputs to MarketCalendarService APIs and must be rejected or normalized before invocation by callers.
 
+### Canonical-ID Compliance Rollout
+
+To eliminate alias drift while keeping rollout risk controlled:
+
+1. Soft enforcement (4-week window):
+   - Emit warnings when legacy names are observed (`NYSE`, `HKEX`, `SEHK`, `TSE`, `JPX`, `TWSE`, `TPEX`).
+   - Normalize to canonical IDs through a single shared helper in MarketCalendarService.
+2. Hard enforcement (after window):
+   - Reject non-canonical identifiers at MarketCalendarService boundaries.
+   - Remove automatic legacy-name normalization from call sites.
+
+Migration work items:
+
+- Update all calendar lookup call sites to canonical IDs (`XNYS`, `XHKG`, `XTKS`, `XTAI`).
+- Add CI guardrails (lint/check) to block new non-canonical literals in production calendar paths.
+- Track migration and remaining call sites in ASIA backlog items before canary launch.
+
 ### Service Contract
 
 MarketCalendarService provides deterministic primitives:

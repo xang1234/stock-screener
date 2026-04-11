@@ -99,20 +99,34 @@ class Scan(Base):
                 return UniverseDefinition(type=UniverseType.ALL)
 
         resolved_market = self.universe_market
-        if (
-            resolved_market is None
-            and self.universe_type == UniverseType.MARKET.value
-            and isinstance(self.universe_key, str)
-            and self.universe_key.lower().startswith("market:")
-        ):
-            resolved_market = self.universe_key.split(":", 1)[1].upper()
+        universe_type = UniverseType(self.universe_type)
+
+        market = None
+        exchange = None
+        index = None
+        symbols = None
+
+        if universe_type == UniverseType.MARKET:
+            if (
+                resolved_market is None
+                and isinstance(self.universe_key, str)
+                and self.universe_key.lower().startswith("market:")
+            ):
+                resolved_market = self.universe_key.split(":", 1)[1].upper()
+            market = Market(resolved_market) if resolved_market else None
+        elif universe_type == UniverseType.EXCHANGE:
+            exchange = Exchange(self.universe_exchange) if self.universe_exchange else None
+        elif universe_type == UniverseType.INDEX:
+            index = IndexName(self.universe_index) if self.universe_index else None
+        elif universe_type in (UniverseType.CUSTOM, UniverseType.TEST):
+            symbols = self.universe_symbols
 
         return UniverseDefinition(
-            type=UniverseType(self.universe_type),
-            market=Market(resolved_market) if resolved_market else None,
-            exchange=Exchange(self.universe_exchange) if self.universe_exchange else None,
-            index=IndexName(self.universe_index) if self.universe_index else None,
-            symbols=self.universe_symbols,
+            type=universe_type,
+            market=market,
+            exchange=exchange,
+            index=index,
+            symbols=symbols,
         )
 
 

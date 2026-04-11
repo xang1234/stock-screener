@@ -6,6 +6,7 @@ clients to structured `universe_def` payloads.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Optional
@@ -55,7 +56,7 @@ class UniverseCompatResolution:
             "Sunset": LEGACY_UNIVERSE_SUNSET_HTTP,
             "X-Universe-Compat-Mode": "legacy",
             "X-Universe-Legacy-Value": self.legacy_value or "unknown",
-            "X-Universe-Migration-Hint": str(hint),
+            "X-Universe-Migration-Hint": json.dumps(hint, separators=(",", ":")),
         }
 
     def deprecation_log_message(self) -> str:
