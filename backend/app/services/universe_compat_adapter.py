@@ -21,6 +21,7 @@ LEGACY_UNIVERSE_SUNSET_HTTP = "Sat, 31 Oct 2026 00:00:00 GMT"
 # the equivalent typed payload shape for migration guidance.
 LEGACY_UNIVERSE_ALIAS_MAP: dict[str, dict[str, Any]] = {
     "all": {"type": "all"},
+    "active": {"type": "all"},
     "nyse": {"type": "exchange", "exchange": "NYSE"},
     "nasdaq": {"type": "exchange", "exchange": "NASDAQ"},
     "amex": {"type": "exchange", "exchange": "AMEX"},
@@ -91,6 +92,8 @@ def resolve_scan_universe_request(
         )
 
     normalized_legacy = (legacy_universe or "all").strip().lower()
+    if normalized_legacy == "active":
+        normalized_legacy = "all"
     parsed = UniverseDefinition.from_legacy(normalized_legacy, legacy_symbols)
     migration_hint = LEGACY_UNIVERSE_ALIAS_MAP.get(normalized_legacy)
     if migration_hint is None:
@@ -110,4 +113,3 @@ def resolve_scan_universe_request(
         legacy_value=normalized_legacy,
         migration_hint=migration_hint,
     )
-
