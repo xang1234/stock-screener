@@ -823,7 +823,20 @@ class ProviderSnapshotService:
 
     @staticmethod
     def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
-        market = str(row.get("market") or "US").strip().upper()
+        raw_market = str(row.get("market") or "").strip().upper()
+        if raw_market:
+            market = raw_market
+        else:
+            exchange = str(row.get("exchange") or "").strip().upper()
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if exchange in {"HKEX", "SEHK"} or symbol.endswith(".HK"):
+                market = "HK"
+            elif exchange in {"TSE", "JPX", "XTKS"} or symbol.endswith(".T"):
+                market = "JP"
+            elif exchange in {"TWSE", "TPEX", "XTAI"} or symbol.endswith(".TW") or symbol.endswith(".TWO"):
+                market = "TW"
+            else:
+                market = "US"
         market_defaults = {
             "HK": ("HKD", "Asia/Hong_Kong"),
             "JP": ("JPY", "Asia/Tokyo"),

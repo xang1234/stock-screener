@@ -549,8 +549,9 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     assert hk_row["timezone"] == "Asia/Hong_Kong"
     assert hk_row["local_code"] == "0700"
 
-    # Simulate backward-compatible bundle with market present but currency/timezone missing.
-    hk_row["market"] = " hk "
+    # Simulate legacy bundle row with market absent and currency/timezone missing.
+    hk_row.pop("market", None)
+    hk_row["exchange"] = " sehk "
     hk_row.pop("currency", None)
     hk_row.pop("timezone", None)
     with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:

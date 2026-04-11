@@ -16,23 +16,42 @@ def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
 
+    market_inference_expr = (
+        "CASE "
+        "WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK') "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' THEN 'HK' "
+        "WHEN UPPER(COALESCE(exchange, '')) IN ('TSE', 'JPX', 'XTKS') "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' THEN 'JP' "
+        "WHEN UPPER(COALESCE(exchange, '')) IN ('TWSE', 'TPEX', 'XTAI') "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TW' "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TWO' THEN 'TW' "
+        "ELSE 'US' END"
+    )
+    non_us_inference_condition = (
+        "UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK', 'TSE', 'JPX', 'XTKS', 'TWSE', 'TPEX', 'XTAI') "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TW' "
+        "OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TWO'"
+    )
+
     if dialect == "postgresql":
         local_code_from_symbol_expr = (
             "CASE "
-            "WHEN inferred.inferred_market IN ('HK', 'JP', 'TW') AND POSITION('.' IN su.symbol) > 0 "
-            "THEN SPLIT_PART(su.symbol, '.', 1) "
-            "ELSE su.symbol END"
+            f"WHEN ({non_us_inference_condition}) AND POSITION('.' IN symbol) > 0 "
+            "THEN SPLIT_PART(symbol, '.', 1) "
+            "ELSE symbol END"
         )
     elif dialect == "sqlite":
         local_code_from_symbol_expr = (
             "CASE "
-            "WHEN inferred.inferred_market IN ('HK', 'JP', 'TW') AND INSTR(su.symbol, '.') > 0 "
-            "THEN SUBSTR(su.symbol, 1, INSTR(su.symbol, '.') - 1) "
-            "ELSE su.symbol END"
+            f"WHEN ({non_us_inference_condition}) AND INSTR(symbol, '.') > 0 "
+            "THEN SUBSTR(symbol, 1, INSTR(symbol, '.') - 1) "
+            "ELSE symbol END"
         )
     else:
         # Fallback for untested dialects: preserve canonical symbol.
-        local_code_from_symbol_expr = "su.symbol"
+        local_code_from_symbol_expr = "symbol"
 
     with op.batch_alter_table("stock_universe") as batch_op:
         batch_op.add_column(
@@ -56,68 +75,51 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             f"""
-            WITH inferred AS (
-                SELECT
-                    id,
-                    CASE
-                        WHEN UPPER(COALESCE(exchange, '')) IN ('HKEX', 'SEHK')
-                            OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.HK' THEN 'HK'
-                        WHEN UPPER(COALESCE(exchange, '')) IN ('TSE', 'JPX', 'XTKS')
-                            OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.T' THEN 'JP'
-                        WHEN UPPER(COALESCE(exchange, '')) IN ('TWSE', 'TPEX', 'XTAI')
-                            OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TW'
-                            OR UPPER(TRIM(COALESCE(symbol, ''))) LIKE '%.TWO' THEN 'TW'
-                        ELSE 'US'
-                    END AS inferred_market
-                FROM stock_universe
-            )
-            UPDATE stock_universe AS su
+            UPDATE stock_universe
             SET
                 market = CASE
-                    WHEN NULLIF(su.market, '') IS NULL THEN inferred.inferred_market
-                    WHEN su.market = 'US' AND inferred.inferred_market <> 'US' THEN inferred.inferred_market
-                    ELSE su.market
+                    WHEN NULLIF(market, '') IS NULL THEN {market_inference_expr}
+                    WHEN market = 'US' AND {market_inference_expr} <> 'US' THEN {market_inference_expr}
+                    ELSE market
                 END,
                 currency = CASE
-                    WHEN NULLIF(su.currency, '') IS NULL THEN
-                    CASE inferred.inferred_market
+                    WHEN NULLIF(currency, '') IS NULL THEN
+                    CASE {market_inference_expr}
                         WHEN 'HK' THEN 'HKD'
                         WHEN 'JP' THEN 'JPY'
                         WHEN 'TW' THEN 'TWD'
                         ELSE 'USD'
                     END
-                    WHEN su.currency = 'USD' AND inferred.inferred_market <> 'US' THEN
-                    CASE inferred.inferred_market
+                    WHEN currency = 'USD' AND {market_inference_expr} <> 'US' THEN
+                    CASE {market_inference_expr}
                         WHEN 'HK' THEN 'HKD'
                         WHEN 'JP' THEN 'JPY'
                         WHEN 'TW' THEN 'TWD'
                         ELSE 'USD'
                     END
-                    ELSE su.currency
+                    ELSE currency
                 END,
                 timezone = CASE
-                    WHEN NULLIF(su.timezone, '') IS NULL THEN
-                        CASE inferred.inferred_market
+                    WHEN NULLIF(timezone, '') IS NULL THEN
+                        CASE {market_inference_expr}
                             WHEN 'HK' THEN 'Asia/Hong_Kong'
                             WHEN 'JP' THEN 'Asia/Tokyo'
                             WHEN 'TW' THEN 'Asia/Taipei'
                             ELSE 'America/New_York'
                         END
-                    WHEN su.timezone = 'America/New_York' AND inferred.inferred_market <> 'US' THEN
-                        CASE inferred.inferred_market
+                    WHEN timezone = 'America/New_York' AND {market_inference_expr} <> 'US' THEN
+                        CASE {market_inference_expr}
                             WHEN 'HK' THEN 'Asia/Hong_Kong'
                             WHEN 'JP' THEN 'Asia/Tokyo'
                             WHEN 'TW' THEN 'Asia/Taipei'
                             ELSE 'America/New_York'
                         END
-                    ELSE su.timezone
+                    ELSE timezone
                 END,
                 local_code = COALESCE(
-                    NULLIF(su.local_code, ''),
+                    NULLIF(local_code, ''),
                     {local_code_from_symbol_expr}
                 )
-            FROM inferred
-            WHERE su.id = inferred.id
             """
         )
     )
