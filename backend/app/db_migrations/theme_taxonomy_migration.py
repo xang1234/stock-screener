@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..infra.db.portability import column_names, dialect_name, index_names
 
@@ -44,8 +45,13 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
         for column, statement in add_statements.items():
             if column in columns:
                 continue
-            conn.execute(text(statement))
-            stats["columns_added"].append(column)
+            try:
+                conn.execute(text(statement))
+                stats["columns_added"].append(column)
+            except SQLAlchemyError:
+                # Another process may have applied the same ALTER between check and execute.
+                if column not in column_names(conn, THEME_TABLE):
+                    raise
 
         if "taxonomy_level" in column_names(conn, THEME_TABLE):
             conn.execute(
