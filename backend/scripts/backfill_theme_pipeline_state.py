@@ -20,9 +20,12 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.database import SessionLocal
 from app.services.theme_pipeline_state_backfill_service import (  # noqa: E402
     ThemePipelineStateBackfillService,
+)
+from app.wiring.bootstrap import (  # noqa: E402
+    get_session_factory,
+    initialize_process_runtime_services,
 )
 
 
@@ -134,7 +137,8 @@ def main() -> None:
             print("Aborted.")
             return
 
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
     service = ThemePipelineStateBackfillService(db)
 
     cursor = start_cursor

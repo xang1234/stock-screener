@@ -22,8 +22,11 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.database import SessionLocal
 from app.services.theme_extraction_service import ThemeExtractionService
+from app.wiring.bootstrap import (
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 
 
 def main():
@@ -32,7 +35,8 @@ def main():
     parser.add_argument("--max-age-days", type=int, default=30, help="Max age of items to check (default: 30)")
     args = parser.parse_args()
 
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
 
     try:
         pipelines = ["technical", "fundamental"]

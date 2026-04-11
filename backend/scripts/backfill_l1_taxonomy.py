@@ -16,9 +16,9 @@ from datetime import datetime
 # Add backend directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.database import SessionLocal, engine
 from app.db_migrations.theme_taxonomy_migration import migrate_theme_taxonomy
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
+from app.wiring.bootstrap import get_session_factory, initialize_process_runtime_services
 
 
 def main():
@@ -34,17 +34,21 @@ def main():
     print(f"Time: {datetime.now().isoformat()}")
     print("=" * 60)
 
-    # Ensure taxonomy columns exist (migration normally runs on app startup,
-    # but this script bypasses FastAPI lifespan)
-    print("\n[Pre-flight] Ensuring taxonomy schema...")
-    migration_result = migrate_theme_taxonomy(engine)
-    if migration_result["columns_added"]:
-        print(f"  Added columns: {migration_result['columns_added']}")
-    else:
-        print("  Schema already up to date.")
-
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
     try:
+        # Ensure taxonomy columns exist (migration normally runs on app startup,
+        # but this script bypasses FastAPI lifespan)
+        print(
+            "\n[Pre-flight] Ensuring taxonomy schema..."
+            + (" (schema-only changes may still be applied in --dry-run)" if args.dry_run else "")
+        )
+        migration_result = migrate_theme_taxonomy(db.get_bind())
+        if migration_result["columns_added"]:
+            print(f"  Added columns: {migration_result['columns_added']}")
+        else:
+            print("  Schema already up to date.")
+
         service = ThemeTaxonomyService(db, pipeline=args.pipeline)
 
         # Phase 1-3: Full assignment pipeline
@@ -122,7 +126,7 @@ def main():
 
         print("\n" + "=" * 60)
         if args.dry_run:
-            print("DRY RUN complete. No changes made. Run without --dry-run to apply.")
+            print("DRY RUN complete. No assignment changes made (schema pre-flight may still apply).")
         else:
             print("BACKFILL COMPLETE.")
         print("=" * 60)
