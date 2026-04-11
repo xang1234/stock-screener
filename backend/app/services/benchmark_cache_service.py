@@ -23,6 +23,7 @@ from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
 from .benchmark_registry_service import benchmark_registry
+from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open
 
 logger = logging.getLogger(__name__)
 
@@ -492,6 +493,8 @@ class BenchmarkCacheService:
             except Exception:
                 expected = None
             if expected is None:
+                if normalized_market == "US":
+                    return self._is_us_data_fresh_without_exchange_calendars(last_date)
                 # Calendar fallback: avoid weekend/holiday false-stale by allowing data
                 # through the next business day when exchange calendar lookup is unavailable.
                 return self._is_data_fresh_without_calendar(last_date, max_age_hours=max_age_hours)
@@ -534,6 +537,17 @@ class BenchmarkCacheService:
             end=now_utc.date(),
         )
         return len(business_days_after_last) <= 1
+
+    @staticmethod
+    def _is_us_data_fresh_without_exchange_calendars(last_date: pd.Timestamp) -> bool:
+        """US-specific fallback that preserves NYSE holiday semantics via market_hours."""
+        eastern_now = get_eastern_now()
+        today = eastern_now.date()
+        if is_market_open(eastern_now):
+            expected = get_last_trading_day(today - timedelta(days=1))
+        else:
+            expected = get_last_trading_day(today)
+        return last_date.date() >= expected
 
     def invalidate_cache(self, period: str = None) -> None:
         """

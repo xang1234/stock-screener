@@ -2,6 +2,7 @@ import pandas as pd
 from datetime import datetime
 
 from app.services.benchmark_cache_service import BenchmarkCacheService
+import app.services.benchmark_cache_service as benchmark_cache_module
 
 
 def test_get_benchmark_symbol_supports_all_markets():
@@ -167,3 +168,23 @@ def test_is_data_fresh_fallback_allows_weekend_without_calendar(monkeypatch):
     )
 
     assert service._is_data_fresh(data, market="HK") is True
+
+
+def test_is_data_fresh_uses_us_market_hours_fallback_when_calendar_unavailable(monkeypatch):
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday
+    service._market_calendar.last_completed_trading_day = lambda market: (_ for _ in ()).throw(RuntimeError("no calendar"))  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_eastern_now",
+        lambda: datetime.fromisoformat("2026-04-13T10:00:00-04:00"),  # Monday, market open
+    )
+    monkeypatch.setattr(benchmark_cache_module, "is_market_open", lambda _dt=None: True)
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_last_trading_day",
+        lambda d=None: pd.Timestamp("2026-04-10").date(),
+    )
+
+    assert service._is_data_fresh(data, market="US") is True
