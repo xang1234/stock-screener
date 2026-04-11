@@ -17,6 +17,7 @@ from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
+from ..services.security_master_service import SecurityMasterResolver, security_master_resolver
 from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,11 @@ class DataPreparationLayer:
         self._retry_base_delay = retry_base_delay
         self._yfinance_service = get_yfinance_service()
         self._rate_limiter = get_rate_limiter()
+        self._security_master = security_master_resolver
+
+    def _resolve_identity(self, symbol: str):
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        return resolver.resolve_identity(symbol=symbol)
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -116,6 +122,8 @@ class DataPreparationLayer:
         Returns:
             StockData object with all fetched data
         """
+        identity = self._resolve_identity(symbol)
+        normalized_symbol = identity.normalized_symbol
         fetch_errors = {}
 
         # 1. Fetch price data (always needed)
@@ -124,25 +132,32 @@ class DataPreparationLayer:
         try:
             # Check cache first (no rate limiting)
             # Note: get_historical_data() handles Redis → DB fallback internally and ensures sufficient data
-            price_data = self.price_cache.get_historical_data(symbol, period=requirements.price_period)
+            price_data = self.price_cache.get_historical_data(
+                normalized_symbol,
+                period=requirements.price_period,
+            )
 
             if price_data is None or price_data.empty:
                 # Cache miss or insufficient - fetch directly
                 # (yfinance_service has its own rate limiter)
-                logger.debug(f"Cache MISS for {symbol} - fetching from yfinance")
+                logger.debug(f"Cache MISS for {normalized_symbol} - fetching from yfinance")
                 price_data = self._fetch_with_retry(
                     self._yfinance_service.get_historical_data,
-                    symbol,
+                    normalized_symbol,
                     period=requirements.price_period,
                     use_cache=False,  # Already checked cache
                 )
             else:
-                logger.debug(f"Cache HIT for {symbol} ({len(price_data)} days) - no rate limiting")
+                logger.debug(
+                    "Cache HIT for %s (%d days) - no rate limiting",
+                    normalized_symbol,
+                    len(price_data),
+                )
 
             if price_data is None or price_data.empty:
                 fetch_errors["price_data"] = "No price data returned"
         except Exception as e:
-            logger.error(f"Error fetching price data for {symbol}: {e}")
+            logger.error(f"Error fetching price data for {normalized_symbol}: {e}")
             fetch_errors["price_data"] = str(e)
 
         # 2. Fetch benchmark data (if needed)
@@ -166,13 +181,13 @@ class DataPreparationLayer:
                 # Use cache service instead of direct API call (no rate limiting needed - cache handles it)
                 fundamentals = self._fetch_with_retry(
                     self.fundamentals_cache.get_fundamentals,
-                    symbol,
+                    normalized_symbol,
                     force_refresh=False,  # Use cache by default
                 )
                 if fundamentals is None:
                     fetch_errors["fundamentals"] = "No fundamental data returned"
             except Exception as e:
-                logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
+                logger.warning(f"Error fetching fundamentals for {normalized_symbol}: {e}")
                 fetch_errors["fundamentals"] = str(e)
 
         # 4. Extract quarterly growth from fundamentals (consolidated cache)
@@ -193,17 +208,22 @@ class DataPreparationLayer:
 
         # Create StockData container
         stock_data = StockData(
-            symbol=symbol,
+            symbol=normalized_symbol,
             price_data=price_data if price_data is not None else pd.DataFrame(),
             benchmark_data=benchmark_data if benchmark_data is not None else pd.DataFrame(),
             fundamentals=fundamentals,
             quarterly_growth=quarterly_growth,
             earnings_history=earnings_history,
+            market=identity.market,
+            exchange=identity.exchange,
+            currency=identity.currency,
+            timezone=identity.timezone,
+            local_code=identity.local_code,
             fetch_errors=fetch_errors
         )
 
         if not allow_partial and fetch_errors:
-            raise DataFetchError(symbol, fetch_errors, partial_data=stock_data)
+            raise DataFetchError(normalized_symbol, fetch_errors, partial_data=stock_data)
 
         return stock_data
 
@@ -238,15 +258,27 @@ class DataPreparationLayer:
             return {}
 
         logger.info(f"Preparing data for {len(symbols)} symbols using bulk cache operations")
+        identities = [self._resolve_identity(symbol) for symbol in symbols]
+        normalized_symbols = [identity.normalized_symbol for identity in identities]
+        identity_by_symbol = {
+            identity.normalized_symbol: identity for identity in identities
+        }
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
         # Instead of N individual Redis calls, make 2 pipeline calls (1 per cache type)
         # Get cached data for all symbols in parallel
         # Price data is always needed (no needs_price_data flag)
         # IMPORTANT: Pass period so get_many() can fall back to database if Redis only has 30 days
-        cached_prices = self.price_cache.get_many(symbols, period=requirements.price_period)
+        cached_prices = self.price_cache.get_many(
+            normalized_symbols,
+            period=requirements.price_period,
+        )
         # Fundamentals cache now includes quarterly growth data (consolidated)
-        cached_fundamentals = self.fundamentals_cache.get_many(symbols) if requirements.needs_fundamentals else {}
+        cached_fundamentals = (
+            self.fundamentals_cache.get_many(normalized_symbols)
+            if requirements.needs_fundamentals
+            else {}
+        )
 
         # Get benchmark data once (shared by all stocks)
         benchmark_data = None
@@ -263,8 +295,9 @@ class DataPreparationLayer:
 
         # Build StockData for each symbol
         results = {}
-        for symbol in symbols:
+        for symbol in normalized_symbols:
             fetch_errors = {}
+            identity = identity_by_symbol[symbol]
 
             # Get price data (from cache or fetch)
             # Note: get_many() already handles sufficiency checks and database fallback
@@ -333,6 +366,11 @@ class DataPreparationLayer:
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,
+                market=identity.market,
+                exchange=identity.exchange,
+                currency=identity.currency,
+                timezone=identity.timezone,
+                local_code=identity.local_code,
                 fetch_errors=fetch_errors
             )
 

@@ -754,3 +754,21 @@ def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required
 
     assert result == enriched
     assert fetch_calls == ["AAPL"]
+
+
+def test_deserialize_universe_row_infers_hk_from_xhkg_exchange():
+    row = ProviderSnapshotService._deserialize_universe_row(
+        {
+            "symbol": "0700",
+            "exchange": "XHKG",
+            "market": "",
+            "currency": None,
+            "timezone": None,
+            "local_code": None,
+        }
+    )
+
+    assert row["market"] == "HK"
+    assert row["currency"] == "HKD"
+    assert row["timezone"] == "Asia/Hong_Kong"
+    assert row["local_code"] == "0700"

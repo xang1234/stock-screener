@@ -22,6 +22,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from .security_master_service import security_master_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,14 @@ class StockUniverseService:
 
     def __init__(self):
         """Initialize stock universe service."""
-        pass
+        self._security_master = security_master_resolver
+
+    def _resolved_identity(self, stock_data: Dict[str, Any]):
+        return self._security_master.resolve_identity(
+            symbol=stock_data.get("symbol", ""),
+            market=stock_data.get("market"),
+            exchange=stock_data.get("exchange"),
+        )
 
     @staticmethod
     def _normalize_status(record: StockUniverse) -> str:
@@ -322,11 +330,16 @@ class StockUniverseService:
 
             for stock_data in stocks:
                 symbol = stock_data["symbol"]
+                identity = self._resolved_identity(stock_data)
                 existing = stock_map.get(symbol)
 
                 if existing:
                     existing.name = stock_data["name"] or existing.name
-                    existing.exchange = stock_data["exchange"] or existing.exchange
+                    existing.exchange = identity.exchange or existing.exchange
+                    existing.market = identity.market
+                    existing.currency = identity.currency
+                    existing.timezone = identity.timezone
+                    existing.local_code = identity.local_code or existing.local_code
                     existing.sector = stock_data["sector"] or existing.sector
                     existing.industry = stock_data["industry"] or existing.industry
                     existing.market_cap = stock_data["market_cap"] or existing.market_cap
@@ -346,7 +359,11 @@ class StockUniverseService:
                     new_stock = StockUniverse(
                         symbol=symbol,
                         name=stock_data["name"],
-                        exchange=stock_data["exchange"],
+                        market=identity.market,
+                        exchange=identity.exchange,
+                        currency=identity.currency,
+                        timezone=identity.timezone,
+                        local_code=identity.local_code,
                         sector=stock_data["sector"],
                         industry=stock_data["industry"],
                         market_cap=stock_data["market_cap"],
@@ -464,12 +481,17 @@ class StockUniverseService:
 
             for stock_data in stocks:
                 symbol = stock_data["symbol"]
+                identity = self._resolved_identity(stock_data)
                 existing = existing_stocks.get(symbol)
                 if existing is None:
                     new_stock = StockUniverse(
                         symbol=symbol,
                         name=stock_data["name"],
-                        exchange=stock_data["exchange"],
+                        market=identity.market,
+                        exchange=identity.exchange,
+                        currency=identity.currency,
+                        timezone=identity.timezone,
+                        local_code=identity.local_code,
                         sector=stock_data["sector"],
                         industry=stock_data["industry"],
                         market_cap=stock_data["market_cap"],
@@ -496,7 +518,11 @@ class StockUniverseService:
                     continue
 
                 existing.name = stock_data["name"] or existing.name
-                existing.exchange = stock_data["exchange"] or existing.exchange
+                existing.exchange = identity.exchange or existing.exchange
+                existing.market = identity.market
+                existing.currency = identity.currency
+                existing.timezone = identity.timezone
+                existing.local_code = identity.local_code or existing.local_code
                 existing.sector = stock_data["sector"] or existing.sector
                 existing.industry = stock_data["industry"] or existing.industry
                 existing.market_cap = stock_data["market_cap"]

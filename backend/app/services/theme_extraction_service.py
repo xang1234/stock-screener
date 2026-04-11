@@ -33,6 +33,7 @@ from ..models.app_settings import AppSetting
 from .errors import ProviderQuotaServiceError, ProviderRateLimitServiceError
 from .llm import LLMService, LLMError, LLMQuotaExceededError, LLMRateLimitError
 from .llm.config import is_model_supported_for_use_case
+from .security_master_service import SecurityMasterResolver, security_master_resolver
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from .theme_lifecycle_service import set_initial_lifecycle_defaults
@@ -241,10 +242,11 @@ class ThemeExtractionService:
         self.theme_policy_overrides = self._load_theme_policy_overrides()
 
         # Known ticker patterns for validation
-        self.ticker_pattern = re.compile(r'^[A-Z]{1,5}$')
+        self.ticker_pattern = re.compile(r"^[A-Z0-9][A-Z0-9\.\-]{0,11}$")
 
         # Cache of valid tickers (loaded from universe)
         self._valid_tickers: Optional[set] = None
+        self._security_master = security_master_resolver
 
         # Rate limiting
         self._last_request_time = 0
@@ -340,7 +342,12 @@ class ThemeExtractionService:
             tickers = self.db.query(StockUniverse.symbol).filter(
                 StockUniverse.active_filter()
             ).all()
-            self._valid_tickers = {t[0] for t in tickers}
+            resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+            self._valid_tickers = {
+                resolver.normalize_symbol(t[0])
+                for t in tickers
+                if t[0]
+            }
         return self._valid_tickers
 
     def _get_company_name_ticker_map(self) -> list[tuple[str, str]]:
@@ -421,22 +428,25 @@ class ThemeExtractionService:
 
     def _validate_ticker(self, ticker: str) -> bool:
         """Check if ticker is valid"""
-        if not self.ticker_pattern.match(ticker):
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        normalized_ticker = resolver.normalize_symbol(ticker)
+        if not self.ticker_pattern.match(normalized_ticker):
             return False
 
         valid_tickers = self._get_valid_tickers()
         if not valid_tickers:
             return False
-        if ticker not in valid_tickers:
+        if normalized_ticker not in valid_tickers:
             return False
 
         return True
 
     def _clean_tickers(self, tickers: list) -> list:
         """Filter and clean ticker list"""
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
         cleaned = []
         for t in tickers:
-            t = t.upper().strip()
+            t = resolver.normalize_symbol(str(t))
             # Remove common false positives
             if t in self.TICKER_FALSE_POSITIVES:
                 continue

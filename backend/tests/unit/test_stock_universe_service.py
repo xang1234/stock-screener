@@ -101,3 +101,24 @@ def test_get_active_symbols_market_filter_falls_back_to_exchange_when_market_bla
 
     assert symbols == ["AAPL", "IBM"]
     db.close()
+
+
+def test_populate_from_csv_sets_market_identity_fields_from_resolver():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "0700.HK,Tencent,SEHK,Technology,Internet,500B",
+        ]
+    )
+    stats = stock_universe_service.populate_from_csv(db, csv_content)
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "0700.HK").one()
+    assert stats["added"] == 1
+    assert row.market == "HK"
+    assert row.currency == "HKD"
+    assert row.timezone == "Asia/Hong_Kong"
+    assert row.local_code == "0700"
+    db.close()
