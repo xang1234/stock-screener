@@ -798,7 +798,11 @@ class ProviderSnapshotService:
         return {
             "symbol": row.symbol,
             "name": row.name,
+            "market": row.market,
             "exchange": row.exchange,
+            "currency": row.currency,
+            "timezone": row.timezone,
+            "local_code": row.local_code,
             "sector": row.sector,
             "industry": row.industry,
             "market_cap": row.market_cap,
@@ -822,7 +826,11 @@ class ProviderSnapshotService:
         return {
             "symbol": row["symbol"],
             "name": row.get("name"),
+            "market": row.get("market", "US"),
             "exchange": row.get("exchange"),
+            "currency": row.get("currency", "USD"),
+            "timezone": row.get("timezone", "America/New_York"),
+            "local_code": row.get("local_code"),
             "sector": row.get("sector"),
             "industry": row.get("industry"),
             "market_cap": row.get("market_cap"),
