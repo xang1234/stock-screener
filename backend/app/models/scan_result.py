@@ -26,6 +26,7 @@ class Scan(Base):
     # Structured universe fields (populated by UniverseDefinition)
     universe_key = Column(String(128), index=True)       # Canonical key for retention grouping
     universe_type = Column(String(20), index=True)       # UniverseType enum value
+    universe_market = Column(String(8), nullable=True, index=True)      # For market-scoped scans
     universe_exchange = Column(String(20), nullable=True, index=True)  # For exchange-scoped scans
     universe_index = Column(String(20), nullable=True, index=True)     # For index-scoped scans
     universe_symbols = Column(JSON, nullable=True)       # Symbol list for custom/test
@@ -78,6 +79,7 @@ class Scan(Base):
         from ..schemas.universe import (
             Exchange,
             IndexName,
+            Market,
             UniverseDefinition,
             UniverseType,
         )
@@ -96,8 +98,18 @@ class Scan(Base):
                 )
                 return UniverseDefinition(type=UniverseType.ALL)
 
+        resolved_market = self.universe_market
+        if (
+            resolved_market is None
+            and self.universe_type == UniverseType.MARKET.value
+            and isinstance(self.universe_key, str)
+            and self.universe_key.lower().startswith("market:")
+        ):
+            resolved_market = self.universe_key.split(":", 1)[1].upper()
+
         return UniverseDefinition(
             type=UniverseType(self.universe_type),
+            market=Market(resolved_market) if resolved_market else None,
             exchange=Exchange(self.universe_exchange) if self.universe_exchange else None,
             index=IndexName(self.universe_index) if self.universe_index else None,
             symbols=self.universe_symbols,

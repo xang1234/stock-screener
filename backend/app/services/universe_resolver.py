@@ -67,17 +67,30 @@ def resolve_symbols(
 
     if t == UniverseType.ALL:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=None, sp500_only=False, limit=limit
+            db, market=None, exchange=None, sp500_only=False, limit=limit
+        )
+
+    elif t == UniverseType.MARKET:
+        return get_stock_universe_service().get_active_symbols(
+            db,
+            market=universe_def.market.value,
+            exchange=None,
+            sp500_only=False,
+            limit=limit,
         )
 
     elif t == UniverseType.EXCHANGE:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=universe_def.exchange.value, sp500_only=False, limit=limit
+            db,
+            market=None,
+            exchange=universe_def.exchange.value,
+            sp500_only=False,
+            limit=limit,
         )
 
     elif t == UniverseType.INDEX:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=None, sp500_only=True, limit=limit
+            db, market=None, exchange=None, sp500_only=True, limit=limit
         )
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):

@@ -43,6 +43,7 @@ class CreateScanCommand:
     universe_label: str
     universe_key: str
     universe_type: str
+    universe_market: str | None = None
     universe_exchange: str | None = None
     universe_index: str | None = None
     universe_symbols: list[str] | None = None
@@ -146,6 +147,7 @@ class CreateScanUseCase:
                 universe=cmd.universe_label,
                 universe_key=cmd.universe_key,
                 universe_type=cmd.universe_type,
+                universe_market=cmd.universe_market,
                 universe_exchange=cmd.universe_exchange,
                 universe_index=cmd.universe_index,
                 universe_symbols=cmd.universe_symbols,

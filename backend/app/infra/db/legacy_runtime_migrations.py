@@ -40,6 +40,7 @@ _SCANS_TABLE = "scans"
 _SCANS_REQUIRED_COLUMNS = {
     "universe_key",
     "universe_type",
+    "universe_market",
     "universe_exchange",
     "universe_index",
     "universe_symbols",
@@ -54,6 +55,7 @@ def _index(*columns: str, unique: bool = False) -> IndexRequirement:
 _SCANS_REQUIRED_INDEXES = {
     _index("universe_key"),
     _index("universe_type"),
+    _index("universe_market"),
     _index("universe_exchange"),
     _index("universe_index"),
 }

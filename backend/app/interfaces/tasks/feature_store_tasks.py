@@ -252,6 +252,9 @@ def _create_auto_scan_for_published_run(
                 universe=universe_def.label(),
                 universe_key=universe_def.key(),
                 universe_type=universe_def.type.value,
+                universe_market=(
+                    universe_def.market.value if getattr(universe_def, "market", None) else None
+                ),
                 universe_exchange=(
                     universe_def.exchange.value if universe_def.exchange else None
                 ),

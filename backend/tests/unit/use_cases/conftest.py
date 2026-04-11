@@ -79,6 +79,7 @@ class FakeScan:
     universe: str | None = None
     universe_key: str | None = None
     universe_type: str | None = None
+    universe_market: str | None = None
     universe_exchange: str | None = None
     universe_index: str | None = None
     universe_symbols: list[str] | None = None

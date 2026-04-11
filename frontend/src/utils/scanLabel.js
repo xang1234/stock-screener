@@ -6,6 +6,8 @@ const formatUniverseLabel = (scan) => {
     switch (scan.universe_type) {
       case 'all':
         return 'All';
+      case 'market':
+        return scan.universe_market || 'Market';
       case 'exchange':
         return scan.universe_exchange || 'Exchange';
       case 'index':

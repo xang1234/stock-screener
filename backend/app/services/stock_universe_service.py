@@ -610,6 +610,7 @@ class StockUniverseService:
     def get_active_symbols(
         self,
         db: Session,
+        market: Optional[str] = None,
         exchange: Optional[str] = None,
         sector: Optional[str] = None,
         min_market_cap: Optional[float] = None,
@@ -621,6 +622,7 @@ class StockUniverseService:
 
         Args:
             db: Database session
+            market: Optional market filter (US, HK, JP, TW)
             exchange: Optional exchange filter (NYSE, NASDAQ, AMEX)
             sector: Optional sector filter
             min_market_cap: Optional minimum market cap filter
@@ -637,6 +639,9 @@ class StockUniverseService:
 
             if sp500_only:
                 query = query.filter(StockUniverse.is_sp500 == True)
+
+            if market:
+                query = query.filter(StockUniverse.market == market.upper())
 
             if exchange:
                 query = query.filter(StockUniverse.exchange == exchange.upper())
@@ -655,7 +660,14 @@ class StockUniverseService:
 
             symbols = [row[0] for row in query.all()]
 
-            logger.info(f"Retrieved {len(symbols)} active symbols (exchange={exchange}, sector={sector}, sp500_only={sp500_only})")
+            logger.info(
+                "Retrieved %d active symbols (market=%s, exchange=%s, sector=%s, sp500_only=%s)",
+                len(symbols),
+                market,
+                exchange,
+                sector,
+                sp500_only,
+            )
             return symbols
 
         except Exception as e:

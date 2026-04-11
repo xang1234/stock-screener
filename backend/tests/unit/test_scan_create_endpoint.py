@@ -80,6 +80,7 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
     }
     assert fake_use_case.received_uow is fake_uow
     assert fake_use_case.received_cmd.universe_type == "all"
+    assert fake_use_case.received_cmd.universe_market is None
     assert mock_publish.call_count == 2
     assert mock_publish.call_args_list[0].args == ("scan-123",)
     assert mock_publish.call_args_list[1].args == ()
@@ -119,4 +120,35 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
         "feature_run_id": None,
     }
     assert fake_use_case.received_uow is fake_uow
+    assert fake_use_case.received_cmd.universe_market is None
     assert mock_publish.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_create_scan_accepts_market_universe_def(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-market",
+            status="queued",
+            total_stocks=1200,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe_def": {"type": "market", "market": "HK"}},
+        )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert fake_use_case.received_cmd.universe_type == "market"
+    assert fake_use_case.received_cmd.universe_market == "HK"
+    assert fake_use_case.received_cmd.universe_key == "market:HK"

@@ -89,6 +89,7 @@ def test_universe_migration_ensures_indexes_for_partially_migrated_scans_schema(
                     universe TEXT,
                     universe_key TEXT,
                     universe_type TEXT,
+                    universe_market TEXT,
                     universe_exchange TEXT,
                     universe_index TEXT,
                     universe_symbols TEXT
@@ -109,6 +110,7 @@ def test_universe_migration_ensures_indexes_for_partially_migrated_scans_schema(
     assert {
         "idx_scans_universe_key",
         "idx_scans_universe_type",
+        "idx_scans_universe_market",
         "idx_scans_universe_exchange",
         "idx_scans_universe_index",
     }.issubset(indexes)
@@ -127,6 +129,7 @@ def test_universe_index_ensure_reuses_equivalent_existing_indexes():
                     universe TEXT,
                     universe_key TEXT,
                     universe_type TEXT,
+                    universe_market TEXT,
                     universe_exchange TEXT,
                     universe_index TEXT,
                     universe_symbols TEXT
@@ -136,6 +139,7 @@ def test_universe_index_ensure_reuses_equivalent_existing_indexes():
         )
         conn.execute(text("CREATE INDEX custom_key_idx ON scans(universe_key)"))
         conn.execute(text("CREATE INDEX custom_type_idx ON scans(universe_type)"))
+        conn.execute(text("CREATE INDEX custom_market_idx ON scans(universe_market)"))
         conn.execute(text("CREATE INDEX custom_exchange_idx ON scans(universe_exchange)"))
         conn.execute(text("CREATE INDEX custom_index_idx ON scans(universe_index)"))
 
@@ -151,6 +155,7 @@ def test_universe_index_ensure_reuses_equivalent_existing_indexes():
     assert created == 0
     assert "idx_scans_universe_key" not in indexes
     assert "idx_scans_universe_type" not in indexes
+    assert "idx_scans_universe_market" not in indexes
     assert "idx_scans_universe_exchange" not in indexes
     assert "idx_scans_universe_index" not in indexes
     engine.dispose()
