@@ -308,6 +308,44 @@ def test_ui_snapshot_publish_coerces_nested_dates_to_json_safe_strings():
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
 
 
+def test_ui_snapshot_publish_coerces_non_finite_numbers_to_null():
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        snapshot = service._publish(  # noqa: SLF001 - persistence semantics
+            db=db,
+            view_key="test_view",
+            variant_key="default",
+            source_revision="rev-non-finite",
+            payload={
+                "ratio_5day": float("nan"),
+                "ratio_10day": float("inf"),
+                "nested": {
+                    "value": float("-inf"),
+                    "ok": 1.25,
+                },
+                "series": [1.0, float("nan"), 2.0],
+            },
+        )
+        row = db.query(UIViewSnapshot).filter(
+            UIViewSnapshot.view_key == "test_view",
+            UIViewSnapshot.variant_key == "default",
+            UIViewSnapshot.source_revision == "rev-non-finite",
+        ).one()
+
+    assert snapshot.payload["ratio_5day"] is None
+    assert snapshot.payload["ratio_10day"] is None
+    assert snapshot.payload["nested"]["value"] is None
+    assert snapshot.payload["nested"]["ok"] == 1.25
+    assert snapshot.payload["series"] == [1.0, None, 2.0]
+    assert row.payload_json["ratio_5day"] is None
+    assert row.payload_json["nested"]["value"] is None
+    assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
+
+
 def test_ui_snapshot_service_resets_corrupt_cache_tables_and_retries():
     engine = create_engine("sqlite:///:memory:")
     Session = sessionmaker(bind=engine)
