@@ -11,22 +11,17 @@ from typing import Any, Optional, Callable
 from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
-from zoneinfo import ZoneInfo
 
 try:
     import redis  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
-try:
-    import exchange_calendars as xcals  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - optional dependency in some envs
-    xcals = None  # type: ignore
 
 from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
-from ..utils.market_hours import get_eastern_now, is_trading_day, is_market_open, get_last_trading_day
+from .market_calendar_service import MarketCalendarService
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +52,6 @@ class BenchmarkCacheService:
         "JP": "^N225",
         "TW": "^TWII",
     }
-    CALENDAR_ID_BY_MARKET: dict[str, str] = {
-        "US": "XNYS",
-        "HK": "XHKG",
-        "JP": "XTKS",
-        "TW": "XTAI",
-    }
-    TIMEZONE_BY_MARKET: dict[str, str] = {
-        "US": "America/New_York",
-        "HK": "Asia/Hong_Kong",
-        "JP": "Asia/Tokyo",
-        "TW": "Asia/Taipei",
-    }
-
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
@@ -88,6 +70,7 @@ class BenchmarkCacheService:
                 logger.warning("Redis connection failed. Will use database fallback.")
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
+        self._market_calendar = MarketCalendarService()
 
     def _normalize_market(self, market: str | None) -> str:
         normalized = (market or "US").strip().upper()
@@ -166,7 +149,11 @@ class BenchmarkCacheService:
             return cached_data
 
         # Try database cache as fallback
-        cached_data = self._get_from_database(benchmark_symbol=benchmark_symbol, period=period)
+        cached_data = self._get_from_database(
+            benchmark_symbol=benchmark_symbol,
+            period=period,
+            market=normalized_market,
+        )
         if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
             logger.info("Cache HIT for %s benchmark %s (%s) (Database)", normalized_market, benchmark_symbol, period)
             # Store in Redis for next time
@@ -201,13 +188,21 @@ class BenchmarkCacheService:
             logger.warning(f"Error reading from Redis: {e}")
             return None
 
-    def _get_from_database(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+    def _get_from_database(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str = "US",
+    ) -> Optional[pd.DataFrame]:
         """Get cached benchmark data from database."""
         db = self._session_factory()
 
         try:
             # Calculate date range
-            end_date = get_eastern_now().date()
+            try:
+                end_date = self._market_calendar.market_now(market).date()
+            except Exception:
+                end_date = datetime.utcnow().date()
 
             if period == "2y":
                 start_date = end_date - timedelta(days=730)  # ~2 years
@@ -249,12 +244,30 @@ class BenchmarkCacheService:
         finally:
             db.close()
 
+    def _fetch_from_yfinance(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Fetch benchmark data from yfinance."""
+        # Import here to avoid circular dependency
+        from .yfinance_service import YFinanceService
+
+        yfinance_service = YFinanceService()
+        return yfinance_service.get_historical_data(benchmark_symbol, period=period)
+
     def _fetch_and_cache_benchmark(self, benchmark_symbol: str, market: str, period: str) -> Optional[pd.DataFrame]:
         """
         Fetch benchmark from yfinance and cache it.
 
         Uses distributed lock to prevent multiple workers from fetching simultaneously.
         """
+        # No Redis means no distributed coordination is possible; fetch directly
+        # and persist to DB so subsequent calls can still hit local cache.
+        if not self._redis_client:
+            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
+            if benchmark_data is None or benchmark_data.empty:
+                logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+                return None
+            self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
+            return benchmark_data
+
         lock_key = self._redis_lock_key(benchmark_symbol, period)
         # Try to acquire lock
         lock_acquired = False
@@ -278,11 +291,7 @@ class BenchmarkCacheService:
             # We have the lock - fetch from yfinance
             logger.info("Fetching benchmark %s for market %s (%s) from yfinance", benchmark_symbol, market, period)
 
-            # Import here to avoid circular dependency
-            from .yfinance_service import YFinanceService
-
-            yfinance_service = YFinanceService()
-            benchmark_data = yfinance_service.get_historical_data(benchmark_symbol, period=period)
+            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
 
             if benchmark_data is None or benchmark_data.empty:
                 logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
@@ -333,9 +342,12 @@ class BenchmarkCacheService:
 
         # Timeout - fetch directly as fallback
         logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
-        from .yfinance_service import YFinanceService
-        yfinance_service = YFinanceService()
-        return yfinance_service.get_historical_data(benchmark_symbol, period=period)
+        benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
+        if benchmark_data is not None and not benchmark_data.empty:
+            # Persist fallback fetch so future calls can use DB cache even when
+            # lock-holder failed to populate Redis.
+            self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
+        return benchmark_data
 
     def _store_in_redis(self, benchmark_symbol: str, period: str, data: pd.DataFrame) -> None:
         """Store benchmark data in Redis."""
@@ -440,7 +452,11 @@ class BenchmarkCacheService:
                 last_date = pd.Timestamp(last_date)
 
             normalized_market = self._normalize_market(market)
-            expected = self._expected_trading_date(normalized_market)
+            expected = None
+            try:
+                expected = self._market_calendar.last_completed_trading_day(normalized_market)
+            except Exception:
+                expected = None
             if expected is None:
                 # Fallback freshness check when expected trading date cannot be computed.
                 latest_allowed = pd.Timestamp.utcnow() - pd.Timedelta(hours=max_age_hours)
@@ -464,41 +480,6 @@ class BenchmarkCacheService:
         except Exception as e:
             logger.warning(f"Error checking data freshness: {e}")
             return False
-
-    def _expected_trading_date(self, market: str):
-        if market == "US":
-            now_et = get_eastern_now()
-            today = now_et.date()
-            if is_trading_day(today) and not is_market_open(now_et) and now_et.hour >= 17:
-                return today
-            return get_last_trading_day(today - timedelta(days=1))
-
-        if xcals is None:
-            return None
-
-        calendar_id = self.CALENDAR_ID_BY_MARKET.get(market)
-        timezone_name = self.TIMEZONE_BY_MARKET.get(market)
-        if not calendar_id or not timezone_name:
-            return None
-
-        calendar = xcals.get_calendar(calendar_id)
-        now_local = datetime.now(ZoneInfo(timezone_name))
-        current_session = pd.Timestamp(now_local.date())
-        if not calendar.is_session(current_session):
-            return calendar.previous_session(current_session).date()
-
-        # Daily bars are reliably available after local close + 1 hour buffer.
-        schedule = calendar.schedule.loc[current_session:current_session]
-        if schedule.empty:
-            return None
-
-        market_close = schedule.iloc[0]["market_close"]
-        if market_close.tzinfo is None:
-            market_close = market_close.tz_localize("UTC")
-        close_with_buffer = market_close.tz_convert(ZoneInfo(timezone_name)).to_pydatetime() + timedelta(hours=1)
-        if now_local >= close_with_buffer:
-            return current_session.date()
-        return calendar.previous_session(current_session).date()
 
     def invalidate_cache(self, period: str = None) -> None:
         """

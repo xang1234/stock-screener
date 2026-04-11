@@ -1,3 +1,5 @@
+import pandas as pd
+
 from app.services.benchmark_cache_service import BenchmarkCacheService
 
 
@@ -36,3 +38,30 @@ def test_market_scoped_redis_keys_are_deterministic():
 
     assert data_key == "benchmark:^N225:2y"
     assert lock_key == "benchmark:^N225:2y:lock"
+
+
+def test_fetch_and_cache_benchmark_without_redis_fetches_directly_and_persists():
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    service._redis_client = None
+
+    calls = {"wait": 0, "store_db": 0}
+    data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))
+
+    def fail_if_wait(*args, **kwargs):
+        calls["wait"] += 1
+        raise AssertionError("wait path must not run when redis is unavailable")
+
+    def fake_store_db(*, benchmark_symbol, data):
+        calls["store_db"] += 1
+        assert benchmark_symbol == "^HSI"
+        assert not data.empty
+
+    service._wait_for_cache = fail_if_wait  # type: ignore[assignment]
+    service._store_in_database = fake_store_db  # type: ignore[assignment]
+    service._fetch_from_yfinance = lambda benchmark_symbol, period: data  # type: ignore[assignment]
+
+    result = service._fetch_and_cache_benchmark("^HSI", "HK", "2y")
+
+    assert result is data
+    assert calls["wait"] == 0
+    assert calls["store_db"] == 1
