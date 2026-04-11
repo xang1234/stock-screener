@@ -39,7 +39,10 @@ def main():
     try:
         # Ensure taxonomy columns exist (migration normally runs on app startup,
         # but this script bypasses FastAPI lifespan)
-        print("\n[Pre-flight] Ensuring taxonomy schema...")
+        print(
+            "\n[Pre-flight] Ensuring taxonomy schema..."
+            + (" (schema-only changes may still be applied in --dry-run)" if args.dry_run else "")
+        )
         migration_result = migrate_theme_taxonomy(db.get_bind())
         if migration_result["columns_added"]:
             print(f"  Added columns: {migration_result['columns_added']}")
@@ -123,7 +126,7 @@ def main():
 
         print("\n" + "=" * 60)
         if args.dry_run:
-            print("DRY RUN complete. No changes made. Run without --dry-run to apply.")
+            print("DRY RUN complete. No assignment changes made (schema pre-flight may still apply).")
         else:
             print("BACKFILL COMPLETE.")
         print("=" * 60)

@@ -56,7 +56,8 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
                         WHEN is_l1 = {true_literal} THEN 1
                         ELSE 2
                     END
-                    WHERE taxonomy_level IS NULL
+                    WHERE (is_l1 = {true_literal} AND taxonomy_level != 1)
+                       OR (is_l1 != {true_literal} AND taxonomy_level != 2)
                     """
                 )
             )
