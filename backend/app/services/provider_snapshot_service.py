@@ -826,7 +826,11 @@ class ProviderSnapshotService:
         return {
             "symbol": row.symbol,
             "name": row.name,
+            "market": row.market,
             "exchange": row.exchange,
+            "currency": row.currency,
+            "timezone": row.timezone,
+            "local_code": row.local_code,
             "sector": row.sector,
             "industry": row.industry,
             "market_cap": row.market_cap,
@@ -847,10 +851,48 @@ class ProviderSnapshotService:
 
     @staticmethod
     def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        raw_market = str(row.get("market") or "").strip().upper()
+        if raw_market:
+            market = raw_market
+        else:
+            exchange = str(row.get("exchange") or "").strip().upper()
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if exchange in {"HKEX", "SEHK"} or symbol.endswith(".HK"):
+                market = "HK"
+            elif exchange in {"TSE", "JPX", "XTKS"} or symbol.endswith(".T"):
+                market = "JP"
+            elif exchange in {"TWSE", "TPEX", "XTAI"} or symbol.endswith(".TW") or symbol.endswith(".TWO"):
+                market = "TW"
+            else:
+                market = "US"
+        market_defaults = {
+            "HK": ("HKD", "Asia/Hong_Kong"),
+            "JP": ("JPY", "Asia/Tokyo"),
+            "TW": ("TWD", "Asia/Taipei"),
+        }
+        default_currency, default_timezone = market_defaults.get(
+            market, ("USD", "America/New_York")
+        )
+        raw_local_code = row.get("local_code")
+        if raw_local_code:
+            local_code = str(raw_local_code).strip()
+        else:
+            local_code = None
+        if not local_code:
+            symbol = str(row.get("symbol") or "").strip()
+            if market != "US" and "." in symbol:
+                local_code = symbol.split(".", 1)[0]
+            elif symbol:
+                local_code = symbol
+
         return {
             "symbol": row["symbol"],
             "name": row.get("name"),
+            "market": market,
             "exchange": row.get("exchange"),
+            "currency": row.get("currency") or default_currency,
+            "timezone": row.get("timezone") or default_timezone,
+            "local_code": local_code,
             "sector": row.get("sector"),
             "industry": row.get("industry"),
             "market_cap": row.get("market_cap"),

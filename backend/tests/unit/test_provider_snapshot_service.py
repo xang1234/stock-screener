@@ -454,13 +454,31 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         [
             StockUniverse(
                 symbol="AAPL",
+                market="US",
                 exchange="NASDAQ",
+                currency="USD",
+                timezone="America/New_York",
+                local_code="AAPL",
                 is_active=True,
                 status=UNIVERSE_STATUS_ACTIVE,
                 status_reason="active",
                 sector="Technology",
                 industry="Software",
                 market_cap=123.0,
+            ),
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="HKEX",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+                sector="Technology",
+                industry="Internet Content & Information",
+                market_cap=456.0,
             ),
             StockUniverse(
                 symbol="OLD",
@@ -532,13 +550,26 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         payload = json.load(fh)
 
     assert export_stats["rows"] == 1
-    assert export_stats["universe_rows"] == 1
+    assert export_stats["universe_rows"] == 2
     assert payload["schema_version"] == ProviderSnapshotService.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
     assert len(payload["snapshot"]["rows"]) == 1
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["ipo_date"] == "2020-01-02"
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["description_yfinance"] == "Long summary"
-    assert len(payload["universe"]) == 1
-    assert payload["universe"][0]["symbol"] == "AAPL"
+    assert len(payload["universe"]) == 2
+    hk_row = next(row for row in payload["universe"] if row["symbol"] == "0700.HK")
+    assert hk_row["market"] == "HK"
+    assert hk_row["currency"] == "HKD"
+    assert hk_row["timezone"] == "Asia/Hong_Kong"
+    assert hk_row["local_code"] == "0700"
+
+    # Simulate legacy bundle row with market absent and currency/timezone missing.
+    hk_row.pop("market", None)
+    hk_row["exchange"] = " sehk "
+    hk_row.pop("currency", None)
+    hk_row.pop("timezone", None)
+    hk_row.pop("local_code", None)
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True, default=str)
 
     manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert manifest["bundle_asset_name"] == bundle_path.name
@@ -575,13 +606,20 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     imported_run = service.get_published_run(db)
     imported_row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == imported_run.id).one()
     imported_payload = json.loads(imported_row.normalized_payload_json)
-    imported_symbols = [row.symbol for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()]
+    imported_universe_rows = db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    imported_symbols = [row.symbol for row in imported_universe_rows]
+    imported_hk_row = next(row for row in imported_universe_rows if row.symbol == "0700.HK")
 
     assert import_stats["rows"] == 1
-    assert import_stats["universe_rows"] == 1
+    assert import_stats["universe_rows"] == 2
     assert imported_run.source_revision == "fundamentals_v1:20260402081000"
     assert imported_payload["ipo_date"] == "2020-01-02"
-    assert imported_symbols == ["AAPL"]
+    assert imported_symbols == ["0700.HK", "AAPL"]
+    assert imported_hk_row.market == "HK"
+    # Missing bundle values should hydrate from market-aware defaults.
+    assert imported_hk_row.currency == "HKD"
+    assert imported_hk_row.timezone == "Asia/Hong_Kong"
+    assert imported_hk_row.local_code == "0700"
     assert db.query(ProviderSnapshotRun).filter(
         ProviderSnapshotRun.snapshot_key == ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS
     ).count() == 1
