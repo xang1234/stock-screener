@@ -20,7 +20,7 @@ class StockUniverse(Base):
     __tablename__ = "stock_universe"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
     name = Column(String(255))
     exchange = Column(String(20), index=True)  # NYSE, NASDAQ, AMEX
     sector = Column(String(100), index=True)
@@ -65,7 +65,7 @@ class StockUniverseStatusEvent(Base):
     __tablename__ = "stock_universe_status_events"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
     old_status = Column(String(32), nullable=True)
     new_status = Column(String(32), nullable=False, index=True)
     trigger_source = Column(String(64), nullable=False)

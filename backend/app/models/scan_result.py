@@ -111,7 +111,7 @@ class ScanResult(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     scan_id = Column(String(36), ForeignKey("scans.scan_id"), nullable=False, index=True)
-    symbol = Column(String(10), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
 
     # Scores
     composite_score = Column(Float, index=True)

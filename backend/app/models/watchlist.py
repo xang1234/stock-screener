@@ -10,7 +10,7 @@ class Watchlist(Base):
     __tablename__ = "watchlist"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
 
     # User notes
     notes = Column(Text)

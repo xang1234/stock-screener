@@ -17,6 +17,7 @@ This folder contains the authoritative architecture decision records for ASIA ex
 6. [ADR ASIA-E5: ReconciliationCircuitBreaker Policy (v1)](./adr_asia_e5_reconciliation_circuit_breaker_v1.md)
 7. [ASIA v2 Feature Flag Matrix and Rollback Runbook](./asia_v2_flag_matrix_and_rollback_runbook.md)
 8. [ASIA v2 Symbol Constraint Inventory Matrix (ST1)](./asia_v2_symbol_constraint_inventory_matrix.md)
+9. [ASIA v2 Objective Launch-Gate Charter](./asia_v2_launch_gate_charter.md)
 
 ## Consumption Rules
 

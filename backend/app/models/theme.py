@@ -294,7 +294,7 @@ class ThemeConstituent(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     theme_cluster_id = Column(Integer, nullable=False, index=True)  # FK to theme_clusters
-    symbol = Column(String(10), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
 
     # How this stock was added to theme
     source = Column(String(20))  # llm_extraction, correlation, manual

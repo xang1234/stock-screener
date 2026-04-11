@@ -10,7 +10,7 @@ class StockPrice(Base):
     __tablename__ = "stock_prices"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     open = Column(Float)
     high = Column(Float)
@@ -32,7 +32,7 @@ class StockFundamental(Base):
     __tablename__ = "stock_fundamentals"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
 
     # Market data
     market_cap = Column(BigInteger)
@@ -166,7 +166,7 @@ class StockTechnical(Base):
     __tablename__ = "stock_technicals"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
 
     # Current price
     current_price = Column(Float)
@@ -204,7 +204,7 @@ class StockIndustry(Base):
     __tablename__ = "stock_industry"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
 
     # GICS classification
     sector = Column(String(100), index=True)  # e.g., "Information Technology"
