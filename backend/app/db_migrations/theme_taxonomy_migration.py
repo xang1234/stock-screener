@@ -12,7 +12,8 @@ from ..infra.db.portability import column_names, dialect_name, index_names
 logger = logging.getLogger(__name__)
 
 THEME_TABLE = "theme_clusters"
-PARENT_CLUSTER_INDEX = "idx_theme_clusters_parent_cluster_id"
+PARENT_CLUSTER_INDEX = "ix_theme_clusters_parent_cluster_id"
+LEGACY_PARENT_CLUSTER_INDEX = "idx_theme_clusters_parent_cluster_id"
 IS_L1_INDEX = "idx_theme_clusters_is_l1"
 
 
@@ -47,8 +48,9 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
             if column in columns:
                 continue
             try:
-                conn.execute(text(statement))
-                stats["columns_added"].append(column)
+                with conn.begin_nested():
+                    conn.execute(text(statement))
+                    stats["columns_added"].append(column)
             except SQLAlchemyError:
                 # Another process may have applied the same ALTER between check and execute.
                 if column not in column_names(conn, THEME_TABLE):
@@ -63,14 +65,24 @@ def migrate_theme_taxonomy(engine) -> dict[str, Any]:
                         WHEN COALESCE(is_l1, {false_literal}) = {true_literal} THEN 1
                         ELSE 2
                     END
-                    WHERE (COALESCE(is_l1, {false_literal}) = {true_literal} AND taxonomy_level != 1)
-                       OR (COALESCE(is_l1, {false_literal}) != {true_literal} AND taxonomy_level != 2)
+                    WHERE (
+                        COALESCE(is_l1, {false_literal}) = {true_literal}
+                        AND (taxonomy_level IS NULL OR taxonomy_level != 1)
+                    )
+                    OR (
+                        COALESCE(is_l1, {false_literal}) != {true_literal}
+                        AND (taxonomy_level IS NULL OR taxonomy_level != 2)
+                    )
                     """
                 )
             )
 
         existing_indexes = index_names(conn, THEME_TABLE)
-        if PARENT_CLUSTER_INDEX not in existing_indexes:
+        has_parent_cluster_index = (
+            PARENT_CLUSTER_INDEX in existing_indexes
+            or LEGACY_PARENT_CLUSTER_INDEX in existing_indexes
+        )
+        if not has_parent_cluster_index:
             conn.execute(
                 text(
                     f"""
