@@ -873,6 +873,62 @@ def test_ingest_hk_reconciliation_preserves_existing_snapshot_baseline_on_rerun(
     db.close()
 
 
+def test_ingest_hk_reconciliation_preserves_non_null_baseline_on_rerun():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    rows_a = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    rows_b = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+    ]
+    rows_c = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings Ltd"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+    first_b = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_c,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-c",
+    )
+    second_b = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+
+    run_b = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+
+    assert run_b.previous_snapshot_id == "hk-20260412-a"
+    assert second_b["reconciliation"]["previous_snapshot_id"] == "hk-20260412-a"
+    assert second_b["reconciliation"]["artifact_hash"] == first_b["reconciliation"]["artifact_hash"]
+    db.close()
+
+
 def test_ingest_hk_snapshot_rows_quarantines_unsafe_deactivation(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

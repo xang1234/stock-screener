@@ -435,6 +435,7 @@ class StockUniverseService:
             .one_or_none()
         )
 
+        # Baseline is immutable per (market, snapshot_id) once the run exists.
         previous_snapshot_id: str | None = (
             current_run.previous_snapshot_id
             if current_run is not None
@@ -533,7 +534,6 @@ class StockUniverseService:
             db.add(run)
         else:
             run.source_name = normalized_source_name
-            run.previous_snapshot_id = previous_snapshot_id
             run.total_current = int(counts["total_current"])
             run.total_previous = int(counts["total_previous"])
             run.added_count = int(counts["added"])
