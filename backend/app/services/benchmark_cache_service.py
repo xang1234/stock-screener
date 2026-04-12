@@ -7,6 +7,7 @@ during bulk scans. Uses Redis for hot cache with database persistence.
 import logging
 import pickle
 import time
+from dataclasses import dataclass
 from typing import Any, Optional, Callable
 from datetime import datetime, timedelta
 import pandas as pd
@@ -26,6 +27,19 @@ from .benchmark_registry_service import benchmark_registry
 from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BenchmarkDataBundle:
+    """Resolved benchmark payload with selection metadata and OHLCV data."""
+
+    market: str
+    period: str
+    benchmark_symbol: str
+    benchmark_role: str
+    benchmark_kind: str | None
+    candidate_symbols: tuple[str, ...]
+    data: pd.DataFrame
 
 
 class BenchmarkCacheService:
@@ -122,8 +136,24 @@ class BenchmarkCacheService:
         4. Cache in Redis + persist to database
         5. Return to all waiting callers
         """
+        bundle = self.get_benchmark_bundle(
+            market=market,
+            period=period,
+            force_refresh=force_refresh,
+        )
+        return bundle.data if bundle is not None else None
+
+    def get_benchmark_bundle(
+        self,
+        market: str = "US",
+        period: str = "2y",
+        force_refresh: bool = False,
+    ) -> Optional[BenchmarkDataBundle]:
+        """Resolve benchmark data plus the selected candidate metadata."""
         normalized_market = self._normalize_market(market)
         candidates = self.get_benchmark_candidates(normalized_market)
+        candidate_tuple = tuple(candidates)
+        registry_entry = self._benchmark_registry.get_entry(normalized_market)
 
         # Pass 1: Prefer any cached candidate before triggering network fetches.
         if not force_refresh:
@@ -138,7 +168,19 @@ class BenchmarkCacheService:
                         period,
                         role,
                     )
-                    return cached_data
+                    return BenchmarkDataBundle(
+                        market=normalized_market,
+                        period=period,
+                        benchmark_symbol=benchmark_symbol,
+                        benchmark_role=role,
+                        benchmark_kind=(
+                            registry_entry.primary_kind
+                            if role == "primary"
+                            else registry_entry.fallback_kind
+                        ),
+                        candidate_symbols=candidate_tuple,
+                        data=cached_data,
+                    )
                 if cached_data is not None:
                     logger.info(
                         "Cache STALE for %s benchmark %s (%s, %s) (Redis)",
@@ -162,7 +204,19 @@ class BenchmarkCacheService:
                         role,
                     )
                     self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
-                    return cached_data
+                    return BenchmarkDataBundle(
+                        market=normalized_market,
+                        period=period,
+                        benchmark_symbol=benchmark_symbol,
+                        benchmark_role=role,
+                        benchmark_kind=(
+                            registry_entry.primary_kind
+                            if role == "primary"
+                            else registry_entry.fallback_kind
+                        ),
+                        candidate_symbols=candidate_tuple,
+                        data=cached_data,
+                    )
 
         # Pass 2: Fetch candidates in deterministic order.
         for idx, benchmark_symbol in enumerate(candidates):
@@ -181,7 +235,19 @@ class BenchmarkCacheService:
                     period=period,
                 )
                 if fetched is not None and not fetched.empty:
-                    return fetched
+                    return BenchmarkDataBundle(
+                        market=normalized_market,
+                        period=period,
+                        benchmark_symbol=benchmark_symbol,
+                        benchmark_role=role,
+                        benchmark_kind=(
+                            registry_entry.primary_kind
+                            if role == "primary"
+                            else registry_entry.fallback_kind
+                        ),
+                        candidate_symbols=candidate_tuple,
+                        data=fetched,
+                    )
                 continue
 
             # Cache MISS - attempt fetch for this candidate
@@ -198,7 +264,19 @@ class BenchmarkCacheService:
                 period=period,
             )
             if fetched is not None and not fetched.empty:
-                return fetched
+                return BenchmarkDataBundle(
+                    market=normalized_market,
+                    period=period,
+                    benchmark_symbol=benchmark_symbol,
+                    benchmark_role=role,
+                    benchmark_kind=(
+                        registry_entry.primary_kind
+                        if role == "primary"
+                        else registry_entry.fallback_kind
+                    ),
+                    candidate_symbols=candidate_tuple,
+                    data=fetched,
+                )
 
         logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
         return None

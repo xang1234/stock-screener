@@ -24,7 +24,7 @@ class DataRequirements:
     price_period: str = "2y"  # How much price history: "1y", "2y", "5y"
     needs_fundamentals: bool = False  # Basic fundamentals (market cap, P/E, etc.)
     needs_quarterly_growth: bool = False  # Quarterly earnings/revenue growth
-    needs_benchmark: bool = False  # SPY benchmark data for RS calculation
+    needs_benchmark: bool = False  # Market benchmark data for RS calculation
     needs_earnings_history: bool = False  # Historical earnings data
 
     def merge(self, other: 'DataRequirements') -> 'DataRequirements':
@@ -99,17 +99,22 @@ class StockData:
     """
     symbol: str
     price_data: pd.DataFrame  # OHLCV data with DatetimeIndex
-    benchmark_data: pd.DataFrame  # SPY benchmark data (same format as price_data)
+    benchmark_data: pd.DataFrame  # Market benchmark data (same format as price_data)
     fundamentals: Optional[Dict[str, Any]] = None  # Basic fundamentals
     quarterly_growth: Optional[Dict[str, Any]] = None  # Quarterly growth metrics
     earnings_history: Optional[pd.DataFrame] = None  # Historical earnings data
 
     # Additional metadata
+    benchmark_symbol: Optional[str] = None
+    benchmark_role: Optional[str] = None
+    benchmark_kind: Optional[str] = None
+    benchmark_candidates: tuple[str, ...] = ()
     market: Optional[str] = None
     exchange: Optional[str] = None
     currency: Optional[str] = None
     timezone: Optional[str] = None
     local_code: Optional[str] = None
+    rs_universe_performances: Optional[Dict[int | str, list[float]]] = None
     fetch_errors: Dict[str, str] = field(default_factory=dict)  # Any errors during fetch
 
     def has_sufficient_data(self, min_days: int = 100) -> bool:
