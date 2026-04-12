@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.models.stock_universe import (
     StockUniverse,
+    StockUniverseReconciliationRun,
     StockUniverseStatusEvent,
     UNIVERSE_STATUS_ACTIVE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
@@ -680,4 +681,137 @@ def test_ingest_tw_snapshot_rows_truncates_verbose_row_payloads():
     assert len(stats["canonical_rows"]) == 25
     assert stats["canonical_rows_truncated"] is True
     assert stats["rejected_rows_truncated"] is False
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_persists_reconciliation_diff_against_prior_snapshot():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    snapshot_one_rows = [
+        {
+            "symbol": "700",
+            "exchange": "SEHK",
+            "name": "Tencent",
+            "sector": "Technology",
+            "industry": "Internet",
+        },
+        {
+            "symbol": "5",
+            "exchange": "SEHK",
+            "name": "HSBC",
+            "sector": "Financial",
+            "industry": "Banks",
+        },
+    ]
+    first_stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=snapshot_one_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    first_reconciliation = first_stats["reconciliation"]
+    first_run = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-a",
+        )
+        .one()
+    )
+    first_artifact = json.loads(first_run.artifact_json)
+
+    assert first_reconciliation["previous_snapshot_id"] is None
+    assert first_reconciliation["counts"]["added"] == 2
+    assert first_reconciliation["counts"]["removed"] == 0
+    assert first_reconciliation["counts"]["changed"] == 0
+    assert first_reconciliation["counts"]["unchanged"] == 0
+    assert len(first_run.artifact_hash) == 64
+    assert first_artifact["added_symbols"] == ["0005.HK", "0700.HK"]
+
+    snapshot_two_rows = [
+        {
+            "symbol": "0700.HK",
+            "exchange": "HKEX",
+            "name": "Tencent Holdings",
+            "sector": "Technology",
+            "industry": "Internet",
+        },
+        {
+            "symbol": "16",
+            "exchange": "SEHK",
+            "name": "Sun Hung Kai",
+            "sector": "Real Estate",
+            "industry": "Property",
+        },
+    ]
+    second_stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=snapshot_two_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    second_reconciliation = second_stats["reconciliation"]
+    second_run = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+    second_artifact = json.loads(second_run.artifact_json)
+
+    assert second_reconciliation["previous_snapshot_id"] == "hk-20260412-a"
+    assert second_reconciliation["counts"]["total_current"] == 2
+    assert second_reconciliation["counts"]["total_previous"] == 2
+    assert second_reconciliation["counts"]["added"] == 1
+    assert second_reconciliation["counts"]["removed"] == 1
+    assert second_reconciliation["counts"]["changed"] == 1
+    assert second_reconciliation["counts"]["unchanged"] == 0
+    assert second_artifact["added_symbols"] == ["0016.HK"]
+    assert second_artifact["removed_symbols"] == ["0005.HK"]
+    assert second_artifact["changed_rows"][0]["symbol"] == "0700.HK"
+    assert "name" in second_artifact["changed_rows"][0]["changed_fields"]
+    db.close()
+
+
+def test_ingest_tw_snapshot_rows_reconciliation_is_idempotent_for_same_snapshot():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {"symbol": "2330", "exchange": "TWSE", "name": "TSMC"},
+        {"symbol": "3008", "exchange": "TPEX", "name": "Largan"},
+    ]
+    reversed_rows = list(reversed(rows))
+
+    first_stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412-a",
+    )
+    second_stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=reversed_rows,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412-a",
+    )
+
+    runs = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "TW",
+            StockUniverseReconciliationRun.snapshot_id == "tw-20260412-a",
+        )
+        .all()
+    )
+
+    assert len(runs) == 1
+    assert first_stats["reconciliation"]["artifact_hash"] == second_stats["reconciliation"]["artifact_hash"]
+    assert second_stats["reconciliation"]["counts"]["added"] == 2
+    assert second_stats["reconciliation"]["counts"]["removed"] == 0
+    assert second_stats["reconciliation"]["counts"]["changed"] == 0
+    assert second_stats["reconciliation"]["counts"]["unchanged"] == 0
     db.close()

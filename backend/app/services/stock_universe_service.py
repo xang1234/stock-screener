@@ -5,10 +5,11 @@ Fetches stocks from finviz and manages the stock_universe database table.
 """
 import logging
 import csv
+import hashlib
 import io
 import json
 import pandas as pd
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
@@ -16,6 +17,7 @@ from datetime import datetime
 
 from ..models.stock_universe import (
     StockUniverse,
+    StockUniverseReconciliationRun,
     StockUniverseStatusEvent,
     UNIVERSE_STATUS_ACTIVE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
@@ -306,6 +308,246 @@ class StockUniverseService:
             return []
 
     @staticmethod
+    def _stable_json(payload: Any) -> str:
+        return json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            default=str,
+        )
+
+    @staticmethod
+    def _sha256_text(raw: str) -> str:
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _reconciliation_row_payload(self, row: Any) -> dict[str, Any]:
+        payload = {
+            "symbol": row.symbol,
+            "name": row.name,
+            "market": row.market,
+            "exchange": row.exchange,
+            "currency": row.currency,
+            "timezone": row.timezone,
+            "local_code": row.local_code,
+            "sector": row.sector,
+            "industry": row.industry,
+            "market_cap": float(row.market_cap) if row.market_cap is not None else None,
+        }
+        payload["content_hash"] = self._sha256_text(self._stable_json(payload))
+        return payload
+
+    @staticmethod
+    def _reconciliation_changed_fields(
+        current: Mapping[str, Any],
+        previous: Mapping[str, Any],
+    ) -> list[str]:
+        fields = (
+            "name",
+            "market",
+            "exchange",
+            "currency",
+            "timezone",
+            "local_code",
+            "sector",
+            "industry",
+            "market_cap",
+        )
+        return [field for field in fields if current.get(field) != previous.get(field)]
+
+    def _build_market_reconciliation_artifact(
+        self,
+        *,
+        market: str,
+        source_name: str,
+        snapshot_id: str,
+        previous_snapshot_id: str | None,
+        current_rows: list[dict[str, Any]],
+        previous_rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        current_by_symbol = {str(row["symbol"]): row for row in current_rows}
+        previous_by_symbol = {str(row["symbol"]): row for row in previous_rows}
+
+        current_symbols = set(current_by_symbol.keys())
+        previous_symbols = set(previous_by_symbol.keys())
+
+        added_symbols = sorted(current_symbols - previous_symbols)
+        removed_symbols = sorted(previous_symbols - current_symbols)
+        common_symbols = sorted(current_symbols & previous_symbols)
+
+        changed_rows: list[dict[str, Any]] = []
+        unchanged_count = 0
+        for symbol in common_symbols:
+            current = current_by_symbol[symbol]
+            previous = previous_by_symbol[symbol]
+            changed_fields = self._reconciliation_changed_fields(current, previous)
+            if not changed_fields:
+                unchanged_count += 1
+                continue
+            changed_rows.append(
+                {
+                    "symbol": symbol,
+                    "changed_fields": changed_fields,
+                    "previous_content_hash": previous.get("content_hash"),
+                    "current_content_hash": current.get("content_hash"),
+                    "previous": previous,
+                    "current": current,
+                }
+            )
+
+        return {
+            "artifact_version": "stock-universe-reconciliation-v1",
+            "market": market,
+            "source_name": source_name,
+            "snapshot_id": snapshot_id,
+            "previous_snapshot_id": previous_snapshot_id,
+            "counts": {
+                "total_current": len(current_rows),
+                "total_previous": len(previous_rows),
+                "added": len(added_symbols),
+                "removed": len(removed_symbols),
+                "changed": len(changed_rows),
+                "unchanged": unchanged_count,
+            },
+            "added_symbols": added_symbols,
+            "removed_symbols": removed_symbols,
+            "changed_rows": changed_rows,
+            "snapshot_rows": sorted(current_rows, key=lambda row: str(row["symbol"])),
+        }
+
+    def _record_market_reconciliation_run(
+        self,
+        db: Session,
+        *,
+        market: str,
+        source_name: str,
+        snapshot_id: str,
+        canonical_rows: Iterable[Any],
+    ) -> dict[str, Any]:
+        current_run = (
+            db.query(StockUniverseReconciliationRun)
+            .filter(
+                StockUniverseReconciliationRun.market == market,
+                StockUniverseReconciliationRun.snapshot_id == snapshot_id,
+            )
+            .one_or_none()
+        )
+
+        previous_run = (
+            db.query(StockUniverseReconciliationRun)
+            .filter(
+                StockUniverseReconciliationRun.market == market,
+                StockUniverseReconciliationRun.snapshot_id != snapshot_id,
+            )
+            .order_by(
+                StockUniverseReconciliationRun.created_at.desc(),
+                StockUniverseReconciliationRun.id.desc(),
+            )
+            .first()
+        )
+
+        previous_snapshot_id: str | None = None
+        previous_rows: list[dict[str, Any]] = []
+        if previous_run is not None:
+            previous_snapshot_id = previous_run.snapshot_id
+            if previous_run.artifact_json:
+                try:
+                    parsed = json.loads(previous_run.artifact_json)
+                    raw_rows = parsed.get("snapshot_rows") if isinstance(parsed, dict) else []
+                    if isinstance(raw_rows, list):
+                        previous_rows = [row for row in raw_rows if isinstance(row, dict)]
+                except Exception:
+                    logger.warning(
+                        "Unable to parse prior stock universe reconciliation artifact",
+                        exc_info=True,
+                        extra={
+                            "market": market,
+                            "snapshot_id": previous_run.snapshot_id,
+                        },
+                    )
+
+        canonical_list = list(canonical_rows)
+        normalized_source_name = (
+            canonical_list[0].source_name
+            if canonical_list
+            else str(source_name or "").strip().lower().replace("-", "_")
+        )
+        current_rows = [
+            self._reconciliation_row_payload(row)
+            for row in canonical_list
+        ]
+        artifact = self._build_market_reconciliation_artifact(
+            market=market,
+            source_name=normalized_source_name,
+            snapshot_id=snapshot_id,
+            previous_snapshot_id=previous_snapshot_id,
+            current_rows=current_rows,
+            previous_rows=previous_rows,
+        )
+        artifact_json = self._stable_json(artifact)
+        artifact_hash = self._sha256_text(artifact_json)
+        counts = artifact["counts"]
+
+        run = current_run
+        if run is None:
+            run = StockUniverseReconciliationRun(
+                market=market,
+                source_name=normalized_source_name,
+                snapshot_id=snapshot_id,
+                previous_snapshot_id=previous_snapshot_id,
+                total_current=int(counts["total_current"]),
+                total_previous=int(counts["total_previous"]),
+                added_count=int(counts["added"]),
+                removed_count=int(counts["removed"]),
+                changed_count=int(counts["changed"]),
+                unchanged_count=int(counts["unchanged"]),
+                artifact_hash=artifact_hash,
+                artifact_json=artifact_json,
+            )
+            db.add(run)
+        else:
+            run.source_name = normalized_source_name
+            run.previous_snapshot_id = previous_snapshot_id
+            run.total_current = int(counts["total_current"])
+            run.total_previous = int(counts["total_previous"])
+            run.added_count = int(counts["added"])
+            run.removed_count = int(counts["removed"])
+            run.changed_count = int(counts["changed"])
+            run.unchanged_count = int(counts["unchanged"])
+            run.artifact_hash = artifact_hash
+            run.artifact_json = artifact_json
+
+        db.flush()
+
+        details_limit = 25
+        changed_rows = artifact.get("changed_rows", [])
+        changed_symbols = [str(row.get("symbol", "")) for row in changed_rows if row.get("symbol")]
+        added_symbols = artifact.get("added_symbols", [])
+        removed_symbols = artifact.get("removed_symbols", [])
+        return {
+            "run_id": run.id,
+            "market": market,
+            "source_name": normalized_source_name,
+            "snapshot_id": snapshot_id,
+            "previous_snapshot_id": previous_snapshot_id,
+            "artifact_hash": artifact_hash,
+            "counts": {
+                "total_current": int(counts["total_current"]),
+                "total_previous": int(counts["total_previous"]),
+                "added": int(counts["added"]),
+                "removed": int(counts["removed"]),
+                "changed": int(counts["changed"]),
+                "unchanged": int(counts["unchanged"]),
+            },
+            "added_symbols": added_symbols[:details_limit],
+            "removed_symbols": removed_symbols[:details_limit],
+            "changed_symbols": changed_symbols[:details_limit],
+            "added_symbols_truncated": len(added_symbols) > details_limit,
+            "removed_symbols_truncated": len(removed_symbols) > details_limit,
+            "changed_symbols_truncated": len(changed_symbols) > details_limit,
+        }
+
+    @staticmethod
     def _parse_hk_csv_rows(csv_content: str) -> list[dict[str, Any]]:
         """Parse HK ingestion CSV into normalized lowercase-key row dicts."""
         csv_file = io.StringIO(csv_content)
@@ -447,6 +689,13 @@ class StockUniverseService:
             )
             added_count += 1
 
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="HK",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonicalized.canonical_rows,
+        )
         db.commit()
         details_limit = 25
         canonical_preview = canonicalized.canonical_rows[:details_limit]
@@ -480,6 +729,7 @@ class StockUniverseService:
             ],
             "canonical_rows_truncated": len(canonicalized.canonical_rows) > details_limit,
             "rejected_rows_truncated": len(canonicalized.rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
         }
 
     def ingest_hk_from_csv(
@@ -648,6 +898,13 @@ class StockUniverseService:
             )
             added_count += 1
 
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="JP",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonicalized.canonical_rows,
+        )
         db.commit()
         details_limit = 25
         canonical_preview = canonicalized.canonical_rows[:details_limit]
@@ -681,6 +938,7 @@ class StockUniverseService:
             ],
             "canonical_rows_truncated": len(canonicalized.canonical_rows) > details_limit,
             "rejected_rows_truncated": len(canonicalized.rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
         }
 
     def ingest_jp_from_csv(
@@ -849,6 +1107,13 @@ class StockUniverseService:
             )
             added_count += 1
 
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="TW",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonicalized.canonical_rows,
+        )
         db.commit()
         details_limit = 25
         canonical_preview = canonicalized.canonical_rows[:details_limit]
@@ -882,6 +1147,7 @@ class StockUniverseService:
             ],
             "canonical_rows_truncated": len(canonicalized.canonical_rows) > details_limit,
             "rejected_rows_truncated": len(canonicalized.rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
         }
 
     def ingest_tw_from_csv(
