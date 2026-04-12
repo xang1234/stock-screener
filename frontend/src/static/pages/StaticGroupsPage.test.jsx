@@ -50,7 +50,7 @@ describe('StaticGroupsPage', () => {
           json: async () => ({
             available: true,
             payload: {
-              movers_period: '3m',
+              movers_period: '1w',
               rankings: {
                 date: '2026-03-31',
                 rankings: [
@@ -66,8 +66,8 @@ describe('StaticGroupsPage', () => {
                 ],
               },
               movers: {
-                gainers: [{ industry_group: 'Semiconductors', rank: 1 }],
-                losers: [{ industry_group: 'Retail', rank: 197 }],
+                gainers: [{ industry_group: 'Semiconductors', rank: 1, rank_change_1w: 3 }],
+                losers: [{ industry_group: 'Retail', rank: 197, rank_change_1w: -5 }],
               },
             },
           }),
@@ -87,14 +87,14 @@ describe('StaticGroupsPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders 3M movers and the 3M rank-change column', async () => {
+  it('renders 1W movers and the 1W rank-change column', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: 'Industry Group Rankings' })).toBeInTheDocument();
-    expect(screen.getByText('Top Gainers (3M)')).toBeInTheDocument();
-    expect(screen.getByText('Top Losers (3M)')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '3M' })).toBeInTheDocument();
+    expect(screen.getByText('Top Gainers (1W)')).toBeInTheDocument();
+    expect(screen.getByText('Top Losers (1W)')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '1W' })).toBeInTheDocument();
     expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
-    expect(screen.getByText('+7')).toBeInTheDocument();
+    expect(screen.getByText('+3')).toBeInTheDocument();
   });
 });

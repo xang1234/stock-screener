@@ -42,7 +42,7 @@ data/xui-reader/**/storage_state.json
 data/xui-reader/**/*.sqlite
 data/xui-reader/**/*.sqlite3
 data/hermes/
-docker-data/postgres/
+docker-data/
 
 # Logs
 *.log

@@ -81,7 +81,7 @@ function StaticLayout({ children }) {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="xl" sx={{ mt: 2, mb: 2, flex: 1 }}>
+      <Container maxWidth="xl" sx={{ mt: 1.5, mb: 1.5, flex: 1 }}>
         {children}
       </Container>
     </Box>
