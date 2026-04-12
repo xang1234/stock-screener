@@ -93,10 +93,14 @@ class DataSourceService:
     def _finviz_allowed(self, market: Optional[str]) -> bool:
         """Return True iff finviz may be attempted for ``market`` per policy.
 
+        NOT a pure predicate: increments ``metrics['finviz_skipped_by_policy']``
+        when policy (rather than ``prefer_finviz=False``) is the reason finviz
+        is skipped. Must be called exactly once per public fetch method so the
+        counter reflects fetch calls, not predicate checks.
+
         The ``prefer_finviz`` instance flag is still honoured — policy only
         *narrows* the set of attempted providers; it never forces finviz on
-        a caller that opted out. Increments a telemetry counter when policy
-        (not ``prefer_finviz=False``) is the reason finviz is skipped.
+        a caller that opted out.
         """
         if not self.prefer_finviz:
             return False
@@ -105,9 +109,10 @@ class DataSourceService:
         )
         if not allowed:
             self.metrics['finviz_skipped_by_policy'] += 1
-            logger.info(
-                "Routing policy %s excluded finviz for market=%r; "
-                "using yfinance as primary.",
+            # DEBUG not INFO: can fire thousands of times on a mixed-market
+            # batch. The counter above is the operator-facing signal.
+            logger.debug(
+                "Routing policy %s excluded finviz for market=%r",
                 routing_policy.policy_version(),
                 market,
             )
@@ -133,7 +138,6 @@ class DataSourceService:
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred AND allowed by policy
         if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} fundamentals from finvizfinance")
 
@@ -238,7 +242,6 @@ class DataSourceService:
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred AND allowed by policy
         if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} quarterly growth from finvizfinance")
 
@@ -306,7 +309,6 @@ class DataSourceService:
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred AND allowed by policy
         if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} combined data from finvizfinance")
 

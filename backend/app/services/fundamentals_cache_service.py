@@ -120,7 +120,8 @@ class FundamentalsCacheService:
     def get_fundamentals(
         self,
         symbol: str,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        market: Optional[str] = None,
     ) -> Optional[Dict]:
         """
         Get fundamental data with caching and graceful fallback.
@@ -128,6 +129,10 @@ class FundamentalsCacheService:
         Args:
             symbol: Stock ticker symbol
             force_refresh: Force fetch from yfinance, bypass cache
+            market: Optional market code (US/HK/JP/TW). Callers that already
+                hold the ``StockUniverse`` row should pass this to avoid an
+                extra per-symbol DB lookup on cache misses. ``None`` falls
+                back to a best-effort DB resolve in ``_fetch_and_cache``.
 
         Returns:
             Dict with fundamental metrics or None if unavailable
@@ -141,7 +146,7 @@ class FundamentalsCacheService:
         """
         if force_refresh:
             logger.info(f"Force refresh requested for {symbol}")
-            return self._fetch_and_cache(symbol)
+            return self._fetch_and_cache(symbol, market=market)
 
         # Try Redis first (fast path)
         if self._redis_client:
@@ -161,7 +166,7 @@ class FundamentalsCacheService:
                             "Cache HIT but incomplete for %s fundamentals - fetching on-demand enrichment",
                             symbol,
                         )
-                        enriched = self._fetch_and_cache(symbol)
+                        enriched = self._fetch_and_cache(symbol, market=market)
                         if enriched is not None:
                             return enriched
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
@@ -207,7 +212,7 @@ class FundamentalsCacheService:
                         "Cache HIT but incomplete for %s fundamentals in database - fetching on-demand enrichment",
                         symbol,
                     )
-                    enriched = self._fetch_and_cache(symbol)
+                    enriched = self._fetch_and_cache(symbol, market=market)
                     if enriched is not None:
                         return enriched
                 logger.info(f"Cache HIT for {symbol} (Database, updated: {last_update})")
@@ -219,11 +224,11 @@ class FundamentalsCacheService:
             else:
                 # Data is stale - fetch fresh data
                 logger.info(f"Cache HIT but STALE for {symbol} (last update: {last_update}) - fetching fresh data")
-                return self._fetch_and_cache(symbol)
+                return self._fetch_and_cache(symbol, market=market)
 
         # No cached data - fetch from yfinance
         logger.info(f"Cache MISS for {symbol} - fetching fresh data")
-        return self._fetch_and_cache(symbol)
+        return self._fetch_and_cache(symbol, market=market)
 
     def _get_from_database(self, symbol: str) -> tuple[Optional[Dict], Optional[datetime]]:
         """
@@ -405,11 +410,19 @@ class FundamentalsCacheService:
             if db is not None:
                 db.close()
 
-    def _fetch_and_cache(self, symbol: str) -> Optional[Dict]:
+    def _fetch_and_cache(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch fundamental data from finvizfinance (primary) or yfinance (fallback) and cache it.
 
         Graceful fallback: If fetch fails, return None (caller will handle).
+
+        ``market`` is consulted by the provider routing policy so US-only
+        providers (finviz, alphavantage) are skipped for HK/JP/TW symbols.
+        When omitted, falls back to a single DB lookup.
         """
         try:
             if not settings.provider_snapshot_on_demand_fallback_enabled:
@@ -421,9 +434,8 @@ class FundamentalsCacheService:
             logger.info(f"Fetching fresh fundamental data for {symbol} from data sources")
             self.record_on_demand_fallback()
 
-            # Resolve market so the provider routing policy can filter out
-            # US-only providers (finviz, alphavantage) for HK/JP/TW symbols.
-            market = self._resolve_market(symbol)
+            if market is None:
+                market = self._resolve_market(symbol)
 
             # Use DataSourceService which handles finviz → yfinance fallback
             fundamentals = get_data_source_service().get_fundamentals(

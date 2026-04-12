@@ -163,10 +163,13 @@ def refresh_all_fundamentals(self):
                 if (i + 1) % 50 == 0:
                     logger.info(f"Progress: {i + 1}/{total_stocks} ({(i+1)/total_stocks*100:.1f}%)")
 
-                # Fetch fundamental data (force_refresh=True to get fresh data)
+                # Fetch fundamental data (force_refresh=True to get fresh data).
+                # Pass market from the already-loaded universe row so the cache
+                # service doesn't re-query the DB for it per symbol.
                 fundamental_data = cache.get_fundamentals(
                     symbol,
-                    force_refresh=True  # Always get fresh data for weekly refresh
+                    force_refresh=True,
+                    market=stock.market,
                 )
 
                 if fundamental_data:
@@ -378,10 +381,12 @@ def populate_initial_cache(self, limit: Optional[int] = None):
                         f"Elapsed: {elapsed/60:.1f}m | ETA: {remaining/60:.1f}m"
                     )
 
-                # Fetch fundamental data (force_refresh=True to populate fresh data)
+                # Fetch fundamental data (force_refresh=True to populate fresh data).
+                # Pass market to avoid a per-symbol DB lookup in the cache service.
                 fundamental_data = cache.get_fundamentals(
                     symbol,
-                    force_refresh=True
+                    force_refresh=True,
+                    market=stock.market,
                 )
 
                 if fundamental_data:

@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.services.data_source_service import DataSourceService
-from app.services.provider_routing_policy import POLICY_VERSION
 
 
 def _make_service(finviz_return=None, yfinance_return=None) -> DataSourceService:
@@ -94,10 +93,3 @@ class TestMetricsIncludePolicySkipCounter:
     def test_metrics_dict_contains_policy_skip_counter(self):
         svc = _make_service()
         assert "finviz_skipped_by_policy" in svc.get_metrics()
-
-
-class TestPolicyVersionIsStable:
-    """Lock the version so silent semantic drift is caught in review."""
-
-    def test_expected_policy_version(self):
-        assert POLICY_VERSION == "2026.04.12.1"

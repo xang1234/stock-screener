@@ -22,7 +22,9 @@ def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
 
     fake_db = MagicMock()
     fake_query = MagicMock()
-    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
     fake_db.query.return_value = fake_query
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
@@ -53,7 +55,9 @@ def test_refresh_all_fundamentals_reraises_soft_time_limit(monkeypatch):
 
     fake_db = MagicMock()
     fake_query = MagicMock()
-    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
     fake_db.query.return_value = fake_query
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
@@ -71,7 +75,9 @@ def test_refresh_all_fundamentals_reraises_nested_soft_time_limit(monkeypatch):
 
     fake_db = MagicMock()
     fake_query = MagicMock()
-    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
     fake_db.query.return_value = fake_query
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
