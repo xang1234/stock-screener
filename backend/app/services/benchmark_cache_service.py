@@ -23,7 +23,7 @@ from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
 from .market_calendar_service import MarketCalendarService
 from .benchmark_registry_service import benchmark_registry
-from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open
+from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -543,10 +543,12 @@ class BenchmarkCacheService:
         """US-specific fallback that preserves NYSE holiday semantics via market_hours."""
         eastern_now = get_eastern_now()
         today = eastern_now.date()
-        if is_market_open(eastern_now):
-            expected = get_last_trading_day(today - timedelta(days=1))
+        if is_trading_day(today) and not is_market_open(eastern_now) and eastern_now.hour >= 17:
+            # After 5 PM ET on a trading day, today's close should be available.
+            expected = today
         else:
-            expected = get_last_trading_day(today)
+            # Pre-market, intraday, weekend, and holidays: previous completed trading day.
+            expected = get_last_trading_day(today - timedelta(days=1))
         return last_date.date() >= expected
 
     def invalidate_cache(self, period: str = None) -> None:

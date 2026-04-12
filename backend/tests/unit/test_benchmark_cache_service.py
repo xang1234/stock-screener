@@ -186,5 +186,48 @@ def test_is_data_fresh_uses_us_market_hours_fallback_when_calendar_unavailable(m
         "get_last_trading_day",
         lambda d=None: pd.Timestamp("2026-04-10").date(),
     )
+    monkeypatch.setattr(benchmark_cache_module, "is_trading_day", lambda d=None: True)
 
     assert service._is_data_fresh(data, market="US") is True
+
+
+def test_is_data_fresh_us_fallback_premarket_uses_previous_trading_day(monkeypatch):
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday close
+    service._market_calendar.last_completed_trading_day = lambda market: (_ for _ in ()).throw(RuntimeError("no calendar"))  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_eastern_now",
+        lambda: datetime.fromisoformat("2026-04-13T08:00:00-04:00"),  # Monday pre-market
+    )
+    monkeypatch.setattr(benchmark_cache_module, "is_market_open", lambda _dt=None: False)
+    monkeypatch.setattr(benchmark_cache_module, "is_trading_day", lambda d=None: True)
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_last_trading_day",
+        lambda d=None: pd.Timestamp("2026-04-10").date(),
+    )
+
+    assert service._is_data_fresh(data, market="US") is True
+
+
+def test_is_data_fresh_us_fallback_after_close_requires_same_day(monkeypatch):
+    service = BenchmarkCacheService(redis_client=None, session_factory=lambda: None)
+    stale_data = pd.DataFrame({"Close": [100.0]}, index=pd.to_datetime(["2026-04-10"]))  # Friday close
+    service._market_calendar.last_completed_trading_day = lambda market: (_ for _ in ()).throw(RuntimeError("no calendar"))  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_eastern_now",
+        lambda: datetime.fromisoformat("2026-04-13T17:30:00-04:00"),  # Monday after close buffer
+    )
+    monkeypatch.setattr(benchmark_cache_module, "is_market_open", lambda _dt=None: False)
+    monkeypatch.setattr(benchmark_cache_module, "is_trading_day", lambda d=None: True)
+    monkeypatch.setattr(
+        benchmark_cache_module,
+        "get_last_trading_day",
+        lambda d=None: pd.Timestamp("2026-04-10").date(),
+    )
+
+    assert service._is_data_fresh(stale_data, market="US") is False
