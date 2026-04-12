@@ -203,6 +203,20 @@ def _build_field_source_map() -> Mapping[str, str]:
 _FIELD_SOURCE: Mapping[str, str] = _build_field_source_map()
 
 
+def _build_field_tier_map() -> Mapping[str, str]:
+    mapping: Dict[str, str] = {}
+    for field in CORE_FIELDS:
+        mapping[field] = "core"
+    for field in STANDARD_FIELDS:
+        mapping[field] = "standard"
+    for field in ENHANCED_FIELDS:
+        mapping[field] = "enhanced"
+    return mapping
+
+
+_FIELD_TIER: Mapping[str, str] = _build_field_tier_map()
+
+
 # --- Helpers ---------------------------------------------------------------
 
 def _is_present(value: Any) -> bool:
@@ -239,6 +253,21 @@ def expected_fields(market: str | None) -> FrozenSet[str]:
     """Return the union of all fields ``market`` is expected to populate."""
     core, std, enh = _expected_fields(market)
     return core | std | enh
+
+
+def screening_fields() -> FrozenSet[str]:
+    """Return all fundamentals screening fields across all tiers."""
+    return frozenset(_FIELD_TIER.keys())
+
+
+def field_source_map() -> Mapping[str, str]:
+    """Return the canonical field->source map used for provenance."""
+    return _FIELD_SOURCE
+
+
+def field_tier_map() -> Mapping[str, str]:
+    """Return ``{field_name: tier_name}`` for all screening fields."""
+    return _FIELD_TIER
 
 
 def compute_completeness_score(
