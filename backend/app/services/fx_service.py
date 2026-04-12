@@ -36,11 +36,13 @@ this change.
 """
 from __future__ import annotations
 
+import json
 import logging
-import pickle
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any, Callable, Dict, Mapping, Optional
+
+from sqlalchemy.exc import IntegrityError
 
 from ..models.fx_rate import FXRate
 from .redis_pool import get_redis_client
@@ -48,13 +50,11 @@ from .redis_pool import get_redis_client
 logger = logging.getLogger(__name__)
 
 
-# --- Supported currencies --------------------------------------------------
-
 USD = "USD"
 
-# Market -> primary currency. Mirrors security_master_service._MARKET_DEFAULTS
-# but kept local to avoid importing the heavier resolver module. If this
-# drifts (two places to keep in sync) T5 (capability registry) can unify.
+# Market -> primary currency. Mirrors security_master_service._MARKET_DEFAULTS;
+# a drift-prevention test (test_fx_service.py::test_agrees_with_security_master_defaults)
+# fails CI if the two registries disagree.
 MARKET_CURRENCY_MAP: Mapping[str, str] = {
     "US": "USD",
     "HK": "HKD",
@@ -71,8 +71,6 @@ def currency_for_market(market: str | None) -> str:
         return USD
     return MARKET_CURRENCY_MAP.get(market.strip().upper(), USD)
 
-
-# --- Rate source contract --------------------------------------------------
 
 RateFetcher = Callable[[str], Optional[float]]
 """``fetcher(from_currency) -> rate`` returning the most recent rate to USD.
@@ -105,8 +103,6 @@ def _yfinance_rate_fetcher(from_currency: str) -> Optional[float]:
         return None
 
 
-# --- Data classes ----------------------------------------------------------
-
 @dataclass(frozen=True)
 class FXQuote:
     """A single currency's conversion quote."""
@@ -126,8 +122,21 @@ class FXQuote:
             "source": self.source,
         }
 
+    @staticmethod
+    def unavailable_metadata(from_currency: str) -> Dict[str, Any]:
+        """Blob to write when a rate could not be resolved.
 
-# --- Service ----------------------------------------------------------------
+        Shares the key schema of ``to_metadata`` so downstream consumers
+        (T4 quality-aware fallback, T8 UI) can rely on a single shape.
+        """
+        return {
+            "from_currency": from_currency,
+            "to_currency": USD,
+            "rate": None,
+            "as_of_date": None,
+            "source": "unavailable",
+        }
+
 
 class FXService:
     """Provides USD conversion quotes with Redis cache + DB persistence.
@@ -190,9 +199,11 @@ class FXService:
                 source=self.SOURCE_IDENTITY,
             )
 
-        # 1. In-memory cache
+        # 1. In-memory cache — stale if the quote is from a prior day. Without
+        # this check, a long-lived Celery worker would keep yesterday's rate
+        # forever since the memo has no TTL.
         memoed = self._memo.get(currency)
-        if memoed is not None:
+        if memoed is not None and memoed.as_of_date == date.today():
             return memoed
 
         # 2. Redis
@@ -272,8 +283,18 @@ class FXService:
         if not raw:
             return None
         try:
-            payload = pickle.loads(raw)
-            return FXQuote(**payload)
+            # JSON (not pickle) because this Redis instance is shared with
+            # the Celery broker/results and externally reachable tools like
+            # redis-cli — keep payloads human-inspectable and free of
+            # pickle deserialisation CVE surface.
+            payload = json.loads(raw)
+            return FXQuote(
+                from_currency=payload["from_currency"],
+                to_currency=payload["to_currency"],
+                rate=payload["rate"],
+                as_of_date=date.fromisoformat(payload["as_of_date"]),
+                source=payload["source"],
+            )
         except Exception as exc:  # pragma: no cover - corruption
             logger.debug("FX redis decode failed for %s: %s", currency, exc)
             return None
@@ -285,13 +306,7 @@ class FXService:
             self._redis_client.setex(
                 self.REDIS_KEY_FORMAT.format(source_currency=quote.from_currency),
                 self.REDIS_TTL_SECONDS,
-                pickle.dumps({
-                    "from_currency": quote.from_currency,
-                    "to_currency": quote.to_currency,
-                    "rate": quote.rate,
-                    "as_of_date": quote.as_of_date,
-                    "source": quote.source,
-                }),
+                json.dumps(quote.to_metadata()),
             )
         except Exception as exc:  # pragma: no cover
             logger.debug("FX redis write failed for %s: %s", quote.from_currency, exc)
@@ -323,10 +338,33 @@ class FXService:
             db.close()
 
     def _persist_database(self, quote: FXQuote) -> None:
+        # Try insert; if the UNIQUE constraint trips (another worker wrote
+        # the same tuple), roll back and UPDATE the rate. This avoids the
+        # check-then-insert race window.
         db = self._session_factory()
         try:
-            # Idempotent: check for existing (currency, date, source) before insert.
-            existing = (
+            db.add(FXRate(
+                from_currency=quote.from_currency,
+                to_currency=quote.to_currency,
+                as_of_date=quote.as_of_date,
+                rate=quote.rate,
+                source=quote.source,
+            ))
+            db.commit()
+            return
+        except IntegrityError:
+            db.rollback()
+        except Exception as exc:  # pragma: no cover - unexpected DB failure
+            logger.warning("FX DB persist failed for %s: %s", quote.from_currency, exc)
+            db.rollback()
+            return
+        finally:
+            db.close()
+
+        # UNIQUE conflict path: another writer won the race; update the rate.
+        db = self._session_factory()
+        try:
+            (
                 db.query(FXRate)
                 .filter(
                     FXRate.from_currency == quote.from_currency,
@@ -334,27 +372,15 @@ class FXService:
                     FXRate.as_of_date == quote.as_of_date,
                     FXRate.source == quote.source,
                 )
-                .first()
+                .update({"rate": quote.rate}, synchronize_session=False)
             )
-            if existing is not None:
-                existing.rate = quote.rate
-            else:
-                db.add(FXRate(
-                    from_currency=quote.from_currency,
-                    to_currency=quote.to_currency,
-                    as_of_date=quote.as_of_date,
-                    rate=quote.rate,
-                    source=quote.source,
-                ))
             db.commit()
         except Exception as exc:  # pragma: no cover
-            logger.warning("FX DB persist failed for %s: %s", quote.from_currency, exc)
+            logger.warning("FX DB rate-update failed for %s: %s", quote.from_currency, exc)
             db.rollback()
         finally:
             db.close()
 
-
-# --- Module-level singleton (lazy) -----------------------------------------
 
 _default_service: Optional[FXService] = None
 

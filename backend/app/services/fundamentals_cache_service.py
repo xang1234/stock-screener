@@ -24,7 +24,7 @@ from .fundamentals_completeness import (
     compute_completeness_score,
     derive_field_provenance,
 )
-from .fx_service import FXService, currency_for_market, get_fx_service
+from .fx_service import FXQuote, FXService, currency_for_market, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
@@ -455,13 +455,7 @@ class FundamentalsCacheService:
             # intent so consumers can see we tried.
             data["market_cap_usd"] = None
             data["adv_usd"] = None
-            data["fx_metadata"] = {
-                "from_currency": currency,
-                "to_currency": "USD",
-                "rate": None,
-                "as_of_date": None,
-                "source": "unavailable",
-            }
+            data["fx_metadata"] = FXQuote.unavailable_metadata(currency)
             return
 
         rate = quote.rate

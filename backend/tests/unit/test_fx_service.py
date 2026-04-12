@@ -42,6 +42,20 @@ class TestCurrencyForMarket:
     def test_supported_set_matches_map(self):
         assert SUPPORTED_CURRENCIES == frozenset(MARKET_CURRENCY_MAP.values())
 
+    def test_agrees_with_security_master_defaults(self):
+        """Drift guard: fx_service.MARKET_CURRENCY_MAP mirrors
+        security_master_service._MARKET_DEFAULTS. If a new market is added
+        to one, CI must fail until the other catches up.
+        """
+        from app.services import security_master_service as sm
+        for market, currency in MARKET_CURRENCY_MAP.items():
+            sm_currency, _tz = sm._MARKET_DEFAULTS[market]
+            assert sm_currency == currency, (
+                f"Market {market!r}: fx_service says {currency!r}, "
+                f"security_master says {sm_currency!r}."
+            )
+        assert set(MARKET_CURRENCY_MAP.keys()) == set(sm._MARKET_DEFAULTS.keys())
+
 
 # --- FXQuote ---------------------------------------------------------------
 
