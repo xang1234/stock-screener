@@ -17,12 +17,14 @@ import time
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
 from ..models.stock_universe import StockUniverse
 from ..wiring.bootstrap import (
+    get_cache_bundle,
     get_eps_rating_service,
+    get_finviz_service,
     get_fundamentals_cache,
     get_provider_snapshot_service,
+    get_session_factory,
     get_stock_universe_service,
     get_ticker_validation_service,
 )
@@ -109,7 +111,7 @@ def refresh_all_fundamentals(self):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     ticker_validation_service = get_ticker_validation_service()
 
@@ -329,7 +331,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
         logger.info(f"Limit: {limit} stocks (testing mode)")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     ticker_validation_service = get_ticker_validation_service()
 
@@ -479,7 +481,7 @@ def get_cache_stats(symbols: Optional[List[str]] = None):
     """
     logger.info("TASK: Get Fundamental Cache Statistics")
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         # Get symbols to check
@@ -564,7 +566,7 @@ def refresh_all_fundamentals_hybrid(
     logger.info(f"yfinance batch size: {yfinance_batch_size}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     ticker_validation_service = get_ticker_validation_service()
 
@@ -616,7 +618,9 @@ def refresh_all_fundamentals_hybrid(
         # Initialize hybrid service
         hybrid_service = HybridFundamentalsService(
             include_finviz=include_finviz,
-            yfinance_batch_size=yfinance_batch_size
+            yfinance_batch_size=yfinance_batch_size,
+            price_cache=get_cache_bundle().price,
+            finviz_service=get_finviz_service(),
         )
 
         # Initialize cache for storage
@@ -643,7 +647,7 @@ def refresh_all_fundamentals_hybrid(
         storage_stats = hybrid_service.store_all_caches(
             all_data,
             cache,
-            session_factory=SessionLocal,
+            session_factory=get_session_factory(),
             include_quarterly=True
         )
 
@@ -766,7 +770,11 @@ def refresh_symbols_hybrid(
     start_time = time.time()
 
     try:
-        hybrid_service = HybridFundamentalsService(include_finviz=include_finviz)
+        hybrid_service = HybridFundamentalsService(
+            include_finviz=include_finviz,
+            price_cache=get_cache_bundle().price,
+            finviz_service=get_finviz_service(),
+        )
         cache = get_fundamentals_cache()
 
         # Fetch fundamentals
@@ -780,7 +788,7 @@ def refresh_symbols_hybrid(
         storage_stats = hybrid_service.store_all_caches(
             all_data,
             cache,
-            session_factory=SessionLocal,
+            session_factory=get_session_factory(),
             include_quarterly=True
         )
 
@@ -832,7 +840,7 @@ def calculate_eps_rating_percentiles(self):
 
     from ..models.stock import StockFundamental
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     eps_rating_service = get_eps_rating_service()
 

@@ -17,6 +17,12 @@ def _patch_serialized_lock(monkeypatch):
     )
 
 
+def _patch_session_factory(monkeypatch, module, fake_db):
+    session_factory = lambda: fake_db
+    monkeypatch.setattr(module, "get_session_factory", lambda: session_factory)
+    return session_factory
+
+
 def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
     import app.tasks.fundamentals_tasks as module
 
@@ -24,7 +30,7 @@ def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
     fake_query = MagicMock()
     fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
     fake_db.query.return_value = fake_query
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_session_factory(monkeypatch, module, fake_db)
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
     monkeypatch.setattr(module, "get_fundamentals_cache", lambda: (_ for _ in ()).throw(ConnectionError("provider down")))
@@ -55,7 +61,7 @@ def test_refresh_all_fundamentals_reraises_soft_time_limit(monkeypatch):
     fake_query = MagicMock()
     fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
     fake_db.query.return_value = fake_query
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_session_factory(monkeypatch, module, fake_db)
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
     monkeypatch.setattr(module, "get_fundamentals_cache", lambda: (_ for _ in ()).throw(SoftTimeLimitExceeded()))
@@ -73,7 +79,7 @@ def test_refresh_all_fundamentals_reraises_nested_soft_time_limit(monkeypatch):
     fake_query = MagicMock()
     fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
     fake_db.query.return_value = fake_query
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_session_factory(monkeypatch, module, fake_db)
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
 
@@ -96,7 +102,7 @@ def test_refresh_all_fundamentals_hybrid_passes_session_factory(monkeypatch):
     fake_db.query.return_value = fake_query
 
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    session_factory = _patch_session_factory(monkeypatch, module, fake_db)
     monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
     monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
     monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
@@ -130,7 +136,7 @@ def test_refresh_all_fundamentals_hybrid_passes_session_factory(monkeypatch):
     result = module.refresh_all_fundamentals_hybrid.run(include_finviz=False)
 
     assert result["updated"] == 1
-    assert captured["kwargs"]["session_factory"] is module.SessionLocal
+    assert captured["kwargs"]["session_factory"] is session_factory
 
 
 def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
@@ -138,6 +144,8 @@ def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
 
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
+    session_factory = lambda: MagicMock()
+    monkeypatch.setattr(module, "get_session_factory", lambda: session_factory)
 
     captured: dict = {}
 
@@ -163,4 +171,4 @@ def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
     result = module.refresh_symbols_hybrid.run(symbols=["AAPL"], include_finviz=False)
 
     assert result["updated"] == 1
-    assert captured["kwargs"]["session_factory"] is module.SessionLocal
+    assert captured["kwargs"]["session_factory"] is session_factory

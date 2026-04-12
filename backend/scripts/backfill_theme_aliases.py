@@ -11,8 +11,11 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.database import SessionLocal  # noqa: E402
 from app.services.theme_alias_backfill_service import ThemeAliasBackfillService  # noqa: E402
+from app.wiring.bootstrap import (  # noqa: E402
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 
 
 def _default_report_path() -> Path:
@@ -55,7 +58,8 @@ def main() -> None:
             print("Aborted.")
             return
 
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
     try:
         service = ThemeAliasBackfillService(db)
         report = service.run(

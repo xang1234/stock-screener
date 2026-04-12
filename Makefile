@@ -10,7 +10,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 .PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
-        frontend-lint frontend-test frontend phase2-type-gate phase2-reliability golden-update all
+        frontend-lint frontend-test frontend phase2-type-gate architecture-di-gate phase2-reliability golden-update all
 
 # ── Tooling ─────────────────────────────────────────────────────────
 
@@ -153,7 +153,10 @@ frontend: frontend-lint frontend-test ## Frontend lint + test
 phase2-type-gate: ## Focused Phase 2 type-contract checks (touched modules)
 	cd backend && $(PYTHON) scripts/check_phase2_type_contracts.py
 
-phase2-reliability: phase2-type-gate ## Alias for Phase 2 reliability gate bundle
+architecture-di-gate: ## Enforce strict DI static architecture boundaries
+	cd backend && $(PYTHON) scripts/check_strict_di_architecture.py
+
+phase2-reliability: phase2-type-gate architecture-di-gate ## Alias for Phase 2 reliability gate bundle
 
 # ── Utilities ───────────────────────────────────────────────────────
 

@@ -54,6 +54,51 @@ Process-scoped dependencies are owned by an explicit `RuntimeServices` container
 | `ui_snapshot_service` | Process | `RuntimeServices` | Lazy | Container dropped at process shutdown |
 | MCP HTTP server | Process | FastAPI app state (`app.state.mcp_server`) | Created during FastAPI startup when MCP HTTP is enabled | Removed from app state on shutdown |
 
+## Strict DI Policy
+
+Production paths follow strict dependency injection:
+
+1. Services never import DB globals (`SessionLocal`) and never self-assemble collaborators.
+2. API routers, Celery tasks, and `app/scripts` entrypoints never call `SessionLocal(...)` directly.
+3. Runtime assembly belongs to `wiring/bootstrap.py` (`RuntimeServices` + provider functions).
+4. Process-scoped state is allowed, but ownership and lifecycle must stay explicit in bootstrap/runtime initialization.
+
+### Adding a New Service
+
+Use explicit constructor injection and bootstrap wiring.
+
+```python
+# app/services/example_service.py
+from collections.abc import Callable
+from sqlalchemy.orm import Session
+
+class ExampleService:
+    def __init__(self, *, session_factory: Callable[[], Session], dependency: Dependency):
+        self._session_factory = session_factory
+        self._dependency = dependency
+```
+
+```python
+# app/wiring/bootstrap.py (RuntimeServices method)
+def example_service(self) -> ExampleService:
+    if self._example_service is None:
+        with self._init_lock:
+            if self._example_service is None:
+                self._example_service = ExampleService(
+                    session_factory=self._session_factory,
+                    dependency=self.some_dependency(),
+                )
+    return self._example_service
+```
+
+```python
+# API/task/script entrypoint
+from app.wiring.bootstrap import get_example_service, get_session_factory
+
+service = get_example_service()
+db = get_session_factory()()
+```
+
 ## Multi-Screener Orchestrator
 
 The scan orchestrator (`scanners/scan_orchestrator.py`) coordinates all screener types:

@@ -13,10 +13,17 @@ from typing import Optional
 from ...schemas.common import TaskResponse
 from ...schemas.fundamentals import FundamentalsCacheStats
 from ...tasks.fundamentals_tasks import (
+    refresh_all_fundamentals_hybrid,
     refresh_all_fundamentals,
+    refresh_symbols_hybrid,
     refresh_symbol_fundamentals,
     populate_initial_cache,
     get_cache_stats as get_fundamentals_cache_stats
+)
+from ...wiring.bootstrap import (
+    get_fundamentals_cache,
+    get_provider_snapshot_service,
+    get_session_factory,
 )
 
 router = APIRouter(prefix="/fundamentals", tags=["fundamentals"])
@@ -169,12 +176,10 @@ async def get_fundamentals_cache_statistics():
         - Last refresh date
     """
     try:
-        from ...database import SessionLocal
         from ...models.stock_universe import StockUniverse
-        from ...wiring.bootstrap import get_fundamentals_cache, get_provider_snapshot_service
         from datetime import datetime
 
-        db = SessionLocal()
+        db = get_session_factory()()
 
         try:
             # Get sample of active stocks (first 100)

@@ -12,10 +12,13 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 import logging
-from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
-from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
+from app.wiring.bootstrap import (
+    get_price_cache,
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.WARNING)  # Quiet output
@@ -24,8 +27,8 @@ print("=" * 80)
 print("CACHE STATUS DIAGNOSTIC")
 print("=" * 80)
 
-db = SessionLocal()
-initialize_process_runtime_services(session_factory=SessionLocal)
+initialize_process_runtime_services()
+db = get_session_factory()()
 price_cache = get_price_cache()
 
 try:

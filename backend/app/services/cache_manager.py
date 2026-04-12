@@ -9,10 +9,9 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from ..database import SessionLocal
 from .benchmark_cache_service import BenchmarkCacheService
 from .price_cache_service import PriceCacheService
-from .redis_pool import get_redis_client, is_redis_enabled
+from .redis_pool import is_redis_enabled
 from ..config import settings
 from ..utils.market_hours import is_market_open, format_market_status
 
@@ -30,15 +29,21 @@ class CacheManager:
     - Cache statistics and monitoring
     """
 
-    def __init__(self, db: Optional[Session] = None):
+    def __init__(
+        self,
+        db: Optional[Session] = None,
+        *,
+        benchmark_cache: BenchmarkCacheService,
+        price_cache: PriceCacheService,
+        redis_client=None,
+    ):
         """
         Initialize cache manager.
 
         Args:
             db: Database session (optional)
         """
-        # Use shared connection pool for efficiency
-        self.redis_client = get_redis_client()
+        self.redis_client = redis_client
         if self.redis_client:
             logger.info("Cache manager connected to Redis (using shared pool)")
         elif is_redis_enabled():
@@ -46,15 +51,8 @@ class CacheManager:
         else:
             logger.info("Redis disabled for this runtime. Cache manager will use fallback mode.")
 
-        # Initialize cache services (they'll use their own pool connections)
-        self.benchmark_cache = BenchmarkCacheService(
-            redis_client=self.redis_client,
-            session_factory=SessionLocal,
-        )
-        self.price_cache = PriceCacheService(
-            redis_client=self.redis_client,
-            session_factory=SessionLocal,
-        )
+        self.benchmark_cache = benchmark_cache
+        self.price_cache = price_cache
 
         self.db = db
 

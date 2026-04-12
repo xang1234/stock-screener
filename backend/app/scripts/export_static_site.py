@@ -9,7 +9,6 @@ from typing import Any
 
 from sqlalchemy import func
 
-from app.database import SessionLocal
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.stock import StockPrice
@@ -26,6 +25,7 @@ from app.wiring.bootstrap import (
     get_group_rank_service,
     get_price_cache,
     get_provider_snapshot_service,
+    get_session_factory,
 )
 
 
@@ -58,7 +58,7 @@ def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
     price_cache = get_price_cache()
     fetcher = BulkDataFetcher()
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         active_symbols = [
             symbol
             for symbol, in db.query(StockUniverse.symbol)
@@ -181,7 +181,7 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
     start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
     desired_dates = _generate_trading_dates(start_date, as_of_date)
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         existing_dates = {
             record_date
             for record_date, in db.query(IBDGroupRank.date)
@@ -240,7 +240,7 @@ def _ensure_breadth_history(
             "recomputed_dates": 0,
         }
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         existing_dates = {
             record_date
             for record_date, in db.query(MarketBreadth.date)
@@ -323,13 +323,13 @@ def _run_daily_refresh(
 
         if hydrate_published_snapshot:
             provider_snapshot_service = get_provider_snapshot_service()
-            with SessionLocal() as db:
+            with get_session_factory()() as db:
                 results["fundamentals_hydrate"] = provider_snapshot_service.hydrate_published_snapshot(
                     db,
                     allow_yahoo_hydration=False,
                 )
 
-        with SessionLocal() as db:
+        with get_session_factory()() as db:
             results["ibd_seed_refresh"] = {
                 "csv_path": str(_tracked_ibd_csv_path()),
                 "loaded": IBDIndustryService.load_from_csv(db, csv_path=_tracked_ibd_csv_path()),
@@ -414,7 +414,7 @@ def main() -> int:
         for warning in refresh_warnings:
             print(f"  - warning: {warning}")
 
-    service = StaticSiteExportService(SessionLocal)
+    service = StaticSiteExportService(get_session_factory())
     result = service.export(Path(args.output_dir), clean=not args.no_clean)
 
     print("Static site export complete:")

@@ -13,7 +13,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from ..celery_app import celery_app
-from ..database import SessionLocal, is_corruption_error, safe_rollback
+from ..database import is_corruption_error, safe_rollback
 from ..models.scan_result import Scan, ScanResult
 from ..config import settings
 
@@ -233,7 +233,9 @@ def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:
 
 def _run_post_scan_pipeline(scan_id: str) -> None:
     """Post-scan: peer metrics, retention cleanup, chart cache warming, SE telemetry."""
-    db = SessionLocal()
+    from ..wiring.bootstrap import get_session_factory
+
+    db = get_session_factory()()
     try:
         compute_industry_peer_metrics(db, scan_id)
         _log_setup_engine_distribution(db, scan_id)
@@ -266,17 +268,18 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
     """
     # Lazy imports to avoid circular dep:
     # bootstrap -> dispatcher -> scan_tasks -> bootstrap
-    from ..wiring.bootstrap import get_run_bulk_scan_use_case
+    from ..wiring.bootstrap import get_run_bulk_scan_use_case, get_session_factory
     from ..infra.db.uow import SqlUnitOfWork
     from ..infra.tasks.progress_sink import CeleryProgressSink
     from ..infra.tasks.cancellation import DbCancellationToken
     from ..use_cases.scanning.run_bulk_scan import RunBulkScanCommand
 
     progress = CeleryProgressSink(task_instance)
-    cancel = DbCancellationToken(SessionLocal, scan_id)
+    session_factory = get_session_factory()
+    cancel = DbCancellationToken(session_factory, scan_id)
 
     try:
-        uow = SqlUnitOfWork(SessionLocal)
+        uow = SqlUnitOfWork(session_factory)
         use_case = get_run_bulk_scan_use_case()
         cmd = RunBulkScanCommand(
             scan_id=scan_id,

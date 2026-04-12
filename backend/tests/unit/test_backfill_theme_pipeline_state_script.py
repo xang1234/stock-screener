@@ -58,11 +58,13 @@ def _summary_payload():
 
 @patch("scripts.backfill_theme_pipeline_state._save_checkpoint")
 @patch("scripts.backfill_theme_pipeline_state.ThemePipelineStateBackfillService")
-@patch("scripts.backfill_theme_pipeline_state.SessionLocal")
+@patch("scripts.backfill_theme_pipeline_state.get_session_factory")
+@patch("scripts.backfill_theme_pipeline_state.initialize_process_runtime_services")
 @patch("scripts.backfill_theme_pipeline_state._build_parser")
 def test_main_dry_run_skips_checkpoint_and_report_writes(
     mock_build_parser,
-    mock_session_local,
+    mock_initialize_runtime,
+    mock_get_session_factory,
     mock_service_cls,
     mock_save_checkpoint,
 ):
@@ -71,7 +73,8 @@ def test_main_dry_run_skips_checkpoint_and_report_writes(
     mock_build_parser.return_value = parser
 
     db = MagicMock()
-    mock_session_local.return_value = db
+    session_factory = MagicMock(return_value=db)
+    mock_get_session_factory.return_value = session_factory
 
     service = MagicMock()
     service.process_chunk.side_effect = [
@@ -83,17 +86,22 @@ def test_main_dry_run_skips_checkpoint_and_report_writes(
 
     script.main()
 
+    mock_initialize_runtime.assert_called_once_with()
+    mock_get_session_factory.assert_called_once_with()
+    session_factory.assert_called_once_with()
     mock_save_checkpoint.assert_not_called()
     db.close.assert_called_once()
 
 
 @patch("scripts.backfill_theme_pipeline_state._save_checkpoint")
 @patch("scripts.backfill_theme_pipeline_state.ThemePipelineStateBackfillService")
-@patch("scripts.backfill_theme_pipeline_state.SessionLocal")
+@patch("scripts.backfill_theme_pipeline_state.get_session_factory")
+@patch("scripts.backfill_theme_pipeline_state.initialize_process_runtime_services")
 @patch("scripts.backfill_theme_pipeline_state._build_parser")
 def test_main_non_dry_run_writes_checkpoint_and_report(
     mock_build_parser,
-    mock_session_local,
+    mock_initialize_runtime,
+    mock_get_session_factory,
     mock_service_cls,
     mock_save_checkpoint,
 ):
@@ -102,7 +110,8 @@ def test_main_non_dry_run_writes_checkpoint_and_report(
     mock_build_parser.return_value = parser
 
     db = MagicMock()
-    mock_session_local.return_value = db
+    session_factory = MagicMock(return_value=db)
+    mock_get_session_factory.return_value = session_factory
 
     service = MagicMock()
     service.process_chunk.side_effect = [
@@ -114,6 +123,9 @@ def test_main_non_dry_run_writes_checkpoint_and_report(
 
     script.main()
 
+    mock_initialize_runtime.assert_called_once_with()
+    mock_get_session_factory.assert_called_once_with()
+    session_factory.assert_called_once_with()
     # One write for checkpoint progress, one for final report.
     assert mock_save_checkpoint.call_count == 2
     first_path = mock_save_checkpoint.call_args_list[0].args[0]

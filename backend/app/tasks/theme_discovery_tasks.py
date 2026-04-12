@@ -27,8 +27,8 @@ import time
 from uuid import uuid4
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
 from ..services.redis_pool import get_redis_client
+from ..wiring.bootstrap import get_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def ingest_content(lookback_days=None):
 
     from ..services.content_ingestion_service import ContentIngestionService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -165,7 +165,7 @@ def extract_themes(limit: int = 50, pipeline: str = None):
 
     from ..services.theme_extraction_service import ThemeExtractionService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     combined_result = {
@@ -271,7 +271,7 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
 
     from ..services.theme_extraction_service import ThemeExtractionService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     combined_result = {
@@ -377,7 +377,7 @@ def calculate_theme_metrics(pipeline: str = None):
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     combined_result = {
@@ -497,7 +497,7 @@ def recompute_stale_theme_embeddings(
             "timestamp": datetime.now().isoformat(),
         }
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     last_progress: dict[str, object] = {}
 
@@ -573,7 +573,7 @@ def promote_candidate_themes(pipeline: str = None, limit: int = 1000):
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     summary = {"pipelines": {}, "promoted_total": 0, "scanned_total": 0, "errors": 0}
 
@@ -619,7 +619,7 @@ def apply_lifecycle_policies(pipeline: str = None, limit: int = 1000):
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     summary = {
         "pipelines": {},
@@ -673,7 +673,7 @@ def infer_theme_relationships(pipeline: str = None, max_merge_suggestions: int =
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     summary = {"pipelines": {}, "edges_written": 0, "errors": 0}
 
@@ -727,7 +727,7 @@ def validate_themes(min_correlation: float = 0.5):
 
     from ..services.theme_correlation_service import ThemeCorrelationService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -797,7 +797,7 @@ def discover_correlation_clusters(
 
     from ..services.theme_correlation_service import ThemeCorrelationService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -866,7 +866,7 @@ def check_alerts():
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -948,7 +948,7 @@ def run_full_pipeline(self, run_id: str = None, pipeline: str = None, lookback_d
     logger.info(f"Pipeline(s): {pipelines_desc}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
     results = {}
     pipeline_run = None
@@ -1149,7 +1149,7 @@ def poll_due_sources():
     logger.info("TASK: Poll Due Content Sources")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -1272,7 +1272,7 @@ def consolidate_themes(dry_run: bool = False):
 
     from ..services.theme_merging_service import ThemeMergingService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -1345,7 +1345,7 @@ def compute_l1_metrics(pipeline: str = None):
 
     from ..services.theme_taxonomy_service import ThemeTaxonomyService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -1391,7 +1391,7 @@ def run_taxonomy_assignment(pipeline: str = None, dry_run: bool = False):
 
     from ..services.theme_taxonomy_service import ThemeTaxonomyService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -1448,7 +1448,7 @@ def recompute_l1_centroid_embeddings(pipeline: str = None):
 
     from ..services.theme_taxonomy_service import ThemeTaxonomyService
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:

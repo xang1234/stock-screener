@@ -9,8 +9,7 @@ import logging
 from datetime import datetime
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
-from ..wiring.bootstrap import get_stock_universe_service
+from ..wiring.bootstrap import get_session_factory, get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,7 @@ def refresh_stock_universe(self, exchange_filter: str = None):
         logger.info(f"Exchange filter: {exchange_filter}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     try:
         stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.populate_universe(db, exchange_filter=exchange_filter)
@@ -88,7 +87,7 @@ def refresh_sp500_membership(self):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     try:
         stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.update_sp500_membership(db)

@@ -19,7 +19,7 @@ def _fake_session():
 def test_build_weekly_reference_bundle_runs_publish_hydrate_and_export(monkeypatch, tmp_path, capsys):
     published_at = datetime(2026, 4, 4, 12, 10, 0)
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
-    monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
+    monkeypatch.setattr(build_script, "get_session_factory", lambda: _fake_session)
     stock_universe_service = SimpleNamespace(
         populate_universe=lambda db: {"added": 10},
     )
@@ -110,7 +110,7 @@ def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_pa
     bundle_path = tmp_path / "weekly-reference.json.gz"
     bundle_path.write_bytes(b"bundle")
     monkeypatch.setattr(import_script, "prepare_runtime", lambda: None)
-    monkeypatch.setattr(import_script, "SessionLocal", _fake_session)
+    monkeypatch.setattr(import_script, "get_session_factory", lambda: _fake_session)
     import_calls: list[Path] = []
     provider_snapshot_service = SimpleNamespace(
         import_weekly_reference_bundle=lambda db, input_path: import_calls.append(input_path) or {"rows": 10},
@@ -130,7 +130,7 @@ def test_load_ibd_industry_groups_script_uses_csv_path(monkeypatch, tmp_path, ca
     csv_path = tmp_path / "IBD_industry_group.csv"
     csv_path.write_text("AAPL,Software\n", encoding="utf-8")
     monkeypatch.setattr(load_ibd_script, "prepare_runtime", lambda: None)
-    monkeypatch.setattr(load_ibd_script, "SessionLocal", _fake_session)
+    monkeypatch.setattr(load_ibd_script, "get_session_factory", lambda: _fake_session)
     load_calls: list[str] = []
     monkeypatch.setattr(
         load_ibd_script.IBDIndustryService,

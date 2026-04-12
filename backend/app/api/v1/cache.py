@@ -23,7 +23,6 @@ from ...schemas.cache import (
     StalenessStatusResponse,
 )
 from ...schemas.common import TaskResponse
-from ...services.cache_manager import CacheManager
 from ...tasks.cache_tasks import (
     warm_spy_cache,
     warm_top_symbols,
@@ -32,9 +31,13 @@ from ...tasks.cache_tasks import (
     force_refresh_stale_intraday,
     smart_refresh_cache
 )
-from ...wiring.bootstrap import get_data_fetch_lock, get_price_cache
+from ...wiring.bootstrap import (
+    get_cache_manager,
+    get_data_fetch_lock,
+    get_price_cache,
+    get_session_factory,
+)
 from ...utils.market_hours import format_market_status, is_market_open
-from ...database import SessionLocal
 from ...models.stock import StockFundamental
 
 router = APIRouter(prefix="/cache", tags=["cache"])
@@ -86,7 +89,7 @@ async def get_cache_statistics():
         Cache statistics including Redis status, SPY cache, price cache, and memory usage
     """
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
         stats = cache_manager.get_cache_stats()
         return stats
 
@@ -247,7 +250,7 @@ async def get_cache_hit_rate():
         Cache hit rate percentage
     """
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
         hit_rate = cache_manager.get_cache_hit_rate()
 
         return {
@@ -367,7 +370,7 @@ async def get_symbol_cache_info(symbol: str):
         Cache information for the symbol
     """
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
         stats = cache_manager.price_cache.get_cache_stats(symbol)
 
         return stats
@@ -407,7 +410,7 @@ async def get_cache_health():
         health = price_cache.get_cache_health_status()
 
         # Add universe count for frontend display
-        db = SessionLocal()
+        db = get_session_factory()()
         try:
             universe_count = db.query(func.count(StockUniverse.symbol)).filter(
                 StockUniverse.is_active == True
@@ -531,7 +534,7 @@ async def get_dashboard_cache_statistics():
         from ...models.stock_universe import StockUniverse
 
         # Get fundamentals cache stats using efficient SQL aggregate queries
-        db = SessionLocal()
+        db = get_session_factory()()
         try:
             from sqlalchemy import func
             from datetime import timedelta
@@ -573,7 +576,7 @@ async def get_dashboard_cache_statistics():
             db.close()
 
         # Get price cache stats
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
         price_stats = cache_manager.get_cache_stats()
 
         # Extract SPY cache info (corrected key names)

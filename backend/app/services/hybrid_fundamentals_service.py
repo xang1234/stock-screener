@@ -59,8 +59,9 @@ class HybridFundamentalsService:
         yfinance_delay_per_ticker: float = 1.5,
         yfinance_delay_between_batches: float = 2.0,
         finviz_rate_limit: float = 0.5,
-        price_cache: PriceCacheService | None = None,
-        finviz_service: FinvizService | None = None,
+        *,
+        price_cache: PriceCacheService,
+        finviz_service: FinvizService,
     ):
         """
         Initialize HybridFundamentalsService.
@@ -80,25 +81,10 @@ class HybridFundamentalsService:
 
         self.technical_calc = TechnicalCalculatorService()
         resolved_rate_limiter = getattr(finviz_service, "_rate_limiter", None)
-        if finviz_service is None:
-            from app.services.rate_limiter import RedisRateLimiter
-
-            resolved_rate_limiter = RedisRateLimiter()
-            finviz_service = FinvizService(rate_limiter=resolved_rate_limiter)
-        if price_cache is None:
-            from app.database import SessionLocal
-            from app.services.redis_pool import get_redis_client
-
-            price_cache = PriceCacheService(
-                redis_client=get_redis_client(),
-                session_factory=SessionLocal,
+        if resolved_rate_limiter is None:
+            raise ValueError(
+                "HybridFundamentalsService requires FinvizService with an injected rate limiter"
             )
-        if resolved_rate_limiter is None:
-            resolved_rate_limiter = getattr(finviz_service, "_rate_limiter", None)
-        if resolved_rate_limiter is None:
-            from app.services.rate_limiter import RedisRateLimiter
-
-            resolved_rate_limiter = RedisRateLimiter()
         self._finviz_rate_limiter = resolved_rate_limiter
         self.bulk_fetcher = BulkDataFetcher(rate_limiter=resolved_rate_limiter)
 

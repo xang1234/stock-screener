@@ -16,7 +16,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
 
-from ..database import SessionLocal
 from ..models.stock import StockFundamental
 from ..config import settings
 from .errors import CacheRefreshError
@@ -101,10 +100,11 @@ class FundamentalsCacheService:
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
-        session_factory: Optional[Callable[[], Session]] = None,
+        *,
+        session_factory: Callable[[], Session],
     ):
         """Initialize fundamentals cache service."""
-        self._session_factory = session_factory or SessionLocal
+        self._session_factory = session_factory
         if redis_client:
             self._redis_client = redis_client
         else:

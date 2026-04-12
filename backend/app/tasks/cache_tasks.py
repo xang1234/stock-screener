@@ -18,11 +18,15 @@ from datetime import datetime
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
-from ..database import SessionLocal, is_corruption_error, safe_rollback
-from ..services.cache_manager import CacheManager
+from ..database import is_corruption_error, safe_rollback
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
-from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
+from ..wiring.bootstrap import (
+    get_cache_manager,
+    get_rate_limiter,
+    get_session_factory,
+    get_stock_universe_service,
+)
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -60,7 +64,7 @@ def warm_spy_cache():
     logger.info("=" * 60)
 
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
 
         # Warm both 1y and 2y periods
         results = {
@@ -105,7 +109,7 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
     logger.info(f"Market status: {format_market_status()}")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         # If no symbols provided, get from universe
@@ -139,7 +143,7 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
 
         logger.info(f"Warming {len(symbols)} symbols: {', '.join(symbols[:10])}...")
 
-        cache_manager = CacheManager(db)
+        cache_manager = get_cache_manager(db=db)
 
         # Warm all caches
         results = cache_manager.warm_all_caches(symbols)
@@ -207,14 +211,14 @@ def weekly_full_refresh(self):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     refreshed = 0
     failed = 0
     failed_symbols = []
 
     try:
         from ..models.stock_universe import StockUniverse
-        cache_manager = CacheManager(db)
+        cache_manager = get_cache_manager(db=db)
         bulk_fetcher = BulkDataFetcher()
 
         # 1. Clean up orphaned cache keys (symbols no longer in active universe)
@@ -396,7 +400,7 @@ def invalidate_cache(symbol: Optional[str] = None):
     logger.info(f"TASK: Invalidate cache for {symbol if symbol else 'ALL'}")
 
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
 
         if symbol:
             success = cache_manager.invalidate_symbol_cache(symbol)
@@ -427,7 +431,7 @@ def get_cache_stats():
         Dict with cache statistics
     """
     try:
-        cache_manager = CacheManager()
+        cache_manager = get_cache_manager()
         stats = cache_manager.get_cache_stats()
         stats['timestamp'] = datetime.now().isoformat()
         return stats
@@ -467,13 +471,13 @@ def _prewarm_scan_cache_impl(task, symbol_list: List[str], priority: str = 'norm
 
     owns_db = db is None
     if owns_db:
-        db = SessionLocal()
+        db = get_session_factory()()
     warmed = 0
     failed = 0
     cached = 0
 
     try:
-        cache_manager = CacheManager(db)
+        cache_manager = get_cache_manager(db=db)
 
         # Process in chunks for progress tracking
         chunk_size = 50
@@ -590,7 +594,7 @@ def prewarm_all_active_symbols(self):
         logger.info(f"Skipping nightly warmup - {today} is not a trading day")
         return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat()}
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         # Get all active symbols from stock universe
@@ -740,7 +744,7 @@ def _track_symbol_failures(
     failure_details = failure_details or {}
     owns_db = db is None
     if owns_db:
-        db = SessionLocal()
+        db = get_session_factory()()
 
     try:
         # Clear failure counters for successful symbols
@@ -837,7 +841,7 @@ def _filter_active_symbols(symbols: List[str]) -> List[str]:
 
         stock_universe_service = StockUniverseService()
 
-    db = SessionLocal()
+    db = get_session_factory()()
     try:
         filtered = stock_universe_service.filter_active_symbols(db, symbols)
         filtered_set = set(filtered)
@@ -1144,7 +1148,7 @@ def smart_refresh_cache(self, mode: str = "auto"):
 
     price_cache = get_price_cache()
     bulk_fetcher = BulkDataFetcher()
-    db = SessionLocal()
+    db = get_session_factory()()
 
     refreshed = 0
     failed = 0
@@ -1383,7 +1387,7 @@ def cleanup_old_price_data(self, keep_years: int = 5):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         # Calculate cutoff date
@@ -1503,7 +1507,7 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         # Get top N results ordered by composite score
@@ -1618,7 +1622,7 @@ def cleanup_orphaned_scans(self):
     logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 80)
 
-    db = SessionLocal()
+    db = get_session_factory()()
 
     try:
         total_deleted_scans = 0

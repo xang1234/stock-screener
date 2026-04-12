@@ -93,7 +93,7 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
 
     fake_db = MagicMock()
     fake_price_cache = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     monkeypatch.setattr(module, "get_eastern_now", lambda: SimpleNamespace(weekday=lambda: 6, hour=2, date=lambda: date(2026, 3, 22)))
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
@@ -120,7 +120,7 @@ def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkey
     fake_db.query.return_value = fake_query
     fake_price_cache = MagicMock()
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
     monkeypatch.setattr(
         module,
@@ -165,8 +165,8 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     fake_cache_manager = MagicMock()
     fake_cache_manager.cleanup_orphaned_cache_keys.return_value = 0
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "CacheManager", lambda db: fake_cache_manager)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
+    monkeypatch.setattr(module, "get_cache_manager", lambda db=None: fake_cache_manager)
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=SoftTimeLimitExceeded()))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(
@@ -208,8 +208,8 @@ def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
     fake_cache_manager = MagicMock()
     fake_cache_manager.cleanup_orphaned_cache_keys.return_value = 0
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(module, "CacheManager", lambda db: fake_cache_manager)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
+    monkeypatch.setattr(module, "get_cache_manager", lambda db=None: fake_cache_manager)
     monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(module, "_fetch_with_backoff", MagicMock(side_effect=SoftTimeLimitExceeded()))
@@ -250,23 +250,15 @@ def test_warm_price_cache_uses_batch_store(monkeypatch):
         },
     }
 
-    monkeypatch.setattr(module, "get_redis_client", lambda: None)
-    monkeypatch.setattr(
-        module,
-        "BenchmarkCacheService",
-        lambda redis_client, session_factory: benchmark_cache,
-    )
-    monkeypatch.setattr(
-        module,
-        "PriceCacheService",
-        lambda redis_client, session_factory: price_cache,
-    )
     monkeypatch.setattr(
         "app.services.bulk_data_fetcher.BulkDataFetcher",
         lambda: bulk_fetcher,
     )
 
-    manager = module.CacheManager()
+    manager = module.CacheManager(
+        benchmark_cache=benchmark_cache,
+        price_cache=price_cache,
+    )
     result = manager.warm_price_cache(
         ["AAPL", "MSFT", "BAD"],
         batch_size=100,

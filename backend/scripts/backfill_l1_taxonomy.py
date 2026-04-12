@@ -16,9 +16,10 @@ from datetime import datetime
 # Add backend directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.database import SessionLocal, engine
+from app.database import engine
 from app.db_migrations.theme_taxonomy_migration import migrate_theme_taxonomy
 from app.services.theme_taxonomy_service import ThemeTaxonomyService
+from app.wiring.bootstrap import get_session_factory, initialize_process_runtime_services
 
 
 def main():
@@ -43,7 +44,8 @@ def main():
     else:
         print("  Schema already up to date.")
 
-    db = SessionLocal()
+    initialize_process_runtime_services()
+    db = get_session_factory()()
     try:
         service = ThemeTaxonomyService(db, pipeline=args.pipeline)
 

@@ -27,12 +27,13 @@ from ...services.assistant_gateway_service import (
     AssistantUpstreamUnavailableError,
     AssistantWatchlistNotFoundError,
 )
+from ...wiring.bootstrap import get_assistant_gateway_service
 
 router = APIRouter()
 
 
 def _get_assistant_gateway_service() -> AssistantGatewayService:
-    return AssistantGatewayService()
+    return get_assistant_gateway_service()
 
 
 @router.post("/conversations", response_model=AssistantConversationResponse)

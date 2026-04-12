@@ -23,7 +23,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
 
-from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from ..config import settings
@@ -68,10 +67,11 @@ class PriceCacheService:
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
-        session_factory: Optional[Callable[[], Session]] = None,
+        *,
+        session_factory: Callable[[], Session],
     ):
         """Initialize price cache service."""
-        self._session_factory = session_factory or SessionLocal
+        self._session_factory = session_factory
         if redis_client:
             self._redis_client = redis_client
         else:

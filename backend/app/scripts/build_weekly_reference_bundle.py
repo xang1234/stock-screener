@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.provider_snapshot_service import ProviderSnapshotService
-from app.wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
+from app.wiring.bootstrap import (
+    get_provider_snapshot_service,
+    get_session_factory,
+    get_stock_universe_service,
+)
 
 
 def _default_output_dir() -> Path:
@@ -85,7 +88,7 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         print("Starting stock universe refresh from Finviz...", flush=True)
         universe_stats = stock_universe_service.populate_universe(db)
         print(f"Universe refresh complete: {universe_stats}", flush=True)

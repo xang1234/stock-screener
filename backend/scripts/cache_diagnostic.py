@@ -4,10 +4,13 @@ Diagnostic script to trace the bulk refresh → cache → database flow.
 This will help identify where the 19-day limitation is coming from.
 """
 import logging
-from app.services.cache_manager import CacheManager
-from app.database import SessionLocal
 from app.models.stock import StockPrice
-from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
+from app.wiring.bootstrap import (
+    get_cache_manager,
+    get_price_cache,
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 from sqlalchemy import func
 
 logging.basicConfig(level=logging.INFO)
@@ -20,12 +23,12 @@ print("=" * 80)
 print("DIAGNOSTIC: Tracing Bulk Refresh → Cache → Database Flow")
 print("=" * 80)
 
-initialize_process_runtime_services(session_factory=SessionLocal)
+initialize_process_runtime_services()
 
 # Step 1: Check what's currently in the database
 print("\n1. CURRENT DATABASE STATE")
 print("-" * 80)
-db = SessionLocal()
+db = get_session_factory()()
 try:
     for symbol in test_symbols:
         count = db.query(func.count(StockPrice.id)).filter(
@@ -48,7 +51,7 @@ finally:
 # Step 2: Run a bulk refresh
 print("\n2. RUNNING BULK REFRESH (FORCE=TRUE)")
 print("-" * 80)
-cache_manager = CacheManager()
+cache_manager = get_cache_manager()
 
 # Force refresh to ensure we bypass any cache
 result = cache_manager.warm_price_cache(
@@ -64,7 +67,7 @@ print(f"Bulk refresh result: {result['successful']} successful, {result['failed'
 # Step 3: Check database again
 print("\n3. DATABASE STATE AFTER REFRESH")
 print("-" * 80)
-db = SessionLocal()
+db = get_session_factory()()
 try:
     for symbol in test_symbols:
         count = db.query(func.count(StockPrice.id)).filter(

@@ -10,7 +10,7 @@ import logging
 
 from fastapi import APIRouter
 
-from ...database import SessionLocal, is_corruption_error, safe_rollback
+from ...database import is_corruption_error, safe_rollback
 from ...models.theme import ContentItem, ContentItemPipelineState, ContentSource, ThemeMention
 from ...services.theme_content_recovery_service import (
     attempt_reindex_theme_content_storage as _attempt_reindex_theme_content_storage,
@@ -33,6 +33,7 @@ from .themes_common import (
     resolve_source_ids_for_pipeline as _resolve_source_ids_for_pipeline,
     safe_theme_cluster_response as _safe_theme_cluster_response,
 )
+from ...wiring.bootstrap import get_session_factory
 from .themes_queries import router as queries_router
 from .themes_queries import (
     get_lifecycle_transitions,
@@ -64,7 +65,7 @@ def _corruption_targets_theme_content_storage(
     **_ignored,
 ):
     """Compatibility wrapper that preserves monkeypatchable classifier probes."""
-    with SessionLocal() as probe_db:
+    with get_session_factory()() as probe_db:
         try:
             probe_db.query(ContentSource.id).filter(
                 ContentSource.is_active == True
@@ -147,7 +148,7 @@ def _fetch_content_items_with_themes_with_recovery(db, **kwargs):
         safe_rollback(db)
         _attempt_reindex_theme_content_storage(exc)
         try:
-            with SessionLocal() as retry_db:
+            with get_session_factory()() as retry_db:
                 return _fetch_content_items_with_themes(retry_db, **kwargs)
         except Exception as retry_exc:
             if not is_corruption_error(retry_exc):
@@ -167,7 +168,7 @@ def _fetch_content_items_with_themes_with_recovery(db, **kwargs):
                 )
                 raise
             _reset_corrupt_theme_content_storage(retry_exc)
-            with SessionLocal() as reset_retry_db:
+            with get_session_factory()() as reset_retry_db:
                 return _fetch_content_items_with_themes(reset_retry_db, **kwargs)
 
 # Keep static/source/pipeline paths before parameterized theme routes.

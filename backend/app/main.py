@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
-from .database import SessionLocal, engine
+from .database import engine
 from .infra.db.migrations import migrate_database_to_head
 from .infra.db.portability import table_exists
 from .services.redis_pool import get_redis_client
@@ -207,12 +207,14 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     initialize_runtime()
-    runtime_services = initialize_process_runtime_services(session_factory=SessionLocal)
+    runtime_services = initialize_process_runtime_services()
     app.state.runtime_services = runtime_services
     if settings.mcp_http_enabled:
         from .interfaces.mcp.http_transport import create_mcp_http_server
 
-        app.state.mcp_server = create_mcp_http_server(session_factory=SessionLocal)
+        app.state.mcp_server = create_mcp_http_server(
+            session_factory=runtime_services.session_factory()
+        )
 
     # Trigger non-blocking gap-fill for IBD group rankings
     if getattr(settings, 'group_rank_gapfill_enabled', True):

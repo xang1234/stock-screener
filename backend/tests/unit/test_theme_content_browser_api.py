@@ -241,7 +241,7 @@ async def test_list_content_items_recovers_from_corrupt_theme_content_storage(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
     )
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
 
     response = await client.get(
         "/api/v1/themes/content",
@@ -291,7 +291,7 @@ def test_theme_content_recovery_retries_after_reindex_without_reset(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
     )
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
 
     items, total = themes_api._fetch_content_items_with_themes_with_recovery(object(), pipeline="fundamental")
 
@@ -333,7 +333,7 @@ def test_theme_content_recovery_does_not_reset_for_non_resettable_corruption(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: reset_calls.__setitem__("count", reset_calls["count"] + 1),
     )
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
 
     with pytest.raises(DatabaseError):
         themes_api._fetch_content_items_with_themes_with_recovery(object(), pipeline="fundamental")
@@ -396,7 +396,7 @@ async def test_export_content_items_recovers_from_reindex_without_reset(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
     )
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
 
     response = await client.get(
         "/api/v1/themes/content/export",
@@ -468,7 +468,7 @@ async def test_export_content_items_recovers_from_corrupt_theme_content_storage(
         "app.api.v1.themes._reset_corrupt_theme_content_storage",
         lambda exc: calls.__setitem__("reset", calls["reset"] + 1),
     )
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
 
     response = await client.get(
         "/api/v1/themes/content/export",
@@ -519,7 +519,7 @@ def test_theme_content_storage_classifier_uses_filtered_browser_query(monkeypatc
         def query(self, *_args, **_kwargs):
             return _SourceProbe()
 
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
     monkeypatch.setattr(
         "app.api.v1.themes._resolve_source_ids_for_pipeline",
         lambda _db, pipeline: [11] if pipeline == "technical" else [],
@@ -569,7 +569,7 @@ def test_theme_content_storage_classifier_skips_reset_for_content_source_corrupt
         def query(self, *_args, **_kwargs):
             return _SourceProbe()
 
-    monkeypatch.setattr("app.api.v1.themes.SessionLocal", lambda: _DummySession())
+    monkeypatch.setattr("app.api.v1.themes.get_session_factory", lambda: (lambda: _DummySession()))
     monkeypatch.setattr(
         "app.api.v1.themes._build_content_items_browser_base_query",
         lambda *_args, **_kwargs: pytest.fail("browser query probe should not run when content_sources is corrupt"),

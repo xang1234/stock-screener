@@ -49,7 +49,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "celery-task-id-123"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal") as mock_session_local,
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()) as mock_session_local,
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork", mock_uow_cls),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink", mock_progress_cls),
@@ -82,7 +82,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "task-id"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()),
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
@@ -105,7 +105,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "task-id"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()),
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
@@ -130,7 +130,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "task-id"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()),
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
@@ -162,7 +162,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "celery-123"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()),
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
@@ -200,7 +200,7 @@ class TestRunBulkScanViaUseCase:
         task_instance.request.id = "task-id"
 
         with (
-            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock()),
             patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
@@ -215,14 +215,14 @@ class TestRunBulkScanViaUseCase:
 class TestPostScanPipeline:
     """Test the extracted _run_post_scan_pipeline function."""
 
-    @patch(f"{_WRAPPER_PATH}.SessionLocal")
+    @patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock())
     @patch(f"{_WRAPPER_PATH}.compute_industry_peer_metrics")
     @patch(f"{_WRAPPER_PATH}.cleanup_old_scans")
     def test_calls_peer_metrics_and_cleanup(
         self, mock_cleanup, mock_peer_metrics, mock_session_local
     ):
         mock_db = MagicMock()
-        mock_session_local.return_value = mock_db
+        mock_session_local.return_value = lambda: mock_db
 
         mock_scan = MagicMock()
         mock_scan.universe_key = "all"
@@ -237,11 +237,11 @@ class TestPostScanPipeline:
         mock_cleanup.assert_called_once_with(mock_db, "all")
         mock_db.close.assert_called_once()
 
-    @patch(f"{_WRAPPER_PATH}.SessionLocal")
+    @patch("app.wiring.bootstrap.get_session_factory", return_value=MagicMock())
     @patch(f"{_WRAPPER_PATH}.compute_industry_peer_metrics")
     def test_session_closed_on_error(self, mock_peer_metrics, mock_session_local):
         mock_db = MagicMock()
-        mock_session_local.return_value = mock_db
+        mock_session_local.return_value = lambda: mock_db
         mock_peer_metrics.side_effect = RuntimeError("db error")
 
         from app.tasks.scan_tasks import _run_post_scan_pipeline

@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime
-from app.wiring.bootstrap import get_provider_snapshot_service
+from app.wiring.bootstrap import get_provider_snapshot_service, get_session_factory
 
 
 def main() -> int:
@@ -22,7 +21,7 @@ def main() -> int:
     prepare_runtime()
     provider_snapshot_service = get_provider_snapshot_service()
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         stats = provider_snapshot_service.import_weekly_reference_bundle(
             db,
             input_path=Path(args.input),

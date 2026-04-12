@@ -17,7 +17,6 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from ..config import settings
-from ..database import SessionLocal
 from ..interfaces.mcp.market_copilot import MarketCopilotService
 from ..models.chatbot import Conversation, Message
 from ..models.stock_universe import StockUniverse
@@ -95,7 +94,7 @@ class AssistantGatewayService:
         self,
         *,
         app_settings: Any = settings,
-        session_factory: sessionmaker = SessionLocal,
+        session_factory: sessionmaker,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         market_copilot_service: MarketCopilotService | None = None,
     ) -> None:

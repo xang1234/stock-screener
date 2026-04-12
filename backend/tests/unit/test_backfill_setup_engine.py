@@ -210,10 +210,10 @@ def _make_price_df(start: str = "2024-06-01", periods: int = 200) -> pd.DataFram
 class TestRunBackfillDryRun:
     """Verify dry-run mode performs no writes."""
 
-    @patch("scripts.backfill_setup_engine.SessionLocal")
+    @patch("scripts.backfill_setup_engine.get_session_factory")
     def test_dry_run_no_writes(self, mock_session_cls):
         mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
+        mock_session_cls.return_value = lambda: mock_db
 
         # Simulate one row that needs backfill (no setup_engine key)
         mock_row = (1, "AAPL", date(2025, 6, 1), {"minervini": {"score": 80}})
@@ -234,12 +234,12 @@ class TestRunBackfillErrorIsolation:
     @patch("scripts.backfill_setup_engine.get_benchmark_cache")
     @patch("scripts.backfill_setup_engine._fetch_price_data")
     @patch("scripts.backfill_setup_engine.SetupEngineScanner")
-    @patch("scripts.backfill_setup_engine.SessionLocal")
+    @patch("scripts.backfill_setup_engine.get_session_factory")
     def test_failed_symbol_continues(
         self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_get_benchmark_cache,
     ):
         mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
+        mock_session_cls.return_value = lambda: mock_db
 
         # Two symbols: AAPL (will fail), MSFT (will succeed)
         rows = [
@@ -300,10 +300,10 @@ class TestRunBackfillErrorIsolation:
 class TestRunBackfillStatusFilter:
     """Verify run status filter is applied to the query."""
 
-    @patch("scripts.backfill_setup_engine.SessionLocal")
+    @patch("scripts.backfill_setup_engine.get_session_factory")
     def test_custom_status_filter(self, mock_session_cls):
         mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
+        mock_session_cls.return_value = lambda: mock_db
 
         mock_query = MagicMock()
         mock_query.all.return_value = []  # No rows — just testing the filter is applied
@@ -327,10 +327,10 @@ class TestRunBackfillStatusFilter:
 class TestRunBackfillIdempotency:
     """Verify rows with matching schema_version are skipped."""
 
-    @patch("scripts.backfill_setup_engine.SessionLocal")
+    @patch("scripts.backfill_setup_engine.get_session_factory")
     def test_already_backfilled_rows_skipped(self, mock_session_cls):
         mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
+        mock_session_cls.return_value = lambda: mock_db
 
         # Row already has current schema
         row_already_done = (
@@ -354,12 +354,12 @@ class TestRunBackfillForceOverwrite:
     @patch("scripts.backfill_setup_engine.get_benchmark_cache")
     @patch("scripts.backfill_setup_engine._fetch_price_data")
     @patch("scripts.backfill_setup_engine.SetupEngineScanner")
-    @patch("scripts.backfill_setup_engine.SessionLocal")
+    @patch("scripts.backfill_setup_engine.get_session_factory")
     def test_force_reprocesses_matching_rows(
         self, mock_session_cls, mock_scanner_cls, mock_fetch, mock_get_benchmark_cache,
     ):
         mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
+        mock_session_cls.return_value = lambda: mock_db
 
         # Row already at current schema — normally would be skipped
         row = (

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.database import SessionLocal
 from app.main import initialize_runtime
 from app.wiring.bootstrap import initialize_process_runtime_services
 
@@ -15,4 +14,4 @@ def repo_root() -> Path:
 
 def prepare_runtime() -> None:
     initialize_runtime()
-    initialize_process_runtime_services(session_factory=SessionLocal)
+    initialize_process_runtime_services()

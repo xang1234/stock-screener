@@ -21,7 +21,7 @@ def test_daily_breadth_refuses_to_publish_when_same_day_warmup_incomplete(monkey
     import app.tasks.breadth_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)
     monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 3, 20, 17, 35, 0))
@@ -89,7 +89,7 @@ def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
     import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 4, 3, 0, 30, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda: None)
@@ -132,7 +132,7 @@ def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):
     import app.tasks.breadth_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
 
     monkeypatch.setattr(
@@ -167,7 +167,7 @@ def test_breadth_gapfill_retries_transient_outer_failures(monkeypatch):
     import app.tasks.breadth_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
     monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)
@@ -198,7 +198,7 @@ def test_breadth_gapfill_reraises_soft_time_limit(monkeypatch):
     import app.tasks.breadth_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
     monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)

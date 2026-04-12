@@ -18,11 +18,14 @@ sys.path.insert(0, str(backend_dir))
 
 import logging
 from sqlalchemy import delete
-from app.database import SessionLocal
 from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
-from app.services.cache_manager import CacheManager
-from app.wiring.bootstrap import get_price_cache, initialize_process_runtime_services
+from app.wiring.bootstrap import (
+    get_cache_manager,
+    get_price_cache,
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,8 +47,8 @@ if confirm != "YES":
     print("Aborted.")
     exit(0)
 
-db = SessionLocal()
-initialize_process_runtime_services(session_factory=SessionLocal)
+initialize_process_runtime_services()
+db = get_session_factory()()
 
 try:
     # Step 1: Clear price data from database
@@ -85,7 +88,7 @@ try:
     print("   This will take ~2-3 hours (respecting yfinance rate limits)...")
     print("   Progress will be logged...")
 
-    cache_manager = CacheManager(db)
+    cache_manager = get_cache_manager(db=db)
 
     # Use smaller batch size to be safe (20 instead of 50)
     result = cache_manager.warm_price_cache(

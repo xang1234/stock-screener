@@ -331,7 +331,7 @@ def build_daily_snapshot(
         BuildDailySnapshotCommand,
         _is_us_trading_day,
     )
-    from app.wiring.bootstrap import get_build_daily_snapshot_use_case
+    from app.wiring.bootstrap import get_build_daily_snapshot_use_case, get_session_factory
 
     as_of = date.fromisoformat(as_of_date_str) if as_of_date_str else date.today()
     from app.domain.scanning.defaults import get_default_scan_profile
@@ -360,9 +360,10 @@ def build_daily_snapshot(
         composite_method,
         settings.feature_snapshot_soft_time_limit_seconds,
     )
+    session_factory = get_session_factory()
 
     cleaned_stale_runs = _fail_stale_feature_runs(
-        session_factory=SessionLocal,
+        session_factory=session_factory,
         stale_after_minutes=settings.feature_snapshot_stale_after_minutes,
     )
 
@@ -378,7 +379,7 @@ def build_daily_snapshot(
 
     # ── Skip-if-published guard (cheap DB check) ─────────────
     if skip_if_published:
-        uow_check = SqlUnitOfWork(SessionLocal)
+        uow_check = SqlUnitOfWork(session_factory)
         with uow_check:
             universe_def = normalize_universe_definition(universe_name)
             symbols = uow_check.universe.resolve_symbols(universe_def)
@@ -422,7 +423,7 @@ def build_daily_snapshot(
 
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
-    uow = SqlUnitOfWork(SessionLocal)
+    uow = SqlUnitOfWork(session_factory)
     cmd = BuildDailySnapshotCommand(
         as_of_date=as_of,
         screener_names=screeners,

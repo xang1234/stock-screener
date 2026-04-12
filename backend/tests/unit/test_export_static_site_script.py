@@ -111,7 +111,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
 
     hydrate_calls: list[tuple[object, bool]] = []
 
-    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(export_script, "get_session_factory", lambda: fake_session)
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
     monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
     monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))

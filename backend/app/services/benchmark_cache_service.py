@@ -17,7 +17,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = Any  # type: ignore
 
-from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
@@ -51,10 +50,11 @@ class BenchmarkCacheService:
     def __init__(
         self,
         redis_client: Optional[redis.Redis] = None,
-        session_factory: Optional[Callable[[], Session]] = None,
+        *,
+        session_factory: Callable[[], Session],
     ):
         """Initialize benchmark cache service."""
-        self._session_factory = session_factory or SessionLocal
+        self._session_factory = session_factory
         if redis_client:
             self._redis_client = redis_client
         else:

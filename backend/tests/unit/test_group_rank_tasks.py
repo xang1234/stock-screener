@@ -23,7 +23,7 @@ def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypat
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "is_trading_day", lambda d: True)
     monkeypatch.setattr(
@@ -57,7 +57,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
     import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "is_trading_day", lambda d: True)
     monkeypatch.setattr(
@@ -94,7 +94,7 @@ def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(m
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "is_trading_day", lambda d: True)
     monkeypatch.setattr(
@@ -136,7 +136,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
     import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(
         module,
@@ -171,7 +171,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
     import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(
         module,
@@ -207,7 +207,7 @@ def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "is_trading_day", lambda d: True)
     monkeypatch.setattr(
@@ -251,7 +251,7 @@ def test_daily_group_rankings_reraises_soft_time_limit(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "get_session_factory", lambda: (lambda: fake_db))
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "is_trading_day", lambda d: True)
     monkeypatch.setattr(

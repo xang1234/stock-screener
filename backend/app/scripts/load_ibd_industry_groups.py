@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from app.database import SessionLocal
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.ibd_industry_service import IBDIndustryService
+from app.wiring.bootstrap import get_session_factory
 
 
 def _default_csv_path() -> Path:
@@ -25,7 +25,7 @@ def main() -> int:
 
     prepare_runtime()
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         loaded = IBDIndustryService.load_from_csv(db, csv_path=args.csv)
 
     print("IBD industry group load complete:")

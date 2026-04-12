@@ -18,11 +18,10 @@ import time
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
 )
-from ..wiring.bootstrap import get_group_rank_service
+from ..wiring.bootstrap import get_group_rank_service, get_session_factory
 from ..utils.market_hours import is_trading_day, get_eastern_now
 from .data_fetch_lock import serialized_data_fetch
 
@@ -125,7 +124,7 @@ def calculate_daily_group_rankings(self, calculation_date: str = None, force_cac
 
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -277,7 +276,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str):
             'timestamp': datetime.now().isoformat()
         }
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -360,7 +359,7 @@ def gapfill_group_rankings(self, max_days: int = 365):
     logger.info(f"Looking back {max_days} days")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -441,7 +440,7 @@ def backfill_group_rankings_1year(self):
     logger.info("TASK: 1-Year Backfill IBD Group Rankings (Optimized)")
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:

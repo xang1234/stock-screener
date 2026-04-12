@@ -87,29 +87,10 @@ class ProviderSnapshotService:
     def __init__(
         self,
         *,
-        price_cache: PriceCacheService | None = None,
-        fundamentals_cache: FundamentalsCacheService | None = None,
-        rate_limiter: RedisRateLimiter | None = None,
+        price_cache: PriceCacheService,
+        fundamentals_cache: FundamentalsCacheService,
+        rate_limiter: RedisRateLimiter,
     ) -> None:
-        if rate_limiter is None:
-            from .rate_limiter import RedisRateLimiter
-
-            rate_limiter = RedisRateLimiter()
-        if price_cache is None or fundamentals_cache is None:
-            from app.database import SessionLocal
-            from app.services.redis_pool import get_redis_client
-            from app.services.fundamentals_cache_service import FundamentalsCacheService
-            from app.services.price_cache_service import PriceCacheService
-
-            redis_client = get_redis_client()
-            price_cache = price_cache or PriceCacheService(
-                redis_client=redis_client,
-                session_factory=SessionLocal,
-            )
-            fundamentals_cache = fundamentals_cache or FundamentalsCacheService(
-                redis_client=redis_client,
-                session_factory=SessionLocal,
-            )
         self.parser = FinvizParser()
         self.price_cache = price_cache
         self.fundamentals_cache = fundamentals_cache

@@ -19,12 +19,11 @@ import time
 from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
 from ..services.breadth_calculator_service import BreadthCalculatorService
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
-from ..wiring.bootstrap import get_price_cache
+from ..wiring.bootstrap import get_price_cache, get_session_factory
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -179,7 +178,7 @@ def calculate_daily_breadth(self, calculation_date: str = None, force_cache_only
 
     logger.info("=" * 60)
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -379,7 +378,7 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
     logger.info(f"Generated {len(trading_dates)} trading days to process")
     logger.info(f"Skipped {skipped_non_trading_days} non-trading days")
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     try:
@@ -466,7 +465,7 @@ def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
     if max_gap_days is None:
         max_gap_days = settings.breadth_gapfill_max_days
 
-    db = SessionLocal()
+    db = get_session_factory()()
     start_time = time.time()
 
     result = {

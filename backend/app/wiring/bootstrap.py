@@ -33,11 +33,14 @@ from app.services.job_backend import JobBackend, CeleryJobBackend
 from app.services.redis_pool import get_redis_client
 
 if TYPE_CHECKING:
+    from app.interfaces.mcp.market_copilot import MarketCopilotService
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.providers.stock_data import DataPrepStockDataProvider
     from app.scanners.scan_orchestrator import ScanOrchestrator
     from app.services.alphavantage_service import AlphaVantageService
+    from app.services.assistant_gateway_service import AssistantGatewayService
     from app.services.benchmark_cache_service import BenchmarkCacheService
+    from app.services.cache_manager import CacheManager
     from app.services.data_source_service import DataSourceService
     from app.services.eps_rating_service import EPSRatingService
     from app.services.finviz_service import FinvizService
@@ -111,6 +114,11 @@ class RuntimeServices:
         self._hybrid_fundamentals_service: HybridFundamentalsService | None = None
         self._stock_data_provider: DataPrepStockDataProvider | None = None
         self._scan_orchestrator: ScanOrchestrator | None = None
+        self._market_copilot_service: MarketCopilotService | None = None
+        self._assistant_gateway_service: AssistantGatewayService | None = None
+
+    def session_factory(self) -> SessionFactory:
+        return self._session_factory
 
     def job_backend(self) -> JobBackend:
         if self._job_backend is None:
@@ -328,6 +336,31 @@ class RuntimeServices:
                     )
         return self._hybrid_fundamentals_service
 
+    def market_copilot_service(self) -> MarketCopilotService:
+        if self._market_copilot_service is None:
+            with self._init_lock:
+                if self._market_copilot_service is None:
+                    from app.interfaces.mcp.market_copilot import MarketCopilotService
+
+                    self._market_copilot_service = MarketCopilotService(
+                        session_factory=self._session_factory,
+                    )
+        return self._market_copilot_service
+
+    def assistant_gateway_service(self) -> AssistantGatewayService:
+        if self._assistant_gateway_service is None:
+            with self._init_lock:
+                if self._assistant_gateway_service is None:
+                    from app.services.assistant_gateway_service import (
+                        AssistantGatewayService,
+                    )
+
+                    self._assistant_gateway_service = AssistantGatewayService(
+                        session_factory=self._session_factory,
+                        market_copilot_service=self.market_copilot_service(),
+                    )
+        return self._assistant_gateway_service
+
     def stock_data_provider(self) -> DataPrepStockDataProvider:
         if self._stock_data_provider is None:
             with self._init_lock:
@@ -375,6 +408,8 @@ class RuntimeServices:
             self._hybrid_fundamentals_service = None
             self._stock_data_provider = None
             self._scan_orchestrator = None
+            self._market_copilot_service = None
+            self._assistant_gateway_service = None
 
 
 _runtime_services_ctx: ContextVar[RuntimeServices | None] = ContextVar(
@@ -476,7 +511,7 @@ def get_uow() -> Iterator[SqlUnitOfWork]:
     """
     from app.infra.db.uow import SqlUnitOfWork
 
-    uow = SqlUnitOfWork(SessionLocal)
+    uow = SqlUnitOfWork(get_session_factory())
     yield uow
 
 
@@ -496,6 +531,11 @@ def get_task_dispatcher() -> TaskDispatcher:
 def get_ui_snapshot_service() -> UISnapshotService:
     """Return the process-scoped UI bootstrap snapshot publisher."""
     return _resolve_runtime_services().ui_snapshot_service()
+
+
+def get_session_factory() -> SessionFactory:
+    """Return runtime-bound SQLAlchemy session factory."""
+    return _resolve_runtime_services().session_factory()
 
 
 def get_cache_bundle() -> CacheBundle:
@@ -588,6 +628,24 @@ def get_provider_snapshot_service() -> ProviderSnapshotService:
 def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
     """Return process-scoped hybrid fundamentals service."""
     return _resolve_runtime_services().hybrid_fundamentals_service()
+
+
+def get_cache_manager(*, db: Session | None = None) -> CacheManager:
+    """Build a cache manager wired with runtime-owned cache dependencies."""
+    from app.services.cache_manager import CacheManager
+
+    cache_bundle = get_cache_bundle()
+    return CacheManager(
+        db=db,
+        benchmark_cache=cache_bundle.benchmark,
+        price_cache=cache_bundle.price,
+        redis_client=get_redis_client(),
+    )
+
+
+def get_assistant_gateway_service() -> AssistantGatewayService:
+    """Return process-scoped assistant gateway service."""
+    return _resolve_runtime_services().assistant_gateway_service()
 
 
 # ── Use Cases ────────────────────────────────────────────────────────────
