@@ -137,6 +137,7 @@ STANDARD_FIELDS: FrozenSet[str] = frozenset({
     "perf_week",
     "perf_month",
     "perf_quarter",
+    "perf_half_year",
     "perf_year",
     "perf_ytd",
     # 52-week range

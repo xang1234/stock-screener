@@ -5,7 +5,7 @@ fundamentals epic:
 
 - ``field_completeness_score`` (INT 0-100): market-aware coverage score
   computed by ``fundamentals_completeness.compute_completeness_score``.
-- ``field_provenance`` (JSON): mapping of ``{field_name: provider_name}``
+- ``field_provenance`` (JSONB): mapping of ``{field_name: provider_name}``
   for every populated field, derived per the routing policy.
 
 Both columns are nullable with no server default — existing rows will

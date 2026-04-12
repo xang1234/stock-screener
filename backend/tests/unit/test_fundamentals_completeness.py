@@ -107,6 +107,21 @@ class TestCompletenessScore:
         assert compute_completeness_score(payload, MARKET_HK) == 100
 
 
+class TestFieldSourceMapConsistency:
+    """Every field in the source map must be expected by at least one market,
+    otherwise the map entry is dead code and its field is silently ignored."""
+
+    def test_every_source_map_field_is_expected_somewhere(self):
+        # Expected fields across ALL markets is the US set (superset).
+        from app.services.fundamentals_completeness import _FIELD_SOURCE
+        us_expected = expected_fields(MARKET_US)
+        orphans = set(_FIELD_SOURCE.keys()) - set(us_expected)
+        assert not orphans, (
+            f"Fields in _FIELD_SOURCE but not in any expected tier: {orphans}. "
+            "Either add them to CORE/STANDARD/ENHANCED or drop the map entry."
+        )
+
+
 class TestProvenance:
     def test_provenance_tags_finviz_fields_on_us(self):
         payload = _full_us_payload()
