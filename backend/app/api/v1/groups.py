@@ -27,6 +27,7 @@ from ...schemas.groups import (
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
+from ...domain.analytics.scope import AnalyticsFeature, us_only_tag
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +69,13 @@ async def get_current_rankings(
     # Get the date from the first ranking
     ranking_date = rankings[0]['date'] if rankings else None
 
+    scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
     return GroupRankingsResponse(
         date=ranking_date,
         total_groups=len(rankings),
-        rankings=[GroupRankResponse(**r) for r in rankings]
+        rankings=[GroupRankResponse(**r) for r in rankings],
+        market_scope=scope["market_scope"],
+        scope_reason=scope.get("scope_reason"),
     )
 
 
@@ -109,10 +113,13 @@ async def get_rank_movers(
             detail=f"No mover data available for period '{period}'"
         )
 
+    scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
     return MoversResponse(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
-        losers=[GroupRankResponse(**l) for l in movers.get('losers', [])]
+        losers=[GroupRankResponse(**l) for l in movers.get('losers', [])],
+        market_scope=scope["market_scope"],
+        scope_reason=scope.get("scope_reason"),
     )
 
 

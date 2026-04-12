@@ -38,6 +38,14 @@ class GroupRankingsResponse(BaseModel):
     date: str = Field(..., description="Date of rankings")
     total_groups: int = Field(..., description="Total number of ranked groups")
     rankings: List[GroupRankResponse] = Field(..., description="List of group rankings")
+    market_scope: Optional[str] = Field(
+        default=None,
+        description="Market scope for these rankings (e.g. 'US'). See analytics scope policy.",
+    )
+    scope_reason: Optional[str] = Field(
+        default=None,
+        description="Why this scope applies (e.g. 'IBD taxonomy is US-specific').",
+    )
 
 
 class HistoricalDataPoint(BaseModel):
@@ -104,6 +112,14 @@ class MoversResponse(BaseModel):
     period: str = Field(..., description="Time period (1w, 1m, 3m, 6m)")
     gainers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank improvements")
     losers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank declines")
+    market_scope: Optional[str] = Field(
+        default=None,
+        description="Market scope for these movers (e.g. 'US'). See analytics scope policy.",
+    )
+    scope_reason: Optional[str] = Field(
+        default=None,
+        description="Why this scope applies.",
+    )
 
 
 class CalculationRequest(BaseModel):

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.database import is_corruption_error
+from app.domain.analytics.scope import AnalyticsFeature, us_only_tag
 from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank
@@ -591,6 +592,11 @@ class UISnapshotService:
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
+            # Breadth is US-scoped today (see app.domain.analytics.scope);
+            # resolve the overlay symbol through the benchmark registry so
+            # this layer doesn't hard-code "SPY".
+            from ..wiring.bootstrap import get_benchmark_cache
+            benchmark_symbol = get_benchmark_cache().get_benchmark_symbol("US")
             return {
                 "current": market_breadth_to_dict(current),
                 "summary": {
@@ -602,7 +608,8 @@ class UISnapshotService:
                 "history_90d": [market_breadth_to_dict(row) for row in history],
                 "chart_range": DEFAULT_BREADTH_RANGE,
                 "chart_data": [market_breadth_to_dict(row) for row in chart],
-                "spy_overlay": self._get_cached_price_history("SPY", "1mo"),
+                "spy_overlay": self._get_cached_price_history(benchmark_symbol, "1mo"),
+                **us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT),
             }
 
     def _publish_groups_bootstrap_with_db(self, db: Session) -> SnapshotResult:
