@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..models.stock_universe import (
     StockUniverse,
@@ -50,6 +50,37 @@ class StockUniverseService:
         self._hk_ingestion = hk_universe_ingestion_adapter
         self._jp_ingestion = jp_universe_ingestion_adapter
         self._tw_ingestion = tw_universe_ingestion_adapter
+
+    @staticmethod
+    def _utc_iso(value: datetime | None) -> str | None:
+        """Serialize datetimes in UTC ISO-8601 format for API payloads."""
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return f"{value.isoformat()}Z"
+
+    @staticmethod
+    def _snapshot_age_seconds(*, now: datetime, value: datetime | None) -> int | None:
+        """Return non-negative age in seconds from now to value."""
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return max(int((now - value).total_seconds()), 0)
+
+    @staticmethod
+    def _normalize_status_fields(status: str | None, is_active: bool | None) -> str:
+        """Return lifecycle status from raw columns without full ORM object hydration."""
+        raw_status = (status or "").strip()
+        active_flag = bool(is_active)
+        if raw_status == UNIVERSE_STATUS_ACTIVE and not active_flag:
+            return UNIVERSE_STATUS_INACTIVE_MANUAL
+        if raw_status and raw_status != UNIVERSE_STATUS_ACTIVE and active_flag:
+            return UNIVERSE_STATUS_ACTIVE
+        if raw_status:
+            return raw_status
+        return UNIVERSE_STATUS_ACTIVE if active_flag else UNIVERSE_STATUS_INACTIVE_MANUAL
 
     def _resolved_identity(self, stock_data: Dict[str, Any]):
         return self._security_master.resolve_identity(
@@ -2054,6 +2085,7 @@ class StockUniverseService:
             active = db.query(StockUniverse).filter(
                 StockUniverse.active_filter()
             ).count()
+            market_audit = self.get_market_audit(db)
 
             # Count by exchange
             by_exchange = {}
@@ -2087,6 +2119,8 @@ class StockUniverseService:
                 'by_exchange': by_exchange,
                 'sp500': sp500,
                 'by_status': by_status,
+                'by_market': market_audit.get('by_market', {}),
+                'market_checks': market_audit.get('checks', {}),
                 'recent_deactivations': [
                     {
                         'symbol': event.symbol,
@@ -2106,8 +2140,180 @@ class StockUniverseService:
                 'by_exchange': {},
                 'sp500': 0,
                 'by_status': {},
+                'by_market': {},
+                'market_checks': {
+                    'stale_after_hours': 0,
+                    'stale_markets': [],
+                    'quarantined_markets': [],
+                    'missing_snapshot_markets': [],
+                    'has_stale_markets': False,
+                    'has_quarantined_markets': False,
+                },
                 'recent_deactivations': [],
             }
+
+    def get_market_audit(self, db: Session) -> Dict[str, Any]:
+        """
+        Return market-level universe audit with freshness + reconciliation summary.
+
+        The payload is designed for ops visibility and launch-gate checks:
+        - counts by market + normalized lifecycle status
+        - latest reconciliation snapshot age/diff summary (HK/JP/TW)
+        - stale/missing/quarantine check lists
+        """
+        now = datetime.utcnow()
+        stale_hours_raw = os.getenv(
+            "ASIA_UNIVERSE_AUDIT_STALE_HOURS",
+            str(getattr(settings, "asia_universe_audit_stale_hours", 36) or 36),
+        )
+        try:
+            configured_stale_hours = int(stale_hours_raw)
+        except (TypeError, ValueError):
+            configured_stale_hours = 36
+        stale_after_hours = max(
+            configured_stale_hours,
+            1,
+        )
+        stale_after_seconds = stale_after_hours * 3600
+        reconciliation_markets = {"HK", "JP", "TW"}
+
+        by_market: Dict[str, Dict[str, Any]] = {
+            market: {
+                "market": market,
+                "counts": {"total": 0, "active": 0, "inactive": 0},
+                "by_status": {},
+                "latest_seen_in_source_at": None,
+                "latest_snapshot": None,
+            }
+            for market in ("US", "HK", "JP", "TW")
+        }
+
+        universe_rows = db.query(
+            StockUniverse.market,
+            StockUniverse.is_active,
+            StockUniverse.status,
+            StockUniverse.last_seen_in_source_at,
+        ).all()
+        for market, is_active, raw_status, seen_at in universe_rows:
+            market_code = (market or "").strip().upper() or "UNKNOWN"
+            if market_code not in by_market:
+                by_market[market_code] = {
+                    "market": market_code,
+                    "counts": {"total": 0, "active": 0, "inactive": 0},
+                    "by_status": {},
+                    "latest_seen_in_source_at": None,
+                    "latest_snapshot": None,
+                }
+            entry = by_market[market_code]
+            entry["counts"]["total"] += 1
+            if bool(is_active):
+                entry["counts"]["active"] += 1
+            else:
+                entry["counts"]["inactive"] += 1
+
+            normalized_status = self._normalize_status_fields(raw_status, is_active)
+            entry["by_status"][normalized_status] = entry["by_status"].get(normalized_status, 0) + 1
+
+            last_seen = entry["latest_seen_in_source_at"]
+            if seen_at is not None and (last_seen is None or seen_at > last_seen):
+                entry["latest_seen_in_source_at"] = seen_at
+
+        latest_by_market: dict[str, StockUniverseReconciliationRun] = {}
+        for run in (
+            db.query(StockUniverseReconciliationRun)
+            .order_by(
+                StockUniverseReconciliationRun.market.asc(),
+                StockUniverseReconciliationRun.created_at.desc(),
+                StockUniverseReconciliationRun.id.desc(),
+            )
+            .all()
+        ):
+            market_code = (run.market or "").strip().upper()
+            if not market_code or market_code in latest_by_market:
+                continue
+            latest_by_market[market_code] = run
+
+        stale_markets: list[str] = []
+        quarantined_markets: list[str] = []
+        missing_snapshot_markets: list[str] = []
+
+        for market_code in sorted(set(by_market) | set(latest_by_market)):
+            if market_code not in by_market:
+                by_market[market_code] = {
+                    "market": market_code,
+                    "counts": {"total": 0, "active": 0, "inactive": 0},
+                    "by_status": {},
+                    "latest_seen_in_source_at": None,
+                    "latest_snapshot": None,
+                }
+            entry = by_market[market_code]
+            run = latest_by_market.get(market_code)
+            supports_snapshot = market_code in reconciliation_markets
+
+            latest_snapshot: Dict[str, Any] | None = None
+            if run is not None:
+                artifact_payload: dict[str, Any] = {}
+                if run.artifact_json:
+                    try:
+                        parsed = json.loads(run.artifact_json)
+                        if isinstance(parsed, dict):
+                            artifact_payload = parsed
+                    except Exception:
+                        logger.warning(
+                            "Failed to parse reconciliation artifact for market audit",
+                            exc_info=True,
+                            extra={"market": market_code, "snapshot_id": run.snapshot_id},
+                        )
+                safety = artifact_payload.get("safety") if isinstance(artifact_payload.get("safety"), dict) else {}
+                age_seconds = self._snapshot_age_seconds(now=now, value=run.created_at)
+                is_stale = bool(
+                    supports_snapshot and age_seconds is not None and age_seconds > stale_after_seconds
+                )
+                latest_snapshot = {
+                    "snapshot_id": run.snapshot_id,
+                    "previous_snapshot_id": run.previous_snapshot_id,
+                    "created_at": self._utc_iso(run.created_at),
+                    "age_seconds": age_seconds,
+                    "is_stale": is_stale,
+                    "counts": {
+                        "total_current": int(run.total_current or 0),
+                        "total_previous": int(run.total_previous or 0),
+                        "added": int(run.added_count or 0),
+                        "removed": int(run.removed_count or 0),
+                        "changed": int(run.changed_count or 0),
+                        "unchanged": int(run.unchanged_count or 0),
+                    },
+                    "safety": {
+                        "quarantined": bool(safety.get("quarantined")),
+                        "destructive_apply_blocked": bool(safety.get("destructive_apply_blocked")),
+                        "gate_breaches": safety.get("gate_breaches", []),
+                        "alerts": safety.get("alerts", []),
+                    },
+                }
+                if latest_snapshot["is_stale"]:
+                    stale_markets.append(market_code)
+                if latest_snapshot["safety"]["quarantined"]:
+                    quarantined_markets.append(market_code)
+            elif supports_snapshot and entry["counts"]["total"] > 0:
+                stale_markets.append(market_code)
+                missing_snapshot_markets.append(market_code)
+
+            entry["latest_seen_in_source_at"] = self._utc_iso(entry["latest_seen_in_source_at"])
+            entry["latest_snapshot"] = latest_snapshot
+            entry["snapshot_supported"] = supports_snapshot
+
+        return {
+            "generated_at": self._utc_iso(now),
+            "by_market": by_market,
+            "checks": {
+                "stale_after_hours": stale_after_hours,
+                "stale_markets": sorted(set(stale_markets)),
+                "quarantined_markets": sorted(set(quarantined_markets)),
+                "missing_snapshot_markets": sorted(set(missing_snapshot_markets)),
+                "has_stale_markets": bool(stale_markets),
+                "has_quarantined_markets": bool(quarantined_markets),
+            },
+        }
 
     def filter_active_symbols(
         self,

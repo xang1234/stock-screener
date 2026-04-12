@@ -275,6 +275,8 @@ async def get_universe_stats(db: Session = Depends(get_db)):
             "by_exchange": stats['by_exchange'],
             "sp500": stats.get('sp500', 0),
             "by_status": stats.get('by_status', {}),
+            "by_market": stats.get('by_market', {}),
+            "market_checks": stats.get('market_checks', {}),
             "recent_deactivations": stats.get('recent_deactivations', []),
         }
 
@@ -283,6 +285,20 @@ async def get_universe_stats(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=500,
             detail=f"Error getting universe stats: {str(e)}"
+        )
+
+
+@router.get("/stats/by-market")
+async def get_universe_market_audit(db: Session = Depends(get_db)):
+    """Get market-level universe audit summary for ops dashboards and launch gates."""
+    try:
+        stock_universe_service = get_stock_universe_service()
+        return stock_universe_service.get_market_audit(db)
+    except Exception as e:
+        logger.error(f"Error getting universe market audit: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting universe market audit: {str(e)}"
         )
 
 

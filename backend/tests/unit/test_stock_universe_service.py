@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -1025,4 +1026,153 @@ def test_ingest_hk_snapshot_rows_applies_safe_deactivation_when_enabled(monkeypa
     assert hsbc.status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE
     assert hsbc.is_active is False
     assert any(event.new_status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE for event in events)
+    db.close()
+
+
+def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    monkeypatch.setenv("ASIA_UNIVERSE_AUDIT_STALE_HOURS", "1")
+
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="SEHK",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="hkex_official",
+            ),
+            StockUniverse(
+                symbol="0005.HK",
+                market="HK",
+                exchange="SEHK",
+                is_active=False,
+                status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+                source="hkex_official",
+            ),
+            StockUniverse(
+                symbol="7203.T",
+                market="JP",
+                exchange="TSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="jpx_listing",
+            ),
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="finviz",
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            StockUniverseReconciliationRun(
+                market="HK",
+                source_name="hkex_official",
+                snapshot_id="hk-20260412-a",
+                previous_snapshot_id=None,
+                total_current=2,
+                total_previous=3,
+                added_count=0,
+                removed_count=1,
+                changed_count=0,
+                unchanged_count=2,
+                artifact_hash="a" * 64,
+                artifact_json=json.dumps(
+                    {
+                        "snapshot_rows": [],
+                        "safety": {
+                            "quarantined": False,
+                            "destructive_apply_blocked": False,
+                            "gate_breaches": [],
+                            "alerts": [],
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                created_at=datetime.utcnow() - timedelta(hours=2),
+            ),
+            StockUniverseReconciliationRun(
+                market="TW",
+                source_name="tw_reference_bundle",
+                snapshot_id="tw-20260412-a",
+                previous_snapshot_id=None,
+                total_current=0,
+                total_previous=0,
+                added_count=0,
+                removed_count=0,
+                changed_count=0,
+                unchanged_count=0,
+                artifact_hash="b" * 64,
+                artifact_json=json.dumps(
+                    {
+                        "snapshot_rows": [],
+                        "safety": {
+                            "quarantined": True,
+                            "destructive_apply_blocked": True,
+                            "gate_breaches": [{"gate": "max_removed_percent"}],
+                            "alerts": ["TW snapshot gate breach"],
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                created_at=datetime.utcnow(),
+            ),
+        ]
+    )
+    db.commit()
+
+    audit = stock_universe_service.get_market_audit(db)
+    hk = audit["by_market"]["HK"]
+    jp = audit["by_market"]["JP"]
+    tw = audit["by_market"]["TW"]
+    us = audit["by_market"]["US"]
+
+    assert hk["counts"]["total"] == 2
+    assert hk["counts"]["active"] == 1
+    assert hk["counts"]["inactive"] == 1
+    assert hk["latest_snapshot"]["snapshot_id"] == "hk-20260412-a"
+    assert hk["latest_snapshot"]["counts"]["removed"] == 1
+    assert hk["latest_snapshot"]["is_stale"] is True
+    assert jp["snapshot_supported"] is True
+    assert jp["latest_snapshot"] is None
+    assert tw["latest_snapshot"]["safety"]["quarantined"] is True
+    assert us["snapshot_supported"] is False
+    assert us["latest_snapshot"] is None
+    assert audit["checks"]["stale_after_hours"] == 1
+    assert set(audit["checks"]["stale_markets"]) == {"HK", "JP"}
+    assert audit["checks"]["missing_snapshot_markets"] == ["JP"]
+    assert audit["checks"]["quarantined_markets"] == ["TW"]
+    db.close()
+
+
+def test_get_stats_includes_market_audit_summary(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    monkeypatch.setenv("ASIA_UNIVERSE_AUDIT_STALE_HOURS", "12")
+
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="SEHK",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            source="hkex_official",
+        )
+    )
+    db.commit()
+
+    stats = stock_universe_service.get_stats(db)
+
+    assert "by_market" in stats
+    assert "market_checks" in stats
+    assert stats["by_market"]["HK"]["counts"]["total"] == 1
+    assert stats["market_checks"]["has_stale_markets"] is True
     db.close()
