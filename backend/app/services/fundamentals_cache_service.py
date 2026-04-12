@@ -24,6 +24,7 @@ from .fundamentals_completeness import (
     compute_completeness_score,
     derive_field_provenance,
 )
+from .fx_service import FXService, currency_for_market, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
@@ -106,9 +107,15 @@ class FundamentalsCacheService:
         self,
         redis_client: Optional[redis.Redis] = None,
         session_factory: Optional[Callable[[], Session]] = None,
+        fx_service: Optional[FXService] = None,
     ):
-        """Initialize fundamentals cache service."""
+        """Initialize fundamentals cache service.
+
+        ``fx_service`` is injectable for tests; in production callers
+        typically rely on the process-wide default via ``get_fx_service()``.
+        """
         self._session_factory = session_factory or SessionLocal
+        self._fx_service = fx_service
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -371,6 +378,10 @@ class FundamentalsCacheService:
                 # T2 quality metadata
                 "field_completeness_score": record.field_completeness_score,
                 "field_provenance": record.field_provenance,
+                # T3 FX normalisation
+                "market_cap_usd": record.market_cap_usd,
+                "adv_usd": record.adv_usd,
+                "fx_metadata": record.fx_metadata,
             }
 
             # Compute fallback description (finviz preferred, yfinance as fallback)
@@ -409,6 +420,67 @@ class FundamentalsCacheService:
         data['field_completeness_score'] = compute_completeness_score(data, market)
         data['field_provenance'] = derive_field_provenance(data, market)
         return market
+
+    def _get_fx_service(self) -> FXService:
+        """Return the FX service, lazily resolving the process-wide default.
+
+        Lazy so that constructing a cache service without Redis/DB (e.g.
+        in unit tests) does not trigger FX service initialisation.
+        """
+        if self._fx_service is None:
+            self._fx_service = get_fx_service()
+        return self._fx_service
+
+    def _enrich_with_fx_normalization(
+        self,
+        data: Dict,
+        market: Optional[str],
+    ) -> None:
+        """Compute USD normalisation (``market_cap_usd``, ``adv_usd``) and
+        attach an ``fx_metadata`` snapshot to ``data`` in place.
+
+        Called *alongside* ``_enrich_with_quality_metadata`` before Redis/
+        DB writes so derived values survive a warm-cache read. Missing
+        rate or missing source amounts → NULL USD columns (honest
+        "unknown" rather than a fabricated zero).
+        """
+        currency = currency_for_market(market)
+        market_cap = data.get("market_cap")
+        shares_out = data.get("shares_outstanding")
+        avg_volume = data.get("avg_volume")
+
+        quote = self._get_fx_service().get_usd_rate(currency)
+        if quote is None:
+            # Rate unavailable — leave USD columns NULL but record the
+            # intent so consumers can see we tried.
+            data["market_cap_usd"] = None
+            data["adv_usd"] = None
+            data["fx_metadata"] = {
+                "from_currency": currency,
+                "to_currency": "USD",
+                "rate": None,
+                "as_of_date": None,
+                "source": "unavailable",
+            }
+            return
+
+        rate = quote.rate
+        data["market_cap_usd"] = (
+            int(market_cap * rate) if market_cap is not None else None
+        )
+        # ADV-USD = avg_volume × price-per-share (local) × rate.
+        # Price-per-share is derived from market_cap / shares_outstanding
+        # to avoid coupling to a separate price cache.
+        if (
+            avg_volume is not None
+            and market_cap is not None
+            and shares_out
+        ):
+            price_local = market_cap / shares_out
+            data["adv_usd"] = int(avg_volume * price_local * rate)
+        else:
+            data["adv_usd"] = None
+        data["fx_metadata"] = quote.to_metadata()
 
     def _resolve_market(self, symbol: str) -> Optional[str]:
         """Look up the stock universe market for ``symbol``.
@@ -486,6 +558,7 @@ class FundamentalsCacheService:
             # Enrich with completeness/provenance so both Redis and DB writes
             # include the derived metadata (avoids warm-read staleness).
             market = self._enrich_with_quality_metadata(symbol, fundamentals, market)
+            self._enrich_with_fx_normalization(fundamentals, market)
 
             # Cache in Redis (7-day TTL)
             self._store_in_redis(symbol, fundamentals)
@@ -719,6 +792,10 @@ class FundamentalsCacheService:
                 # T2 quality metadata
                 existing_record.field_completeness_score = completeness_score
                 existing_record.field_provenance = provenance
+                # T3 FX normalisation
+                existing_record.market_cap_usd = data.get("market_cap_usd")
+                existing_record.adv_usd = data.get("adv_usd")
+                existing_record.fx_metadata = data.get("fx_metadata")
                 existing_record.updated_at = datetime.now()
 
                 logger.info(f"Updated fundamental data for {symbol} in database")
@@ -840,6 +917,10 @@ class FundamentalsCacheService:
                     # T2 quality metadata
                     field_completeness_score=completeness_score,
                     field_provenance=provenance,
+                    # T3 FX normalisation
+                    market_cap_usd=data.get("market_cap_usd"),
+                    adv_usd=data.get("adv_usd"),
+                    fx_metadata=data.get("fx_metadata"),
                 )
                 db.add(new_record)
                 logger.info(f"Inserted fundamental data for {symbol} in database")
@@ -1254,6 +1335,7 @@ class FundamentalsCacheService:
 
         # Enrich before Redis/DB writes so both see the same snapshot.
         market = self._enrich_with_quality_metadata(symbol, normalized_data, market)
+        self._enrich_with_fx_normalization(normalized_data, market)
 
         # Store in Redis
         self._store_in_redis(symbol, normalized_data)

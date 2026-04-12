@@ -34,6 +34,11 @@ class StockFundamentals(BaseModel):
     # {field: provider} provenance map. NULL when not yet computed.
     field_completeness_score: Optional[int] = None
     field_provenance: Optional[Dict[str, str]] = None
+    # T3 FX normalisation — USD comparables for mixed-market ranking, plus
+    # a per-row FX snapshot (rate, currency, as_of_date, source) for replay.
+    market_cap_usd: Optional[int] = None
+    adv_usd: Optional[int] = None
+    fx_metadata: Optional[Dict[str, Any]] = None
 
 
 class StockTechnicals(BaseModel):

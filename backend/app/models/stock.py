@@ -166,6 +166,16 @@ class StockFundamental(Base):
     # SQLite which falls back to the JSON variant.
     field_provenance = Column(JSONB().with_variant(JSON(), "sqlite"))
 
+    # USD normalisation (T3). Computed at storage time using the FX rate
+    # captured in ``fx_metadata``; NULL when source currency or amount is
+    # unavailable. Indexed for cross-market ranking.
+    market_cap_usd = Column(BigInteger, index=True)
+    adv_usd = Column(BigInteger, index=True)
+    # Per-row FX snapshot: {from_currency, to_currency, rate, as_of_date,
+    # source}. Stored so a single row can be replayed without consulting
+    # the fx_rates log. SQLite fallback for test schemas.
+    fx_metadata = Column(JSONB().with_variant(JSON(), "sqlite"))
+
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
