@@ -79,7 +79,7 @@ function StaticGroupsPage() {
   const payload = groupsQuery.data.payload || {};
   const rankings = payload.rankings?.rankings || [];
   const movers = payload.movers || {};
-  const moversPeriod = payload.movers_period || movers.period || '3m';
+  const moversPeriod = payload.movers_period || movers.period || '1w';
   const groupDetails = payload.group_details || {};
 
   return (
