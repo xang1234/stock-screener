@@ -653,6 +653,6 @@ describe('StaticScanPage', () => {
 
     expect(await screen.findByText(/Background hydration failed/i)).toBeInTheDocument();
     expect(screen.getByTestId('results-table-rows')).toHaveTextContent('NVDA,MSFT,AAPL');
-    expect(screen.getByText(/Static charts exported for 143 ranked symbols/i)).toBeInTheDocument();
+    expect(screen.getByText(/143 charts/i)).toBeInTheDocument();
   });
 });

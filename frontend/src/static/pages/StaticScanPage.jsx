@@ -23,6 +23,8 @@ import {
   sortStaticScanRows,
 } from '../scanClient';
 import StaticChartViewerModal from '../StaticChartViewerModal';
+import ScreenSelector from '../components/ScreenSelector';
+import { usePresetScreens, buildFiltersFromPreset } from '../hooks/usePresetScreens';
 
 const HYDRATION_BATCH_SIZE = 2;
 
@@ -62,6 +64,7 @@ function StaticScanPage() {
     () => applyScanFilterDefaults(scanManifestQuery.data?.default_filters),
     [scanManifestQuery.data?.default_filters]
   );
+  const presetScreens = scanManifestQuery.data?.preset_screens;
 
   useEffect(() => {
     if (scanManifestQuery.data?.default_page_size) {
@@ -162,12 +165,33 @@ function StaticScanPage() {
   }, [scanManifestQuery.data]);
 
   const hydrationComplete = hydrationState.status === 'complete';
+  const hydratedRows = hydrationState.rows;
+  const { activeScreenId, setActiveScreenId, matchCounts } = usePresetScreens({
+    screens: presetScreens,
+    allRows: hydratedRows,
+    hydrationComplete,
+  });
+
+  const handleSelectScreen = useCallback((screenId) => {
+    setActiveScreenId(screenId);
+    if (!screenId) {
+      setFilters(manifestDefaultFilters);
+      setSortBy('composite_score');
+      setSortOrder('desc');
+    } else {
+      const screen = presetScreens?.find((s) => s.id === screenId);
+      if (screen) {
+        setFilters(buildFiltersFromPreset(screen));
+        setSortBy(screen.sort_by);
+        setSortOrder(screen.sort_order);
+      }
+    }
+  }, [presetScreens, manifestDefaultFilters, setActiveScreenId]);
+
   const filterKey = useMemo(() => getStableFilterKey(filters), [filters]);
   useEffect(() => {
     setPage(1);
   }, [filterKey]);
-
-  const hydratedRows = hydrationState.rows;
   const chartEntries = useMemo(
     () => chartIndexQuery.data?.symbols || [],
     [chartIndexQuery.data]
@@ -222,35 +246,35 @@ function StaticScanPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
         Daily Scan
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-        Fixed daily ranking from published run {scanManifestQuery.data.run_id} as of {scanManifestQuery.data.as_of_date}.
-        The first page renders from the exported default-filtered top rows, then the remaining chunks hydrate in the background.
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
+        Run {scanManifestQuery.data.run_id} as of {scanManifestQuery.data.as_of_date}.
       </Typography>
 
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="subtitle2" color="text.secondary">
-          Results
-        </Typography>
-        <Typography variant="h6">
-          {(hydrationComplete ? filteredRows.length : hydrationState.loadedRows).toLocaleString()} rows ready
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {scanManifestQuery.data.rows_total.toLocaleString()} total rows exported
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Default view applies dollar volume &gt; $100M to {scanManifestQuery.data.default_filtered_rows_total?.toLocaleString?.() ?? 0} rows.
-        </Typography>
-        {scanManifestQuery.data.charts?.available ? (
-          <Typography variant="body2" color="text.secondary">
-            Static charts exported for{' '}
-            {(scanManifestQuery.data.charts.symbols_total ?? scanManifestQuery.data.charts.limit).toLocaleString()}{' '}
-            ranked symbols.
+      <Paper elevation={0} sx={{ p: 1.5, mb: 1.5, border: '1px solid', borderColor: 'divider' }}>
+        <Box display="flex" alignItems="baseline" gap={1.5}>
+          <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+            {(hydrationComplete ? filteredRows.length : hydrationState.loadedRows).toLocaleString()}
           </Typography>
-        ) : null}
+          <Typography variant="caption" color="text.disabled" sx={{ fontSize: '10px' }}>
+            of {scanManifestQuery.data.rows_total.toLocaleString()} rows
+            {scanManifestQuery.data.charts?.available
+              ? ` · ${(scanManifestQuery.data.charts.symbols_total ?? scanManifestQuery.data.charts.limit).toLocaleString()} charts`
+              : ''}
+          </Typography>
+        </Box>
       </Paper>
+
+      {hydrationComplete && presetScreens?.length > 0 && (
+        <ScreenSelector
+          screens={presetScreens}
+          activeScreenId={activeScreenId}
+          onSelectScreen={handleSelectScreen}
+          matchCounts={matchCounts}
+        />
+      )}
 
       {!hydrationComplete && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -275,7 +299,7 @@ function StaticScanPage() {
         <FilterPanel
           filters={filters}
           onFilterChange={setFilters}
-          onReset={() => setFilters(manifestDefaultFilters)}
+          onReset={() => { setFilters(manifestDefaultFilters); setActiveScreenId(null); }}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}

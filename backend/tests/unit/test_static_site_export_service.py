@@ -177,7 +177,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     }
 
     monkeypatch.setattr(service, "_load_scan_export_source", lambda *_args, **_kwargs: ([], SimpleNamespace()))
-    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: scan_manifest)
+    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
     monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
@@ -261,7 +261,7 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
 
     with session_factory() as db:
         run = db.get(FeatureRun, 11)
-        manifest = service._export_scan_bundle(  # noqa: SLF001 - intentional unit test coverage
+        manifest, _serialized = service._export_scan_bundle(  # noqa: SLF001 - intentional unit test coverage
             db=db,
             output_dir=tmp_path,
             generated_at="2026-03-31T22:00:00Z",
@@ -319,7 +319,7 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     }
 
     monkeypatch.setattr(service, "_load_scan_export_source", lambda *_args, **_kwargs: ([], SimpleNamespace()))
-    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: scan_manifest)
+    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
     monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
     monkeypatch.setattr(
         service,

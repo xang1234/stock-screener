@@ -93,6 +93,18 @@ const staticPayloads = {
       { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
       { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
     ],
+    preset_screens: [
+      {
+        id: 'minervini',
+        name: 'Minervini Trend Template',
+        short_name: 'Minervini',
+        description: 'Stage 2 uptrend stocks',
+        tier: 1,
+        filters: { minerviniScore: { min: 70, max: null }, stage: 2 },
+        sort_by: 'minervini_score',
+        sort_order: 'desc',
+      },
+    ],
     chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
     charts: {
       path: 'charts/index.json',
