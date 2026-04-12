@@ -348,7 +348,7 @@ class TWUniverseIngestionAdapter:
                         existing,
                         canonical_row,
                     )
-            except Exception as exc:
+            except ValueError as exc:
                 rejected_rows.append(
                     TWRejectedUniverseRow(
                         source_row_number=index,
