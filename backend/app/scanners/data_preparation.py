@@ -14,6 +14,7 @@ import pandas as pd
 from .base_screener import DataRequirements, StockData
 from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
+from ..domain.scanning.mixed_market_policy import is_mixed_market
 from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
@@ -194,8 +195,12 @@ class DataPreparationLayer:
         results: dict[str, StockData],
     ) -> None:
         market_universe = self._compute_market_rs_universe_performances(list(results.values()))
+        # Compute the mixed-market flag once per scan so the filter policy is
+        # stable across symbols. See app.domain.scanning.mixed_market_policy.
+        mixed = is_mixed_market(item.market for item in results.values())
         for item in results.values():
             item.rs_universe_performances = market_universe.get(item.market or "US", {})
+            item.is_mixed_market = mixed
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
