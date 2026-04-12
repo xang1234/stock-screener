@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
@@ -165,6 +165,74 @@ class HKUniverseIngestionAdapter:
         encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
+    @staticmethod
+    def _selection_key(row: HKCanonicalUniverseRow) -> tuple[str, int]:
+        return (row.source_symbol, row.source_row_number)
+
+    @staticmethod
+    def _prefer_text(primary: str, fallback: str) -> str:
+        return primary if primary.strip() else fallback
+
+    def _canonical_payload(
+        self,
+        row: HKCanonicalUniverseRow,
+        *,
+        name: str,
+        sector: str,
+        industry: str,
+        market_cap: float | None,
+    ) -> dict[str, Any]:
+        return {
+            "symbol": row.symbol,
+            "market": row.market,
+            "exchange": row.exchange,
+            "local_code": row.local_code,
+            "name": name,
+            "sector": sector,
+            "industry": industry,
+            "market_cap": market_cap,
+            "source_name": row.source_name,
+            "snapshot_id": row.snapshot_id,
+        }
+
+    def _merge_duplicate_rows(
+        self,
+        first: HKCanonicalUniverseRow,
+        second: HKCanonicalUniverseRow,
+    ) -> HKCanonicalUniverseRow:
+        if self._selection_key(first) <= self._selection_key(second):
+            primary = first
+            secondary = second
+        else:
+            primary = second
+            secondary = first
+
+        merged_name = self._prefer_text(primary.name, secondary.name)
+        merged_sector = self._prefer_text(primary.sector, secondary.sector)
+        merged_industry = self._prefer_text(primary.industry, secondary.industry)
+        merged_market_cap = primary.market_cap if primary.market_cap is not None else secondary.market_cap
+        merged_source_metadata = (
+            primary.source_metadata if primary.source_metadata else secondary.source_metadata
+        )
+        merged_row_hash = self._hash_payload(
+            self._canonical_payload(
+                primary,
+                name=merged_name,
+                sector=merged_sector,
+                industry=merged_industry,
+                market_cap=merged_market_cap,
+            )
+        )
+        return replace(
+            primary,
+            name=merged_name,
+            sector=merged_sector,
+            industry=merged_industry,
+            market_cap=merged_market_cap,
+            source_metadata=merged_source_metadata,
+            row_hash=merged_row_hash,
+        )
+
     def canonicalize_rows(
         self,
         rows: Iterable[Mapping[str, Any]],
@@ -228,10 +296,11 @@ class HKUniverseIngestionAdapter:
                     "source_symbol": source_symbol,
                     "canonical_symbol": identity.canonical_symbol,
                 }
+                canonical_exchange = identity.exchange or "XHKG"
                 canonical_payload = {
                     "symbol": identity.canonical_symbol,
                     "market": identity.market,
-                    "exchange": identity.exchange,
+                    "exchange": canonical_exchange,
                     "local_code": identity.local_code,
                     "name": row_name,
                     "sector": row_sector,
@@ -244,7 +313,7 @@ class HKUniverseIngestionAdapter:
                     symbol=identity.canonical_symbol,
                     name=row_name,
                     market=identity.market,
-                    exchange=identity.exchange or "XHKG",
+                    exchange=canonical_exchange,
                     currency=identity.currency,
                     timezone=identity.timezone,
                     local_code=identity.local_code,
@@ -265,14 +334,11 @@ class HKUniverseIngestionAdapter:
                 if existing is None:
                     canonical_by_symbol[canonical_row.symbol] = canonical_row
                 else:
-                    existing_key = (existing.source_symbol, existing.source_row_number)
-                    candidate_key = (
-                        canonical_row.source_symbol,
-                        canonical_row.source_row_number,
+                    canonical_by_symbol[canonical_row.symbol] = self._merge_duplicate_rows(
+                        existing,
+                        canonical_row,
                     )
-                    if candidate_key < existing_key:
-                        canonical_by_symbol[canonical_row.symbol] = canonical_row
-            except Exception as exc:
+            except ValueError as exc:
                 rejected_rows.append(
                     HKRejectedUniverseRow(
                         source_row_number=index,
@@ -294,4 +360,3 @@ class HKUniverseIngestionAdapter:
 
 
 hk_universe_ingestion_adapter = HKUniverseIngestionAdapter()
-

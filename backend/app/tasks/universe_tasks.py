@@ -121,13 +121,9 @@ def ingest_hk_universe_csv(
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
-    except Exception as e:
-        logger.error(f"Error ingesting HK universe CSV: {e}", exc_info=True)
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat(),
-        }
+    except Exception:
+        logger.exception("Error ingesting HK universe CSV")
+        raise
     finally:
         db.close()
 
@@ -181,13 +177,9 @@ def ingest_jp_universe_csv(
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
-    except Exception as e:
-        logger.error(f"Error ingesting JP universe CSV: {e}", exc_info=True)
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat(),
-        }
+    except Exception:
+        logger.exception("Error ingesting JP universe CSV")
+        raise
     finally:
         db.close()
 
@@ -241,13 +233,9 @@ def ingest_tw_universe_csv(
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
-    except Exception as e:
-        logger.error(f"Error ingesting TW universe CSV: {e}", exc_info=True)
-        return {
-            'status': 'error',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat(),
-        }
+    except Exception:
+        logger.exception("Error ingesting TW universe CSV")
+        raise
     finally:
         db.close()
 

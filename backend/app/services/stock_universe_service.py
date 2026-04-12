@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+from uuid import uuid4
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
@@ -90,6 +91,12 @@ class StockUniverseService:
         )
 
     @staticmethod
+    def _auto_snapshot_id(prefix: str) -> str:
+        """Generate collision-resistant snapshot IDs for implicit ingestion runs."""
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+        return f"{prefix}:{timestamp}:{uuid4().hex[:8]}"
+
+    @staticmethod
     def _normalize_status(record: StockUniverse) -> str:
         """Return a lifecycle status even for pre-migration rows."""
         raw_status = (record.status or "").strip()
@@ -164,7 +171,7 @@ class StockUniverseService:
                 record.deactivated_at = now
 
         changed = old_status != new_status
-        if changed or payload:
+        if changed:
             self._add_status_event(
                 db,
                 symbol=record.symbol,
@@ -1071,7 +1078,7 @@ class StockUniverseService:
     ) -> Dict[str, Any]:
         """Ingest HK universe rows from CSV content."""
         rows = self._parse_hk_csv_rows(csv_content)
-        resolved_snapshot_id = snapshot_id or f"hk:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        resolved_snapshot_id = snapshot_id or self._auto_snapshot_id("hk")
         return self.ingest_hk_snapshot_rows(
             db,
             rows=rows,
@@ -1288,7 +1295,7 @@ class StockUniverseService:
     ) -> Dict[str, Any]:
         """Ingest JP universe rows from CSV content."""
         rows = self._parse_jp_csv_rows(csv_content)
-        resolved_snapshot_id = snapshot_id or f"jp:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        resolved_snapshot_id = snapshot_id or self._auto_snapshot_id("jp")
         return self.ingest_jp_snapshot_rows(
             db,
             rows=rows,
@@ -1505,7 +1512,7 @@ class StockUniverseService:
     ) -> Dict[str, Any]:
         """Ingest TW universe rows from CSV content."""
         rows = self._parse_tw_csv_rows(csv_content)
-        resolved_snapshot_id = snapshot_id or f"tw:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        resolved_snapshot_id = snapshot_id or self._auto_snapshot_id("tw")
         return self.ingest_tw_snapshot_rows(
             db,
             rows=rows,
@@ -2218,20 +2225,35 @@ class StockUniverseService:
             if seen_at is not None and (last_seen is None or seen_at > last_seen):
                 entry["latest_seen_in_source_at"] = seen_at
 
-        latest_by_market: dict[str, StockUniverseReconciliationRun] = {}
-        for run in (
+        latest_runs_subquery = (
             db.query(StockUniverseReconciliationRun)
+            .with_entities(
+                StockUniverseReconciliationRun.market.label("market"),
+                func.max(StockUniverseReconciliationRun.created_at).label("max_created_at"),
+            )
+            .group_by(StockUniverseReconciliationRun.market)
+            .subquery()
+        )
+        latest_runs = (
+            db.query(StockUniverseReconciliationRun)
+            .join(
+                latest_runs_subquery,
+                and_(
+                    StockUniverseReconciliationRun.market == latest_runs_subquery.c.market,
+                    StockUniverseReconciliationRun.created_at == latest_runs_subquery.c.max_created_at,
+                ),
+            )
             .order_by(
                 StockUniverseReconciliationRun.market.asc(),
-                StockUniverseReconciliationRun.created_at.desc(),
                 StockUniverseReconciliationRun.id.desc(),
             )
             .all()
-        ):
+        )
+        latest_by_market: dict[str, StockUniverseReconciliationRun] = {}
+        for run in latest_runs:
             market_code = (run.market or "").strip().upper()
-            if not market_code or market_code in latest_by_market:
-                continue
-            latest_by_market[market_code] = run
+            if market_code and market_code not in latest_by_market:
+                latest_by_market[market_code] = run
 
         stale_markets: list[str] = []
         quarantined_markets: list[str] = []

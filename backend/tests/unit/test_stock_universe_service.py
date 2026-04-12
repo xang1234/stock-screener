@@ -1176,3 +1176,81 @@ def test_get_stats_includes_market_audit_summary(monkeypatch):
     assert stats["by_market"]["HK"]["counts"]["total"] == 1
     assert stats["market_checks"]["has_stale_markets"] is True
     db.close()
+
+
+def test_ingest_from_csv_auto_snapshot_ids_are_collision_resistant():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    hk_csv = "symbol,name,exchange,sector,industry,market_cap\n0700,Tencent,SEHK,Technology,Internet,500B\n"
+    jp_csv = "symbol,name,exchange,sector,industry,market_cap\n7203,Toyota,TSE,Consumer,Auto,250B\n"
+    tw_csv = "symbol,name,exchange,sector,industry,market_cap\n2330,TSMC,TWSE,Technology,Semiconductors,650B\n"
+
+    hk_first = stock_universe_service.ingest_hk_from_csv(db, hk_csv, source_name="hk_manual_csv")
+    hk_second = stock_universe_service.ingest_hk_from_csv(db, hk_csv, source_name="hk_manual_csv")
+    jp_first = stock_universe_service.ingest_jp_from_csv(db, jp_csv, source_name="jp_manual_csv")
+    jp_second = stock_universe_service.ingest_jp_from_csv(db, jp_csv, source_name="jp_manual_csv")
+    tw_first = stock_universe_service.ingest_tw_from_csv(db, tw_csv, source_name="tw_manual_csv")
+    tw_second = stock_universe_service.ingest_tw_from_csv(db, tw_csv, source_name="tw_manual_csv")
+
+    assert hk_first["snapshot_id"] != hk_second["snapshot_id"]
+    assert jp_first["snapshot_id"] != jp_second["snapshot_id"]
+    assert tw_first["snapshot_id"] != tw_second["snapshot_id"]
+    assert hk_first["snapshot_id"].startswith("hk:")
+    assert jp_first["snapshot_id"].startswith("jp:")
+    assert tw_first["snapshot_id"].startswith("tw:")
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_does_not_emit_status_events_for_unchanged_active_rows():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [{"symbol": "700", "exchange": "SEHK", "name": "Tencent"}]
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260414-a",
+    )
+    initial_events = db.query(StockUniverseStatusEvent).filter(
+        StockUniverseStatusEvent.symbol == "0700.HK"
+    ).count()
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260414-a",
+    )
+    after_rerun_events = db.query(StockUniverseStatusEvent).filter(
+        StockUniverseStatusEvent.symbol == "0700.HK"
+    ).count()
+
+    assert initial_events == 1
+    assert after_rerun_events == 1
+    db.close()
+
+
+def test_ingest_hk_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "700,,SEHK,Technology,Internet,500B",
+            "0700.HK,Tencent Holdings,,Technology,Internet,",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_hk_from_csv(
+        db,
+        csv_content,
+        source_name="hk_manual_csv",
+        snapshot_id="hk-20260414-dup",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "0700.HK").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Tencent Holdings"
+    db.close()

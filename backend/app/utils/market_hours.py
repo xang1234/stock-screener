@@ -59,7 +59,11 @@ def _get_trading_days_set() -> set:
             if end_ts > last_session:
                 end_ts = last_session
             if start_ts > end_ts:
-                sessions = pd.DatetimeIndex([])
+                raise RuntimeError(
+                    "NYSE calendar coverage is out of range for trading-day cache: "
+                    f"start_ts={start_ts}, end_ts={end_ts}, "
+                    f"first_session={first_session}, last_session={last_session}"
+                )
             else:
                 sessions = _NYSE.sessions_in_range(start_ts, end_ts)
             _trading_days_cache = set(session.date() for session in sessions)

@@ -293,10 +293,11 @@ class JPUniverseIngestionAdapter:
                     "source_symbol": source_symbol,
                     "canonical_symbol": identity.canonical_symbol,
                 }
+                canonical_exchange = identity.exchange or "XTKS"
                 canonical_payload = {
                     "symbol": identity.canonical_symbol,
                     "market": identity.market,
-                    "exchange": identity.exchange,
+                    "exchange": canonical_exchange,
                     "local_code": identity.local_code,
                     "name": row_name,
                     "sector": row_sector,
@@ -309,7 +310,7 @@ class JPUniverseIngestionAdapter:
                     symbol=identity.canonical_symbol,
                     name=row_name,
                     market=identity.market,
-                    exchange=identity.exchange or "XTKS",
+                    exchange=canonical_exchange,
                     currency=identity.currency,
                     timezone=identity.timezone,
                     local_code=identity.local_code,
@@ -334,7 +335,7 @@ class JPUniverseIngestionAdapter:
                         existing,
                         canonical_row,
                     )
-            except Exception as exc:
+            except ValueError as exc:
                 rejected_rows.append(
                     JPRejectedUniverseRow(
                         source_row_number=index,
