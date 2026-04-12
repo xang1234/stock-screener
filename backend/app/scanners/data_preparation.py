@@ -140,9 +140,14 @@ class DataPreparationLayer:
         """Build market-partitioned RS universe performance lists for percentile ranking."""
         rs_calc = self._get_rs_calc()
         by_market: dict[str, dict[int | str, list[float]]] = {}
+        seen_symbols: set[tuple[str, str]] = set()
 
         for item in stock_data_items:
             market = item.market or "US"
+            dedupe_key = (market, item.symbol)
+            if dedupe_key in seen_symbols:
+                continue
+            seen_symbols.add(dedupe_key)
             if (
                 item.price_data is None
                 or item.price_data.empty
