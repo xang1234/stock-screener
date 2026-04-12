@@ -8,7 +8,7 @@ Uses Redis for hot cache and database for persistence.
 import logging
 import pickle
 from typing import Any, Optional, Dict, Callable
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 from sqlalchemy.orm import Session
 
 try:
@@ -20,6 +20,12 @@ from ..database import SessionLocal
 from ..models.stock import StockFundamental
 from ..config import settings
 from .errors import CacheRefreshError
+from .fundamentals_completeness import (
+    compute_completeness_score,
+    derive_field_provenance,
+)
+from .field_capability_registry import field_capability_registry
+from .fx_service import FXQuote, FXService, currency_for_market, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
@@ -102,9 +108,15 @@ class FundamentalsCacheService:
         self,
         redis_client: Optional[redis.Redis] = None,
         session_factory: Optional[Callable[[], Session]] = None,
+        fx_service: Optional[FXService] = None,
     ):
-        """Initialize fundamentals cache service."""
+        """Initialize fundamentals cache service.
+
+        ``fx_service`` is injectable for tests; in production callers
+        typically rely on the process-wide default via ``get_fx_service()``.
+        """
         self._session_factory = session_factory or SessionLocal
+        self._fx_service = fx_service
         if redis_client:
             self._redis_client = redis_client
         else:
@@ -120,7 +132,8 @@ class FundamentalsCacheService:
     def get_fundamentals(
         self,
         symbol: str,
-        force_refresh: bool = False
+        force_refresh: bool = False,
+        market: Optional[str] = None,
     ) -> Optional[Dict]:
         """
         Get fundamental data with caching and graceful fallback.
@@ -128,6 +141,10 @@ class FundamentalsCacheService:
         Args:
             symbol: Stock ticker symbol
             force_refresh: Force fetch from yfinance, bypass cache
+            market: Optional market code (US/HK/JP/TW). Callers that already
+                hold the ``StockUniverse`` row should pass this to avoid an
+                extra per-symbol DB lookup on cache misses. ``None`` falls
+                back to a best-effort DB resolve in ``_fetch_and_cache``.
 
         Returns:
             Dict with fundamental metrics or None if unavailable
@@ -141,7 +158,7 @@ class FundamentalsCacheService:
         """
         if force_refresh:
             logger.info(f"Force refresh requested for {symbol}")
-            return self._fetch_and_cache(symbol)
+            return self._fetch_and_cache(symbol, market=market)
 
         # Try Redis first (fast path)
         if self._redis_client:
@@ -161,9 +178,11 @@ class FundamentalsCacheService:
                             "Cache HIT but incomplete for %s fundamentals - fetching on-demand enrichment",
                             symbol,
                         )
-                        enriched = self._fetch_and_cache(symbol)
+                        enriched = self._fetch_and_cache(symbol, market=market)
                         if enriched is not None:
                             return enriched
+                    if self._ensure_field_availability_metadata(symbol, fundamentals, market):
+                        self._store_in_redis(symbol, fundamentals)
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except (pickle.PickleError, TypeError, ValueError, RuntimeError, OSError) as exc:
@@ -207,9 +226,10 @@ class FundamentalsCacheService:
                         "Cache HIT but incomplete for %s fundamentals in database - fetching on-demand enrichment",
                         symbol,
                     )
-                    enriched = self._fetch_and_cache(symbol)
+                    enriched = self._fetch_and_cache(symbol, market=market)
                     if enriched is not None:
                         return enriched
+                self._ensure_field_availability_metadata(symbol, cached_data, market)
                 logger.info(f"Cache HIT for {symbol} (Database, updated: {last_update})")
 
                 # Also store in Redis for faster next access
@@ -219,11 +239,11 @@ class FundamentalsCacheService:
             else:
                 # Data is stale - fetch fresh data
                 logger.info(f"Cache HIT but STALE for {symbol} (last update: {last_update}) - fetching fresh data")
-                return self._fetch_and_cache(symbol)
+                return self._fetch_and_cache(symbol, market=market)
 
         # No cached data - fetch from yfinance
         logger.info(f"Cache MISS for {symbol} - fetching fresh data")
-        return self._fetch_and_cache(symbol)
+        return self._fetch_and_cache(symbol, market=market)
 
     def _get_from_database(self, symbol: str) -> tuple[Optional[Dict], Optional[datetime]]:
         """
@@ -278,6 +298,10 @@ class FundamentalsCacheService:
                 # Quarter metadata (consolidated from QuarterlyData)
                 "recent_quarter_date": record.recent_quarter_date,
                 "previous_quarter_date": record.previous_quarter_date,
+                "growth_reporting_cadence": record.growth_reporting_cadence,
+                "growth_metric_basis": record.growth_metric_basis,
+                "growth_comparable_period_date": record.growth_comparable_period_date,
+                "growth_reference_gap_days": record.growth_reference_gap_days,
                 # Alias for CANSLIM compatibility
                 "eps_growth_qq": record.eps_growth_quarterly,
                 # Profitability metrics
@@ -359,10 +383,22 @@ class FundamentalsCacheService:
                 "technicals_refreshed_at": (
                     record.technicals_refreshed_at.isoformat() if record.technicals_refreshed_at else None
                 ),
+                # T2 quality metadata
+                "field_completeness_score": record.field_completeness_score,
+                "field_provenance": record.field_provenance,
+                # T3 FX normalisation
+                "market_cap_usd": record.market_cap_usd,
+                "adv_usd": record.adv_usd,
+                "fx_metadata": record.fx_metadata,
             }
 
             # Compute fallback description (finviz preferred, yfinance as fallback)
             fundamentals["description"] = fundamentals.get("description_finviz") or fundamentals.get("description_yfinance")
+            fundamentals["field_availability"] = (
+                field_capability_registry.derive_ownership_sentiment_availability(
+                    fundamentals, self._resolve_market(symbol)
+                )
+            )
 
             # Get last update timestamp
             last_update = record.updated_at
@@ -377,11 +413,179 @@ class FundamentalsCacheService:
         finally:
             db.close()
 
-    def _fetch_and_cache(self, symbol: str) -> Optional[Dict]:
+    def _enrich_with_quality_metadata(
+        self,
+        symbol: str,
+        data: Dict,
+        market: Optional[str],
+    ) -> Optional[str]:
+        """Compute and attach T2 quality metadata to ``data`` in place.
+
+        Must be called *before* writes to Redis/DB so both stores see the
+        same snapshot — otherwise a warm Redis read would omit the
+        derived fields for up to the cache TTL.
+
+        Returns the resolved market string so the caller can pass it on
+        to ``_store_in_database`` without a second DB lookup.
+        """
+        if market is None:
+            market = self._resolve_market(symbol)
+        data['field_completeness_score'] = compute_completeness_score(data, market)
+        data['field_provenance'] = derive_field_provenance(data, market)
+        data['field_availability'] = (
+            field_capability_registry.derive_ownership_sentiment_availability(
+                data, market
+            )
+        )
+        return market
+
+    def _ensure_field_availability_metadata(
+        self,
+        symbol: str,
+        data: Dict,
+        market: Optional[str],
+    ) -> bool:
+        """Backfill derived metadata fields for older cache rows.
+
+        Returns ``True`` when any field was backfilled.
+        """
+        changed = False
+        resolved_market = market if market is not None else self._resolve_market(symbol)
+        if data.get("field_completeness_score") is None:
+            data["field_completeness_score"] = compute_completeness_score(
+                data, resolved_market
+            )
+            changed = True
+        if not isinstance(data.get("field_provenance"), dict):
+            data["field_provenance"] = derive_field_provenance(data, resolved_market)
+            changed = True
+        if not isinstance(data.get("field_availability"), dict):
+            data["field_availability"] = (
+                field_capability_registry.derive_ownership_sentiment_availability(
+                    data, resolved_market
+                )
+            )
+            changed = True
+
+        previous_fx_values = (
+            data.get("market_cap_usd"),
+            data.get("adv_usd"),
+            data.get("fx_metadata"),
+        )
+        missing_fx_metadata = (
+            data.get("market_cap_usd") is None
+            or data.get("adv_usd") is None
+            or not isinstance(data.get("fx_metadata"), dict)
+        )
+        if missing_fx_metadata:
+            self._enrich_with_fx_normalization(data, resolved_market)
+            changed = changed or (
+                previous_fx_values
+                != (
+                    data.get("market_cap_usd"),
+                    data.get("adv_usd"),
+                    data.get("fx_metadata"),
+                )
+            )
+
+        return changed
+
+    def _get_fx_service(self) -> FXService:
+        """Return the FX service, lazily resolving the process-wide default.
+
+        Lazy so that constructing a cache service without Redis/DB (e.g.
+        in unit tests) does not trigger FX service initialisation.
+        """
+        if self._fx_service is None:
+            self._fx_service = get_fx_service()
+        return self._fx_service
+
+    def _enrich_with_fx_normalization(
+        self,
+        data: Dict,
+        market: Optional[str],
+    ) -> None:
+        """Compute USD normalisation (``market_cap_usd``, ``adv_usd``) and
+        attach an ``fx_metadata`` snapshot to ``data`` in place.
+
+        Called *alongside* ``_enrich_with_quality_metadata`` before Redis/
+        DB writes so derived values survive a warm-cache read. Missing
+        rate or missing source amounts → NULL USD columns (honest
+        "unknown" rather than a fabricated zero).
+        """
+        currency = currency_for_market(market)
+        market_cap = data.get("market_cap")
+        shares_out = data.get("shares_outstanding")
+        avg_volume = data.get("avg_volume")
+
+        quote = self._get_fx_service().get_usd_rate(currency)
+        if quote is None:
+            # Rate unavailable — leave USD columns NULL but record the
+            # intent so consumers can see we tried.
+            data["market_cap_usd"] = None
+            data["adv_usd"] = None
+            data["fx_metadata"] = FXQuote.unavailable_metadata(currency)
+            return
+
+        rate = quote.rate
+        data["market_cap_usd"] = (
+            int(market_cap * rate) if market_cap is not None else None
+        )
+        # ADV-USD = avg_volume × price-per-share (local) × rate.
+        # Price-per-share is derived from market_cap / shares_outstanding
+        # to avoid coupling to a separate price cache.
+        if (
+            avg_volume is not None
+            and market_cap is not None
+            and shares_out
+        ):
+            price_local = market_cap / shares_out
+            data["adv_usd"] = int(avg_volume * price_local * rate)
+        else:
+            data["adv_usd"] = None
+        data["fx_metadata"] = quote.to_metadata()
+
+    def _resolve_market(self, symbol: str) -> Optional[str]:
+        """Look up the stock universe market for ``symbol``.
+
+        Returns ``None`` if the symbol is not in the universe (or the lookup
+        fails) — the routing policy treats ``None`` as the legacy US default
+        so this never crashes on-demand fetches.
+        """
+        from ..models.stock_universe import StockUniverse
+
+        db = None
+        try:
+            db = self._session_factory()
+            row = (
+                db.query(StockUniverse.market)
+                .filter(StockUniverse.symbol == symbol)
+                .first()
+            )
+            return row[0] if row else None
+        except Exception as exc:  # pragma: no cover - DB hiccup shouldn't block fetch
+            logger.debug(
+                "Market lookup failed for %s (%s) - defaulting to US policy",
+                symbol, exc,
+            )
+            return None
+        finally:
+            if db is not None:
+                db.close()
+
+    def _fetch_and_cache(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch fundamental data from finvizfinance (primary) or yfinance (fallback) and cache it.
 
         Graceful fallback: If fetch fails, return None (caller will handle).
+
+        ``market`` is consulted by the provider routing policy so US-only
+        providers (finviz, alphavantage) are skipped for HK/JP/TW symbols.
+        When omitted, falls back to a single DB lookup.
         """
         try:
             if not settings.provider_snapshot_on_demand_fallback_enabled:
@@ -393,8 +597,13 @@ class FundamentalsCacheService:
             logger.info(f"Fetching fresh fundamental data for {symbol} from data sources")
             self.record_on_demand_fallback()
 
+            if market is None:
+                market = self._resolve_market(symbol)
+
             # Use DataSourceService which handles finviz → yfinance fallback
-            fundamentals = get_data_source_service().get_fundamentals(symbol)
+            fundamentals = get_data_source_service().get_fundamentals(
+                symbol, market=market
+            )
 
             if not fundamentals:
                 logger.warning(f"All data sources failed for {symbol} fundamentals")
@@ -409,11 +618,18 @@ class FundamentalsCacheService:
                 f"{len([v for v in fundamentals.values() if v is not None])} fields populated"
             )
 
+            # Enrich with completeness/provenance so both Redis and DB writes
+            # include the derived metadata (avoids warm-read staleness).
+            market = self._enrich_with_quality_metadata(symbol, fundamentals, market)
+            self._enrich_with_fx_normalization(fundamentals, market)
+
             # Cache in Redis (7-day TTL)
             self._store_in_redis(symbol, fundamentals)
 
-            # Persist to database (permanent storage) with data source metadata
-            self._store_in_database(symbol, fundamentals, data_source=data_source)
+            # Persist to database (permanent storage) with data source metadata.
+            self._store_in_database(
+                symbol, fundamentals, data_source=data_source, market=market
+            )
 
             # Re-add metadata for return value
             fundamentals['data_source'] = data_source
@@ -464,7 +680,13 @@ class FundamentalsCacheService:
         except Exception as e:
             logger.error(f"Error storing {symbol} in Redis: {e}", exc_info=True)
 
-    def _store_in_database(self, symbol: str, data: Dict, data_source: str = 'unknown') -> None:
+    def _store_in_database(
+        self,
+        symbol: str,
+        data: Dict,
+        data_source: str = 'unknown',
+        market: Optional[str] = None,
+    ) -> None:
         """
         Store fundamental data in database (StockFundamental table).
 
@@ -472,12 +694,31 @@ class FundamentalsCacheService:
             symbol: Stock ticker symbol
             data: Fundamental data dict
             data_source: Data source ('finviz' or 'yfinance')
+            market: Market code used for completeness/provenance scoring.
+                When omitted, falls back to a DB lookup via _resolve_market.
+
+        Also persists T2 quality metadata: ``field_completeness_score``
+        and ``field_provenance``.
 
         Uses upsert to handle existing records gracefully.
         """
         db = self._session_factory()
 
         try:
+            if market is None:
+                market = self._resolve_market(symbol)
+
+            # Prefer pre-computed values from the dict (attached by
+            # ``_enrich_with_quality_metadata`` on the write path); only
+            # recompute if the caller reached this method without going
+            # through the standard cache-enrichment path.
+            completeness_score = data.get('field_completeness_score')
+            if completeness_score is None:
+                completeness_score = compute_completeness_score(data, market)
+            provenance = data.get('field_provenance')
+            if provenance is None:
+                provenance = derive_field_provenance(data, market)
+
             # Check if record exists
             existing_record = db.query(StockFundamental).filter(
                 StockFundamental.symbol == symbol
@@ -518,6 +759,10 @@ class FundamentalsCacheService:
                 existing_record.sales_growth_qq = data.get("sales_growth_qq")
                 existing_record.recent_quarter_date = data.get("recent_quarter_date")
                 existing_record.previous_quarter_date = data.get("previous_quarter_date")
+                existing_record.growth_reporting_cadence = data.get("growth_reporting_cadence")
+                existing_record.growth_metric_basis = data.get("growth_metric_basis")
+                existing_record.growth_comparable_period_date = data.get("growth_comparable_period_date")
+                existing_record.growth_reference_gap_days = data.get("growth_reference_gap_days")
 
                 # Profitability metrics
                 existing_record.profit_margin = data.get("profit_margin")
@@ -611,6 +856,13 @@ class FundamentalsCacheService:
                 existing_record.technicals_refreshed_at = self._coerce_datetime(
                     data.get("technicals_refreshed_at")
                 )
+                # T2 quality metadata
+                existing_record.field_completeness_score = completeness_score
+                existing_record.field_provenance = provenance
+                # T3 FX normalisation
+                existing_record.market_cap_usd = data.get("market_cap_usd")
+                existing_record.adv_usd = data.get("adv_usd")
+                existing_record.fx_metadata = data.get("fx_metadata")
                 existing_record.updated_at = datetime.now()
 
                 logger.info(f"Updated fundamental data for {symbol} in database")
@@ -649,6 +901,10 @@ class FundamentalsCacheService:
                     sales_growth_qq=data.get("sales_growth_qq"),
                     recent_quarter_date=data.get("recent_quarter_date"),
                     previous_quarter_date=data.get("previous_quarter_date"),
+                    growth_reporting_cadence=data.get("growth_reporting_cadence"),
+                    growth_metric_basis=data.get("growth_metric_basis"),
+                    growth_comparable_period_date=data.get("growth_comparable_period_date"),
+                    growth_reference_gap_days=data.get("growth_reference_gap_days"),
                     # Profitability metrics
                     profit_margin=data.get("profit_margin"),
                     operating_margin=data.get("operating_margin"),
@@ -729,6 +985,13 @@ class FundamentalsCacheService:
                     technicals_refreshed_at=self._coerce_datetime(
                         data.get("technicals_refreshed_at")
                     ),
+                    # T2 quality metadata
+                    field_completeness_score=completeness_score,
+                    field_provenance=provenance,
+                    # T3 FX normalisation
+                    market_cap_usd=data.get("market_cap_usd"),
+                    adv_usd=data.get("adv_usd"),
+                    fx_metadata=data.get("fx_metadata"),
                 )
                 db.add(new_record)
                 logger.info(f"Inserted fundamental data for {symbol} in database")
@@ -884,6 +1147,10 @@ class FundamentalsCacheService:
                     # Quarter metadata
                     "recent_quarter_date": record.recent_quarter_date,
                     "previous_quarter_date": record.previous_quarter_date,
+                    "growth_reporting_cadence": record.growth_reporting_cadence,
+                    "growth_metric_basis": record.growth_metric_basis,
+                    "growth_comparable_period_date": record.growth_comparable_period_date,
+                    "growth_reference_gap_days": record.growth_reference_gap_days,
                     # Alias for CANSLIM compatibility
                     "eps_growth_qq": record.eps_growth_quarterly,
                     # Profitability metrics
@@ -1114,7 +1381,13 @@ class FundamentalsCacheService:
         )
         return {symbol: data for symbol, (data, _) in db_results.items()}
 
-    def store(self, symbol: str, data: Dict, data_source: str = 'hybrid') -> None:
+    def store(
+        self,
+        symbol: str,
+        data: Dict,
+        data_source: str = 'hybrid',
+        market: Optional[str] = None,
+    ) -> None:
         """
         Store fundamental data in cache (Redis + Database).
 
@@ -1125,6 +1398,9 @@ class FundamentalsCacheService:
             symbol: Stock ticker symbol
             data: Fundamental data dict
             data_source: Source identifier (default 'hybrid')
+            market: Market code; used to compute T2 completeness and
+                provenance without an extra DB lookup. When omitted,
+                ``_store_in_database`` falls back to DB resolve.
         """
         if not data:
             logger.warning(f"Cannot store empty data for {symbol}")
@@ -1132,11 +1408,17 @@ class FundamentalsCacheService:
 
         normalized_data = self._normalize_payload_for_storage(data)
 
+        # Enrich before Redis/DB writes so both see the same snapshot.
+        market = self._enrich_with_quality_metadata(symbol, normalized_data, market)
+        self._enrich_with_fx_normalization(normalized_data, market)
+
         # Store in Redis
         self._store_in_redis(symbol, normalized_data)
 
         # Store in database
-        self._store_in_database(symbol, normalized_data, data_source=data_source)
+        self._store_in_database(
+            symbol, normalized_data, data_source=data_source, market=market
+        )
 
         logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
 

@@ -54,6 +54,7 @@ def test_store_all_caches_uses_injected_session_factory(monkeypatch):
         "AAPL",
         {"symbol": "AAPL", "market_cap": 1_000},
         data_source="hybrid",
+        market=None,
     )
     session_factory.assert_called_once_with()
     ownership_ctor.assert_called_once_with(fake_db)

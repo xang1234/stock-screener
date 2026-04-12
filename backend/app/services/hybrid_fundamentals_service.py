@@ -22,6 +22,7 @@ from .technical_calculator_service import TechnicalCalculatorService
 from .finviz_service import FinvizService
 from .price_cache_service import PriceCacheService
 from .institutional_ownership_service import InstitutionalOwnershipService
+from . import provider_routing_policy as routing_policy
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,8 @@ class HybridFundamentalsService:
         symbols: List[str],
         include_technicals: bool = True,
         include_finviz: bool = None,
-        progress_callback=None
+        progress_callback=None,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols using hybrid approach.
@@ -172,6 +174,11 @@ class HybridFundamentalsService:
             include_technicals: Whether to calculate technical indicators
             include_finviz: Whether to include finviz-only fields
             progress_callback: Optional callback for progress updates (called with current, total)
+            market_by_symbol: Optional mapping ``{symbol: market_code}``.
+                When provided, Phase 3 (finviz) skips symbols whose market
+                is not covered by finviz per the routing policy (e.g.
+                HK/JP/TW). ``None`` or missing keys default to US behaviour,
+                preserving legacy callers.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -199,7 +206,8 @@ class HybridFundamentalsService:
             batch_size=self.yfinance_batch_size,
             include_quarterly=True,
             delay_between_batches=self.yfinance_delay_between_batches,
-            delay_per_ticker=self.yfinance_delay_per_ticker
+            delay_per_ticker=self.yfinance_delay_per_ticker,
+            market_by_symbol=market_by_symbol,
         )
 
         for symbol in symbols:
@@ -245,32 +253,60 @@ class HybridFundamentalsService:
         # Phase 3: Fetch finviz-only fields (~1-1.5 hours)
         # ============================================================
         if include_finviz:
-            logger.info("Phase 3: Fetching finviz-only fields...")
+            # Filter symbols by routing policy: finviz is US-only, so skip
+            # HK/JP/TW symbols entirely rather than making doomed API calls.
+            finviz_eligible = [
+                s for s in symbols
+                if routing_policy.is_supported(
+                    (market_by_symbol or {}).get(s),
+                    routing_policy.PROVIDER_FINVIZ,
+                )
+            ]
+            skipped = len(symbols) - len(finviz_eligible)
+            if skipped:
+                logger.info(
+                    "Phase 3: skipping %d/%d symbols excluded from finviz "
+                    "by routing policy %s (non-US markets).",
+                    skipped, len(symbols), routing_policy.policy_version(),
+                )
+
+            logger.info(
+                "Phase 3: Fetching finviz-only fields for %d symbols...",
+                len(finviz_eligible),
+            )
             phase3_start = time.time()
 
+            finviz_total = len(finviz_eligible)
             finviz_success = 0
-            for i, symbol in enumerate(symbols):
+            for i, symbol in enumerate(finviz_eligible):
                 finviz_data = self.finviz_service.get_finviz_only_fields(symbol)
                 if finviz_data:
                     results[symbol].update(finviz_data)
                     finviz_success += 1
 
-                if i > 0 and i % 50 == 0:
+                if i > 0 and i % 50 == 0 and finviz_total > 0:
                     elapsed = time.time() - phase3_start
                     rate = i / elapsed if elapsed > 0 else 0
-                    eta = (total - i) / rate if rate > 0 else 0
+                    eta = (finviz_total - i) / rate if rate > 0 else 0
                     logger.info(
-                        f"Phase 3 progress: {i}/{total} ({i/total*100:.1f}%), "
-                        f"ETA: {eta/60:.1f} min"
+                        f"Phase 3 progress: {i}/{finviz_total} "
+                        f"({i/finviz_total*100:.1f}%), ETA: {eta/60:.1f} min"
                     )
 
                     if progress_callback:
-                        # Phase 3 is 50% to 100% of progress
-                        phase3_progress = 0.5 + (i / total) * 0.5
+                        # Phase 3 is 50% to 100% of overall progress; scale
+                        # by finviz-eligible count, not total.
+                        phase3_progress = 0.5 + (i / finviz_total) * 0.5
                         progress_callback(int(total * phase3_progress), total)
 
             phase3_time = time.time() - phase3_start
-            logger.info(f"Phase 3 complete: {finviz_success}/{total} in {phase3_time:.1f}s")
+            logger.info(
+                f"Phase 3 complete: {finviz_success}/{finviz_total} in "
+                f"{phase3_time:.1f}s"
+            )
+            if progress_callback:
+                # Always emit completion even when finviz_eligible is empty.
+                progress_callback(total, total)
 
         # Add metadata to all results
         for symbol in symbols:
@@ -313,7 +349,8 @@ class HybridFundamentalsService:
         symbols: List[str],
         include_technicals: bool = True,
         finviz_workers: int = 2,
-        progress_callback=None
+        progress_callback=None,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals with parallel finviz fetching for faster performance.
@@ -326,6 +363,8 @@ class HybridFundamentalsService:
             include_technicals: Whether to calculate technical indicators
             finviz_workers: Number of parallel workers for finviz (default 2)
             progress_callback: Optional progress callback
+            market_by_symbol: Optional mapping ``{symbol: market}`` forwarded
+                to cadence-aware quarterly growth extraction.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -346,7 +385,8 @@ class HybridFundamentalsService:
             batch_size=self.yfinance_batch_size,
             max_workers=3,
             include_quarterly=True,
-            delay_per_ticker=self.yfinance_delay_per_ticker
+            delay_per_ticker=self.yfinance_delay_per_ticker,
+            market_by_symbol=market_by_symbol,
         )
 
         for symbol in symbols:
@@ -416,6 +456,7 @@ class HybridFundamentalsService:
         *,
         session_factory: Callable[[], Session],
         include_quarterly: bool = True,  # kept for compatibility with existing task call sites
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, int]:
         """
         Store hybrid results in fundamentals cache.
@@ -429,6 +470,9 @@ class HybridFundamentalsService:
         Args:
             results: Dict mapping symbols to their fundamental data
             fundamentals_cache: FundamentalsCacheService instance
+            market_by_symbol: Optional {symbol: market_code} map. Passed
+                through to ``fundamentals_cache.store`` so T2 completeness
+                scoring is market-aware without a per-symbol DB lookup.
 
         Returns:
             Dict with storage statistics
@@ -439,6 +483,7 @@ class HybridFundamentalsService:
             'ownership_updated': 0,
             'failed': 0
         }
+        markets = market_by_symbol or {}
 
         for symbol, data in results.items():
             if not data or data.get('has_error'):
@@ -447,7 +492,10 @@ class HybridFundamentalsService:
 
             try:
                 # Store in fundamentals cache (includes quarterly growth fields)
-                fundamentals_cache.store(symbol, data, data_source='hybrid')
+                fundamentals_cache.store(
+                    symbol, data, data_source='hybrid',
+                    market=markets.get(symbol),
+                )
                 stats['fundamentals_stored'] += 1
                 if include_quarterly:
                     stats['quarterly_stored'] += 1

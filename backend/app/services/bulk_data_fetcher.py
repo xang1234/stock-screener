@@ -11,14 +11,13 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 import logging
 from typing import TYPE_CHECKING, List, Dict, Optional, Any
 from threading import RLock
-import pandas as pd
-import numpy as np
 import yfinance as yf
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from ..config import settings
+from .growth_cadence_service import compute_cadence_aware_growth
 
 if TYPE_CHECKING:
     from .eps_rating_service import EPSRatingService
@@ -227,110 +226,29 @@ class BulkDataFetcher:
             return None
         return round(value * 100, 2)
 
-    def _extract_quarterly_growth(self, ticker) -> Dict[str, Optional[float]]:
+    def _extract_quarterly_growth(
+        self,
+        ticker,
+        *,
+        market: str | None = None,
+    ) -> Dict[str, Optional[float]]:
         """
-        Extract quarterly growth metrics from ticker's income statement.
-
-        Calculates EPS Q/Q and Sales Q/Q growth from quarterly data.
+        Extract cadence-aware growth metrics from ticker income statement.
 
         Args:
             ticker: yfinance Ticker object
+            market: Optional market code for cadence-aware basis selection.
 
         Returns:
             Dict with quarterly growth metrics
         """
-        result = {
-            'eps_growth_qq': None,
-            'sales_growth_qq': None,
-            'eps_growth_yy': None,
-            'sales_growth_yy': None,
-            'recent_quarter_date': None,
-            'previous_quarter_date': None,
-        }
-
         try:
             quarterly_income = ticker.quarterly_income_stmt
-
-            if quarterly_income is None or quarterly_income.shape[1] < 2:
-                return result
-
-            # Columns are most recent first
-            recent_col = quarterly_income.columns[0]
-            prev_col = quarterly_income.columns[1]
-
-            result['recent_quarter_date'] = str(recent_col)
-            result['previous_quarter_date'] = str(prev_col)
-
-            # Find EPS row (Diluted EPS preferred)
-            eps_row = None
-            for idx in quarterly_income.index:
-                idx_str = str(idx).lower()
-                if 'diluted eps' in idx_str or 'dilutedeps' in idx_str:
-                    eps_row = idx
-                    break
-            if eps_row is None:
-                for idx in quarterly_income.index:
-                    idx_str = str(idx).lower()
-                    if 'basic eps' in idx_str or 'basiceps' in idx_str:
-                        eps_row = idx
-                        break
-
-            # Calculate EPS Q/Q growth
-            if eps_row is not None:
-                recent_eps = quarterly_income.loc[eps_row, recent_col]
-                prev_eps = quarterly_income.loc[eps_row, prev_col]
-
-                if prev_eps != 0 and not pd.isna(prev_eps) and not pd.isna(recent_eps):
-                    if abs(prev_eps) > 0.05:  # Avoid tiny denominators
-                        eps_growth = ((recent_eps - prev_eps) / abs(prev_eps)) * 100
-                        result['eps_growth_qq'] = round(float(eps_growth), 2)
-
-            # Find Revenue row
-            revenue_row = None
-            for idx in quarterly_income.index:
-                idx_str = str(idx).lower()
-                if 'total revenue' in idx_str or 'totalrevenue' in idx_str:
-                    revenue_row = idx
-                    break
-            if revenue_row is None:
-                for idx in quarterly_income.index:
-                    idx_str = str(idx).lower()
-                    if 'revenue' in idx_str:
-                        revenue_row = idx
-                        break
-
-            # Calculate Sales Q/Q growth
-            if revenue_row is not None:
-                recent_rev = quarterly_income.loc[revenue_row, recent_col]
-                prev_rev = quarterly_income.loc[revenue_row, prev_col]
-
-                if prev_rev != 0 and not pd.isna(prev_rev) and not pd.isna(recent_rev):
-                    sales_growth = ((recent_rev - prev_rev) / abs(prev_rev)) * 100
-                    result['sales_growth_qq'] = round(float(sales_growth), 2)
-
-            # Y/Y growth (compare to same quarter last year if available)
-            if quarterly_income.shape[1] >= 5:
-                year_ago_col = quarterly_income.columns[4]
-
-                if eps_row is not None:
-                    recent_eps = quarterly_income.loc[eps_row, recent_col]
-                    year_ago_eps = quarterly_income.loc[eps_row, year_ago_col]
-                    if year_ago_eps != 0 and not pd.isna(year_ago_eps) and not pd.isna(recent_eps):
-                        if abs(year_ago_eps) > 0.05:
-                            yy_growth = ((recent_eps - year_ago_eps) / abs(year_ago_eps)) * 100
-                            result['eps_growth_yy'] = round(float(yy_growth), 2)
-
-                if revenue_row is not None:
-                    recent_rev = quarterly_income.loc[revenue_row, recent_col]
-                    year_ago_rev = quarterly_income.loc[revenue_row, year_ago_col]
-                    if year_ago_rev != 0 and not pd.isna(year_ago_rev) and not pd.isna(recent_rev):
-                        yy_growth = ((recent_rev - year_ago_rev) / abs(year_ago_rev)) * 100
-                        result['sales_growth_yy'] = round(float(yy_growth), 2)
+            return compute_cadence_aware_growth(quarterly_income, market=market)
 
         except Exception as e:
             logger.debug(f"Error extracting quarterly growth: {e}")
-
-        return result
+            return compute_cadence_aware_growth(None, market=market)
 
     def _extract_eps_rating_data(self, ticker) -> Dict[str, Optional[float]]:
         """
@@ -637,7 +555,8 @@ class BulkDataFetcher:
         batch_size: int = 50,
         include_quarterly: bool = True,
         delay_between_batches: float = 2.0,
-        delay_per_ticker: float = 1.5
+        delay_per_ticker: float = 1.5,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols efficiently.
@@ -651,6 +570,8 @@ class BulkDataFetcher:
             include_quarterly: Whether to fetch quarterly growth data (slower but more complete)
             delay_between_batches: Seconds to wait between batches (default 2.0)
             delay_per_ticker: Seconds to wait between individual ticker info fetches (default 0.2)
+            market_by_symbol: Optional mapping ``{symbol: market}`` for
+                cadence-aware growth extraction.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -687,7 +608,10 @@ class BulkDataFetcher:
 
                         # Optionally get quarterly growth
                         if include_quarterly:
-                            quarterly = self._extract_quarterly_growth(ticker)
+                            quarterly = self._extract_quarterly_growth(
+                                ticker,
+                                market=(market_by_symbol or {}).get(symbol),
+                            )
                             fundamentals.update(quarterly)
 
                             # Also extract EPS rating data
@@ -739,7 +663,8 @@ class BulkDataFetcher:
         batch_size: int = 50,
         max_workers: int = 3,
         include_quarterly: bool = True,
-        delay_per_ticker: float = 1.5
+        delay_per_ticker: float = 1.5,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals using parallel batch processing.
@@ -753,6 +678,8 @@ class BulkDataFetcher:
             max_workers: Number of parallel workers
             include_quarterly: Whether to include quarterly growth data
             delay_per_ticker: Seconds between individual ticker fetches (default 0.2)
+            market_by_symbol: Optional mapping ``{symbol: market}`` for
+                cadence-aware growth extraction.
 
         Returns:
             Dict mapping symbols to fundamental data
@@ -783,7 +710,10 @@ class BulkDataFetcher:
                         fundamentals = self._extract_fundamentals(info)
 
                         if include_quarterly:
-                            quarterly = self._extract_quarterly_growth(ticker)
+                            quarterly = self._extract_quarterly_growth(
+                                ticker,
+                                market=(market_by_symbol or {}).get(symbol),
+                            )
                             fundamentals.update(quarterly)
 
                             # Also extract EPS rating data

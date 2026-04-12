@@ -163,10 +163,13 @@ def refresh_all_fundamentals(self):
                 if (i + 1) % 50 == 0:
                     logger.info(f"Progress: {i + 1}/{total_stocks} ({(i+1)/total_stocks*100:.1f}%)")
 
-                # Fetch fundamental data (force_refresh=True to get fresh data)
+                # Fetch fundamental data (force_refresh=True to get fresh data).
+                # Pass market from the already-loaded universe row so the cache
+                # service doesn't re-query the DB for it per symbol.
                 fundamental_data = cache.get_fundamentals(
                     symbol,
-                    force_refresh=True  # Always get fresh data for weekly refresh
+                    force_refresh=True,
+                    market=stock.market,
                 )
 
                 if fundamental_data:
@@ -378,10 +381,12 @@ def populate_initial_cache(self, limit: Optional[int] = None):
                         f"Elapsed: {elapsed/60:.1f}m | ETA: {remaining/60:.1f}m"
                     )
 
-                # Fetch fundamental data (force_refresh=True to populate fresh data)
+                # Fetch fundamental data (force_refresh=True to populate fresh data).
+                # Pass market to avoid a per-symbol DB lookup in the cache service.
                 fundamental_data = cache.get_fundamentals(
                     symbol,
-                    force_refresh=True
+                    force_refresh=True,
+                    market=stock.market,
                 )
 
                 if fundamental_data:
@@ -602,6 +607,9 @@ def refresh_all_fundamentals_hybrid(
             }
 
         symbols = [s.symbol for s in universe_stocks]
+        # Build {symbol: market} map so HybridFundamentalsService can apply
+        # the provider routing policy (finviz is US-only — HK/JP/TW skip it).
+        market_by_symbol = {s.symbol: s.market for s in universe_stocks}
         total_stocks = len(symbols)
         logger.info(f"Found {total_stocks} active stocks to refresh")
 
@@ -635,7 +643,8 @@ def refresh_all_fundamentals_hybrid(
             symbols,
             include_technicals=True,
             include_finviz=include_finviz,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            market_by_symbol=market_by_symbol,
         )
 
         # Store in all caches (fundamentals + quarterly for CANSLIM compatibility)
@@ -644,7 +653,8 @@ def refresh_all_fundamentals_hybrid(
             all_data,
             cache,
             session_factory=SessionLocal,
-            include_quarterly=True
+            include_quarterly=True,
+            market_by_symbol=market_by_symbol,
         )
 
         stats = {
@@ -769,11 +779,25 @@ def refresh_symbols_hybrid(
         hybrid_service = HybridFundamentalsService(include_finviz=include_finviz)
         cache = get_fundamentals_cache()
 
+        # Batch-resolve markets in a single query so fetch and store are
+        # market-aware without N+1 DB lookups later.
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(StockUniverse.symbol, StockUniverse.market)
+                .filter(StockUniverse.symbol.in_(symbols))
+                .all()
+            )
+            market_by_symbol = {sym: mkt for sym, mkt in rows}
+        finally:
+            db.close()
+
         # Fetch fundamentals
         all_data = hybrid_service.fetch_fundamentals_batch(
             symbols,
             include_technicals=True,
-            include_finviz=include_finviz
+            include_finviz=include_finviz,
+            market_by_symbol=market_by_symbol,
         )
 
         # Store in all caches (fundamentals + quarterly for CANSLIM compatibility)
@@ -781,7 +805,8 @@ def refresh_symbols_hybrid(
             all_data,
             cache,
             session_factory=SessionLocal,
-            include_quarterly=True
+            include_quarterly=True,
+            market_by_symbol=market_by_symbol,
         )
 
         duration = time.time() - start_time

@@ -1,5 +1,6 @@
 """Stock-related database models"""
-from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, JSON, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -71,6 +72,10 @@ class StockFundamental(Base):
     # Quarter metadata (consolidated from QuarterlyData)
     recent_quarter_date = Column(String(50))  # e.g., "2024-Q4"
     previous_quarter_date = Column(String(50))  # e.g., "2024-Q3"
+    growth_reporting_cadence = Column(String(24))  # quarterly | semiannual | annual | unknown
+    growth_metric_basis = Column(String(40))  # quarterly_qoq | comparable_period_yoy | unavailable
+    growth_comparable_period_date = Column(String(50))  # Same-period prior-year statement date
+    growth_reference_gap_days = Column(Integer)  # Gap between recent and previous statement periods
 
     # Profitability metrics
     profit_margin = Column(Float)
@@ -155,6 +160,25 @@ class StockFundamental(Base):
     yahoo_profile_refreshed_at = Column(DateTime(timezone=True))
     yahoo_statements_refreshed_at = Column(DateTime(timezone=True))
     technicals_refreshed_at = Column(DateTime(timezone=True))
+
+    # Field-level quality metadata (T2)
+    # Market-aware 0-100 score. Indexed for quality-tier filtering by
+    # scanners/ranking logic. NULL means "not yet computed" — treat as unknown.
+    field_completeness_score = Column(Integer, index=True)
+    # {field_name: provider_name} for every populated field. JSONB in
+    # production (PG) so T4 can filter on key paths efficiently; tests use
+    # SQLite which falls back to the JSON variant.
+    field_provenance = Column(JSONB().with_variant(JSON(), "sqlite"))
+
+    # USD normalisation (T3). Computed at storage time using the FX rate
+    # captured in ``fx_metadata``; NULL when source currency or amount is
+    # unavailable. Indexed for cross-market ranking.
+    market_cap_usd = Column(BigInteger, index=True)
+    adv_usd = Column(BigInteger, index=True)
+    # Per-row FX snapshot: {from_currency, to_currency, rate, as_of_date,
+    # source}. Stored so a single row can be replayed without consulting
+    # the fx_rates log. SQLite fallback for test schemas.
+    fx_metadata = Column(JSONB().with_variant(JSON(), "sqlite"))
 
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

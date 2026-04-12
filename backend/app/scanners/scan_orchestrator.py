@@ -14,7 +14,11 @@ from .screener_registry import ScreenerRegistry
 
 from app.config import settings
 from app.domain.scanning.models import CompositeMethod, ScreenerOutputDomain
-from app.domain.scanning.scoring import calculate_composite_score, calculate_overall_rating
+from app.domain.scanning.scoring import (
+    apply_quality_policy,
+    calculate_composite_score,
+    calculate_overall_rating,
+)
 from app.domain.scanning.ports import StockDataProvider
 
 logger = logging.getLogger(__name__)
@@ -188,7 +192,18 @@ class ScanOrchestrator:
 
             # 7. Determine overall rating
             rating_category = calculate_overall_rating(composite_score, domain_outputs)
-            overall_rating = rating_category.value
+
+            # 7b. Apply quality-aware fallback (T4): low completeness scores
+            #     downgrade or exclude the rating. Tie-break behaviour is
+            #     documented in scoring.py; we expose field_completeness_score
+            #     in the result so consumers can use it as a secondary sort.
+            completeness = None
+            if stock_data.fundamentals:
+                completeness = stock_data.fundamentals.get(
+                    "field_completeness_score"
+                )
+            adjustment = apply_quality_policy(rating_category, completeness)
+            overall_rating = adjustment.rating.value
 
             # 8. Combine results
             combined_result = self._combine_results(
@@ -197,7 +212,9 @@ class ScanOrchestrator:
                 screener_results,
                 composite_score,
                 overall_rating,
-                composite_method
+                composite_method,
+                quality_downgrade_reason=adjustment.reason,
+                field_completeness_score=completeness,
             )
 
             return combined_result
@@ -213,7 +230,9 @@ class ScanOrchestrator:
         screener_results: Dict[str, ScreenerResult],
         composite_score: float,
         overall_rating: str,
-        composite_method: str
+        composite_method: str,
+        quality_downgrade_reason: Optional[str] = None,
+        field_completeness_score: Optional[int] = None,
     ) -> Dict:
         """
         Combine all screener results into a single result dict.
@@ -223,8 +242,12 @@ class ScanOrchestrator:
             stock_data: Stock data
             screener_results: Results from each screener
             composite_score: Combined score
-            overall_rating: Overall rating
+            overall_rating: Overall rating (may be post-quality adjustment)
             composite_method: Method used for combining
+            quality_downgrade_reason: Human-readable reason when T4 quality
+                policy adjusted the rating, else None.
+            field_completeness_score: 0-100 completeness from T2, used by
+                callers for tie-break ordering.
 
         Returns:
             Combined result dict
@@ -284,10 +307,17 @@ class ScanOrchestrator:
             "screeners_passed": sum(1 for r in screener_results.values() if r.passes),
             "screeners_total": len(screener_results),
 
+            # T4 quality-aware fallback surface (top-level so API consumers
+            # don't have to drill into details — mirrors how ``rating`` is
+            # exposed). ``field_completeness_score`` doubles as the secondary
+            # sort key for tie-break (see scoring.py policy docstring).
+            "field_completeness_score": field_completeness_score,
+            "quality_downgrade_reason": quality_downgrade_reason,
+
             # Full details
             "details": {
                 "screeners": screener_details,
-                "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None
+                "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
             }
         }
 

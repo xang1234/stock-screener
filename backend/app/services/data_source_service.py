@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 from datetime import datetime
 
 from .finviz_validator import FinvizValidator
+from . import provider_routing_policy as routing_policy
 
 if TYPE_CHECKING:
     from app.services.eps_rating_service import EPSRatingService
@@ -83,22 +84,61 @@ class DataSourceService:
             'yfinance_fallback': 0,
             'yfinance_primary': 0,
             'total_calls': 0,
+            # Count of calls where prefer_finviz=True but routing policy
+            # excluded finviz (e.g. HK/JP/TW). Useful for measuring how many
+            # wasted US-only provider calls the policy is preventing.
+            'finviz_skipped_by_policy': 0,
         }
 
-    def get_fundamentals(self, symbol: str) -> Optional[Dict]:
+    def _finviz_allowed(self, market: Optional[str]) -> bool:
+        """Return True iff finviz may be attempted for ``market`` per policy.
+
+        NOT a pure predicate: increments ``metrics['finviz_skipped_by_policy']``
+        when policy (rather than ``prefer_finviz=False``) is the reason finviz
+        is skipped. Must be called exactly once per public fetch method so the
+        counter reflects fetch calls, not predicate checks.
+
+        The ``prefer_finviz`` instance flag is still honoured — policy only
+        *narrows* the set of attempted providers; it never forces finviz on
+        a caller that opted out.
+        """
+        if not self.prefer_finviz:
+            return False
+        allowed = routing_policy.is_supported(
+            market, routing_policy.PROVIDER_FINVIZ
+        )
+        if not allowed:
+            self.metrics['finviz_skipped_by_policy'] += 1
+            # DEBUG not INFO: can fire thousands of times on a mixed-market
+            # batch. The counter above is the operator-facing signal.
+            logger.debug(
+                "Routing policy %s excluded finviz for market=%r",
+                routing_policy.policy_version(),
+                market,
+            )
+        return allowed
+
+    def get_fundamentals(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch fundamental data with intelligent source selection and fallback.
 
         Args:
             symbol: Stock ticker symbol
+            market: Optional market code (US/HK/JP/TW). When provided, the
+                provider routing policy filters out providers that do not
+                cover this market (e.g. finviz is skipped for HK/JP/TW).
+                ``None`` preserves legacy US-equivalent behaviour.
 
         Returns:
             Dict with fundamental metrics and metadata, or None if all sources fail
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred
-        if self.prefer_finviz:
+        if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} fundamentals from finvizfinance")
 
             finviz_data = self.finviz_service.get_fundamentals(symbol)
@@ -184,20 +224,25 @@ class DataSourceService:
         eps_data = {key: yf_data.get(key) for key in keys if yf_data.get(key) is not None}
         return eps_data or None
 
-    def get_quarterly_growth(self, symbol: str) -> Optional[Dict]:
+    def get_quarterly_growth(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch quarterly growth metrics with intelligent source selection and fallback.
 
         Args:
             symbol: Stock ticker symbol
+            market: Optional market code (US/HK/JP/TW); see
+                ``get_fundamentals`` for semantics.
 
         Returns:
             Dict with growth metrics and metadata, or None if all sources fail
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred
-        if self.prefer_finviz:
+        if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} quarterly growth from finvizfinance")
 
             finviz_data = self.finviz_service.get_quarterly_growth(symbol)
@@ -232,7 +277,7 @@ class DataSourceService:
             self.metrics['yfinance_primary'] += 1
 
         # Fetch from yfinance
-        yf_data = self.yfinance_service.get_quarterly_growth(symbol)
+        yf_data = self.yfinance_service.get_quarterly_growth(symbol, market=market)
 
         if yf_data:
             yf_data['data_source'] = 'yfinance'
@@ -243,7 +288,11 @@ class DataSourceService:
         logger.error(f"All data sources failed for {symbol} quarterly growth")
         return None
 
-    def get_combined_data(self, symbol: str) -> Optional[Dict]:
+    def get_combined_data(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch both fundamentals and quarterly growth in an optimized way.
 
@@ -252,14 +301,15 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
+            market: Optional market code (US/HK/JP/TW); see
+                ``get_fundamentals`` for semantics.
 
         Returns:
             Dict with keys 'fundamentals' and 'growth', both containing data + metadata
         """
         self.metrics['total_calls'] += 1
 
-        # Try finvizfinance first if preferred
-        if self.prefer_finviz:
+        if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} combined data from finvizfinance")
 
             combined_data = self.finviz_service.get_combined_data(symbol, validate=self.strict_validation)
@@ -293,7 +343,7 @@ class DataSourceService:
 
         # Fetch from yfinance (requires two API calls)
         fundamentals = self.yfinance_service.get_fundamentals(symbol)
-        growth = self.yfinance_service.get_quarterly_growth(symbol)
+        growth = self.yfinance_service.get_quarterly_growth(symbol, market=market)
 
         if fundamentals and growth:
             timestamp = datetime.utcnow()

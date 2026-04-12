@@ -791,7 +791,7 @@ def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required
     monkeypatch.setattr(service, "_get_from_database", lambda symbol: (dict(incomplete), datetime.utcnow()))
     fetch_calls = []
 
-    def fake_fetch(symbol):
+    def fake_fetch(symbol, market=None):
         fetch_calls.append(symbol)
         return dict(enriched)
 

@@ -36,6 +36,7 @@ from .user_watchlist import UserWatchlist, WatchlistItem
 from .ticker_validation import TickerValidationLog
 from .filter_preset import FilterPreset
 from .institutional_ownership import InstitutionalOwnershipHistory
+from .fx_rate import FXRate
 from .app_settings import AppSetting
 from .ui_view_snapshot import UIViewSnapshot, UIViewSnapshotPointer
 from app.infra.db.models.feature_store import (
@@ -100,6 +101,8 @@ __all__ = [
     "FilterPreset",
     # Institutional Ownership History
     "InstitutionalOwnershipHistory",
+    # FX
+    "FXRate",
     # App Settings
     "AppSetting",
     # UI View Snapshots

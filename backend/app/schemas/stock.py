@@ -1,7 +1,6 @@
 """Stock data schemas"""
 from pydantic import BaseModel
-from typing import Any, List, Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from .scanning import ScanResultItem, ScreenerExplanationResponse
 
@@ -30,6 +29,23 @@ class StockFundamentals(BaseModel):
     profit_margin: Optional[float] = None
     institutional_ownership: Optional[float] = None
     description: Optional[str] = None
+    # T2 quality metadata — 0-100 market-aware completeness and
+    # {field: provider} provenance map. NULL when not yet computed.
+    field_completeness_score: Optional[int] = None
+    field_provenance: Optional[Dict[str, str]] = None
+    # T6 graceful-degrade metadata for ownership/sentiment fields.
+    # Shape: {field_name: {status, reason_code, canonical_provider, support_state}}.
+    field_availability: Optional[Dict[str, Dict[str, Any]]] = None
+    # T7 cadence metadata for mixed reporting frequencies.
+    growth_reporting_cadence: Optional[str] = None
+    growth_metric_basis: Optional[str] = None
+    growth_comparable_period_date: Optional[str] = None
+    growth_reference_gap_days: Optional[int] = None
+    # T3 FX normalisation — USD comparables for mixed-market ranking, plus
+    # a per-row FX snapshot (rate, currency, as_of_date, source) for replay.
+    market_cap_usd: Optional[int] = None
+    adv_usd: Optional[int] = None
+    fx_metadata: Optional[Dict[str, Any]] = None
 
 
 class StockTechnicals(BaseModel):
