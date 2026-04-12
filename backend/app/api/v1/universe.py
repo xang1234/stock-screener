@@ -208,6 +208,55 @@ async def import_jp_csv(
         )
 
 
+@router.post("/import-tw-csv")
+async def import_tw_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("tw_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import TW universe rows from CSV using TW-specific canonical normalization.
+
+    This path supports TWSE and TPEX variants (e.g. 2330, 2330.TW, 3008.TWO,
+    TWSE:2330) and preserves exchange-level distinctions under market TW.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_tw_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "TW CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing TW CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing TW CSV: {str(e)}",
+        )
+
+
 @router.get("/stats")
 async def get_universe_stats(db: Session = Depends(get_db)):
     """

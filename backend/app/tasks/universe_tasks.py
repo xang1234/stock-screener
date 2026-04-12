@@ -192,6 +192,66 @@ def ingest_jp_universe_csv(
         db.close()
 
 
+@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_tw_universe_csv')
+@serialized_data_fetch('ingest_tw_universe_csv')
+def ingest_tw_universe_csv(
+    self,
+    csv_content: str,
+    source_name: str = "tw_manual_csv",
+    snapshot_id: str | None = None,
+    snapshot_as_of: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
+    strict: bool = True,
+):
+    """
+    Ingest TW universe rows from CSV using canonical TW normalization.
+
+    This task applies deterministic TW canonicalization (TWSE/TPEX exchange
+    alias handling and .TW/.TWO normalization) before upserting rows.
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: TW Universe Ingestion")
+    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Source: {source_name}")
+    if snapshot_id:
+        logger.info(f"Snapshot ID: {snapshot_id}")
+    logger.info("=" * 60)
+
+    db = SessionLocal()
+    try:
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_tw_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        logger.info("=" * 60)
+        logger.info("TW Universe Ingestion Complete!")
+        logger.info(f"Added: {stats.get('added', 0)}")
+        logger.info(f"Updated: {stats.get('updated', 0)}")
+        logger.info(f"Canonical rows: {stats.get('total', 0)}")
+        logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
+        logger.info("=" * 60)
+        return {
+            'status': 'success',
+            **stats,
+            'timestamp': datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error ingesting TW universe CSV: {e}", exc_info=True)
+        return {
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat(),
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_sp500_membership')
 @serialized_data_fetch('refresh_sp500_membership')
 def refresh_sp500_membership(self):

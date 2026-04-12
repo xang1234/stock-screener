@@ -1,4 +1,4 @@
-"""JP market universe ingestion adapter with deterministic canonicalization."""
+"""TW market universe ingestion adapter with deterministic canonicalization."""
 
 from __future__ import annotations
 
@@ -10,31 +10,30 @@ from typing import Any, Iterable, Mapping
 
 from .security_master_service import security_master_resolver
 
-_JP_EXCHANGE_ALIASES: dict[str, str] = {
-    "TSE": "XTKS",
-    "JPX": "XTKS",
-    "XTKS": "XTKS",
+_TW_EXCHANGE_ALIASES: dict[str, str] = {
+    "TWSE": "TWSE",
+    "XTAI": "TWSE",
+    "TPEX": "TPEX",
+    "TWO": "TPEX",
 }
 
-# Sources that are considered policy-approved for JP universe ingestion.
-_APPROVED_JP_SOURCES: frozenset[str] = frozenset(
+# Sources that are considered policy-approved for TW universe ingestion.
+_APPROVED_TW_SOURCES: frozenset[str] = frozenset(
     {
-        "jpx_official",
-        "tse_official",
-        "xtks_official",
-        "jp_manual_csv",
-        "jp_reference_bundle",
+        "twse_official",
+        "tpex_official",
+        "xtai_official",
+        "tw_manual_csv",
+        "tw_reference_bundle",
     }
 )
 
-# JP listing codes are primarily 4-digit, but support alpha-suffixed edge cases
-# for lifecycle transitions and certain newer listings.
-_JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
+_TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
 
 
 @dataclass(frozen=True)
-class JPCanonicalUniverseRow:
-    """Canonical JP row emitted by the ingestion adapter."""
+class TWCanonicalUniverseRow:
+    """Canonical TW row emitted by the ingestion adapter."""
 
     symbol: str
     name: str
@@ -57,8 +56,8 @@ class JPCanonicalUniverseRow:
 
 
 @dataclass(frozen=True)
-class JPRejectedUniverseRow:
-    """Rejected JP row with reason."""
+class TWRejectedUniverseRow:
+    """Rejected TW row with reason."""
 
     source_row_number: int
     source_symbol: str
@@ -66,15 +65,15 @@ class JPRejectedUniverseRow:
 
 
 @dataclass(frozen=True)
-class JPCanonicalizationResult:
+class TWCanonicalizationResult:
     """Canonicalization output, split into accepted and rejected rows."""
 
-    canonical_rows: tuple[JPCanonicalUniverseRow, ...]
-    rejected_rows: tuple[JPRejectedUniverseRow, ...]
+    canonical_rows: tuple[TWCanonicalUniverseRow, ...]
+    rejected_rows: tuple[TWRejectedUniverseRow, ...]
 
 
-class JPUniverseIngestionAdapter:
-    """Normalize and validate JP universe rows for deterministic snapshots."""
+class TWUniverseIngestionAdapter:
+    """Normalize and validate TW universe rows for deterministic snapshots."""
 
     @staticmethod
     def normalize_source_name(source_name: str) -> str:
@@ -86,12 +85,12 @@ class JPUniverseIngestionAdapter:
     @classmethod
     def is_approved_source(cls, source_name: str) -> bool:
         normalized = cls.normalize_source_name(source_name)
-        if normalized in _APPROVED_JP_SOURCES:
+        if normalized in _APPROVED_TW_SOURCES:
             return True
         return (
-            normalized.startswith("jpx_")
-            or normalized.startswith("tse_")
-            or normalized.startswith("xtks_")
+            normalized.startswith("twse_")
+            or normalized.startswith("tpex_")
+            or normalized.startswith("xtai_")
         )
 
     @staticmethod
@@ -103,32 +102,32 @@ class JPUniverseIngestionAdapter:
 
     @staticmethod
     def _normalize_exchange(raw_exchange: Any) -> str:
-        exchange = str(raw_exchange or "").strip().upper() or "XTKS"
-        normalized = _JP_EXCHANGE_ALIASES.get(exchange)
+        exchange = str(raw_exchange or "").strip().upper() or "TWSE"
+        normalized = _TW_EXCHANGE_ALIASES.get(exchange)
         if normalized is None:
             raise ValueError(
-                f"Unsupported JP exchange '{exchange}'. Expected one of: "
-                "TSE, JPX, XTKS"
+                f"Unsupported TW exchange '{exchange}'. Expected one of: "
+                "TWSE, XTAI, TPEX, TWO"
             )
         return normalized
 
     @staticmethod
-    def _normalize_jp_local_code(source_symbol: str) -> str:
+    def _normalize_tw_local_code(source_symbol: str) -> str:
         token = source_symbol
-        for prefix in ("TSE:", "JPX:", "XTKS:"):
+        for prefix in ("TWSE:", "XTAI:", "TPEX:", "TWO:"):
             if token.startswith(prefix):
                 token = token[len(prefix):]
                 break
 
-        if token.endswith(".T"):
-            token = token[:-2]
-        elif token.endswith(".JP"):
+        if token.endswith(".TWO"):
+            token = token[:-4]
+        elif token.endswith(".TW"):
             token = token[:-3]
 
-        if not _JP_LOCAL_CODE_RE.fullmatch(token):
+        if not _TW_LOCAL_CODE_RE.fullmatch(token):
             raise ValueError(
-                f"Invalid JP symbol '{source_symbol}'. "
-                "Expected JP local code with optional .T/.JP suffix."
+                f"Invalid TW symbol '{source_symbol}'. "
+                "Expected TW local code with optional .TW/.TWO suffix."
             )
         return token
 
@@ -162,7 +161,7 @@ class JPUniverseIngestionAdapter:
         return hashlib.sha256(encoded).hexdigest()
 
     @staticmethod
-    def _selection_key(row: JPCanonicalUniverseRow) -> tuple[str, int]:
+    def _selection_key(row: TWCanonicalUniverseRow) -> tuple[str, int]:
         return (row.source_symbol, row.source_row_number)
 
     @staticmethod
@@ -171,7 +170,7 @@ class JPUniverseIngestionAdapter:
 
     def _canonical_payload(
         self,
-        row: JPCanonicalUniverseRow,
+        row: TWCanonicalUniverseRow,
         *,
         name: str,
         sector: str,
@@ -193,10 +192,9 @@ class JPUniverseIngestionAdapter:
 
     def _merge_duplicate_rows(
         self,
-        first: JPCanonicalUniverseRow,
-        second: JPCanonicalUniverseRow,
-    ) -> JPCanonicalUniverseRow:
-        """Deterministically merge duplicate canonical symbols without dropping richer metadata."""
+        first: TWCanonicalUniverseRow,
+        second: TWCanonicalUniverseRow,
+    ) -> TWCanonicalUniverseRow:
         if self._selection_key(first) <= self._selection_key(second):
             primary = first
             secondary = second
@@ -238,12 +236,12 @@ class JPUniverseIngestionAdapter:
         snapshot_id: str,
         snapshot_as_of: str | None = None,
         source_metadata: Mapping[str, Any] | None = None,
-    ) -> JPCanonicalizationResult:
+    ) -> TWCanonicalizationResult:
         normalized_source_name = self.normalize_source_name(source_name)
         if not self.is_approved_source(normalized_source_name):
             raise ValueError(
-                f"Unapproved JP source '{source_name}'. "
-                "Use an approved JP source identifier."
+                f"Unapproved TW source '{source_name}'. "
+                "Use an approved TW source identifier."
             )
 
         normalized_snapshot_id = (snapshot_id or "").strip()
@@ -251,8 +249,8 @@ class JPUniverseIngestionAdapter:
             raise ValueError("snapshot_id must be provided")
 
         metadata = dict(source_metadata or {})
-        canonical_by_symbol: dict[str, JPCanonicalUniverseRow] = {}
-        rejected_rows: list[JPRejectedUniverseRow] = []
+        canonical_by_symbol: dict[str, TWCanonicalUniverseRow] = {}
+        rejected_rows: list[TWRejectedUniverseRow] = []
 
         for index, raw_row in enumerate(rows, start=1):
             source_symbol = self._normalize_source_symbol(
@@ -262,7 +260,7 @@ class JPUniverseIngestionAdapter:
             )
             if not source_symbol:
                 rejected_rows.append(
-                    JPRejectedUniverseRow(
+                    TWRejectedUniverseRow(
                         source_row_number=index,
                         source_symbol="",
                         reason="Missing symbol/local_code/ticker",
@@ -272,10 +270,10 @@ class JPUniverseIngestionAdapter:
 
             try:
                 exchange = self._normalize_exchange(raw_row.get("exchange"))
-                local_code = self._normalize_jp_local_code(source_symbol)
+                local_code = self._normalize_tw_local_code(source_symbol)
                 identity = security_master_resolver.resolve_identity(
-                    symbol=f"{local_code}.T",
-                    market="JP",
+                    symbol=f"{local_code}.TW",
+                    market="TW",
                     exchange=exchange,
                     local_code=local_code,
                 )
@@ -305,11 +303,11 @@ class JPUniverseIngestionAdapter:
                     "source_name": normalized_source_name,
                     "snapshot_id": normalized_snapshot_id,
                 }
-                canonical_row = JPCanonicalUniverseRow(
+                canonical_row = TWCanonicalUniverseRow(
                     symbol=identity.canonical_symbol,
                     name=row_name,
                     market=identity.market,
-                    exchange=identity.exchange or "XTKS",
+                    exchange=identity.exchange or exchange,
                     currency=identity.currency,
                     timezone=identity.timezone,
                     local_code=identity.local_code,
@@ -336,7 +334,7 @@ class JPUniverseIngestionAdapter:
                     )
             except Exception as exc:
                 rejected_rows.append(
-                    JPRejectedUniverseRow(
+                    TWRejectedUniverseRow(
                         source_row_number=index,
                         source_symbol=source_symbol,
                         reason=str(exc),
@@ -349,10 +347,11 @@ class JPUniverseIngestionAdapter:
         rejected_rows_tuple = tuple(
             sorted(rejected_rows, key=lambda row: row.source_row_number)
         )
-        return JPCanonicalizationResult(
+        return TWCanonicalizationResult(
             canonical_rows=canonical_rows,
             rejected_rows=rejected_rows_tuple,
         )
 
 
-jp_universe_ingestion_adapter = JPUniverseIngestionAdapter()
+tw_universe_ingestion_adapter = TWUniverseIngestionAdapter()
+

@@ -417,3 +417,238 @@ def test_ingest_jp_from_csv_reports_rejected_rows_in_non_strict_mode():
     assert stats["rejected"] == 1
     assert stats["rejected_rows"][0]["source_symbol"] == "ABCD"
     db.close()
+
+
+def test_ingest_jp_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203,,TSE,,,",
+            "7203.T,Toyota Motor,JPX,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="jpx_official",
+        snapshot_id="jp-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Toyota Motor"
+    assert row.sector == "Consumer Cyclical"
+    assert row.industry == "Auto Manufacturers"
+    assert row.market_cap == 300_000_000_000.0
+    db.close()
+
+
+def test_ingest_jp_snapshot_rows_truncates_verbose_row_payloads():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {
+            "symbol": f"{1300 + index}",
+            "exchange": "TSE",
+            "name": f"Company {index}",
+        }
+        for index in range(30)
+    ]
+
+    stats = stock_universe_service.ingest_jp_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+    )
+
+    assert stats["total"] == 30
+    assert len(stats["canonical_rows"]) == 25
+    assert stats["canonical_rows_truncated"] is True
+    assert stats["rejected_rows_truncated"] is False
+    db.close()
+
+
+def test_ingest_tw_from_csv_normalizes_twse_tpex_variants_and_lineage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "2330,Taiwan Semiconductor,TWSE,Technology,Semiconductors,800B",
+            "TWSE:2330,TSMC,XTAI,Technology,Semiconductors,800B",
+            "3008.TW,Largan Precision,TPEX,Technology,Electronics,120B",
+            "TWO:3008,Largan Precision,TWO,Technology,Electronics,120B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412",
+    )
+
+    twse_row = db.query(StockUniverse).filter(StockUniverse.symbol == "2330.TW").one()
+    tpex_row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol.in_(["2330.TW", "3008.TWO"]))
+        .all()
+    )
+
+    assert stats["added"] == 2
+    assert stats["updated"] == 0
+    assert stats["total"] == 2
+    assert stats["rejected"] == 0
+    assert twse_row.exchange == "TWSE"
+    assert twse_row.market == "TW"
+    assert twse_row.currency == "TWD"
+    assert twse_row.timezone == "Asia/Taipei"
+    assert tpex_row.exchange == "TPEX"
+    assert tpex_row.market == "TW"
+    assert tpex_row.symbol == "3008.TWO"
+    assert tpex_row.source == "tw_ingest"
+    assert len(events) == 2
+    payload = json.loads(events[0].payload_json)
+    assert payload["snapshot_id"] == "tw-20260412"
+    assert payload["source_name"] == "tw_reference_bundle"
+    assert len(payload["lineage_hash"]) == 64
+    assert len(payload["row_hash"]) == 64
+    db.close()
+
+
+def test_ingest_tw_from_csv_reactivates_existing_inactive_symbol():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="3008.TWO",
+            exchange="TPEX",
+            market="TW",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            status_reason="manual off",
+        )
+    )
+    db.commit()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "3008,Largan Precision,TPEX,Technology,Electronics,120B",
+        ]
+    )
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tpex_official",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+
+    assert stats["added"] == 0
+    assert stats["updated"] == 1
+    assert row.is_active is True
+    assert row.status == UNIVERSE_STATUS_ACTIVE
+    assert row.exchange == "TPEX"
+    assert row.local_code == "3008"
+    db.close()
+
+
+def test_ingest_tw_from_csv_rejects_unapproved_source():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "symbol,name,exchange\n2330,TSMC,TWSE\n"
+
+    with pytest.raises(ValueError, match="Unapproved TW source"):
+        stock_universe_service.ingest_tw_from_csv(
+            db,
+            csv_content,
+            source_name="random_vendor",
+            snapshot_id="tw-20260412",
+        )
+    db.close()
+
+
+def test_ingest_tw_from_csv_reports_rejected_rows_in_non_strict_mode():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "ABCD,Invalid,TWSE",
+            "2330,TSMC,TWSE",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "ABCD"
+    db.close()
+
+
+def test_ingest_tw_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "2330,,TWSE,,,",
+            "2330.TW,Taiwan Semiconductor,XTAI,Technology,Semiconductors,800B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "2330.TW").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Taiwan Semiconductor"
+    assert row.sector == "Technology"
+    assert row.industry == "Semiconductors"
+    assert row.market_cap == 800_000_000_000.0
+    db.close()
+
+
+def test_ingest_tw_snapshot_rows_truncates_verbose_row_payloads():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {
+            "symbol": f"{1100 + index}",
+            "exchange": "TWSE",
+            "name": f"Company {index}",
+        }
+        for index in range(30)
+    ]
+
+    stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+    )
+
+    assert stats["total"] == 30
+    assert len(stats["canonical_rows"]) == 25
+    assert stats["canonical_rows_truncated"] is True
+    assert stats["rejected_rows_truncated"] is False
+    db.close()
