@@ -6,6 +6,7 @@ Manages the list of scannable stocks from NYSE/NASDAQ.
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 from sqlalchemy.orm import Session
 import logging
+from typing import Any
 
 from ...database import get_db
 from ...wiring.bootstrap import get_stock_universe_service
@@ -109,6 +110,153 @@ async def import_csv(
         )
 
 
+@router.post("/import-hk-csv")
+async def import_hk_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("hk_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import HK universe rows from CSV using HK-specific canonical normalization.
+
+    This path supports local code variants (e.g. 700, 0700.HK) and applies
+    deterministic zero-padding + canonical symbol generation.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_hk_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "HK CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing HK CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing HK CSV: {str(e)}",
+        )
+
+
+@router.post("/import-jp-csv")
+async def import_jp_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("jp_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import JP universe rows from CSV using JP-specific canonical normalization.
+
+    This path supports exchange-specific code formats (e.g. 7203, 7203.T,
+    JPX:7203) and emits canonical `.T` symbols.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_jp_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "JP CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing JP CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing JP CSV: {str(e)}",
+        )
+
+
+@router.post("/import-tw-csv")
+async def import_tw_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("tw_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import TW universe rows from CSV using TW-specific canonical normalization.
+
+    This path supports TWSE and TPEX variants (e.g. 2330, 2330.TW, 3008.TWO,
+    TWSE:2330) and preserves exchange-level distinctions under market TW.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_tw_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "TW CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing TW CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing TW CSV: {str(e)}",
+        )
+
+
 @router.get("/stats")
 async def get_universe_stats(db: Session = Depends(get_db)):
     """
@@ -127,6 +275,8 @@ async def get_universe_stats(db: Session = Depends(get_db)):
             "by_exchange": stats['by_exchange'],
             "sp500": stats.get('sp500', 0),
             "by_status": stats.get('by_status', {}),
+            "by_market": stats.get('by_market', {}),
+            "market_checks": stats.get('market_checks', {}),
             "recent_deactivations": stats.get('recent_deactivations', []),
         }
 
@@ -135,6 +285,20 @@ async def get_universe_stats(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=500,
             detail=f"Error getting universe stats: {str(e)}"
+        )
+
+
+@router.get("/stats/by-market")
+async def get_universe_market_audit(db: Session = Depends(get_db)):
+    """Get market-level universe audit summary for ops dashboards and launch gates."""
+    try:
+        stock_universe_service = get_stock_universe_service()
+        return stock_universe_service.get_market_audit(db)
+    except Exception as e:
+        logger.error(f"Error getting universe market audit: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting universe market audit: {str(e)}"
         )
 
 

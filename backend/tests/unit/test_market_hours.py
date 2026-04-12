@@ -7,6 +7,7 @@ correctness.
 """
 import pytest
 from datetime import date, datetime, time, timedelta
+import pandas as pd
 
 from app.utils.market_hours import (
     is_trading_day,
@@ -195,6 +196,31 @@ class TestTradingDaysCache:
         # Should recompute
         _get_trading_days_set()
         assert mh._cache_year == initial_year  # Restored to current year
+
+    def test_inverted_calendar_range_raises_and_preserves_existing_cache(self, monkeypatch):
+        import app.utils.market_hours as mh
+
+        if mh.calendar_engine() != "exchange_calendars":
+            pytest.skip("Inverted-range guard only applies to exchange_calendars backend")
+
+        previous_cache = {date(2026, 1, 2)}
+        mh._trading_days_cache = previous_cache.copy()
+        mh._cache_year = None
+
+        class _BrokenCalendar:
+            first_session = pd.Timestamp("2030-01-01")
+            last_session = pd.Timestamp("2020-01-01")
+
+            @staticmethod
+            def sessions_in_range(_start, _end):
+                return pd.DatetimeIndex([])
+
+        monkeypatch.setattr(mh, "_NYSE", _BrokenCalendar())
+
+        with pytest.raises(RuntimeError, match="calendar coverage is out of range"):
+            mh._get_trading_days_set()
+
+        assert mh._trading_days_cache == previous_cache
 
 
 def test_calendar_engine_prefers_exchange_calendars():

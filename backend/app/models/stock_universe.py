@@ -1,5 +1,15 @@
 """Stock universe database models for scannable symbol lifecycle management."""
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Index, Text
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    Boolean,
+    DateTime,
+    Index,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -80,4 +90,30 @@ class StockUniverseStatusEvent(Base):
     __table_args__ = (
         Index("idx_universe_status_events_symbol_created", "symbol", "created_at"),
         Index("idx_universe_status_events_status_created", "new_status", "created_at"),
+    )
+
+
+class StockUniverseReconciliationRun(Base):
+    """Immutable reconciliation artifact metadata per market snapshot."""
+
+    __tablename__ = "stock_universe_reconciliation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    market = Column(String(8), nullable=False, index=True)
+    source_name = Column(String(64), nullable=False)
+    snapshot_id = Column(String(128), nullable=False, index=True)
+    previous_snapshot_id = Column(String(128), nullable=True)
+    total_current = Column(Integer, nullable=False, default=0)
+    total_previous = Column(Integer, nullable=False, default=0)
+    added_count = Column(Integer, nullable=False, default=0)
+    removed_count = Column(Integer, nullable=False, default=0)
+    changed_count = Column(Integer, nullable=False, default=0)
+    unchanged_count = Column(Integer, nullable=False, default=0)
+    artifact_hash = Column(String(64), nullable=False, index=True)
+    artifact_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("market", "snapshot_id", name="uq_universe_reconciliation_market_snapshot"),
+        Index("idx_universe_reconciliation_market_created", "market", "created_at"),
     )

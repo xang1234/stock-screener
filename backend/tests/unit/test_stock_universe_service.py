@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta
+
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
+from app.models.stock_universe import (
+    StockUniverse,
+    StockUniverseReconciliationRun,
+    StockUniverseStatusEvent,
+    UNIVERSE_STATUS_ACTIVE,
+    UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+    UNIVERSE_STATUS_INACTIVE_MANUAL,
+)
 from app.services.stock_universe_service import StockUniverseService
 
 stock_universe_service = StockUniverseService()
@@ -160,4 +171,1086 @@ def test_populate_from_csv_uses_tpex_two_suffix_for_unsuffixed_symbols():
     assert row.exchange == "TPEX"
     assert row.market == "TW"
     assert row.timezone == "Asia/Taipei"
+    db.close()
+
+
+def test_ingest_hk_from_csv_normalizes_variants_with_zero_padding_and_lineage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "700,Tencent,SEHK,Technology,Internet,500B",
+            "0700.HK,Tencent Holdings,HKEX,Technology,Internet,500B",
+            "00700,Tencent Holdings,XHKG,Technology,Internet,500B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_hk_from_csv(
+        db,
+        csv_content,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412",
+    )
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "0700.HK").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "0700.HK")
+        .all()
+    )
+
+    assert stats["added"] == 1
+    assert stats["updated"] == 0
+    assert stats["total"] == 1
+    assert stats["rejected"] == 0
+    assert row.local_code == "0700"
+    assert row.exchange == "XHKG"
+    assert row.market == "HK"
+    assert row.source == "hk_ingest"
+    assert len(events) == 1
+    payload = json.loads(events[0].payload_json)
+    assert payload["snapshot_id"] == "hk-20260412"
+    assert payload["source_name"] == "hkex_official"
+    assert len(payload["lineage_hash"]) == 64
+    assert len(payload["row_hash"]) == 64
+    db.close()
+
+
+def test_ingest_hk_from_csv_reactivates_existing_inactive_symbol():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            exchange="SEHK",
+            market="HK",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            status_reason="manual off",
+        )
+    )
+    db.commit()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "700,Tencent,SEHK,Technology,Internet,500B",
+        ]
+    )
+    stats = stock_universe_service.ingest_hk_from_csv(
+        db,
+        csv_content,
+        source_name="sehk_official",
+        snapshot_id="hk-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "0700.HK").one()
+
+    assert stats["added"] == 0
+    assert stats["updated"] == 1
+    assert row.is_active is True
+    assert row.status == UNIVERSE_STATUS_ACTIVE
+    assert row.exchange == "XHKG"
+    assert row.local_code == "0700"
+    db.close()
+
+
+def test_ingest_hk_from_csv_rejects_unapproved_source():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "symbol,name,exchange\n700,Tencent,SEHK\n"
+
+    with pytest.raises(ValueError, match="Unapproved HK source"):
+        stock_universe_service.ingest_hk_from_csv(
+            db,
+            csv_content,
+            source_name="random_vendor",
+            snapshot_id="hk-20260412",
+        )
+    db.close()
+
+
+def test_ingest_hk_from_csv_reports_rejected_rows_in_non_strict_mode():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "ABC.HK,Invalid,SEHK",
+            "700,Tencent,SEHK",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_hk_from_csv(
+        db,
+        csv_content,
+        source_name="sehk_official",
+        snapshot_id="hk-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "ABC.HK"
+    db.close()
+
+
+def test_ingest_jp_from_csv_normalizes_exchange_formats_and_lineage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203,Toyota Motor,TSE,Consumer Cyclical,Auto Manufacturers,300B",
+            "7203.T,Toyota Motor,JPX,Consumer Cyclical,Auto Manufacturers,300B",
+            "JPX:7203,Toyota Motor,XTKS,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="jpx_official",
+        snapshot_id="jp-20260412",
+    )
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "7203.T")
+        .all()
+    )
+
+    assert stats["added"] == 1
+    assert stats["updated"] == 0
+    assert stats["total"] == 1
+    assert stats["rejected"] == 0
+    assert row.local_code == "7203"
+    assert row.exchange == "XTKS"
+    assert row.market == "JP"
+    assert row.currency == "JPY"
+    assert row.timezone == "Asia/Tokyo"
+    assert row.source == "jp_ingest"
+    assert len(events) == 1
+    payload = json.loads(events[0].payload_json)
+    assert payload["snapshot_id"] == "jp-20260412"
+    assert payload["source_name"] == "jpx_official"
+    assert len(payload["lineage_hash"]) == 64
+    assert len(payload["row_hash"]) == 64
+    db.close()
+
+
+def test_ingest_jp_from_csv_reactivates_existing_inactive_symbol():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="7203.T",
+            exchange="TSE",
+            market="JP",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            status_reason="manual off",
+        )
+    )
+    db.commit()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203.T,Toyota Motor,TSE,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+
+    assert stats["added"] == 0
+    assert stats["updated"] == 1
+    assert row.is_active is True
+    assert row.status == UNIVERSE_STATUS_ACTIVE
+    assert row.exchange == "XTKS"
+    assert row.local_code == "7203"
+    db.close()
+
+
+def test_ingest_jp_from_csv_rejects_unapproved_source():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "symbol,name,exchange\n7203,Toyota,TSE\n"
+
+    with pytest.raises(ValueError, match="Unapproved JP source"):
+        stock_universe_service.ingest_jp_from_csv(
+            db,
+            csv_content,
+            source_name="random_vendor",
+            snapshot_id="jp-20260412",
+        )
+    db.close()
+
+
+def test_ingest_jp_from_csv_reports_rejected_rows_in_non_strict_mode():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "ABCD,Invalid,TSE",
+            "7203,Toyota,TSE",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "ABCD"
+    db.close()
+
+
+def test_ingest_jp_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203,,TSE,,,",
+            "7203.T,Toyota Motor,JPX,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="jpx_official",
+        snapshot_id="jp-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Toyota Motor"
+    assert row.sector == "Consumer Cyclical"
+    assert row.industry == "Auto Manufacturers"
+    assert row.market_cap == 300_000_000_000.0
+    db.close()
+
+
+def test_ingest_jp_snapshot_rows_truncates_verbose_row_payloads():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {
+            "symbol": f"{1300 + index}",
+            "exchange": "TSE",
+            "name": f"Company {index}",
+        }
+        for index in range(30)
+    ]
+
+    stats = stock_universe_service.ingest_jp_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+    )
+
+    assert stats["total"] == 30
+    assert len(stats["canonical_rows"]) == 25
+    assert stats["canonical_rows_truncated"] is True
+    assert stats["rejected_rows_truncated"] is False
+    db.close()
+
+
+def test_ingest_tw_from_csv_normalizes_twse_tpex_variants_and_lineage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "2330,Taiwan Semiconductor,TWSE,Technology,Semiconductors,800B",
+            "TWSE:2330,TSMC,XTAI,Technology,Semiconductors,800B",
+            "3008.TW,Largan Precision,TPEX,Technology,Electronics,120B",
+            "TWO:3008,Largan Precision,TWO,Technology,Electronics,120B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412",
+    )
+
+    twse_row = db.query(StockUniverse).filter(StockUniverse.symbol == "2330.TW").one()
+    tpex_row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol.in_(["2330.TW", "3008.TWO"]))
+        .all()
+    )
+
+    assert stats["added"] == 2
+    assert stats["updated"] == 0
+    assert stats["total"] == 2
+    assert stats["rejected"] == 0
+    assert twse_row.exchange == "TWSE"
+    assert twse_row.market == "TW"
+    assert twse_row.currency == "TWD"
+    assert twse_row.timezone == "Asia/Taipei"
+    assert tpex_row.exchange == "TPEX"
+    assert tpex_row.market == "TW"
+    assert tpex_row.symbol == "3008.TWO"
+    assert tpex_row.source == "tw_ingest"
+    assert len(events) == 2
+    payload = json.loads(events[0].payload_json)
+    assert payload["snapshot_id"] == "tw-20260412"
+    assert payload["source_name"] == "tw_reference_bundle"
+    assert len(payload["lineage_hash"]) == 64
+    assert len(payload["row_hash"]) == 64
+    db.close()
+
+
+def test_ingest_tw_from_csv_reactivates_existing_inactive_symbol():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="3008.TWO",
+            exchange="TPEX",
+            market="TW",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            status_reason="manual off",
+        )
+    )
+    db.commit()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "3008,Largan Precision,TPEX,Technology,Electronics,120B",
+        ]
+    )
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tpex_official",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+
+    assert stats["added"] == 0
+    assert stats["updated"] == 1
+    assert row.is_active is True
+    assert row.status == UNIVERSE_STATUS_ACTIVE
+    assert row.exchange == "TPEX"
+    assert row.local_code == "3008"
+    db.close()
+
+
+def test_ingest_tw_from_csv_infers_tpex_exchange_from_symbol_when_exchange_missing():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "3008.TWO,Largan Precision,,Technology,Electronics,120B",
+            "TWO:3008,Largan Precision,,Technology,Electronics,120B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+
+    assert stats["added"] == 1
+    assert stats["updated"] == 0
+    assert stats["total"] == 1
+    assert stats["rejected"] == 0
+    assert row.exchange == "TPEX"
+    assert row.market == "TW"
+    assert row.local_code == "3008"
+    db.close()
+
+
+def test_ingest_tw_from_csv_rejects_unapproved_source():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "symbol,name,exchange\n2330,TSMC,TWSE\n"
+
+    with pytest.raises(ValueError, match="Unapproved TW source"):
+        stock_universe_service.ingest_tw_from_csv(
+            db,
+            csv_content,
+            source_name="random_vendor",
+            snapshot_id="tw-20260412",
+        )
+    db.close()
+
+
+def test_ingest_tw_from_csv_reports_rejected_rows_in_non_strict_mode():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "ABCD,Invalid,TWSE",
+            "2330,TSMC,TWSE",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "ABCD"
+    db.close()
+
+
+def test_ingest_tw_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "2330,,TWSE,,,",
+            "2330.TW,Taiwan Semiconductor,XTAI,Technology,Semiconductors,800B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "2330.TW").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Taiwan Semiconductor"
+    assert row.sector == "Technology"
+    assert row.industry == "Semiconductors"
+    assert row.market_cap == 800_000_000_000.0
+    db.close()
+
+
+def test_ingest_tw_snapshot_rows_truncates_verbose_row_payloads():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {
+            "symbol": f"{1100 + index}",
+            "exchange": "TWSE",
+            "name": f"Company {index}",
+        }
+        for index in range(30)
+    ]
+
+    stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="twse_official",
+        snapshot_id="tw-20260412",
+    )
+
+    assert stats["total"] == 30
+    assert len(stats["canonical_rows"]) == 25
+    assert stats["canonical_rows_truncated"] is True
+    assert stats["rejected_rows_truncated"] is False
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_persists_reconciliation_diff_against_prior_snapshot():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    snapshot_one_rows = [
+        {
+            "symbol": "700",
+            "exchange": "SEHK",
+            "name": "Tencent",
+            "sector": "Technology",
+            "industry": "Internet",
+        },
+        {
+            "symbol": "5",
+            "exchange": "SEHK",
+            "name": "HSBC",
+            "sector": "Financial",
+            "industry": "Banks",
+        },
+    ]
+    first_stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=snapshot_one_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    first_reconciliation = first_stats["reconciliation"]
+    first_run = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-a",
+        )
+        .one()
+    )
+    first_artifact = json.loads(first_run.artifact_json)
+
+    assert first_reconciliation["previous_snapshot_id"] is None
+    assert first_reconciliation["counts"]["added"] == 2
+    assert first_reconciliation["counts"]["removed"] == 0
+    assert first_reconciliation["counts"]["changed"] == 0
+    assert first_reconciliation["counts"]["unchanged"] == 0
+    assert len(first_run.artifact_hash) == 64
+    assert first_artifact["added_symbols"] == ["0005.HK", "0700.HK"]
+
+    snapshot_two_rows = [
+        {
+            "symbol": "0700.HK",
+            "exchange": "HKEX",
+            "name": "Tencent Holdings",
+            "sector": "Technology",
+            "industry": "Internet",
+        },
+        {
+            "symbol": "16",
+            "exchange": "SEHK",
+            "name": "Sun Hung Kai",
+            "sector": "Real Estate",
+            "industry": "Property",
+        },
+    ]
+    second_stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=snapshot_two_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    second_reconciliation = second_stats["reconciliation"]
+    second_run = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+    second_artifact = json.loads(second_run.artifact_json)
+
+    assert second_reconciliation["previous_snapshot_id"] == "hk-20260412-a"
+    assert second_reconciliation["counts"]["total_current"] == 2
+    assert second_reconciliation["counts"]["total_previous"] == 2
+    assert second_reconciliation["counts"]["added"] == 1
+    assert second_reconciliation["counts"]["removed"] == 1
+    assert second_reconciliation["counts"]["changed"] == 1
+    assert second_reconciliation["counts"]["unchanged"] == 0
+    assert second_artifact["added_symbols"] == ["0016.HK"]
+    assert second_artifact["removed_symbols"] == ["0005.HK"]
+    assert second_artifact["changed_rows"][0]["symbol"] == "0700.HK"
+    assert "name" in second_artifact["changed_rows"][0]["changed_fields"]
+    db.close()
+
+
+def test_ingest_tw_snapshot_rows_reconciliation_is_idempotent_for_same_snapshot():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [
+        {"symbol": "2330", "exchange": "TWSE", "name": "TSMC"},
+        {"symbol": "3008", "exchange": "TPEX", "name": "Largan"},
+    ]
+    reversed_rows = list(reversed(rows))
+
+    first_stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412-a",
+    )
+    second_stats = stock_universe_service.ingest_tw_snapshot_rows(
+        db,
+        rows=reversed_rows,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412-a",
+    )
+
+    runs = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "TW",
+            StockUniverseReconciliationRun.snapshot_id == "tw-20260412-a",
+        )
+        .all()
+    )
+
+    assert len(runs) == 1
+    assert first_stats["reconciliation"]["artifact_hash"] == second_stats["reconciliation"]["artifact_hash"]
+    assert second_stats["reconciliation"]["counts"]["added"] == 2
+    assert second_stats["reconciliation"]["counts"]["removed"] == 0
+    assert second_stats["reconciliation"]["counts"]["changed"] == 0
+    assert second_stats["reconciliation"]["counts"]["unchanged"] == 0
+    db.close()
+
+
+def test_ingest_hk_reconciliation_preserves_existing_snapshot_baseline_on_rerun():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    rows_a = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    rows_b = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings"},
+    ]
+
+    first_a = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    second_a = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    run_a = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-a",
+        )
+        .one()
+    )
+    run_b = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+
+    assert run_a.previous_snapshot_id is None
+    assert first_a["reconciliation"]["previous_snapshot_id"] is None
+    assert second_a["reconciliation"]["previous_snapshot_id"] is None
+    assert second_a["reconciliation"]["artifact_hash"] == first_a["reconciliation"]["artifact_hash"]
+    assert run_b.previous_snapshot_id == "hk-20260412-a"
+    db.close()
+
+
+def test_ingest_hk_reconciliation_preserves_non_null_baseline_on_rerun():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    rows_a = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    rows_b = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+    ]
+    rows_c = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings Ltd"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+    first_b = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_c,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-c",
+    )
+    second_b = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+
+    run_b = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+
+    assert run_b.previous_snapshot_id == "hk-20260412-a"
+    assert second_b["reconciliation"]["previous_snapshot_id"] == "hk-20260412-a"
+    assert second_b["reconciliation"]["artifact_hash"] == first_b["reconciliation"]["artifact_hash"]
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_quarantines_unsafe_deactivation(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_QUARANTINE_ENFORCED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MIN_COUNT_HK", "0")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MAX_REMOVED_PERCENT", "20")
+    monkeypatch.setenv("ASIA_RECONCILIATION_ANOMALY_PERCENT", "90")
+
+    baseline_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=baseline_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    reduced_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=reduced_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+
+    safety = stats["reconciliation"]["safety"]
+    hsbc = db.query(StockUniverse).filter(StockUniverse.symbol == "0005.HK").one()
+    shk = db.query(StockUniverse).filter(StockUniverse.symbol == "0016.HK").one()
+
+    assert safety["quarantined"] is True
+    assert safety["destructive_apply_blocked"] is True
+    assert safety["deactivated_count"] == 0
+    assert any(breach["gate"] == "max_removed_percent" for breach in safety["gate_breaches"])
+    assert safety["alerts"]
+    assert hsbc.status == UNIVERSE_STATUS_ACTIVE
+    assert hsbc.is_active is True
+    assert shk.status == UNIVERSE_STATUS_ACTIVE
+    assert shk.is_active is True
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_applies_safe_deactivation_when_enabled(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_QUARANTINE_ENFORCED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MIN_COUNT_HK", "0")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MAX_REMOVED_PERCENT", "90")
+    monkeypatch.setenv("ASIA_RECONCILIATION_ANOMALY_PERCENT", "90")
+
+    baseline_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=baseline_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260413-a",
+    )
+
+    updated_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=updated_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260413-b",
+    )
+
+    safety = stats["reconciliation"]["safety"]
+    hsbc = db.query(StockUniverse).filter(StockUniverse.symbol == "0005.HK").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "0005.HK")
+        .all()
+    )
+
+    assert safety["quarantined"] is False
+    assert safety["allow_destructive_apply"] is True
+    assert safety["deactivated_count"] == 1
+    assert safety["deactivated_symbols"] == ["0005.HK"]
+    assert hsbc.status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE
+    assert hsbc.is_active is False
+    assert any(event.new_status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE for event in events)
+    db.close()
+
+
+def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    monkeypatch.setenv("ASIA_UNIVERSE_AUDIT_STALE_HOURS", "1")
+
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="SEHK",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="hkex_official",
+            ),
+            StockUniverse(
+                symbol="0005.HK",
+                market="HK",
+                exchange="SEHK",
+                is_active=False,
+                status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+                source="hkex_official",
+            ),
+            StockUniverse(
+                symbol="7203.T",
+                market="JP",
+                exchange="TSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="jpx_listing",
+            ),
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="finviz",
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            StockUniverseReconciliationRun(
+                market="HK",
+                source_name="hkex_official",
+                snapshot_id="hk-20260412-a",
+                previous_snapshot_id=None,
+                total_current=2,
+                total_previous=3,
+                added_count=0,
+                removed_count=1,
+                changed_count=0,
+                unchanged_count=2,
+                artifact_hash="a" * 64,
+                artifact_json=json.dumps(
+                    {
+                        "snapshot_rows": [],
+                        "safety": {
+                            "quarantined": False,
+                            "destructive_apply_blocked": False,
+                            "gate_breaches": [],
+                            "alerts": [],
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                created_at=datetime.utcnow() - timedelta(hours=2),
+            ),
+            StockUniverseReconciliationRun(
+                market="TW",
+                source_name="tw_reference_bundle",
+                snapshot_id="tw-20260412-a",
+                previous_snapshot_id=None,
+                total_current=0,
+                total_previous=0,
+                added_count=0,
+                removed_count=0,
+                changed_count=0,
+                unchanged_count=0,
+                artifact_hash="b" * 64,
+                artifact_json=json.dumps(
+                    {
+                        "snapshot_rows": [],
+                        "safety": {
+                            "quarantined": True,
+                            "destructive_apply_blocked": True,
+                            "gate_breaches": [{"gate": "max_removed_percent"}],
+                            "alerts": ["TW snapshot gate breach"],
+                        },
+                    },
+                    sort_keys=True,
+                ),
+                created_at=datetime.utcnow(),
+            ),
+        ]
+    )
+    db.commit()
+
+    audit = stock_universe_service.get_market_audit(db)
+    hk = audit["by_market"]["HK"]
+    jp = audit["by_market"]["JP"]
+    tw = audit["by_market"]["TW"]
+    us = audit["by_market"]["US"]
+
+    assert hk["counts"]["total"] == 2
+    assert hk["counts"]["active"] == 1
+    assert hk["counts"]["inactive"] == 1
+    assert hk["latest_snapshot"]["snapshot_id"] == "hk-20260412-a"
+    assert hk["latest_snapshot"]["counts"]["removed"] == 1
+    assert hk["latest_snapshot"]["is_stale"] is True
+    assert jp["snapshot_supported"] is True
+    assert jp["latest_snapshot"] is None
+    assert tw["latest_snapshot"]["safety"]["quarantined"] is True
+    assert us["snapshot_supported"] is False
+    assert us["latest_snapshot"] is None
+    assert audit["checks"]["stale_after_hours"] == 1
+    assert set(audit["checks"]["stale_markets"]) == {"HK", "JP"}
+    assert audit["checks"]["missing_snapshot_markets"] == ["JP"]
+    assert audit["checks"]["quarantined_markets"] == ["TW"]
+    db.close()
+
+
+def test_get_stats_includes_market_audit_summary(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    monkeypatch.setenv("ASIA_UNIVERSE_AUDIT_STALE_HOURS", "12")
+
+    db.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="SEHK",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            source="hkex_official",
+        )
+    )
+    db.commit()
+
+    stats = stock_universe_service.get_stats(db)
+
+    assert "by_market" in stats
+    assert "market_checks" in stats
+    assert stats["by_market"]["HK"]["counts"]["total"] == 1
+    assert stats["market_checks"]["has_stale_markets"] is True
+    db.close()
+
+
+def test_ingest_from_csv_auto_snapshot_ids_are_collision_resistant():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    hk_csv = "symbol,name,exchange,sector,industry,market_cap\n0700,Tencent,SEHK,Technology,Internet,500B\n"
+    jp_csv = "symbol,name,exchange,sector,industry,market_cap\n7203,Toyota,TSE,Consumer,Auto,250B\n"
+    tw_csv = "symbol,name,exchange,sector,industry,market_cap\n2330,TSMC,TWSE,Technology,Semiconductors,650B\n"
+
+    hk_first = stock_universe_service.ingest_hk_from_csv(db, hk_csv, source_name="hk_manual_csv")
+    hk_second = stock_universe_service.ingest_hk_from_csv(db, hk_csv, source_name="hk_manual_csv")
+    jp_first = stock_universe_service.ingest_jp_from_csv(db, jp_csv, source_name="jp_manual_csv")
+    jp_second = stock_universe_service.ingest_jp_from_csv(db, jp_csv, source_name="jp_manual_csv")
+    tw_first = stock_universe_service.ingest_tw_from_csv(db, tw_csv, source_name="tw_manual_csv")
+    tw_second = stock_universe_service.ingest_tw_from_csv(db, tw_csv, source_name="tw_manual_csv")
+
+    assert hk_first["snapshot_id"] != hk_second["snapshot_id"]
+    assert jp_first["snapshot_id"] != jp_second["snapshot_id"]
+    assert tw_first["snapshot_id"] != tw_second["snapshot_id"]
+    assert hk_first["snapshot_id"].startswith("hk:")
+    assert jp_first["snapshot_id"].startswith("jp:")
+    assert tw_first["snapshot_id"].startswith("tw:")
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_does_not_emit_status_events_for_unchanged_active_rows():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    rows = [{"symbol": "700", "exchange": "SEHK", "name": "Tencent"}]
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260414-a",
+    )
+    initial_events = db.query(StockUniverseStatusEvent).filter(
+        StockUniverseStatusEvent.symbol == "0700.HK"
+    ).count()
+
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260414-a",
+    )
+    after_rerun_events = db.query(StockUniverseStatusEvent).filter(
+        StockUniverseStatusEvent.symbol == "0700.HK"
+    ).count()
+
+    assert initial_events == 1
+    assert after_rerun_events == 1
+    db.close()
+
+
+def test_ingest_hk_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "700,,SEHK,Technology,Internet,500B",
+            "0700.HK,Tencent Holdings,,Technology,Internet,",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_hk_from_csv(
+        db,
+        csv_content,
+        source_name="hk_manual_csv",
+        snapshot_id="hk-20260414-dup",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "0700.HK").one()
+
+    assert stats["total"] == 1
+    assert row.name == "Tencent Holdings"
     db.close()
