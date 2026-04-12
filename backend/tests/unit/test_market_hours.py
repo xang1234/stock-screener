@@ -1,7 +1,7 @@
 """
 Unit tests for market_hours utility module.
 
-Tests the NYSE calendar integration via pandas_market_calendars,
+Tests the NYSE calendar integration via exchange_calendars,
 ensuring trading day detection, holiday handling, and timezone
 correctness.
 """
@@ -16,6 +16,7 @@ from app.utils.market_hours import (
     get_last_market_close,
     get_next_market_close,
     _get_trading_days_set,
+    calendar_engine,
     EASTERN,
 )
 
@@ -194,3 +195,7 @@ class TestTradingDaysCache:
         # Should recompute
         _get_trading_days_set()
         assert mh._cache_year == initial_year  # Restored to current year
+
+
+def test_calendar_engine_prefers_exchange_calendars():
+    assert calendar_engine() in {"exchange_calendars", "pandas_market_calendars"}

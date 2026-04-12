@@ -77,7 +77,7 @@ async def trigger_symbol_fundamentals_refresh(symbol: str):
     try:
         # Validate symbol format (basic check)
         symbol = symbol.upper().strip()
-        if not symbol or len(symbol) > 10:
+        if not symbol or len(symbol) > 20:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid symbol format"

@@ -32,4 +32,15 @@ describe('formatScanDropdownLabel', () => {
       total_stocks: 100,
     })).toBe('man Mar 29, 2026, 5:45 PM | All (42/100)');
   });
+
+  it('renders market universe labels from universe_market metadata', () => {
+    expect(formatScanDropdownLabel({
+      trigger_source: 'manual',
+      started_at: '2026-03-29T21:45:00Z',
+      universe_type: 'market',
+      universe_market: 'HK',
+      passed_stocks: 42,
+      total_stocks: 100,
+    })).toBe('man Mar 29, 2026, 5:45 PM | HK (42/100)');
+  });
 });

@@ -1,7 +1,7 @@
 # ADR ASIA-E2: BenchmarkRegistry Policy (v1)
 
 - Date: 2026-04-11
-- Status: Accepted
+- Status: Accepted (Target Architecture)
 - Issue: `StockScreenClaude-asia.1.1`
 
 ## Context
@@ -39,6 +39,15 @@ Exact tickers are configuration-backed and versioned; selection policy is stable
 - RS and benchmark-relative outputs become market-correct.
 - Failures become isolated and diagnosable by market.
 - Rollout gates can assert benchmark correctness objectively.
+
+## Implementation Status (2026-04-11)
+
+- Current runtime remains partially US-anchored in legacy benchmark cache paths.
+- This ADR is binding for implementation tasks under `StockScreenClaude-asia.3.2`, `StockScreenClaude-asia.3.4`, and `StockScreenClaude-asia.6.*`.
+- Required completion criteria before non-US launch:
+  - market-scoped cache keys/locks and freshness checks,
+  - benchmark resolution by market through SecurityMaster/BenchmarkRegistry,
+  - explicit prohibition of implicit SPY fallback in non-US flows.
 
 ## Rejected Alternatives
 

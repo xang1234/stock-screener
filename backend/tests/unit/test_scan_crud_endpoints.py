@@ -53,6 +53,7 @@ def _make_scan(scan_id="scan-001", status="completed", **kwargs) -> FakeScan:
         passed_stocks=42,
         universe="all",
         universe_type="exchange",
+        universe_market=None,
         universe_exchange="all",
         universe_index=None,
         universe_symbols=None,

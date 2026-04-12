@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..schemas.universe import UniverseDefinition, UniverseType
 from ..wiring.bootstrap import get_stock_universe_service
+from ..services.universe_compat_adapter import resolve_scan_universe_request
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,11 @@ def normalize_universe_definition(universe_def: Any) -> UniverseDefinition:
         legacy = universe_def.strip()
         if legacy.lower() == "active":
             return UniverseDefinition(type=UniverseType.ALL)
-        return UniverseDefinition.from_legacy(legacy)
+        return resolve_scan_universe_request(
+            universe_def=None,
+            legacy_universe=legacy,
+            legacy_symbols=None,
+        ).universe_def
 
     if isinstance(universe_def, dict):
         if "type" in universe_def:
@@ -34,7 +39,13 @@ def normalize_universe_definition(universe_def: Any) -> UniverseDefinition:
         for key in ("name", "universe", "value"):
             legacy = universe_def.get(key)
             if isinstance(legacy, str):
-                return normalize_universe_definition(legacy)
+                symbols = universe_def.get("symbols")
+                symbols_list = symbols if isinstance(symbols, list) else None
+                return resolve_scan_universe_request(
+                    universe_def=None,
+                    legacy_universe=legacy,
+                    legacy_symbols=symbols_list,
+                ).universe_def
 
         raise ValueError(
             "Unsupported universe definition dict; expected {'type': ...} "
@@ -67,17 +78,30 @@ def resolve_symbols(
 
     if t == UniverseType.ALL:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=None, sp500_only=False, limit=limit
+            db, market=None, exchange=None, sp500_only=False, limit=limit
+        )
+
+    elif t == UniverseType.MARKET:
+        return get_stock_universe_service().get_active_symbols(
+            db,
+            market=universe_def.market.value,
+            exchange=None,
+            sp500_only=False,
+            limit=limit,
         )
 
     elif t == UniverseType.EXCHANGE:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=universe_def.exchange.value, sp500_only=False, limit=limit
+            db,
+            market=None,
+            exchange=universe_def.exchange.value,
+            sp500_only=False,
+            limit=limit,
         )
 
     elif t == UniverseType.INDEX:
         return get_stock_universe_service().get_active_symbols(
-            db, exchange=None, sp500_only=True, limit=limit
+            db, market=None, exchange=None, sp500_only=True, limit=limit
         )
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):

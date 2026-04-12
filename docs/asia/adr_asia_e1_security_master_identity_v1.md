@@ -1,7 +1,7 @@
 # ADR ASIA-E1: SecurityMaster Identity Model (v1)
 
 - Date: 2026-04-11
-- Status: Accepted
+- Status: Accepted (Target Architecture)
 - Issue: `StockScreenClaude-asia.1.1`
 
 ## Context
@@ -37,6 +37,12 @@ Security identity is explicit and centralized:
 - Routing decisions become deterministic across subsystems.
 - Hidden US assumptions are removed from core data/contract flows.
 - Future market additions have one integration point for identity semantics.
+
+## Implementation Status (2026-04-11)
+
+- This ADR defines the normative target contract for E3/E4/E5 rollouts.
+- Current E2 migration work seeds explicit identity fields in `stock_universe` using deterministic exchange/suffix inference as transitional bootstrap data.
+- Runtime source-of-truth enforcement remains planned in `StockScreenClaude-asia.3.1` (SecurityMaster resolver adoption across ingestion, scanner prep, and theme normalization).
 
 ## Rejected Alternatives
 

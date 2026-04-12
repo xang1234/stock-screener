@@ -327,6 +327,7 @@ class ScanListItem(BaseModel):
     trigger_source: str = "manual"
     universe: str  # Legacy label (backward compat)
     universe_type: Optional[str] = None
+    universe_market: Optional[str] = None
     universe_exchange: Optional[str] = None
     universe_index: Optional[str] = None
     universe_symbols_count: Optional[int] = None

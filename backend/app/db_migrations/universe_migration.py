@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 NEW_COLUMNS = [
     ("universe_key", "VARCHAR(128)"),
     ("universe_type", "VARCHAR(20)"),
+    ("universe_market", "VARCHAR(8)"),
     ("universe_exchange", "VARCHAR(20)"),
     ("universe_index", "VARCHAR(20)"),
     ("universe_symbols", "TEXT"),  # JSON stored as text in SQLite
@@ -27,11 +28,11 @@ NEW_COLUMNS = [
 
 # Mapping from legacy universe string to structured fields
 LEGACY_MAP = {
-    "all":    {"type": "all",      "key": "all"},
-    "nyse":   {"type": "exchange", "exchange": "NYSE",   "key": "exchange:NYSE"},
-    "nasdaq": {"type": "exchange", "exchange": "NASDAQ", "key": "exchange:NASDAQ"},
-    "amex":   {"type": "exchange", "exchange": "AMEX",   "key": "exchange:AMEX"},
-    "sp500":  {"type": "index",    "index": "SP500",     "key": "index:SP500"},
+    "all":    {"type": "all",      "market": "US", "key": "all"},
+    "nyse":   {"type": "exchange", "market": "US", "exchange": "NYSE",   "key": "exchange:NYSE"},
+    "nasdaq": {"type": "exchange", "market": "US", "exchange": "NASDAQ", "key": "exchange:NASDAQ"},
+    "amex":   {"type": "exchange", "market": "US", "exchange": "AMEX",   "key": "exchange:AMEX"},
+    "sp500":  {"type": "index",    "market": "US", "index": "SP500",     "key": "index:SP500"},
 }
 
 
@@ -92,6 +93,7 @@ def _ensure_indexes(conn) -> int:
     required_indexes = {
         "idx_scans_universe_key": ("universe_key",),
         "idx_scans_universe_type": ("universe_type",),
+        "idx_scans_universe_market": ("universe_market",),
         "idx_scans_universe_exchange": ("universe_exchange",),
         "idx_scans_universe_index": ("universe_index",),
     }
@@ -135,11 +137,12 @@ def _backfill_universe_fields(conn) -> int:
             # Known legacy value — direct mapping
             conn.execute(text(
                 "UPDATE scans SET universe_key = :key, universe_type = :type, "
-                "universe_exchange = :exchange, universe_index = :index "
+                "universe_market = :market, universe_exchange = :exchange, universe_index = :index "
                 "WHERE id = :id"
             ), {
                 "key": mapped["key"],
                 "type": mapped["type"],
+                "market": mapped.get("market"),
                 "exchange": mapped.get("exchange"),
                 "index": mapped.get("index"),
                 "id": row_id,
@@ -159,13 +162,15 @@ def _backfill_universe_fields(conn) -> int:
                 key = f"{universe_lower}:{digest}"
             else:
                 key = f"{universe_lower}:empty"
+            market = _infer_market_from_symbols(symbols)
 
             conn.execute(text(
                 "UPDATE scans SET universe_key = :key, universe_type = :type, "
-                "universe_symbols = :symbols WHERE id = :id"
+                "universe_market = :market, universe_symbols = :symbols WHERE id = :id"
             ), {
                 "key": key,
                 "type": universe_lower,
+                "market": market,
                 "symbols": json.dumps(symbols) if symbols else None,
                 "id": row_id,
             })
@@ -186,3 +191,25 @@ def _backfill_universe_fields(conn) -> int:
 
     logger.info(f"Backfilled {total} scan rows")
     return total
+
+
+def _infer_market_from_symbols(symbols: list[str]) -> str | None:
+    """Infer a single market for a symbol set when all symbols share one market."""
+    if not symbols:
+        return None
+
+    markets: set[str] = set()
+    for symbol in symbols:
+        upper_symbol = (symbol or "").strip().upper()
+        if upper_symbol.endswith(".HK"):
+            markets.add("HK")
+        elif upper_symbol.endswith(".T"):
+            markets.add("JP")
+        elif upper_symbol.endswith(".TW") or upper_symbol.endswith(".TWO"):
+            markets.add("TW")
+        else:
+            markets.add("US")
+
+    if len(markets) == 1:
+        return next(iter(markets))
+    return None

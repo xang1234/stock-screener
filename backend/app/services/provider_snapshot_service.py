@@ -24,6 +24,7 @@ from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
+from .security_master_service import security_master_resolver
 from .technical_calculator_service import TechnicalCalculatorService
 
 if TYPE_CHECKING:
@@ -755,17 +756,26 @@ class ProviderSnapshotService:
         db.add(run)
         db.flush()
 
-        rows = [
-            ProviderSnapshotRow(
-                run_id=run.id,
-                symbol=row["symbol"],
+        rows = []
+        for row in snapshot_rows:
+            identity = security_master_resolver.resolve_identity(
+                symbol=str(row.get("symbol") or ""),
+                market=row.get("market"),
                 exchange=row.get("exchange"),
-                row_hash=row["row_hash"],
-                normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
-                raw_payload_json=None,
+                currency=row.get("currency"),
+                timezone=row.get("timezone"),
+                local_code=row.get("local_code"),
             )
-            for row in snapshot_rows
-        ]
+            rows.append(
+                ProviderSnapshotRow(
+                    run_id=run.id,
+                    symbol=identity.canonical_symbol,
+                    exchange=identity.exchange,
+                    row_hash=row["row_hash"],
+                    normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
+                    raw_payload_json=None,
+                )
+            )
         if rows:
             db.bulk_save_objects(rows)
 
@@ -807,7 +817,11 @@ class ProviderSnapshotService:
         return {
             "symbol": row.symbol,
             "name": row.name,
+            "market": row.market,
             "exchange": row.exchange,
+            "currency": row.currency,
+            "timezone": row.timezone,
+            "local_code": row.local_code,
             "sector": row.sector,
             "industry": row.industry,
             "market_cap": row.market_cap,
@@ -828,10 +842,23 @@ class ProviderSnapshotService:
 
     @staticmethod
     def _deserialize_universe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        identity = security_master_resolver.resolve_identity(
+            symbol=str(row.get("symbol") or ""),
+            market=row.get("market"),
+            exchange=row.get("exchange"),
+            currency=row.get("currency"),
+            timezone=row.get("timezone"),
+            local_code=row.get("local_code"),
+        )
+
         return {
-            "symbol": row["symbol"],
+            "symbol": identity.canonical_symbol,
             "name": row.get("name"),
-            "exchange": row.get("exchange"),
+            "market": identity.market,
+            "exchange": identity.exchange,
+            "currency": identity.currency,
+            "timezone": identity.timezone,
+            "local_code": identity.local_code,
             "sector": row.get("sector"),
             "industry": row.get("industry"),
             "market_cap": row.get("market_cap"),

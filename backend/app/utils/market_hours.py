@@ -4,12 +4,18 @@ Market hours utilities for cache staleness detection.
 Provides functions to determine if US stock market is open,
 when it closes, and if cached data is stale based on market hours.
 
-Uses pandas_market_calendars for authoritative NYSE holiday/schedule data.
+Uses exchange_calendars as the primary calendar engine for NYSE sessions.
 """
 from datetime import UTC, datetime, date, time, timedelta
 from typing import Optional
 import pytz
-import pandas_market_calendars as mcal
+import pandas as pd
+
+try:
+    import exchange_calendars as xcals  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback for legacy environments
+    xcals = None  # type: ignore
+    import pandas_market_calendars as mcal  # type: ignore
 
 
 # US Eastern timezone
@@ -20,7 +26,12 @@ MARKET_OPEN_TIME = time(9, 30)  # 9:30 AM ET
 MARKET_CLOSE_TIME = time(16, 0)  # 4:00 PM ET
 
 # NYSE calendar singleton
-_NYSE = mcal.get_calendar("NYSE")
+if xcals is not None:
+    _CALENDAR_ENGINE = "exchange_calendars"
+    _NYSE = xcals.get_calendar("XNYS")
+else:
+    _CALENDAR_ENGINE = "pandas_market_calendars"
+    _NYSE = mcal.get_calendar("NYSE")
 
 # Cache: pre-compute 3-year window of valid trading days for O(1) lookups
 _trading_days_cache: Optional[set] = None
@@ -34,10 +45,19 @@ def _get_trading_days_set() -> set:
     if _trading_days_cache is None or _cache_year != current_year:
         start = f"{current_year - 1}-01-01"
         end = f"{current_year + 1}-12-31"
-        schedule = _NYSE.schedule(start_date=start, end_date=end)
-        _trading_days_cache = set(schedule.index.date)
+        if _CALENDAR_ENGINE == "exchange_calendars":
+            sessions = _NYSE.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+            _trading_days_cache = set(session.date() for session in sessions)
+        else:
+            schedule = _NYSE.schedule(start_date=start, end_date=end)
+            _trading_days_cache = set(schedule.index.date)
         _cache_year = current_year
     return _trading_days_cache
+
+
+def calendar_engine() -> str:
+    """Return the active calendar backend name."""
+    return _CALENDAR_ENGINE
 
 
 def get_eastern_now() -> datetime:
@@ -85,11 +105,13 @@ def is_market_open(dt: Optional[datetime] = None) -> bool:
         # Convert to Eastern timezone
         dt = dt.astimezone(EASTERN)
 
-    # Check if this is a trading day (handles weekends + holidays)
+    if _CALENDAR_ENGINE == "exchange_calendars":
+        minute_utc = pd.Timestamp(dt.astimezone(UTC)).floor("min")
+        return bool(_NYSE.is_open_on_minute(minute_utc, ignore_breaks=False))
+
+    # Legacy fallback path
     if not is_trading_day(dt.date()):
         return False
-
-    # Check if within market hours
     current_time = dt.time()
     return MARKET_OPEN_TIME <= current_time < MARKET_CLOSE_TIME
 

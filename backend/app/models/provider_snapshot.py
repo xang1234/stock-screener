@@ -38,7 +38,7 @@ class ProviderSnapshotRow(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     run_id = Column(Integer, ForeignKey("provider_snapshot_runs.id", ondelete="CASCADE"), nullable=False, index=True)
-    symbol = Column(String(10), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
     exchange = Column(String(20), index=True)
     row_hash = Column(String(64), nullable=False)
     normalized_payload_json = Column(Text, nullable=False)

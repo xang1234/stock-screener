@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from app.schemas.universe import (
     Exchange,
     IndexName,
+    Market,
     UniverseDefinition,
     UniverseType,
 )
@@ -24,6 +25,11 @@ class TestUniverseDefinitionConstruction:
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.NYSE)
         assert u.type == UniverseType.EXCHANGE
         assert u.exchange == Exchange.NYSE
+
+    def test_market_hk(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.HK)
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.HK
 
     def test_exchange_nasdaq(self):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.NASDAQ)
@@ -72,8 +78,20 @@ class TestUniverseDefinitionValidation:
         with pytest.raises(ValidationError, match="requires 'exchange' field"):
             UniverseDefinition(type=UniverseType.EXCHANGE)
 
+    def test_market_without_market_raises(self):
+        with pytest.raises(ValidationError, match="requires 'market' field"):
+            UniverseDefinition(type=UniverseType.MARKET)
+
+    def test_market_with_exchange_raises(self):
+        with pytest.raises(ValidationError, match="must not specify exchange"):
+            UniverseDefinition(
+                type=UniverseType.MARKET,
+                market=Market.HK,
+                exchange=Exchange.NYSE,
+            )
+
     def test_exchange_with_index_raises(self):
-        with pytest.raises(ValidationError, match="must not specify index"):
+        with pytest.raises(ValidationError, match="must not specify"):
             UniverseDefinition(
                 type=UniverseType.EXCHANGE, exchange=Exchange.NYSE, index=IndexName.SP500
             )
@@ -83,7 +101,7 @@ class TestUniverseDefinitionValidation:
             UniverseDefinition(type=UniverseType.INDEX)
 
     def test_index_with_exchange_raises(self):
-        with pytest.raises(ValidationError, match="must not specify exchange"):
+        with pytest.raises(ValidationError, match="must not specify"):
             UniverseDefinition(
                 type=UniverseType.INDEX, index=IndexName.SP500, exchange=Exchange.NYSE
             )
@@ -154,6 +172,10 @@ class TestKey:
         u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.SP500)
         assert u.key() == "index:SP500"
 
+    def test_market_key(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.JP)
+        assert u.key() == "market:JP"
+
     def test_custom_key_is_deterministic(self):
         u1 = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])
         u2 = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["MSFT", "AAPL"])
@@ -192,6 +214,10 @@ class TestLabel:
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.NYSE)
         assert u.label() == "NYSE"
 
+    def test_market_label(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.US)
+        assert u.label() == "US Market"
+
     def test_index_label(self):
         u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.SP500)
         assert u.label() == "S&P 500"
@@ -224,6 +250,15 @@ class TestFromLegacy:
         u = UniverseDefinition.from_legacy("nyse")
         assert u.type == UniverseType.EXCHANGE
         assert u.exchange == Exchange.NYSE
+
+    def test_market_prefixed(self):
+        u = UniverseDefinition.from_legacy("market:jp")
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.JP
+
+    def test_market_short_code_without_prefix_is_not_legacy(self):
+        with pytest.raises(ValueError, match="Unknown universe"):
+            UniverseDefinition.from_legacy("hk")
 
     def test_nasdaq(self):
         u = UniverseDefinition.from_legacy("nasdaq")
@@ -282,6 +317,12 @@ class TestJsonSerialization:
         data = u.model_dump()
         assert data["type"] == "exchange"
         assert data["exchange"] == "NYSE"
+
+    def test_market_serializes(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.TW)
+        data = u.model_dump()
+        assert data["type"] == "market"
+        assert data["market"] == "TW"
 
     def test_round_trip(self):
         original = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])

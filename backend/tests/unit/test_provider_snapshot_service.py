@@ -454,13 +454,31 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         [
             StockUniverse(
                 symbol="AAPL",
+                market="US",
                 exchange="NASDAQ",
+                currency="USD",
+                timezone="America/New_York",
+                local_code="AAPL",
                 is_active=True,
                 status=UNIVERSE_STATUS_ACTIVE,
                 status_reason="active",
                 sector="Technology",
                 industry="Software",
                 market_cap=123.0,
+            ),
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="HKEX",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+                sector="Technology",
+                industry="Internet Content & Information",
+                market_cap=456.0,
             ),
             StockUniverse(
                 symbol="OLD",
@@ -532,13 +550,26 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         payload = json.load(fh)
 
     assert export_stats["rows"] == 1
-    assert export_stats["universe_rows"] == 1
+    assert export_stats["universe_rows"] == 2
     assert payload["schema_version"] == ProviderSnapshotService.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
     assert len(payload["snapshot"]["rows"]) == 1
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["ipo_date"] == "2020-01-02"
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["description_yfinance"] == "Long summary"
-    assert len(payload["universe"]) == 1
-    assert payload["universe"][0]["symbol"] == "AAPL"
+    assert len(payload["universe"]) == 2
+    hk_row = next(row for row in payload["universe"] if row["symbol"] == "0700.HK")
+    assert hk_row["market"] == "HK"
+    assert hk_row["currency"] == "HKD"
+    assert hk_row["timezone"] == "Asia/Hong_Kong"
+    assert hk_row["local_code"] == "0700"
+
+    # Simulate legacy bundle row with market absent and currency/timezone missing.
+    hk_row.pop("market", None)
+    hk_row["exchange"] = " sehk "
+    hk_row.pop("currency", None)
+    hk_row.pop("timezone", None)
+    hk_row.pop("local_code", None)
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True, default=str)
 
     manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert manifest["bundle_asset_name"] == bundle_path.name
@@ -575,13 +606,20 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     imported_run = service.get_published_run(db)
     imported_row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == imported_run.id).one()
     imported_payload = json.loads(imported_row.normalized_payload_json)
-    imported_symbols = [row.symbol for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()]
+    imported_universe_rows = db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    imported_symbols = [row.symbol for row in imported_universe_rows]
+    imported_hk_row = next(row for row in imported_universe_rows if row.symbol == "0700.HK")
 
     assert import_stats["rows"] == 1
-    assert import_stats["universe_rows"] == 1
+    assert import_stats["universe_rows"] == 2
     assert imported_run.source_revision == "fundamentals_v1:20260402081000"
     assert imported_payload["ipo_date"] == "2020-01-02"
-    assert imported_symbols == ["AAPL"]
+    assert imported_symbols == ["0700.HK", "AAPL"]
+    assert imported_hk_row.market == "HK"
+    # Missing bundle values should hydrate from market-aware defaults.
+    assert imported_hk_row.currency == "HKD"
+    assert imported_hk_row.timezone == "Asia/Hong_Kong"
+    assert imported_hk_row.local_code == "0700"
     assert db.query(ProviderSnapshotRun).filter(
         ProviderSnapshotRun.snapshot_key == ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS
     ).count() == 1
@@ -681,6 +719,53 @@ def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp
     db.close()
 
 
+def test_import_weekly_reference_bundle_canonicalizes_snapshot_row_symbol(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    bundle_path = tmp_path / "weekly_reference_bundle.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": service.SNAPSHOT_KEY_FUNDAMENTALS,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "3008.TW",
+                    "exchange": "TPEX",
+                    "row_hash": "row-hash-1",
+                    "normalized_payload": {"symbol": "3008.TW", "exchange": "TPEX"},
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "3008.TW",
+                "exchange": "TPEX",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    run = service.get_published_run(db)
+    row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == run.id).one()
+    assert row.symbol == "3008.TWO"
+    assert row.exchange == "TPEX"
+    db.close()
+
+
 def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required_fields(monkeypatch):
     monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
     service = FundamentalsCacheService(
@@ -716,3 +801,39 @@ def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required
 
     assert result == enriched
     assert fetch_calls == ["AAPL"]
+
+
+def test_deserialize_universe_row_infers_hk_from_xhkg_exchange():
+    row = ProviderSnapshotService._deserialize_universe_row(
+        {
+            "symbol": "0700",
+            "exchange": "XHKG",
+            "market": "",
+            "currency": None,
+            "timezone": None,
+            "local_code": None,
+        }
+    )
+
+    assert row["symbol"] == "0700.HK"
+    assert row["market"] == "HK"
+    assert row["currency"] == "HKD"
+    assert row["timezone"] == "Asia/Hong_Kong"
+    assert row["local_code"] == "0700"
+
+
+def test_deserialize_universe_row_normalizes_tpex_symbol_to_two_suffix():
+    row = ProviderSnapshotService._deserialize_universe_row(
+        {
+            "symbol": "3008.TW",
+            "exchange": "TPEX",
+            "market": "TW",
+            "currency": "TWD",
+            "timezone": "Asia/Taipei",
+            "local_code": "3008",
+        }
+    )
+
+    assert row["symbol"] == "3008.TWO"
+    assert row["exchange"] == "TPEX"
+    assert row["market"] == "TW"

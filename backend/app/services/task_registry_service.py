@@ -63,7 +63,7 @@ SCHEDULED_TASKS = {
     'daily-smart-refresh': {
         'task_function': 'app.tasks.cache_tasks.smart_refresh_cache',
         'display_name': 'Daily Smart Refresh',
-        'description': 'Runs the SPY-first full-universe batched price refresh',
+        'description': 'Runs benchmark-first full-universe batched price refresh',
         'schedule_description': f'{settings.cache_warm_hour}:{settings.cache_warm_minute:02d} ET, Mon-Fri',
         'history_task_names': ['daily-smart-refresh', 'daily-cache-warmup'],
         'manual_dispatch_kwargs': {'mode': 'full'},

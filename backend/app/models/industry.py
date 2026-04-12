@@ -92,7 +92,7 @@ class IBDIndustryGroup(Base):
     __tablename__ = "ibd_industry_groups"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(10), nullable=False, unique=True, index=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
     industry_group = Column(String(100), nullable=False, index=True)
 
     # Metadata
@@ -122,7 +122,7 @@ class IBDGroupPeerCache(Base):
     avg_composite_score = Column(Float)
 
     # Top performers in group
-    top_symbol = Column(String(10))  # Best performer by composite score
+    top_symbol = Column(String(20))  # Best performer by composite score
     top_score = Column(Float)
 
     # Timestamp
@@ -155,7 +155,7 @@ class IBDGroupRank(Base):
     num_stocks_rs_above_80 = Column(Integer, default=0)  # High RS count
 
     # Top performer in group
-    top_symbol = Column(String(10))
+    top_symbol = Column(String(20))
     top_rs_rating = Column(Float)
 
     # Metadata

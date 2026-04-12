@@ -25,6 +25,38 @@ MarketCalendarService must use the following canonical `exchange_calendars` IDs:
 
 No alias IDs or market-specific substitutes may be used in production without a superseding ADR revision.
 
+Canonical timezone mapping (for deterministic rendering and audit labeling):
+
+- US (`XNYS`) -> `America/New_York`
+- HK (`XHKG`) -> `Asia/Hong_Kong`
+- JP (`XTKS`) -> `Asia/Tokyo`
+- TW (`XTAI`) -> `Asia/Taipei`
+
+### Normalization Rules (Normative)
+
+1. Calendar lookups must be performed only with the canonical IDs above.
+2. Session boundaries returned by `exchange_calendars` are interpreted in exchange-local time, then normalized to UTC for all freshness/scheduler comparisons.
+3. Internal comparisons and persisted freshness references must use UTC timestamps only.
+4. User-facing surfaces and logs must render session boundaries with both UTC and canonical market-local timezone context.
+5. Naive (timezone-less) timestamps are not valid inputs to MarketCalendarService APIs and must be rejected or normalized before invocation by callers.
+
+### Canonical-ID Compliance Rollout
+
+To eliminate alias drift while keeping rollout risk controlled:
+
+1. Soft enforcement (4-week window):
+   - Emit warnings when legacy names are observed (`NYSE`, `HKEX`, `SEHK`, `TSE`, `JPX`, `TWSE`, `TPEX`).
+   - Normalize to canonical IDs through a single shared helper in MarketCalendarService.
+2. Hard enforcement (after window):
+   - Reject non-canonical identifiers at MarketCalendarService boundaries.
+   - Remove automatic legacy-name normalization from call sites.
+
+Migration work items:
+
+- Update all calendar lookup call sites to canonical IDs (`XNYS`, `XHKG`, `XTKS`, `XTAI`).
+- Add CI guardrails (lint/check) to block new non-canonical literals in production calendar paths.
+- Track migration and remaining call sites in ASIA backlog items before canary launch.
+
 ### Service Contract
 
 MarketCalendarService provides deterministic primitives:

@@ -9,7 +9,7 @@ import pytest
 
 from app.api.v1.scans import _build_universe_def
 from app.schemas.scanning import ScanCreateRequest
-from app.schemas.universe import Exchange, IndexName, UniverseDefinition, UniverseType
+from app.schemas.universe import Exchange, IndexName, Market, UniverseDefinition, UniverseType
 from app.use_cases.scanning.create_scan import CreateScanCommand
 
 
@@ -52,6 +52,16 @@ def test_build_universe_def_parses_legacy_index():
     assert result.label() == "S&P 500"
 
 
+def test_build_universe_def_accepts_structured_market():
+    request = ScanCreateRequest(
+        universe_def=UniverseDefinition(type=UniverseType.MARKET, market=Market.TW),
+    )
+    result = _build_universe_def(request)
+    assert result.type == UniverseType.MARKET
+    assert result.market == Market.TW
+    assert result.key() == "market:TW"
+
+
 def test_build_universe_def_parses_legacy_custom():
     request = ScanCreateRequest(
         universe="custom",
@@ -91,6 +101,7 @@ def test_command_preserves_screener_config():
         universe_label=universe_def.label(),
         universe_key=universe_def.key(),
         universe_type=universe_def.type.value,
+        universe_market=universe_def.market.value if universe_def.market else None,
         universe_exchange=universe_def.exchange.value if universe_def.exchange else None,
         universe_index=universe_def.index.value if universe_def.index else None,
         universe_symbols=universe_def.symbols,
@@ -116,6 +127,7 @@ def test_command_universe_metadata_for_exchange():
         universe_label=universe_def.label(),
         universe_key=universe_def.key(),
         universe_type=universe_def.type.value,
+        universe_market=universe_def.market.value if universe_def.market else None,
         universe_exchange=universe_def.exchange.value if universe_def.exchange else None,
         universe_index=universe_def.index.value if universe_def.index else None,
         universe_symbols=universe_def.symbols,
@@ -124,4 +136,5 @@ def test_command_universe_metadata_for_exchange():
     assert cmd.universe_key == "exchange:NASDAQ"
     assert cmd.universe_type == "exchange"
     assert cmd.universe_exchange == "NASDAQ"
+    assert cmd.universe_market is None
     assert cmd.universe_index is None

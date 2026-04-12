@@ -86,7 +86,7 @@ async def get_cache_statistics():
     Get comprehensive cache statistics.
 
     Returns:
-        Cache statistics including Redis status, SPY cache, price cache, and memory usage
+        Cache statistics including Redis status, benchmark cache, price cache, and memory usage
     """
     try:
         cache_manager = get_cache_manager()
@@ -118,9 +118,9 @@ async def get_market_status():
 @router.post("/warm/spy")
 async def warm_spy_benchmark_cache(background_tasks: BackgroundTasks):
     """
-    Warm SPY benchmark cache.
+    Warm benchmark cache for active markets.
 
-    This endpoint triggers background warming of the SPY benchmark data.
+    Compatibility endpoint name; task warms benchmarks for active markets.
 
     Returns:
         Task information
@@ -131,14 +131,14 @@ async def warm_spy_benchmark_cache(background_tasks: BackgroundTasks):
 
         return TaskResponse(
             task_id=task.id,
-            message="SPY cache warming task queued",
+            message="Benchmark cache warming task queued",
             status="queued"
         )
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error queuing SPY cache warming: {str(e)}"
+            detail=f"Error queuing benchmark cache warming: {str(e)}"
         )
 
 
@@ -387,16 +387,16 @@ async def get_cache_health():
     """
     Get cache health status with unified state indicator.
 
-    This is the NEW primary endpoint for cache status. It uses SPY as a proxy
+    This is the NEW primary endpoint for cache status. It uses US benchmark cache as a proxy
     for overall cache health (O(1) check) and includes warmup metadata for
     detecting partial failures.
 
     Returns one of 6 states:
-    - fresh: Cache is up to date (SPY has expected date + last warmup complete)
+    - fresh: Cache is up to date (US benchmark has expected date + last warmup complete)
     - updating: Refresh task is currently running
     - stuck: Task running but no progress for >30 minutes
     - partial: Last warmup incomplete (some symbols failed)
-    - stale: SPY missing expected trading date
+    - stale: Benchmark missing expected trading date
     - error: Redis unavailable or other error
 
     Returns:
@@ -441,7 +441,7 @@ async def smart_refresh(request: SmartRefreshRequest):
     - full: Full universe, force re-fetch everything (~2 hours)
 
     Key features:
-    - Always warms SPY first (required for RS calculations)
+    - Always warms market benchmarks first (required for RS calculations)
     - Fetches symbols in market cap order (high cap first)
     - Prevents double-refresh (returns existing task info if running)
 
@@ -522,7 +522,7 @@ async def get_dashboard_cache_statistics():
 
     This endpoint aggregates cache health metrics from all cache services:
     - Fundamentals cache (Redis + DB)
-    - Price/technical data cache (SPY + symbols)
+    - Price/technical data cache (benchmarks + symbols)
     - Market status
 
     Returns:
@@ -579,11 +579,12 @@ async def get_dashboard_cache_statistics():
         cache_manager = get_cache_manager()
         price_stats = cache_manager.get_cache_stats()
 
-        # Extract SPY cache info (corrected key names)
-        spy_cache = price_stats.get('spy_cache', {})
-        spy_cached = spy_cache.get('2y_cached', False)
-        spy_ttl_seconds = spy_cache.get('2y_ttl', 0)
-        spy_ttl = (spy_ttl_seconds / 3600) if spy_ttl_seconds else 0  # Convert seconds to hours
+        # Extract US benchmark cache info (with legacy SPY fallback key)
+        benchmark_cache = price_stats.get('benchmark_cache', {})
+        us_benchmark = benchmark_cache.get('US') or price_stats.get('spy_cache', {})
+        us_benchmark_cached = us_benchmark.get('2y_cached', False)
+        us_benchmark_ttl_seconds = us_benchmark.get('2y_ttl', 0)
+        us_benchmark_ttl = (us_benchmark_ttl_seconds / 3600) if us_benchmark_ttl_seconds else 0
 
         # Get market status
         market_status = {
@@ -603,9 +604,9 @@ async def get_dashboard_cache_statistics():
                 "hit_rate": fundamentals_stats.get('hit_rate', 0)
             },
             "prices": {
-                "spy_cached": spy_cached,
+                "spy_cached": us_benchmark_cached,
                 "spy_last_update": "N/A",  # Could be enhanced to extract last update date
-                "spy_ttl_hours": round(spy_ttl, 1),
+                "spy_ttl_hours": round(us_benchmark_ttl, 1),
                 "total_symbols_cached": price_stats.get('price_cache', {}).get('symbols_cached', 0),
                 "last_warmup": "N/A"  # Could track last warmup timestamp
             },
