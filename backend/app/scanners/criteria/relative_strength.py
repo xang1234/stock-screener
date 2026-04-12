@@ -292,6 +292,10 @@ class RelativeStrengthCalculator:
             'rs_rating_1m': rs_1m,
             'rs_rating_3m': rs_3m,
             'rs_rating_12m': rs_12m,
+            # Expose weighted detail so callers don't need a second
+            # calculate_rs_rating call to recover these fields.
+            'relative_performance': weighted_rs_result.get('relative_performance'),
+            'percentile_rank': weighted_rs_result.get('percentile_rank'),
         }
 
 

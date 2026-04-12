@@ -223,22 +223,13 @@ class MinerviniScanner(BaseStockScreener):
                 data.rs_universe_performances,
             )
 
-            # For backward compatibility, build rs_result dict
-            weighted_universe = (
-                data.rs_universe_performances.get("weighted")
-                if data.rs_universe_performances
-                else None
-            )
-            weighted_rs_detail = self.rs_calc.calculate_rs_rating(
-                symbol,
-                prices,
-                spy_prices,
-                weighted_universe,
-            )
+            # calculate_all_rs_ratings now surfaces relative_performance and
+            # percentile_rank from the weighted detail it already computed
+            # internally, so no second calculate_rs_rating call is needed.
             rs_result = {
                 'rs_rating': rs_ratings['rs_rating'],
-                'relative_performance': weighted_rs_detail.get("relative_performance"),
-                'percentile_rank': weighted_rs_detail.get("percentile_rank"),
+                'relative_performance': rs_ratings.get('relative_performance'),
+                'percentile_rank': rs_ratings.get('percentile_rank'),
             }
 
             # Calculate Beta and Beta-Adjusted RS metrics

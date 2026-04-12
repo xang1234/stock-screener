@@ -82,6 +82,8 @@ class DataPreparationLayer:
             )
             if isinstance(bundle, BenchmarkDataBundle):
                 return bundle
+            if bundle is None:
+                return None
             bundle_data = getattr(bundle, "data", None)
             if isinstance(bundle_data, pd.DataFrame):
                 return BenchmarkDataBundle(
