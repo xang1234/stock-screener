@@ -195,7 +195,7 @@ class DataPreparationLayer:
     ) -> None:
         market_universe = self._compute_market_rs_universe_performances(list(results.values()))
         for item in results.values():
-            item.rs_universe_performances = market_universe.get(item.market or "US")
+            item.rs_universe_performances = market_universe.get(item.market or "US", {})
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
