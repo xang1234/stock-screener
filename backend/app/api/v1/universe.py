@@ -159,6 +159,55 @@ async def import_hk_csv(
         )
 
 
+@router.post("/import-jp-csv")
+async def import_jp_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("jp_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import JP universe rows from CSV using JP-specific canonical normalization.
+
+    This path supports exchange-specific code formats (e.g. 7203, 7203.T,
+    JPX:7203) and emits canonical `.T` symbols.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_jp_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "JP CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing JP CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing JP CSV: {str(e)}",
+        )
+
+
 @router.get("/stats")
 async def get_universe_stats(db: Session = Depends(get_db)):
     """

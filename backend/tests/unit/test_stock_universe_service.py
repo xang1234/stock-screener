@@ -292,3 +292,128 @@ def test_ingest_hk_from_csv_reports_rejected_rows_in_non_strict_mode():
     assert stats["rejected"] == 1
     assert stats["rejected_rows"][0]["source_symbol"] == "ABC.HK"
     db.close()
+
+
+def test_ingest_jp_from_csv_normalizes_exchange_formats_and_lineage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203,Toyota Motor,TSE,Consumer Cyclical,Auto Manufacturers,300B",
+            "7203.T,Toyota Motor,JPX,Consumer Cyclical,Auto Manufacturers,300B",
+            "JPX:7203,Toyota Motor,XTKS,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="jpx_official",
+        snapshot_id="jp-20260412",
+    )
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "7203.T")
+        .all()
+    )
+
+    assert stats["added"] == 1
+    assert stats["updated"] == 0
+    assert stats["total"] == 1
+    assert stats["rejected"] == 0
+    assert row.local_code == "7203"
+    assert row.exchange == "XTKS"
+    assert row.market == "JP"
+    assert row.currency == "JPY"
+    assert row.timezone == "Asia/Tokyo"
+    assert row.source == "jp_ingest"
+    assert len(events) == 1
+    payload = json.loads(events[0].payload_json)
+    assert payload["snapshot_id"] == "jp-20260412"
+    assert payload["source_name"] == "jpx_official"
+    assert len(payload["lineage_hash"]) == 64
+    assert len(payload["row_hash"]) == 64
+    db.close()
+
+
+def test_ingest_jp_from_csv_reactivates_existing_inactive_symbol():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="7203.T",
+            exchange="TSE",
+            market="JP",
+            is_active=False,
+            status=UNIVERSE_STATUS_INACTIVE_MANUAL,
+            status_reason="manual off",
+        )
+    )
+    db.commit()
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "7203.T,Toyota Motor,TSE,Consumer Cyclical,Auto Manufacturers,300B",
+        ]
+    )
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "7203.T").one()
+
+    assert stats["added"] == 0
+    assert stats["updated"] == 1
+    assert row.is_active is True
+    assert row.status == UNIVERSE_STATUS_ACTIVE
+    assert row.exchange == "XTKS"
+    assert row.local_code == "7203"
+    db.close()
+
+
+def test_ingest_jp_from_csv_rejects_unapproved_source():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "symbol,name,exchange\n7203,Toyota,TSE\n"
+
+    with pytest.raises(ValueError, match="Unapproved JP source"):
+        stock_universe_service.ingest_jp_from_csv(
+            db,
+            csv_content,
+            source_name="random_vendor",
+            snapshot_id="jp-20260412",
+        )
+    db.close()
+
+
+def test_ingest_jp_from_csv_reports_rejected_rows_in_non_strict_mode():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "ABCD,Invalid,TSE",
+            "7203,Toyota,TSE",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "ABCD"
+    db.close()
