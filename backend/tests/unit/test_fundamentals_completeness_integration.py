@@ -90,12 +90,13 @@ class TestStorageWritesCompletenessAndProvenance:
         assert record.field_completeness_score == 0
         assert record.field_provenance == {}
 
-    def test_market_is_resolved_when_not_passed(self, captured_record):
+    def test_market_is_resolved_when_not_passed(self, captured_record, monkeypatch):
         """When caller omits ``market``, the service falls back to
         ``_resolve_market`` — verify the hook is honoured."""
         service, captured = captured_record
-        # Stub _resolve_market so we don't need a StockUniverse row.
-        service._resolve_market = lambda symbol: "HK"
+        # ``raising=True`` (default) errors if _resolve_market is renamed,
+        # catching refactor breakage that plain assignment would miss.
+        monkeypatch.setattr(service, "_resolve_market", lambda symbol: "HK")
 
         service._store_in_database("0700.HK", _full_yfinance_payload(), data_source="yfinance")
         record = captured["added_record"]

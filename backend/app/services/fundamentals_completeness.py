@@ -178,7 +178,6 @@ _SOURCE_TECHNICALS = "technicals"
 
 def _build_field_source_map() -> Mapping[str, str]:
     mapping: Dict[str, str] = {}
-    # Everything in ENHANCED comes from finviz.
     for field in ENHANCED_FIELDS:
         mapping[field] = routing_policy.PROVIDER_FINVIZ
     # Technical-calculator fields.

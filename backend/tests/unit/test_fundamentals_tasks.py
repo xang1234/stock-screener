@@ -147,6 +147,14 @@ def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
     _patch_serialized_lock(monkeypatch)
     monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
 
+    # The task now batch-resolves markets before fetch; stub SessionLocal
+    # so the query doesn't try to hit a real Postgres.
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.all.return_value = [
+        ("AAPL", "US"),
+    ]
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+
     captured: dict = {}
 
     class _HybridStub:

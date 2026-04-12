@@ -1,5 +1,6 @@
 """Stock-related database models"""
 from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, JSON, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -160,8 +161,10 @@ class StockFundamental(Base):
     # Market-aware 0-100 score. Indexed for quality-tier filtering by
     # scanners/ranking logic. NULL means "not yet computed" — treat as unknown.
     field_completeness_score = Column(Integer, index=True)
-    # {field_name: provider_name} for every populated field.
-    field_provenance = Column(JSON)
+    # {field_name: provider_name} for every populated field. JSONB in
+    # production (PG) so T4 can filter on key paths efficiently; tests use
+    # SQLite which falls back to the JSON variant.
+    field_provenance = Column(JSONB().with_variant(JSON(), "sqlite"))
 
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

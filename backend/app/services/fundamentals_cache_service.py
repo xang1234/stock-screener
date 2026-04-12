@@ -389,6 +389,27 @@ class FundamentalsCacheService:
         finally:
             db.close()
 
+    def _enrich_with_quality_metadata(
+        self,
+        symbol: str,
+        data: Dict,
+        market: Optional[str],
+    ) -> Optional[str]:
+        """Compute and attach T2 quality metadata to ``data`` in place.
+
+        Must be called *before* writes to Redis/DB so both stores see the
+        same snapshot — otherwise a warm Redis read would omit the
+        derived fields for up to the cache TTL.
+
+        Returns the resolved market string so the caller can pass it on
+        to ``_store_in_database`` without a second DB lookup.
+        """
+        if market is None:
+            market = self._resolve_market(symbol)
+        data['field_completeness_score'] = compute_completeness_score(data, market)
+        data['field_provenance'] = derive_field_provenance(data, market)
+        return market
+
     def _resolve_market(self, symbol: str) -> Optional[str]:
         """Look up the stock universe market for ``symbol``.
 
@@ -462,12 +483,14 @@ class FundamentalsCacheService:
                 f"{len([v for v in fundamentals.values() if v is not None])} fields populated"
             )
 
+            # Enrich with completeness/provenance so both Redis and DB writes
+            # include the derived metadata (avoids warm-read staleness).
+            market = self._enrich_with_quality_metadata(symbol, fundamentals, market)
+
             # Cache in Redis (7-day TTL)
             self._store_in_redis(symbol, fundamentals)
 
             # Persist to database (permanent storage) with data source metadata.
-            # ``market`` was already resolved (or passed in) earlier in this
-            # method; passing it avoids a second DB lookup in _store_in_database.
             self._store_in_database(
                 symbol, fundamentals, data_source=data_source, market=market
             )
@@ -549,8 +572,16 @@ class FundamentalsCacheService:
             if market is None:
                 market = self._resolve_market(symbol)
 
-            completeness_score = compute_completeness_score(data, market)
-            provenance = derive_field_provenance(data, market)
+            # Prefer pre-computed values from the dict (attached by
+            # ``_enrich_with_quality_metadata`` on the write path); only
+            # recompute if the caller reached this method without going
+            # through the standard cache-enrichment path.
+            completeness_score = data.get('field_completeness_score')
+            if completeness_score is None:
+                completeness_score = compute_completeness_score(data, market)
+            provenance = data.get('field_provenance')
+            if provenance is None:
+                provenance = derive_field_provenance(data, market)
 
             # Check if record exists
             existing_record = db.query(StockFundamental).filter(
@@ -1220,6 +1251,9 @@ class FundamentalsCacheService:
             return
 
         normalized_data = self._normalize_payload_for_storage(data)
+
+        # Enrich before Redis/DB writes so both see the same snapshot.
+        market = self._enrich_with_quality_metadata(symbol, normalized_data, market)
 
         # Store in Redis
         self._store_in_redis(symbol, normalized_data)

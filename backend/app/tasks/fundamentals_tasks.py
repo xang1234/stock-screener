@@ -779,11 +779,25 @@ def refresh_symbols_hybrid(
         hybrid_service = HybridFundamentalsService(include_finviz=include_finviz)
         cache = get_fundamentals_cache()
 
+        # Batch-resolve markets in a single query so fetch and store are
+        # market-aware without N+1 DB lookups later.
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(StockUniverse.symbol, StockUniverse.market)
+                .filter(StockUniverse.symbol.in_(symbols))
+                .all()
+            )
+            market_by_symbol = {sym: mkt for sym, mkt in rows}
+        finally:
+            db.close()
+
         # Fetch fundamentals
         all_data = hybrid_service.fetch_fundamentals_batch(
             symbols,
             include_technicals=True,
-            include_finviz=include_finviz
+            include_finviz=include_finviz,
+            market_by_symbol=market_by_symbol,
         )
 
         # Store in all caches (fundamentals + quarterly for CANSLIM compatibility)
@@ -791,7 +805,8 @@ def refresh_symbols_hybrid(
             all_data,
             cache,
             session_factory=SessionLocal,
-            include_quarterly=True
+            include_quarterly=True,
+            market_by_symbol=market_by_symbol,
         )
 
         duration = time.time() - start_time
