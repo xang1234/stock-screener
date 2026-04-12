@@ -9,9 +9,11 @@ from __future__ import annotations
 import yfinance as yf
 import pandas as pd
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
-from datetime import date, datetime, timedelta
+from datetime import date
 import logging
 from threading import RLock
+
+from .growth_cadence_service import compute_cadence_aware_growth
 
 if TYPE_CHECKING:
     from app.services.eps_rating_service import EPSRatingService
@@ -354,132 +356,43 @@ class YFinanceService:
             logger.error(f"Error fetching earnings dates for {symbol}: {e}")
             return []
 
-    def get_quarterly_growth(self, symbol: str) -> Optional[Dict]:
+    def get_quarterly_growth(
+        self,
+        symbol: str,
+        market: str | None = None,
+    ) -> Optional[Dict]:
         """
-        Get quarter-over-quarter growth metrics.
-
-        Fetches most recent 2 quarters and calculates Q/Q growth for:
-        - EPS (Earnings Per Share)
-        - Revenue (Total Revenue)
+        Get cadence-aware growth metrics from quarterly income statements.
 
         Args:
             symbol: Stock ticker symbol
+            market: Optional market code. HK/JP with non-quarterly cadence
+                use comparable-period YoY as the primary growth basis.
 
         Returns:
             Dict containing:
             {
-                'eps_growth_qq': float or None,  # EPS growth % Q/Q
-                'sales_growth_qq': float or None,  # Revenue growth % Q/Q
+                'eps_growth_qq': float or None,
+                'sales_growth_qq': float or None,
+                'eps_growth_yy': float or None,
+                'sales_growth_yy': float or None,
                 'recent_quarter_date': str or None,
-                'previous_quarter_date': str or None
+                'previous_quarter_date': str or None,
+                'growth_reporting_cadence': str,
+                'growth_metric_basis': str,
+                'growth_comparable_period_date': str or None,
+                'growth_reference_gap_days': int or None,
             }
 
             Returns None if ticker cannot be fetched.
             Individual metrics are None if data missing.
-
-        Example:
-            {
-                'eps_growth_qq': 15.5,  # 15.5% growth Q/Q
-                'sales_growth_qq': 8.2,  # 8.2% growth Q/Q
-                'recent_quarter_date': '2024-Q4',
-                'previous_quarter_date': '2024-Q3'
-            }
         """
         try:
             self._wait_for_yfinance_rate_limit()
 
             ticker = yf.Ticker(symbol)
-
-            result = {
-                'eps_growth_qq': None,
-                'sales_growth_qq': None,
-                'recent_quarter_date': None,
-                'previous_quarter_date': None
-            }
-
-            # Calculate EPS Growth Q/Q using quarterly income statement
-            try:
-                quarterly_income = ticker.quarterly_income_stmt
-
-                if quarterly_income is not None and quarterly_income.shape[1] >= 2:
-                    # quarterly_income_stmt: line items as index (rows), dates as columns
-                    recent_quarter_col = quarterly_income.columns[0]
-                    previous_quarter_col = quarterly_income.columns[1]
-
-                    # Store quarter dates
-                    result['recent_quarter_date'] = str(recent_quarter_col)
-                    result['previous_quarter_date'] = str(previous_quarter_col)
-
-                    # Look for Diluted EPS or Basic EPS row
-                    eps_row = None
-                    for idx in quarterly_income.index:
-                        idx_str = str(idx).lower()
-                        if 'diluted eps' in idx_str or 'dilutedeps' in idx_str:
-                            eps_row = idx
-                            break
-
-                    # If not found, try basic EPS
-                    if eps_row is None:
-                        for idx in quarterly_income.index:
-                            idx_str = str(idx).lower()
-                            if 'basic eps' in idx_str or 'basiceps' in idx_str:
-                                eps_row = idx
-                                break
-
-                    if eps_row is not None:
-                        recent_eps = quarterly_income.loc[eps_row, recent_quarter_col]
-                        previous_eps = quarterly_income.loc[eps_row, previous_quarter_col]
-
-                        # Calculate growth percentage
-                        if previous_eps != 0 and not pd.isna(previous_eps) and not pd.isna(recent_eps):
-                            eps_growth = ((recent_eps - previous_eps) / abs(previous_eps)) * 100
-
-                            # Cap at reasonable range to avoid huge percentages from tiny numbers
-                            if abs(previous_eps) > 0.05:  # Only if denominator is meaningful
-                                result['eps_growth_qq'] = round(float(eps_growth), 2)
-
-            except (KeyError, IndexError, AttributeError) as e:
-                logger.debug(f"Could not calculate EPS growth for {symbol}: {e}")
-
-            # Calculate Sales/Revenue Growth Q/Q
-            try:
-                quarterly_income = ticker.quarterly_income_stmt
-
-                if quarterly_income is not None and quarterly_income.shape[1] >= 2:
-                    # quarterly_income_stmt: line items as index (rows), dates as columns
-                    # Columns are most recent first
-                    recent_quarter_col = quarterly_income.columns[0]
-                    previous_quarter_col = quarterly_income.columns[1]
-
-                    # Find revenue row (case-insensitive search)
-                    revenue_row = None
-                    for idx in quarterly_income.index:
-                        idx_str = str(idx).lower()
-                        if 'revenue' in idx_str and 'total' in idx_str:
-                            revenue_row = idx
-                            break
-
-                    # Alternative search if not found
-                    if revenue_row is None:
-                        for idx in quarterly_income.index:
-                            idx_str = str(idx).lower()
-                            if 'total revenue' in idx_str or 'totalrevenue' in idx_str:
-                                revenue_row = idx
-                                break
-
-                    if revenue_row is not None:
-                        recent_revenue = quarterly_income.loc[revenue_row, recent_quarter_col]
-                        previous_revenue = quarterly_income.loc[revenue_row, previous_quarter_col]
-
-                        # Calculate growth percentage
-                        if previous_revenue != 0 and not pd.isna(previous_revenue) and not pd.isna(recent_revenue):
-                            sales_growth = ((recent_revenue - previous_revenue) / abs(previous_revenue)) * 100
-                            result['sales_growth_qq'] = round(float(sales_growth), 2)
-
-            except (KeyError, IndexError, AttributeError) as e:
-                logger.debug(f"Could not calculate sales growth for {symbol}: {e}")
-
-            return result
+            quarterly_income = ticker.quarterly_income_stmt
+            return compute_cadence_aware_growth(quarterly_income, market=market)
 
         except Exception as e:
             logger.warning(f"Error fetching quarterly growth for {symbol}: {e}")

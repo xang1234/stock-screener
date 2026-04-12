@@ -3,9 +3,7 @@ routing policy: non-US symbols must not hit finviz.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from app.services.hybrid_fundamentals_service import HybridFundamentalsService
 
@@ -77,3 +75,19 @@ class TestPhase3PolicyFiltering:
         )
 
         svc.finviz_service.get_finviz_only_fields.assert_not_called()
+
+    def test_market_map_is_forwarded_to_bulk_growth_extractor(self):
+        svc = _make_service()
+        symbols = ["0700.HK", "7203.T", "AAPL"]
+        market_by_symbol = {"0700.HK": "HK", "7203.T": "JP", "AAPL": "US"}
+
+        svc.fetch_fundamentals_batch(
+            symbols,
+            include_technicals=False,
+            include_finviz=False,
+            market_by_symbol=market_by_symbol,
+        )
+
+        assert svc.bulk_fetcher.fetch_batch_fundamentals.call_count == 1
+        kwargs = svc.bulk_fetcher.fetch_batch_fundamentals.call_args.kwargs
+        assert kwargs.get("market_by_symbol") == market_by_symbol

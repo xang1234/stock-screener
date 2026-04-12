@@ -36,6 +36,11 @@ class StockFundamentals(BaseModel):
     # T6 graceful-degrade metadata for ownership/sentiment fields.
     # Shape: {field_name: {status, reason_code, canonical_provider, support_state}}.
     field_availability: Optional[Dict[str, Dict[str, Any]]] = None
+    # T7 cadence metadata for mixed reporting frequencies.
+    growth_reporting_cadence: Optional[str] = None
+    growth_metric_basis: Optional[str] = None
+    growth_comparable_period_date: Optional[str] = None
+    growth_reference_gap_days: Optional[int] = None
     # T3 FX normalisation — USD comparables for mixed-market ranking, plus
     # a per-row FX snapshot (rate, currency, as_of_date, source) for replay.
     market_cap_usd: Optional[int] = None

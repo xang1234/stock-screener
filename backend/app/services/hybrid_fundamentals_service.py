@@ -206,7 +206,8 @@ class HybridFundamentalsService:
             batch_size=self.yfinance_batch_size,
             include_quarterly=True,
             delay_between_batches=self.yfinance_delay_between_batches,
-            delay_per_ticker=self.yfinance_delay_per_ticker
+            delay_per_ticker=self.yfinance_delay_per_ticker,
+            market_by_symbol=market_by_symbol,
         )
 
         for symbol in symbols:

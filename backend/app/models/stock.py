@@ -72,6 +72,10 @@ class StockFundamental(Base):
     # Quarter metadata (consolidated from QuarterlyData)
     recent_quarter_date = Column(String(50))  # e.g., "2024-Q4"
     previous_quarter_date = Column(String(50))  # e.g., "2024-Q3"
+    growth_reporting_cadence = Column(String(24))  # quarterly | semiannual | annual | unknown
+    growth_metric_basis = Column(String(40))  # quarterly_qoq | comparable_period_yoy | unavailable
+    growth_comparable_period_date = Column(String(50))  # Same-period prior-year statement date
+    growth_reference_gap_days = Column(Integer)  # Gap between recent and previous statement periods
 
     # Profitability metrics
     profit_margin = Column(Float)

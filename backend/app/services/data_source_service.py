@@ -277,7 +277,7 @@ class DataSourceService:
             self.metrics['yfinance_primary'] += 1
 
         # Fetch from yfinance
-        yf_data = self.yfinance_service.get_quarterly_growth(symbol)
+        yf_data = self.yfinance_service.get_quarterly_growth(symbol, market=market)
 
         if yf_data:
             yf_data['data_source'] = 'yfinance'
@@ -343,7 +343,7 @@ class DataSourceService:
 
         # Fetch from yfinance (requires two API calls)
         fundamentals = self.yfinance_service.get_fundamentals(symbol)
-        growth = self.yfinance_service.get_quarterly_growth(symbol)
+        growth = self.yfinance_service.get_quarterly_growth(symbol, market=market)
 
         if fundamentals and growth:
             timestamp = datetime.utcnow()

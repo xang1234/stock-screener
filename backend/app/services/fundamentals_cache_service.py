@@ -297,6 +297,10 @@ class FundamentalsCacheService:
                 # Quarter metadata (consolidated from QuarterlyData)
                 "recent_quarter_date": record.recent_quarter_date,
                 "previous_quarter_date": record.previous_quarter_date,
+                "growth_reporting_cadence": record.growth_reporting_cadence,
+                "growth_metric_basis": record.growth_metric_basis,
+                "growth_comparable_period_date": record.growth_comparable_period_date,
+                "growth_reference_gap_days": record.growth_reference_gap_days,
                 # Alias for CANSLIM compatibility
                 "eps_growth_qq": record.eps_growth_quarterly,
                 # Profitability metrics
@@ -719,6 +723,10 @@ class FundamentalsCacheService:
                 existing_record.sales_growth_qq = data.get("sales_growth_qq")
                 existing_record.recent_quarter_date = data.get("recent_quarter_date")
                 existing_record.previous_quarter_date = data.get("previous_quarter_date")
+                existing_record.growth_reporting_cadence = data.get("growth_reporting_cadence")
+                existing_record.growth_metric_basis = data.get("growth_metric_basis")
+                existing_record.growth_comparable_period_date = data.get("growth_comparable_period_date")
+                existing_record.growth_reference_gap_days = data.get("growth_reference_gap_days")
 
                 # Profitability metrics
                 existing_record.profit_margin = data.get("profit_margin")
@@ -857,6 +865,10 @@ class FundamentalsCacheService:
                     sales_growth_qq=data.get("sales_growth_qq"),
                     recent_quarter_date=data.get("recent_quarter_date"),
                     previous_quarter_date=data.get("previous_quarter_date"),
+                    growth_reporting_cadence=data.get("growth_reporting_cadence"),
+                    growth_metric_basis=data.get("growth_metric_basis"),
+                    growth_comparable_period_date=data.get("growth_comparable_period_date"),
+                    growth_reference_gap_days=data.get("growth_reference_gap_days"),
                     # Profitability metrics
                     profit_margin=data.get("profit_margin"),
                     operating_margin=data.get("operating_margin"),
@@ -1099,6 +1111,10 @@ class FundamentalsCacheService:
                     # Quarter metadata
                     "recent_quarter_date": record.recent_quarter_date,
                     "previous_quarter_date": record.previous_quarter_date,
+                    "growth_reporting_cadence": record.growth_reporting_cadence,
+                    "growth_metric_basis": record.growth_metric_basis,
+                    "growth_comparable_period_date": record.growth_comparable_period_date,
+                    "growth_reference_gap_days": record.growth_reference_gap_days,
                     # Alias for CANSLIM compatibility
                     "eps_growth_qq": record.eps_growth_quarterly,
                     # Profitability metrics

@@ -71,7 +71,7 @@ class TestGetQuarterlyGrowthPolicyGate:
         svc = _make_service()
         result = svc.get_quarterly_growth("7203.T", market=market)
         svc.finviz_service.get_quarterly_growth.assert_not_called()
-        svc.yfinance_service.get_quarterly_growth.assert_called_once_with("7203.T")
+        svc.yfinance_service.get_quarterly_growth.assert_called_once_with("7203.T", market=market)
         assert result is not None
         assert result["data_source"] == "yfinance"
 
@@ -83,7 +83,7 @@ class TestGetCombinedDataPolicyGate:
         result = svc.get_combined_data("2330.TW", market=market)
         svc.finviz_service.get_combined_data.assert_not_called()
         svc.yfinance_service.get_fundamentals.assert_called_once_with("2330.TW")
-        svc.yfinance_service.get_quarterly_growth.assert_called_once_with("2330.TW")
+        svc.yfinance_service.get_quarterly_growth.assert_called_once_with("2330.TW", market=market)
         assert result is not None
 
 
