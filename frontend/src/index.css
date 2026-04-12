@@ -2,23 +2,23 @@
 
 :root {
   /* Compact Table Variables */
-  --table-row-height: 24px;
-  --table-cell-padding: 4px 6px;
-  --table-header-bg: #1a1a2e;
-  --table-header-color: #ffffff;
+  --table-row-height: 22px;
+  --table-cell-padding: 3px 6px;
+  --table-header-bg: #0F0F14;
+  --table-header-color: #787880;
   --table-alt-row-bg: #fafafa;
   --table-hover-bg: #e3f2fd;
-  --table-border-color: #e0e0e0;
+  --table-border-color: #1E1E22;
 
   /* Typography */
   --font-size-table-data: 11px;
-  --font-size-table-header: 10px;
+  --font-size-table-header: 9px;
   --font-mono: 'SF Mono', 'Monaco', 'Consolas', monospace;
 
   /* Financial Colors */
-  --color-positive: #2e7d32;
-  --color-negative: #d32f2f;
-  --color-neutral: #666666;
+  --color-positive: #00C853;
+  --color-negative: #FF1744;
+  --color-neutral: #787880;
 }
 
 * {
@@ -33,7 +33,7 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f5f5f5;
+  background-color: #0A0A0C;
 }
 
 code {
@@ -64,4 +64,20 @@ code {
 /* Ensure table headers don't get zebra striping */
 .MuiTableHead-root .MuiTableRow-root {
   background-color: var(--table-header-bg) !important;
+}
+
+/* Dark scrollbar for terminal aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0A0A0C;
+}
+::-webkit-scrollbar-thumb {
+  background: #1E1E22;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2A2A30;
 }

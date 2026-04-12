@@ -58,84 +58,120 @@ const getDesignTokens = (mode) => ({
   palette: {
     mode,
     primary: {
-      main: '#1976d2',
+      main: '#5C6BC0',
     },
     secondary: {
-      main: '#dc004e',
+      main: '#7C4DFF',
     },
     success: {
-      main: '#2e7d32',
-      light: '#4caf50',
+      main: '#00C853',
+      light: '#69F0AE',
     },
     error: {
-      main: '#d32f2f',
-      light: '#f44336',
+      main: '#FF1744',
+      light: '#FF5252',
     },
     background: {
-      default: mode === 'light' ? '#f5f5f5' : '#121212',
-      paper: mode === 'light' ? '#ffffff' : '#1e1e1e',
+      default: mode === 'light' ? '#f5f5f5' : '#0A0A0C',
+      paper: mode === 'light' ? '#ffffff' : '#111114',
     },
+    ...(mode === 'dark' && {
+      text: {
+        primary: '#E0E0E0',
+        secondary: '#787880',
+      },
+      divider: '#1E1E22',
+    }),
   },
   typography: {
     fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    fontSize: 13,
+    fontSize: 12,
     body1: {
-      fontSize: '14px',
+      fontSize: '13px',
     },
     body2: {
-      fontSize: '13px',
-      lineHeight: 1.5,
+      fontSize: '12px',
+      lineHeight: 1.4,
     },
     caption: {
-      fontSize: '11px',
+      fontSize: '10px',
+    },
+    h4: {
+      fontSize: '18px',
+      fontWeight: 600,
+      letterSpacing: '-0.02em',
     },
     h6: {
-      fontSize: '15px',
+      fontSize: '13px',
       fontWeight: 600,
+      letterSpacing: '0.02em',
+      textTransform: 'uppercase',
     },
   },
   components: {
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+          ...(mode === 'dark' && {
+            border: '1px solid #1E1E22',
+            boxShadow: 'none',
+          }),
+        },
+      },
+    },
+    MuiAppBar: {
+      styleOverrides: {
+        root: {
+          ...(mode === 'dark' && {
+            backgroundColor: '#0A0A0C',
+            borderBottom: '1px solid #1E1E22',
+            boxShadow: 'none',
+          }),
+        },
+      },
+    },
     MuiTableCell: {
       styleOverrides: {
         root: {
-          padding: '4px 6px',
+          padding: '3px 6px',
           fontSize: '11px',
-          lineHeight: 1.3,
-          borderBottom: mode === 'light' ? '1px solid #e0e0e0' : '1px solid #333',
+          lineHeight: 1.2,
+          borderBottom: mode === 'light' ? '1px solid #e0e0e0' : '1px solid #1E1E22',
         },
         head: {
-          backgroundColor: '#1a1a2e',
-          color: '#ffffff',
+          backgroundColor: '#0F0F14',
+          color: '#787880',
           fontWeight: 600,
-          fontSize: '10px',
+          fontSize: '9px',
           textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-          padding: '6px 6px',
+          letterSpacing: '0.8px',
+          padding: '5px 6px',
           whiteSpace: 'nowrap',
-          borderBottom: '2px solid #333',
+          borderBottom: '1px solid #1E1E22',
         },
         sizeSmall: {
-          padding: '3px 5px',
+          padding: '2px 5px',
         },
       },
     },
     MuiTableRow: {
       styleOverrides: {
         root: {
-          height: 24,
+          height: 22,
           '&:nth-of-type(odd)': {
-            backgroundColor: mode === 'light' ? '#fafafa' : '#1e1e1e',
+            backgroundColor: mode === 'light' ? '#fafafa' : '#111114',
           },
           '&:nth-of-type(even)': {
-            backgroundColor: mode === 'light' ? '#ffffff' : '#252525',
+            backgroundColor: mode === 'light' ? '#ffffff' : '#141418',
           },
           '&:hover': {
-            backgroundColor: mode === 'light' ? '#e3f2fd !important' : '#333 !important',
+            backgroundColor: mode === 'light' ? '#e3f2fd !important' : '#1A1A22 !important',
           },
           '&.MuiTableRow-head': {
-            height: 28,
+            height: 26,
             '&:nth-of-type(odd)': {
-              backgroundColor: '#1a1a2e',
+              backgroundColor: '#0F0F14',
             },
           },
         },
@@ -144,16 +180,16 @@ const getDesignTokens = (mode) => ({
     MuiTableSortLabel: {
       styleOverrides: {
         root: {
-          color: '#ffffff !important',
+          color: '#787880 !important',
           '&:hover': {
-            color: '#90caf9 !important',
+            color: '#9FA8DA !important',
           },
           '&.Mui-active': {
-            color: '#90caf9 !important',
+            color: '#9FA8DA !important',
           },
         },
         icon: {
-          color: '#90caf9 !important',
+          color: '#9FA8DA !important',
         },
       },
     },

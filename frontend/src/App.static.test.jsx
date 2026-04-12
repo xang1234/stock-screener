@@ -75,7 +75,7 @@ const staticPayloads = {
     scan_summary: {
       top_results: [{ symbol: 'NVDA', composite_score: 97.5, current_price: 145.4, rating: 'Strong Buy' }],
     },
-    top_groups: [{ industry_group: 'Semiconductors', rank: 1 }],
+    top_groups: [{ industry_group: 'Semiconductors', rank: 1, top_symbol: 'NVDA', rank_change_1w: 2 }],
   },
   'scan/manifest.json': {
     generated_at: '2026-03-31T22:00:00Z',
@@ -137,7 +137,7 @@ const staticPayloads = {
   'groups.json': {
     available: true,
     payload: {
-      movers_period: '3m',
+      movers_period: '1w',
       rankings: {
         date: '2026-03-31',
         rankings: [{ industry_group: 'Semiconductors', rank: 1, avg_rs_rating: 92.5, num_stocks: 14, rank_change_1w: 2, rank_change_1m: 4, rank_change_3m: 7 }],

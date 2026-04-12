@@ -39,7 +39,7 @@ function MoversCard({ title, rows }) {
                 <TableCell>{row.industry_group}</TableCell>
                 <TableCell align="right">{row.rank}</TableCell>
                 <TableCell align="right">
-                  <RankChangeCell value={row.rank_change_3m} />
+                  <RankChangeCell value={row.rank_change_1w} />
                 </TableCell>
               </TableRow>
             ))}

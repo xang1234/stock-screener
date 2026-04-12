@@ -14,11 +14,14 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import { useStaticManifest, fetchStaticJson } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
 import PriceSparkline from '../../components/Scan/PriceSparkline';
 import RSSparkline from '../../components/Scan/RSSparkline';
 import StaticChartViewerModal from '../StaticChartViewerModal';
+import RankChangeCell from '../../components/shared/RankChangeCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 
 const EMPTY_RESULTS = [];
@@ -31,21 +34,25 @@ const formatNumber = (value, digits = 0) => {
   });
 };
 
-function SummaryCard({ label, value, helper }) {
+function FreshnessRow({ freshness }) {
+  const items = [
+    { label: 'Scan', value: freshness.scan_as_of_date },
+    { label: 'Breadth', value: freshness.breadth_latest_date },
+    { label: 'Groups', value: freshness.groups_latest_date },
+  ];
   return (
-    <Paper sx={{ p: 2, height: '100%' }}>
-      <Typography variant="caption" color="text.secondary">
-        {label}
-      </Typography>
-      <Typography variant="h6" sx={{ mt: 0.5, fontWeight: 600 }}>
-        {value}
-      </Typography>
-      {helper ? (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
-          {helper}
-        </Typography>
-      ) : null}
-    </Paper>
+    <Box display="flex" alignItems="center" gap={2} sx={{ mb: 2 }}>
+      {items.map((item) => (
+        <Box key={item.label} display="flex" alignItems="center" gap={0.5}>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '10px' }}>
+            {item.label}:
+          </Typography>
+          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '10px', color: 'text.secondary' }}>
+            {item.value || '-'}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
   );
 }
 
@@ -100,65 +107,63 @@ function StaticHomePage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Daily Market Snapshot
-      </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Generated {home.generated_at}. Data reflects the latest published daily snapshot as of {home.as_of_date}.
-      </Typography>
+      <Box display="flex" alignItems="baseline" gap={1.5} sx={{ mb: 2 }}>
+        <Typography variant="h4">
+          Daily Market Snapshot
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {home.as_of_date}
+        </Typography>
+      </Box>
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={3}>
-          <SummaryCard
-            label="Feature Snapshot"
-            value={freshness.scan_as_of_date || '-'}
-            helper={`Run ${freshness.scan_run_id ?? '-'}`}
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <SummaryCard
-            label="Breadth Date"
-            value={freshness.breadth_latest_date || '-'}
-          />
-        </Grid>
-        <Grid item xs={12} md={3}>
-          <SummaryCard
-            label="Group Rankings"
-            value={freshness.groups_latest_date || '-'}
-          />
-        </Grid>
-      </Grid>
+      <FreshnessRow freshness={freshness} />
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {(home.key_markets || []).map((item) => (
           <Grid item xs={12} sm={6} md={2.4} key={item.symbol}>
-            <Paper sx={{ p: 2, height: '100%' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                {item.symbol}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {item.display_name}
-              </Typography>
-              <Typography variant="h6" sx={{ mt: 1 }}>
+            <Paper sx={{ p: 1.5, height: '100%' }}>
+              <Box display="flex" alignItems="baseline" justifyContent="space-between">
+                <Typography variant="caption" sx={{ fontWeight: 600, letterSpacing: '0.05em' }}>
+                  {item.symbol}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '9px' }}>
+                  {item.display_name}
+                </Typography>
+              </Box>
+              <Typography variant="body2" sx={{ mt: 0.5, fontFamily: 'monospace', fontWeight: 600 }}>
                 {item.latest_close != null ? `$${formatNumber(item.latest_close, 2)}` : '-'}
               </Typography>
-              <Typography
-                variant="body2"
-                color={item.change_1d > 0 ? 'success.main' : item.change_1d < 0 ? 'error.main' : 'text.secondary'}
-              >
-                {item.change_1d != null ? `${formatNumber(item.change_1d, 2)}%` : 'No daily change'}
-              </Typography>
+              <Box display="flex" alignItems="center" gap={0.25} sx={{ mt: 0.25 }}>
+                {item.change_1d > 0 && (
+                  <TrendingUpIcon sx={{ fontSize: 14, color: 'success.main' }} />
+                )}
+                {item.change_1d < 0 && (
+                  <TrendingDownIcon sx={{ fontSize: 14, color: 'error.main' }} />
+                )}
+                <Typography
+                  variant="body2"
+                  component="span"
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    color: item.change_1d > 0 ? 'success.main' : item.change_1d < 0 ? 'error.main' : 'text.secondary',
+                  }}
+                >
+                  {item.change_1d != null ? `${item.change_1d > 0 ? '+' : ''}${formatNumber(item.change_1d, 2)}%` : '-'}
+                </Typography>
+              </Box>
             </Paper>
           </Grid>
         ))}
       </Grid>
 
-      <Paper sx={{ p: 2, mb: 3 }}>
+      <Paper sx={{ p: 1.5, mb: 2 }}>
         <Typography variant="h6" gutterBottom>
           Top Scan Candidates
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Default view uses dollar volume &gt; $100M. Click a row for chart details.
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontSize: '10px' }}>
+          Dollar volume &gt; $100M. Click a row for chart details.
         </Typography>
         <TableContainer>
           <Table size="small">
@@ -202,7 +207,7 @@ function StaticHomePage() {
                           trend={row.price_trend}
                           change1d={row.price_change_1d}
                           industry={row.ibd_industry_group}
-                          width={100}
+                          width={130}
                           height={28}
                         />
                       </Box>
@@ -214,14 +219,14 @@ function StaticHomePage() {
                         <RSSparkline
                           data={row.rs_sparkline_data}
                           trend={row.rs_trend}
-                          width={60}
+                          width={78}
                           height={20}
                         />
                       </Box>
                     ) : '-'}
                   </TableCell>
                   <TableCell align="center" sx={{
-                    color: 'text.secondary', fontSize: '12px',
+                    color: 'text.secondary', fontSize: '11px',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140,
                   }}>
                     {row.ibd_industry_group || '-'}
@@ -239,7 +244,7 @@ function StaticHomePage() {
         </TableContainer>
       </Paper>
 
-      <Paper sx={{ p: 2 }}>
+      <Paper sx={{ p: 1.5 }}>
         <Typography variant="h6" gutterBottom>
           Leading Groups
         </Typography>
@@ -247,15 +252,29 @@ function StaticHomePage() {
           <Table size="small">
             <TableHead>
               <TableRow>
+                <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
-                <TableCell align="right">Rank</TableCell>
+                <TableCell>Top Stock</TableCell>
+                <TableCell align="right">1W Chg</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {topGroups.map((group) => (
                 <TableRow key={group.industry_group}>
+                  <TableCell align="center" sx={{
+                    fontWeight: 600,
+                    fontFamily: 'monospace',
+                    color: getGroupRankColor(group.rank),
+                  }}>
+                    {group.rank}
+                  </TableCell>
                   <TableCell>{group.industry_group}</TableCell>
-                  <TableCell align="right">{group.rank}</TableCell>
+                  <TableCell sx={{ fontWeight: 500, color: 'text.secondary', fontSize: '11px' }}>
+                    {group.top_symbol || '-'}
+                  </TableCell>
+                  <TableCell align="right">
+                    <RankChangeCell value={group.rank_change_1w} />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

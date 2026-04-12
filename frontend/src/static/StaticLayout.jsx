@@ -30,17 +30,17 @@ function StaticLayout({ children }) {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      <AppBar position="static" sx={{ minHeight: 48 }}>
-        <Toolbar variant="dense" sx={{ minHeight: 48 }}>
-          <ShowChartIcon sx={{ mr: 1, fontSize: 20 }} />
-          <Typography variant="subtitle1" component="div" sx={{ fontWeight: 600 }}>
+      <AppBar position="static" sx={{ minHeight: 40 }}>
+        <Toolbar variant="dense" sx={{ minHeight: 40 }}>
+          <ShowChartIcon sx={{ mr: 0.75, fontSize: 16 }} />
+          <Typography variant="subtitle2" component="div" sx={{ fontWeight: 600, letterSpacing: '0.05em', fontSize: '11px' }}>
             STOCK SCANNER DAILY
           </Typography>
           <Chip
             label="Read-only"
             size="small"
             color="info"
-            sx={{ ml: 1.5, height: 22, fontSize: '11px' }}
+            sx={{ ml: 1, height: 18, fontSize: '9px' }}
           />
           <Box sx={{ flexGrow: 1 }} />
           {NAV_ITEMS.map((item) => {
@@ -53,15 +53,17 @@ function StaticLayout({ children }) {
                 to={item.path}
                 size="small"
                 sx={{
-                  backgroundColor: isActive ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
-                  borderBottom: isActive ? '2px solid white' : '2px solid transparent',
+                  backgroundColor: isActive ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+                  borderBottom: isActive ? '2px solid #5C6BC0' : '2px solid transparent',
                   borderRadius: 0,
                   fontWeight: isActive ? 600 : 400,
-                  fontSize: '12px',
-                  px: 1.5,
-                  py: 0.5,
+                  fontSize: '11px',
+                  px: 1.25,
+                  py: 0.25,
+                  minWidth: 0,
+                  letterSpacing: '0.03em',
                   '&:hover': {
-                    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
                   },
                 }}
               >
@@ -81,7 +83,7 @@ function StaticLayout({ children }) {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="xl" sx={{ mt: 2, mb: 2, flex: 1 }}>
+      <Container maxWidth="xl" sx={{ mt: 1.5, mb: 1.5, flex: 1 }}>
         {children}
       </Container>
     </Box>
