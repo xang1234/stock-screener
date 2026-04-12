@@ -20,8 +20,8 @@ import RankChangeCell from '../../components/shared/RankChangeCell';
 
 function MoversCard({ title, rows }) {
   return (
-    <Paper sx={{ p: 2, height: '100%' }}>
-      <Typography variant="h6" gutterBottom>
+    <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
         {title}
       </Typography>
       <TableContainer>
@@ -39,7 +39,7 @@ function MoversCard({ title, rows }) {
                 <TableCell>{row.industry_group}</TableCell>
                 <TableCell align="right">{row.rank}</TableCell>
                 <TableCell align="right">
-                  <RankChangeCell value={row.rank_change_3m} />
+                  <RankChangeCell value={row.rank_change_1w} />
                 </TableCell>
               </TableRow>
             ))}
@@ -79,19 +79,19 @@ function StaticGroupsPage() {
   const payload = groupsQuery.data.payload || {};
   const rankings = payload.rankings?.rankings || [];
   const movers = payload.movers || {};
-  const moversPeriod = payload.movers_period || movers.period || '3m';
+  const moversPeriod = payload.movers_period || movers.period || '1w';
   const groupDetails = payload.group_details || {};
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
         Industry Group Rankings
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
         Latest ranking date: {payload.rankings?.date || '-'}.
       </Typography>
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={12} md={6}>
           <MoversCard title={`Top Gainers (${moversPeriod.toUpperCase()})`} rows={movers.gainers} />
         </Grid>
@@ -100,8 +100,8 @@ function StaticGroupsPage() {
         </Grid>
       </Grid>
 
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>
+      <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
           Current Rankings
         </Typography>
         <TableContainer>

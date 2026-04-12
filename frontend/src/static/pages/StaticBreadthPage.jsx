@@ -21,11 +21,11 @@ const RANGE_DAYS = { '1M': 31, '3M': 90 };
 
 function MetricCard({ label, value }) {
   return (
-    <Paper sx={{ p: 2, height: '100%' }}>
-      <Typography variant="caption" color="text.secondary">
+    <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
+      <Typography variant="caption" sx={{ fontSize: '10px', letterSpacing: '0.5px', textTransform: 'uppercase', color: 'text.disabled' }}>
         {label}
       </Typography>
-      <Typography variant="h6" sx={{ mt: 0.5 }}>
+      <Typography variant="body1" sx={{ mt: 0.25, fontFamily: 'monospace', fontWeight: 600 }}>
         {value ?? '-'}
       </Typography>
     </Paper>
@@ -73,14 +73,14 @@ function StaticBreadthPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
         Market Breadth
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-        Read-only breadth snapshot published {breadthQuery.data.published_at || breadthQuery.data.generated_at}.
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
+        Breadth snapshot published {breadthQuery.data.published_at || breadthQuery.data.generated_at}.
       </Typography>
 
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={12} sm={6} md={3}>
           <MetricCard label="Date" value={current.date} />
         </Grid>
@@ -105,8 +105,8 @@ function StaticBreadthPage() {
         availableRanges={['1M', '3M']}
       />
 
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>
+      <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
           Recent Sessions
         </Typography>
         <TableContainer>

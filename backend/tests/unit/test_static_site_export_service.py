@@ -396,7 +396,7 @@ def test_build_groups_payload_requires_target_date(service_and_session_factory, 
     movers_calls: list[tuple[str, int, date | None]] = []
     fake_service = SimpleNamespace(
         get_current_rankings=lambda db, limit=197, calculation_date=None: rankings_calls.append((limit, calculation_date)) or [],
-        get_rank_movers=lambda db, period="3m", limit=10, calculation_date=None: movers_calls.append((period, limit, calculation_date)) or {"period": period, "gainers": [], "losers": []},
+        get_rank_movers=lambda db, period="1w", limit=10, calculation_date=None: movers_calls.append((period, limit, calculation_date)) or {"period": period, "gainers": [], "losers": []},
     )
     monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
 

@@ -457,7 +457,7 @@ class StaticSiteExportService:
             )
         movers = service.get_rank_movers(
             db,
-            period="3m",
+            period="1w",
             limit=10,
             calculation_date=expected_as_of_date,
         )
@@ -491,7 +491,7 @@ class StaticSiteExportService:
                     total_groups=len(rankings),
                     rankings=[GroupRankResponse(**row) for row in rankings],
                 ).model_dump(mode="json"),
-                "movers_period": "3m",
+                "movers_period": "1w",
                 "movers": MoversResponse(
                     period=movers["period"],
                     gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
@@ -514,7 +514,7 @@ class StaticSiteExportService:
         key_markets = self._build_key_markets(db)
         top_groups = (
             ((groups_payload.get("payload") or {}).get("rankings") or {}).get("rankings") or []
-        )[:5]
+        )[:10]
 
         breadth_current = ((breadth_payload.get("payload") or {}).get("current")) or {}
 
