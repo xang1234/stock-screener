@@ -46,7 +46,19 @@ def _get_trading_days_set() -> set:
         start = f"{current_year - 1}-01-01"
         end = f"{current_year + 1}-12-31"
         if _CALENDAR_ENGINE == "exchange_calendars":
-            sessions = _NYSE.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+            start_ts = pd.Timestamp(start)
+            end_ts = pd.Timestamp(end)
+            # Clamp to the calendar's bounds — the installed exchange_calendars
+            # package only includes sessions through a finite horizon (typically
+            # ~1 year past install date). Without clamping, requesting an `end`
+            # beyond `last_session` raises DateOutOfBounds.
+            first_session = _NYSE.first_session
+            last_session = _NYSE.last_session
+            if start_ts < first_session:
+                start_ts = first_session
+            if end_ts > last_session:
+                end_ts = last_session
+            sessions = _NYSE.sessions_in_range(start_ts, end_ts)
             _trading_days_cache = set(session.date() for session in sessions)
         else:
             schedule = _NYSE.schedule(start_date=start, end_date=end)
