@@ -377,6 +377,34 @@ class FundamentalsCacheService:
         finally:
             db.close()
 
+    def _resolve_market(self, symbol: str) -> Optional[str]:
+        """Look up the stock universe market for ``symbol``.
+
+        Returns ``None`` if the symbol is not in the universe (or the lookup
+        fails) — the routing policy treats ``None`` as the legacy US default
+        so this never crashes on-demand fetches.
+        """
+        from ..models.stock_universe import StockUniverse
+
+        db = None
+        try:
+            db = self._session_factory()
+            row = (
+                db.query(StockUniverse.market)
+                .filter(StockUniverse.symbol == symbol)
+                .first()
+            )
+            return row[0] if row else None
+        except Exception as exc:  # pragma: no cover - DB hiccup shouldn't block fetch
+            logger.debug(
+                "Market lookup failed for %s (%s) - defaulting to US policy",
+                symbol, exc,
+            )
+            return None
+        finally:
+            if db is not None:
+                db.close()
+
     def _fetch_and_cache(self, symbol: str) -> Optional[Dict]:
         """
         Fetch fundamental data from finvizfinance (primary) or yfinance (fallback) and cache it.
@@ -393,8 +421,14 @@ class FundamentalsCacheService:
             logger.info(f"Fetching fresh fundamental data for {symbol} from data sources")
             self.record_on_demand_fallback()
 
+            # Resolve market so the provider routing policy can filter out
+            # US-only providers (finviz, alphavantage) for HK/JP/TW symbols.
+            market = self._resolve_market(symbol)
+
             # Use DataSourceService which handles finviz → yfinance fallback
-            fundamentals = get_data_source_service().get_fundamentals(symbol)
+            fundamentals = get_data_source_service().get_fundamentals(
+                symbol, market=market
+            )
 
             if not fundamentals:
                 logger.warning(f"All data sources failed for {symbol} fundamentals")

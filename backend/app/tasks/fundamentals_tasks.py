@@ -602,6 +602,9 @@ def refresh_all_fundamentals_hybrid(
             }
 
         symbols = [s.symbol for s in universe_stocks]
+        # Build {symbol: market} map so HybridFundamentalsService can apply
+        # the provider routing policy (finviz is US-only — HK/JP/TW skip it).
+        market_by_symbol = {s.symbol: s.market for s in universe_stocks}
         total_stocks = len(symbols)
         logger.info(f"Found {total_stocks} active stocks to refresh")
 
@@ -635,7 +638,8 @@ def refresh_all_fundamentals_hybrid(
             symbols,
             include_technicals=True,
             include_finviz=include_finviz,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            market_by_symbol=market_by_symbol,
         )
 
         # Store in all caches (fundamentals + quarterly for CANSLIM compatibility)

@@ -92,7 +92,9 @@ def test_refresh_all_fundamentals_hybrid_passes_session_factory(monkeypatch):
 
     fake_db = MagicMock()
     fake_query = MagicMock()
-    fake_query.filter.return_value.all.return_value = [SimpleNamespace(symbol="AAPL")]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
     fake_db.query.return_value = fake_query
 
     _patch_serialized_lock(monkeypatch)
