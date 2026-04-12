@@ -48,21 +48,41 @@ POLICY_VERSION: str = "2026.04.13.1"
 # Field names populated by T5.3's FX normalization enrichment hook.
 USD_CAP_FIELD: str = "market_cap_usd"
 USD_ADV_FIELD: str = "adv_usd"
-# Native-currency cap field, populated on every StockFundamental row.
 NATIVE_CAP_FIELD: str = "market_cap"
 
-US_MARKET: str = "US"
+# Filter-result detail tags. Kept here (not scanner-local) because they
+# flow outward to the API / UI and must stay stable across surfaces.
+UNIT_USD: str = "usd"
+UNIT_NATIVE: str = "native"
+UNIT_SHARES: str = "shares"
+REASON_MISSING_CAP_USD: str = "missing_market_cap_usd"
+REASON_MISSING_CAP_NATIVE: str = "missing_market_cap"
+REASON_MISSING_ADV_USD: str = "missing_adv_usd"
+
+# Local US-default; deliberately not imported from ``provider_routing_policy``
+# to keep the domain layer free of services imports. Upstream callers pass
+# already-normalised markets, so casing handling here is defensive.
+_US_MARKET: str = "US"
+
+
+def policy_version() -> str:
+    """Accessor for the active policy version — mirrors provider_routing_policy."""
+    return POLICY_VERSION
 
 
 def is_mixed_market(markets: Iterable[Optional[str]]) -> bool:
     """Return True when the scan universe spans more than one market.
 
-    Any ``None`` market is normalised to ``"US"`` to match the convention
-    used by ``data_preparation`` — legacy rows without a market tag are
-    treated as US stocks (the historical default).
+    ``None`` / empty / whitespace is normalised to ``"US"`` and casing is
+    folded so ``"us"`` and ``"US"`` count as the same market.
     """
-    seen = {(m or US_MARKET) for m in markets}
-    return len(seen) > 1
+    seen: set[str] = set()
+    for m in markets:
+        canonical = (m or "").strip().upper() or _US_MARKET
+        seen.add(canonical)
+        if len(seen) > 1:
+            return True
+    return False
 
 
 def resolve_cap_for_filter(
@@ -130,7 +150,13 @@ __all__ = [
     "USD_CAP_FIELD",
     "USD_ADV_FIELD",
     "NATIVE_CAP_FIELD",
-    "US_MARKET",
+    "UNIT_USD",
+    "UNIT_NATIVE",
+    "UNIT_SHARES",
+    "REASON_MISSING_CAP_USD",
+    "REASON_MISSING_CAP_NATIVE",
+    "REASON_MISSING_ADV_USD",
+    "policy_version",
     "is_mixed_market",
     "resolve_cap_for_filter",
     "resolve_adv_for_filter",

@@ -29,6 +29,12 @@ from .base_screener import BaseStockScreener, DataRequirements, ScreenerResult, 
 from .screener_registry import register_screener
 from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.scanning.mixed_market_policy import (
+    REASON_MISSING_ADV_USD,
+    REASON_MISSING_CAP_NATIVE,
+    REASON_MISSING_CAP_USD,
+    UNIT_NATIVE,
+    UNIT_SHARES,
+    UNIT_USD,
     resolve_adv_for_filter,
     resolve_cap_for_filter,
 )
@@ -359,33 +365,36 @@ class CustomScanner(BaseStockScreener):
             fundamentals, native_avg_volume, mixed_market=mixed_market,
         )
         volume_min = float(filters.get("volume_min", 0))
-        unit = "usd" if mixed_market else "shares"
+        unit = UNIT_USD if mixed_market else UNIT_SHARES
 
         if adv is None:
-            # Mixed-market row without FX normalization — fail closed.
-            return FilterResult(
+            return self._fail_closed(
                 name="volume",
-                passes=False,
-                points=0.0,
                 max_points=10.0,
                 details={
                     "avg_volume": None,
                     "volume_min": volume_min,
                     "unit": unit,
-                    "reason": "missing_adv_usd",
+                    "reason": REASON_MISSING_ADV_USD,
                 },
             )
 
         passes = bool(adv >= volume_min)
 
-        # Scaled scoring: meeting minimum = 5pts, 2x minimum = 10pts
-        if adv >= volume_min * 2:
+        # Scoring: meeting min = 5pts, 2× min = 10pts (linear). When
+        # volume_min <= 0 the filter is a no-op; award max points.
+        if volume_min <= 0:
             points = 10.0
+            ratio = None
+        elif adv >= volume_min * 2:
+            points = 10.0
+            ratio = adv / volume_min
         elif adv >= volume_min:
-            ratio = adv / volume_min if volume_min > 0 else 2.0
+            ratio = adv / volume_min
             points = 5.0 + (ratio - 1.0) * 5.0
         else:
             points = 0.0
+            ratio = adv / volume_min
 
         return FilterResult(
             name="volume",
@@ -396,7 +405,7 @@ class CustomScanner(BaseStockScreener):
                 "avg_volume": int(adv),
                 "volume_min": volume_min,
                 "unit": unit,
-                "ratio": adv / volume_min if volume_min > 0 else 0,
+                "ratio": ratio,
             },
         )
 
@@ -458,20 +467,18 @@ class CustomScanner(BaseStockScreener):
         market_cap = resolve_cap_for_filter(fundamentals, mixed_market=mixed_market)
         cap_min = float(filters.get("market_cap_min", 0))
         cap_max = float(filters.get("market_cap_max", float('inf')))
-        unit = "usd" if mixed_market else "native"
+        unit = UNIT_USD if mixed_market else UNIT_NATIVE
 
         if market_cap is None:
-            return FilterResult(
+            return self._fail_closed(
                 name="market_cap",
-                passes=False,
-                points=0.0,
                 max_points=10.0,
                 details={
                     "market_cap": None,
                     "market_cap_min": cap_min,
                     "market_cap_max": cap_max,
                     "unit": unit,
-                    "reason": "missing_market_cap_usd" if mixed_market else "missing_market_cap",
+                    "reason": REASON_MISSING_CAP_USD if mixed_market else REASON_MISSING_CAP_NATIVE,
                 },
             )
 
@@ -713,6 +720,22 @@ class CustomScanner(BaseStockScreener):
         filters.pop("min_score", None)
 
         return filters
+
+    def _fail_closed(
+        self,
+        *,
+        name: str,
+        max_points: float,
+        details: Dict[str, Any],
+    ) -> FilterResult:
+        """Build a zero-point failing FilterResult (used by policy fail-closed paths)."""
+        return FilterResult(
+            name=name,
+            passes=False,
+            points=0.0,
+            max_points=max_points,
+            details=details,
+        )
 
     def _create_error_result(self, symbol: str, error_msg: str) -> ScreenerResult:
         """Create error result."""

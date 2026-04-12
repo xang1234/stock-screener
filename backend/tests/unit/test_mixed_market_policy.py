@@ -27,6 +27,22 @@ class TestIsMixedMarket:
     def test_empty_is_not_mixed(self):
         assert is_mixed_market([]) is False
 
+    def test_casing_and_whitespace_are_folded(self):
+        # Upstream producers already normalise, but the policy must not
+        # treat casing/whitespace as distinct markets (defensive).
+        assert is_mixed_market(["US", "us", " US "]) is False
+        assert is_mixed_market(["US", "  ", None]) is False  # blanks → US
+
+    def test_short_circuits_on_second_distinct_market(self):
+        # Implementation detail, but worth pinning: an iterable that would
+        # raise after the 2nd element is never consumed past it.
+        def gen():
+            yield "US"
+            yield "HK"
+            raise AssertionError("should not iterate past 2nd market")
+
+        assert is_mixed_market(gen()) is True
+
 
 class TestResolveCapForFilter:
     def test_single_market_uses_native_cap(self):

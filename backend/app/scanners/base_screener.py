@@ -115,9 +115,7 @@ class StockData:
     timezone: Optional[str] = None
     local_code: Optional[str] = None
     rs_universe_performances: Optional[Dict[int | str, list[float]]] = None
-    # Set by data_preparation when the scan universe spans >1 market.
-    # Consulted by the mixed-market policy to switch liquidity/cap filters
-    # to USD-normalized columns. See app.domain.scanning.mixed_market_policy.
+    # See app.domain.scanning.mixed_market_policy.
     is_mixed_market: bool = False
     fetch_errors: Dict[str, str] = field(default_factory=dict)  # Any errors during fetch
 

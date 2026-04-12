@@ -14,7 +14,6 @@ import pandas as pd
 from .base_screener import DataRequirements, StockData
 from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
-from ..domain.scanning.mixed_market_policy import is_mixed_market
 from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
@@ -194,12 +193,22 @@ class DataPreparationLayer:
         self,
         results: dict[str, StockData],
     ) -> None:
-        market_universe = self._compute_market_rs_universe_performances(list(results.values()))
-        # Compute the mixed-market flag once per scan so the filter policy is
-        # stable across symbols. See app.domain.scanning.mixed_market_policy.
-        mixed = is_mixed_market(item.market for item in results.values())
-        for item in results.values():
-            item.rs_universe_performances = market_universe.get(item.market or "US", {})
+        items = list(results.values())
+        market_universe = self._compute_market_rs_universe_performances(items)
+        # Single pass: attach per-market RS universe while detecting whether
+        # the scan spans >1 market. The mixed-market flag must be identical
+        # across all items (stable policy — see mixed_market_policy).
+        seen_market: Optional[str] = None
+        mixed = False
+        for item in items:
+            key = item.market or "US"
+            item.rs_universe_performances = market_universe.get(key, {})
+            if not mixed:
+                if seen_market is None:
+                    seen_market = key
+                elif key != seen_market:
+                    mixed = True
+        for item in items:
             item.is_mixed_market = mixed
 
     def _is_transient(self, exc: Exception) -> bool:
