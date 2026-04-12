@@ -172,7 +172,15 @@ class CustomScanner(BaseStockScreener):
             if not benchmark_data.empty:
                 try:
                     filter_results.append(self._check_rs_rating(
-                        symbol, price_data, benchmark_data, filters
+                        symbol,
+                        price_data,
+                        benchmark_data,
+                        filters,
+                        (
+                            data.rs_universe_performances.get("weighted")
+                            if data.rs_universe_performances
+                            else None
+                        ),
                     ))
                 except Exception as e:
                     logger.error(f"{symbol}: Error in rs_rating filter: {e}")
@@ -353,14 +361,16 @@ class CustomScanner(BaseStockScreener):
         symbol: str,
         price_data: pd.DataFrame,
         benchmark_data: pd.DataFrame,
-        filters: Dict
+        filters: Dict,
+        universe_performances: Optional[list[float]] = None,
     ) -> FilterResult:
         """Check if RS rating meets minimum."""
         # calculate_rs_rating returns a dict, extract the rs_rating value
         rs_result = self.rs_calc.calculate_rs_rating(
             symbol,
             price_data['Close'],
-            benchmark_data['Close']
+            benchmark_data['Close'],
+            universe_performances=universe_performances,
         )
         rs_rating = float(rs_result["rs_rating"])
         rs_min = float(filters.get("rs_rating_min", 0))

@@ -108,7 +108,16 @@ class CANSLIMScanner(BaseStockScreener):
             a_result = self._check_annual_earnings(quarterly_growth)
             n_result = self._check_new_highs(current_price, prices)
             s_result = self._check_supply_demand(prices, volumes)
-            l_result = self._check_leader(symbol, prices, spy_prices)
+            l_result = self._check_leader(
+                symbol,
+                prices,
+                spy_prices,
+                (
+                    data.rs_universe_performances.get("weighted")
+                    if data.rs_universe_performances
+                    else None
+                ),
+            )
             i_result = self._check_institutional(fundamentals)
 
             # Calculate overall score
@@ -130,7 +139,8 @@ class CANSLIMScanner(BaseStockScreener):
             rs_ratings = self.rs_calc.calculate_all_rs_ratings(
                 symbol,
                 prices,
-                spy_prices
+                spy_prices,
+                data.rs_universe_performances,
             )
 
             # Build details
@@ -365,7 +375,13 @@ class CANSLIMScanner(BaseStockScreener):
                 "reason": f"Error: {str(e)}"
             }
 
-    def _check_leader(self, symbol: str, prices: pd.Series, spy_prices: pd.Series) -> Dict:
+    def _check_leader(
+        self,
+        symbol: str,
+        prices: pd.Series,
+        spy_prices: pd.Series,
+        universe_performances: Optional[list[float]] = None,
+    ) -> Dict:
         """
         L - Leader (20 points).
 
@@ -378,7 +394,12 @@ class CANSLIMScanner(BaseStockScreener):
         - RS < 70: proportional
         """
         try:
-            rs_result = self.rs_calc.calculate_rs_rating(symbol, prices, spy_prices)
+            rs_result = self.rs_calc.calculate_rs_rating(
+                symbol,
+                prices,
+                spy_prices,
+                universe_performances=universe_performances,
+            )
             rs_rating = rs_result["rs_rating"]
 
             # Calculate points

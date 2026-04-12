@@ -201,6 +201,7 @@ class SetupEngineScanner(BaseStockScreener):
         context = self._compute_context(
             price_data, spy_close, symbol,
             self._ma_analyzer, self._rs_calc,
+            data.rs_universe_performances,
         )
 
         # ── Phase C: readiness + payload assembly ──
@@ -301,6 +302,7 @@ class SetupEngineScanner(BaseStockScreener):
         symbol: str,
         ma_analyzer: MovingAverageAnalyzer,
         rs_calc: RelativeStrengthCalculator,
+        rs_universe_performances: Optional[Dict[int | str, list[float]]] = None,
     ) -> dict:
         """Compute stage, MA alignment, and RS rating from price data."""
         prices_chrono = price_data["Close"].reset_index(drop=True)
@@ -339,7 +341,16 @@ class SetupEngineScanner(BaseStockScreener):
             prices_rev = prices_chrono[::-1].reset_index(drop=True)
             spy_chrono = spy_close.reset_index(drop=True)
             spy_rev = spy_chrono[::-1].reset_index(drop=True)
-            rs_result = rs_calc.calculate_rs_rating(symbol, prices_rev, spy_rev)
+            rs_result = rs_calc.calculate_rs_rating(
+                symbol,
+                prices_rev,
+                spy_rev,
+                (
+                    rs_universe_performances.get("weighted")
+                    if rs_universe_performances
+                    else None
+                ),
+            )
             rs_rating = float(rs_result["rs_rating"])
 
         return {

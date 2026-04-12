@@ -219,14 +219,17 @@ class MinerviniScanner(BaseStockScreener):
             rs_ratings = self.rs_calc.calculate_all_rs_ratings(
                 symbol,
                 prices,
-                spy_prices
+                spy_prices,
+                data.rs_universe_performances,
             )
 
-            # For backward compatibility, build rs_result dict
+            # calculate_all_rs_ratings now surfaces relative_performance and
+            # percentile_rank from the weighted detail it already computed
+            # internally, so no second calculate_rs_rating call is needed.
             rs_result = {
                 'rs_rating': rs_ratings['rs_rating'],
-                'relative_performance': None,
-                'percentile_rank': None,
+                'relative_performance': rs_ratings.get('relative_performance'),
+                'percentile_rank': rs_ratings.get('percentile_rank'),
             }
 
             # Calculate Beta and Beta-Adjusted RS metrics

@@ -12,8 +12,9 @@ from typing import List, Dict, Optional
 import pandas as pd
 
 from .base_screener import DataRequirements, StockData
+from .criteria.relative_strength import RelativeStrengthCalculator
 from ..domain.common.errors import DataFetchError
-from ..services.benchmark_cache_service import BenchmarkCacheService
+from ..services.benchmark_cache_service import BenchmarkCacheService, BenchmarkDataBundle
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
@@ -23,6 +24,7 @@ from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
 logger = logging.getLogger(__name__)
 
 _TRANSIENT_TYPES = (ConnectionError, TimeoutError, RateLimitTimeoutError)
+_RS_PERCENTILE_PERIODS = (21, 63, 252)
 
 
 class DataPreparationLayer:
@@ -51,10 +53,149 @@ class DataPreparationLayer:
         self._yfinance_service = get_yfinance_service()
         self._rate_limiter = get_rate_limiter()
         self._security_master = security_master_resolver
+        self._rs_calc = RelativeStrengthCalculator()
 
     def _resolve_identity(self, symbol: str):
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
         return resolver.resolve_identity(symbol=symbol)
+
+    def _get_rs_calc(self) -> RelativeStrengthCalculator:
+        rs_calc = getattr(self, "_rs_calc", None)
+        if rs_calc is None:
+            rs_calc = RelativeStrengthCalculator()
+            self._rs_calc = rs_calc
+        return rs_calc
+
+    def _fetch_benchmark_bundle(
+        self,
+        *,
+        market: str,
+        period: str,
+    ) -> BenchmarkDataBundle | None:
+        """Fetch benchmark data and preserve resolved benchmark metadata."""
+        bundle_fn = getattr(self.benchmark_cache, "get_benchmark_bundle", None)
+        if callable(bundle_fn):
+            bundle = self._fetch_with_retry(
+                bundle_fn,
+                market=market,
+                period=period,
+            )
+            if isinstance(bundle, BenchmarkDataBundle):
+                return bundle
+            if bundle is None:
+                return None
+            bundle_data = getattr(bundle, "data", None)
+            if isinstance(bundle_data, pd.DataFrame):
+                return BenchmarkDataBundle(
+                    market=getattr(bundle, "market", market),
+                    period=getattr(bundle, "period", period),
+                    benchmark_symbol=getattr(bundle, "benchmark_symbol", "UNKNOWN"),
+                    benchmark_role=getattr(bundle, "benchmark_role", "primary"),
+                    benchmark_kind=getattr(bundle, "benchmark_kind", None),
+                    candidate_symbols=tuple(getattr(bundle, "candidate_symbols", ()) or ()),
+                    data=bundle_data,
+                )
+
+        # Backward-compatible fallback for test doubles that only expose get_benchmark_data.
+        benchmark_data = self._fetch_with_retry(
+            self.benchmark_cache.get_benchmark_data,
+            market=market,
+            period=period,
+        )
+        if benchmark_data is None or benchmark_data.empty:
+            return None
+
+        benchmark_symbol = None
+        benchmark_candidates: tuple[str, ...] = ()
+        symbol_fn = getattr(self.benchmark_cache, "get_benchmark_symbol", None)
+        candidates_fn = getattr(self.benchmark_cache, "get_benchmark_candidates", None)
+        if callable(symbol_fn):
+            try:
+                benchmark_symbol = symbol_fn(market)
+            except Exception:
+                benchmark_symbol = None
+        if callable(candidates_fn):
+            try:
+                benchmark_candidates = tuple(candidates_fn(market))
+            except Exception:
+                benchmark_candidates = ()
+
+        if benchmark_symbol is None and benchmark_candidates:
+            benchmark_symbol = benchmark_candidates[0]
+
+        return BenchmarkDataBundle(
+            market=market,
+            period=period,
+            benchmark_symbol=benchmark_symbol or "UNKNOWN",
+            benchmark_role="primary",
+            benchmark_kind=None,
+            candidate_symbols=benchmark_candidates,
+            data=benchmark_data,
+        )
+
+    def _compute_market_rs_universe_performances(
+        self,
+        stock_data_items: list[StockData],
+    ) -> dict[str, dict[int | str, list[float]]]:
+        """Build market-partitioned RS universe performance lists for percentile ranking."""
+        rs_calc = self._get_rs_calc()
+        by_market: dict[str, dict[int | str, list[float]]] = {}
+        seen_symbols: set[tuple[str, str]] = set()
+
+        for item in stock_data_items:
+            market = item.market or "US"
+            dedupe_key = (market, item.symbol)
+            if dedupe_key in seen_symbols:
+                continue
+            seen_symbols.add(dedupe_key)
+            if (
+                item.price_data is None
+                or item.price_data.empty
+                or item.benchmark_data is None
+                or item.benchmark_data.empty
+                or "Close" not in item.price_data.columns
+                or "Close" not in item.benchmark_data.columns
+            ):
+                continue
+
+            prices = item.price_data["Close"].reset_index(drop=True)[::-1].reset_index(drop=True)
+            benchmark = item.benchmark_data["Close"].reset_index(drop=True)[::-1].reset_index(drop=True)
+
+            market_universe = by_market.setdefault(
+                market,
+                {"weighted": [], 21: [], 63: [], 252: []},
+            )
+
+            weighted_perf = rs_calc.calculate_weighted_performance(prices, benchmark)
+            if weighted_perf is not None:
+                market_universe["weighted"].append(weighted_perf)
+
+            for period in _RS_PERCENTILE_PERIODS:
+                stock_return = rs_calc.calculate_return(prices, period)
+                benchmark_return = rs_calc.calculate_return(benchmark, period)
+                if stock_return is None or benchmark_return is None:
+                    continue
+                market_universe[period].append(stock_return - benchmark_return)
+
+        normalized: dict[str, dict[int | str, list[float]]] = {}
+        for market, values in by_market.items():
+            market_values = {
+                key: series
+                for key, series in values.items()
+                if len(series) >= 2
+            }
+            if market_values:
+                normalized[market] = market_values
+
+        return normalized
+
+    def _attach_market_rs_universe_performances(
+        self,
+        results: dict[str, StockData],
+    ) -> None:
+        market_universe = self._compute_market_rs_universe_performances(list(results.values()))
+        for item in results.values():
+            item.rs_universe_performances = market_universe.get(item.market or "US", {})
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -161,15 +302,20 @@ class DataPreparationLayer:
             logger.error(f"Error fetching price data for {normalized_symbol}: {e}")
             fetch_errors["price_data"] = str(e)
 
+        # Normalize None market to "US" so single-symbol and bulk paths are
+        # consistent (bulk path normalizes at line ~535 for the same reason).
+        normalized_market = identity.market or "US"
+
         # 2. Fetch benchmark data (if needed)
+        benchmark_bundle = None
         benchmark_data = None
         if requirements.needs_benchmark:
             try:
-                benchmark_data = self._fetch_with_retry(
-                    self.benchmark_cache.get_benchmark_data,
-                    market=identity.market,
+                benchmark_bundle = self._fetch_benchmark_bundle(
+                    market=normalized_market,
                     period=requirements.price_period,
                 )
+                benchmark_data = benchmark_bundle.data if benchmark_bundle is not None else None
                 if benchmark_data is None or benchmark_data.empty:
                     fetch_errors["benchmark_data"] = "No benchmark data returned"
             except Exception as e:
@@ -216,7 +362,27 @@ class DataPreparationLayer:
             fundamentals=fundamentals,
             quarterly_growth=quarterly_growth,
             earnings_history=earnings_history,
-            market=identity.market,
+            benchmark_symbol=(
+                benchmark_bundle.benchmark_symbol
+                if benchmark_bundle is not None
+                else None
+            ),
+            benchmark_role=(
+                benchmark_bundle.benchmark_role
+                if benchmark_bundle is not None
+                else None
+            ),
+            benchmark_kind=(
+                benchmark_bundle.benchmark_kind
+                if benchmark_bundle is not None
+                else None
+            ),
+            benchmark_candidates=(
+                benchmark_bundle.candidate_symbols
+                if benchmark_bundle is not None
+                else ()
+            ),
+            market=normalized_market,
             exchange=identity.exchange,
             currency=identity.currency,
             timezone=identity.timezone,
@@ -283,27 +449,27 @@ class DataPreparationLayer:
         )
 
         # Get benchmark data once per market (shared by symbols in that market)
-        benchmark_data_by_market: dict[str, pd.DataFrame | None] = {}
+        benchmark_bundle_by_market: dict[str, BenchmarkDataBundle | None] = {}
         all_errors: dict[str, str] = {}
         if requirements.needs_benchmark:
-            unique_markets = sorted({identity.market for identity in identities})
+            unique_markets = sorted({identity.market or "US" for identity in identities})
             for market in unique_markets:
                 try:
-                    benchmark_data = self._fetch_with_retry(
-                        self.benchmark_cache.get_benchmark_data,
+                    benchmark_bundle = self._fetch_benchmark_bundle(
                         market=market,
                         period=requirements.price_period,
                     )
+                    benchmark_data = benchmark_bundle.data if benchmark_bundle is not None else None
                     if benchmark_data is None or benchmark_data.empty:
                         logger.warning("No benchmark data returned for market %s", market)
                         all_errors[f"<bulk>/benchmark_data:{market}"] = "No benchmark data returned"
-                        benchmark_data_by_market[market] = None
+                        benchmark_bundle_by_market[market] = None
                     else:
-                        benchmark_data_by_market[market] = benchmark_data
+                        benchmark_bundle_by_market[market] = benchmark_bundle
                 except Exception as e:
                     logger.warning("Error fetching benchmark data for market %s: %s", market, e)
                     all_errors[f"<bulk>/benchmark_data:{market}"] = str(e)
-                    benchmark_data_by_market[market] = None
+                    benchmark_bundle_by_market[market] = None
 
         # Build StockData for each symbol
         results = {}
@@ -370,16 +536,27 @@ class DataPreparationLayer:
             # CANSLIM now uses eps_growth_yy from fundamentals instead
             earnings_history = None
 
+            # Normalize None market to "US" so None and "US" map to the same
+            # benchmark bucket (consistent with _attach_market_rs_universe_performances).
+            normalized_market = identity.market or "US"
+
             # Create StockData
-            market_benchmark_data = (
-                benchmark_data_by_market.get(identity.market)
+            market_benchmark_bundle = (
+                benchmark_bundle_by_market.get(normalized_market)
                 if requirements.needs_benchmark
+                else None
+            )
+            market_benchmark_data = (
+                market_benchmark_bundle.data
+                if market_benchmark_bundle is not None
                 else None
             )
             if requirements.needs_benchmark and (
                 market_benchmark_data is None or market_benchmark_data.empty
             ):
-                fetch_errors["benchmark_data"] = f"No benchmark data returned for market {identity.market}"
+                fetch_errors["benchmark_data"] = (
+                    f"No benchmark data returned for market {normalized_market}"
+                )
             results[requested_key] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
@@ -391,7 +568,27 @@ class DataPreparationLayer:
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,
-                market=identity.market,
+                benchmark_symbol=(
+                    market_benchmark_bundle.benchmark_symbol
+                    if market_benchmark_bundle is not None
+                    else None
+                ),
+                benchmark_role=(
+                    market_benchmark_bundle.benchmark_role
+                    if market_benchmark_bundle is not None
+                    else None
+                ),
+                benchmark_kind=(
+                    market_benchmark_bundle.benchmark_kind
+                    if market_benchmark_bundle is not None
+                    else None
+                ),
+                benchmark_candidates=(
+                    market_benchmark_bundle.candidate_symbols
+                    if market_benchmark_bundle is not None
+                    else ()
+                ),
+                market=normalized_market,
                 exchange=identity.exchange,
                 currency=identity.currency,
                 timezone=identity.timezone,
@@ -404,6 +601,9 @@ class DataPreparationLayer:
                 all_errors[f"{requested_key}/{key}"] = msg
 
         logger.info(f"Bulk data preparation completed for {len(results)} symbols")
+
+        if requirements.needs_benchmark and results:
+            self._attach_market_rs_universe_performances(results)
 
         if not allow_partial and all_errors:
             raise DataFetchError("<bulk>", all_errors, partial_data=results)

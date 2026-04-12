@@ -15,6 +15,7 @@ from app.domain.common.errors import DataFetchError
 from app.infra.providers.stock_data import DataPrepStockDataProvider
 from app.scanners.base_screener import DataRequirements, StockData
 from app.scanners.data_preparation import DataPreparationLayer
+from app.services.benchmark_cache_service import BenchmarkDataBundle
 from app.services.rate_limiter import RateLimitTimeoutError
 
 
@@ -322,6 +323,28 @@ class TestRetryWithBackoff:
             period="2y",
         )
 
+    def test_prepare_data_propagates_resolved_benchmark_metadata(
+        self, data_layer, mock_benchmark_cache
+    ):
+        benchmark_df = _make_price_df(days=252, price=280.0)
+        mock_benchmark_cache.get_benchmark_bundle.return_value = BenchmarkDataBundle(
+            market="HK",
+            period="2y",
+            benchmark_symbol="2800.HK",
+            benchmark_role="fallback",
+            benchmark_kind="etf",
+            candidate_symbols=("^HSI", "2800.HK"),
+            data=benchmark_df,
+        )
+
+        result = data_layer.prepare_data("700.HK", REQUIREMENTS)
+
+        assert result.benchmark_data is benchmark_df
+        assert result.benchmark_symbol == "2800.HK"
+        assert result.benchmark_role == "fallback"
+        assert result.benchmark_kind == "etf"
+        assert result.benchmark_candidates == ("^HSI", "2800.HK")
+
 
 # ===================================================================
 # Class 4: Rate limit and timeout handling
@@ -479,6 +502,74 @@ class TestBulkDataPreparation:
         assert mock_benchmark_cache.get_benchmark_data.call_count == 2
         assert results["AAPL"].benchmark_data is us_df
         assert results["0700.HK"].benchmark_data is hk_df
+
+    def test_bulk_propagates_resolved_benchmark_metadata_per_market(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        hk_df = _make_price_df(price=280.0)
+        us_df = _make_price_df(price=450.0)
+        mock_benchmark_cache.get_benchmark_bundle.side_effect = lambda *, market, period: (
+            BenchmarkDataBundle(
+                market=market,
+                period=period,
+                benchmark_symbol="^HSI" if market == "HK" else "SPY",
+                benchmark_role="primary",
+                benchmark_kind="index" if market == "HK" else "etf",
+                candidate_symbols=("^HSI", "2800.HK") if market == "HK" else ("SPY", "IVV"),
+                data=hk_df if market == "HK" else us_df,
+            )
+        )
+        mock_price_cache.get_many.return_value = {
+            "AAPL": _make_price_df(price=180.0),
+            "MSFT": _make_price_df(price=190.0),
+            "0700.HK": _make_price_df(price=380.0),
+            "0005.HK": _make_price_df(price=60.0),
+        }
+
+        results = data_layer.prepare_data_bulk(["AAPL", "MSFT", "0700.HK", "0005.HK"], REQUIREMENTS)
+
+        assert results["AAPL"].benchmark_symbol == "SPY"
+        assert results["AAPL"].benchmark_candidates == ("SPY", "IVV")
+        assert results["0700.HK"].benchmark_symbol == "^HSI"
+        assert results["0700.HK"].benchmark_candidates == ("^HSI", "2800.HK")
+
+    def test_bulk_computes_rs_universe_performances_within_each_market(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        us_benchmark = _make_price_df(price=450.0)
+        hk_benchmark = _make_price_df(price=280.0)
+        mock_benchmark_cache.get_benchmark_bundle.side_effect = lambda *, market, period: (
+            BenchmarkDataBundle(
+                market=market,
+                period=period,
+                benchmark_symbol="SPY" if market == "US" else "^HSI",
+                benchmark_role="primary",
+                benchmark_kind="etf" if market == "US" else "index",
+                candidate_symbols=("SPY", "IVV") if market == "US" else ("^HSI", "2800.HK"),
+                data=us_benchmark if market == "US" else hk_benchmark,
+            )
+        )
+        mock_price_cache.get_many.return_value = {
+            "AAPL": _make_price_df(price=180.0),
+            "MSFT": _make_price_df(price=190.0),
+            "0700.HK": _make_price_df(price=380.0),
+            "0005.HK": _make_price_df(price=60.0),
+        }
+
+        results = data_layer.prepare_data_bulk(["AAPL", "MSFT", "0700.HK", "0005.HK"], REQUIREMENTS)
+
+        assert results["AAPL"].rs_universe_performances is not None
+        assert results["MSFT"].rs_universe_performances is not None
+        assert results["0700.HK"].rs_universe_performances is not None
+        assert results["0005.HK"].rs_universe_performances is not None
+
+        us_weighted = results["AAPL"].rs_universe_performances["weighted"]
+        hk_weighted = results["0700.HK"].rs_universe_performances["weighted"]
+        assert len(us_weighted) == 2
+        assert len(hk_weighted) == 2
+        assert us_weighted is results["MSFT"].rs_universe_performances["weighted"]
+        assert hk_weighted is results["0005.HK"].rs_universe_performances["weighted"]
+        assert results["AAPL"].rs_universe_performances is not results["0700.HK"].rs_universe_performances
 
     def test_bulk_results_preserve_requested_input_key_for_unsuffixed_symbol(
         self, data_layer, mock_price_cache
