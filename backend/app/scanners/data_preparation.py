@@ -297,13 +297,17 @@ class DataPreparationLayer:
             logger.error(f"Error fetching price data for {normalized_symbol}: {e}")
             fetch_errors["price_data"] = str(e)
 
+        # Normalize None market to "US" so single-symbol and bulk paths are
+        # consistent (bulk path normalizes at line ~535 for the same reason).
+        normalized_market = identity.market or "US"
+
         # 2. Fetch benchmark data (if needed)
         benchmark_bundle = None
         benchmark_data = None
         if requirements.needs_benchmark:
             try:
                 benchmark_bundle = self._fetch_benchmark_bundle(
-                    market=identity.market,
+                    market=normalized_market,
                     period=requirements.price_period,
                 )
                 benchmark_data = benchmark_bundle.data if benchmark_bundle is not None else None
@@ -373,7 +377,7 @@ class DataPreparationLayer:
                 if benchmark_bundle is not None
                 else ()
             ),
-            market=identity.market,
+            market=normalized_market,
             exchange=identity.exchange,
             currency=identity.currency,
             timezone=identity.timezone,
