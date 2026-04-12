@@ -7,8 +7,13 @@ from app.services.field_capability_registry import (
     FALLBACK_BEHAVIOR_FALLBACK,
     FALLBACK_BEHAVIOR_POLICY_EXCLUDED,
     FALLBACK_BEHAVIOR_PRIMARY,
+    REASON_CODE_MISSING_SUPPORTED,
+    REASON_CODE_NON_US_GAP,
+    REASON_CODE_POLICY_EXCLUDED,
     SOURCE_TECHNICALS,
+    SUPPORT_STATE_AVAILABLE,
     SUPPORT_STATE_COMPUTED,
+    SUPPORT_STATE_MISSING,
     SUPPORT_STATE_PARTIAL,
     SUPPORT_STATE_SUPPORTED,
     SUPPORT_STATE_UNSUPPORTED,
@@ -147,3 +152,34 @@ def test_auxiliary_scan_field_is_enumerated():
         row = first_trade_date[market]
         assert row["support_state"] == SUPPORT_STATE_SUPPORTED
         assert row["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_SUPPORTED
+
+
+def test_non_us_missing_ownership_fields_surface_explicit_reason_codes():
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=MARKET_HK,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP
+    assert availability["insider_ownership"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["insider_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP
+    assert availability["short_interest"]["status"] == SUPPORT_STATE_UNSUPPORTED
+    assert availability["short_interest"]["reason_code"] == REASON_CODE_POLICY_EXCLUDED
+
+
+def test_present_non_us_ownership_field_is_marked_available():
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={"institutional_ownership": 42.5},
+        market=MARKET_JP,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_AVAILABLE
+    assert availability["institutional_ownership"]["reason_code"] is None
+
+
+def test_us_missing_supported_ownership_field_is_marked_missing():
+    availability = field_capability_registry.derive_ownership_sentiment_availability(
+        data={},
+        market=MARKET_US,
+    )
+    assert availability["institutional_ownership"]["status"] == SUPPORT_STATE_MISSING
+    assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_MISSING_SUPPORTED

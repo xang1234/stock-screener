@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Mapping, Tuple
+import math
+from typing import Any, Dict, Mapping, Tuple
 
 from . import provider_routing_policy as routing_policy
 from .finviz_parser import FinvizParser
@@ -19,6 +20,8 @@ SUPPORT_STATE_SUPPORTED = "supported"
 SUPPORT_STATE_COMPUTED = "computed"
 SUPPORT_STATE_PARTIAL = "partial"
 SUPPORT_STATE_UNSUPPORTED = "unsupported"
+SUPPORT_STATE_MISSING = "missing"
+SUPPORT_STATE_AVAILABLE = "available"
 
 FALLBACK_BEHAVIOR_PRIMARY = "canonical_provider_primary"
 FALLBACK_BEHAVIOR_FALLBACK = "canonical_provider_fallback"
@@ -26,6 +29,16 @@ FALLBACK_BEHAVIOR_POLICY_EXCLUDED = "market_policy_excludes_canonical_provider"
 FALLBACK_BEHAVIOR_COMPUTED = "computed_locally_from_price_history"
 
 SOURCE_TECHNICALS = "technicals"
+
+REASON_CODE_POLICY_EXCLUDED = "unsupported_market_policy_excludes_canonical_provider"
+REASON_CODE_NON_US_GAP = "unsupported_non_us_ownership_sentiment_data_unavailable"
+REASON_CODE_MISSING_SUPPORTED = "missing_supported_field_value"
+
+OWNERSHIP_SENTIMENT_FIELDS: Tuple[str, ...] = (
+    "institutional_ownership",
+    "insider_ownership",
+    "short_interest",
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +155,16 @@ class FieldCapabilityRegistryService:
             )
             for provider in self.PROVIDER_ORDER
         }
+
+    @staticmethod
+    def _is_present(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and value == "":
+            return False
+        if isinstance(value, float) and math.isnan(value):
+            return False
+        return True
 
     def _market_capability(
         self,
@@ -274,6 +297,62 @@ class FieldCapabilityRegistryService:
             "field_count": len(entries),
             "fields": entries,
         }
+
+    def derive_ownership_sentiment_availability(
+        self,
+        data: Mapping[str, Any] | None,
+        market: str | None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return status + explicit reason codes for ownership/sentiment fields.
+
+        This powers graceful-degrade transparency for non-US markets where
+        ownership/sentiment sources can be missing or policy-excluded.
+        """
+        resolved_market = routing_policy.normalize_market(market)
+        by_field = {entry.field: entry for entry in self.entries()}
+        payload = data or {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for field in OWNERSHIP_SENTIMENT_FIELDS:
+            entry = by_field.get(field)
+            if entry is None:
+                continue
+            cap = entry.markets[resolved_market]
+            present = self._is_present(payload.get(field))
+
+            if present:
+                result[field] = {
+                    "status": SUPPORT_STATE_AVAILABLE,
+                    "reason_code": None,
+                    "canonical_provider": cap.canonical_provider,
+                    "support_state": cap.support_state,
+                }
+                continue
+
+            if cap.support_state == SUPPORT_STATE_UNSUPPORTED:
+                reason_code = REASON_CODE_POLICY_EXCLUDED
+                status = SUPPORT_STATE_UNSUPPORTED
+            elif (
+                resolved_market in (
+                    routing_policy.MARKET_HK,
+                    routing_policy.MARKET_JP,
+                    routing_policy.MARKET_TW,
+                )
+            ):
+                reason_code = REASON_CODE_NON_US_GAP
+                status = SUPPORT_STATE_UNSUPPORTED
+            else:
+                reason_code = REASON_CODE_MISSING_SUPPORTED
+                status = SUPPORT_STATE_MISSING
+
+            result[field] = {
+                "status": status,
+                "reason_code": reason_code,
+                "canonical_provider": cap.canonical_provider,
+                "support_state": cap.support_state,
+            }
+
+        return result
 
 
 field_capability_registry = FieldCapabilityRegistryService()

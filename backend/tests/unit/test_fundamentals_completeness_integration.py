@@ -13,6 +13,7 @@ import pytest
 
 from app.models.stock import StockFundamental
 from app.services.fundamentals_cache_service import FundamentalsCacheService
+from app.services.field_capability_registry import REASON_CODE_NON_US_GAP
 from app.services.fundamentals_completeness import (
     CORE_FIELDS,
     STANDARD_FIELDS,
@@ -102,3 +103,16 @@ class TestStorageWritesCompletenessAndProvenance:
         record = captured["added_record"]
         # HK with full yfinance payload = 100% completeness.
         assert record.field_completeness_score == 100
+
+    def test_hk_missing_ownership_fields_emit_t6_reason_codes(self, captured_record):
+        service, _ = captured_record
+        payload = _full_yfinance_payload()
+        payload.pop("institutional_ownership", None)
+        payload.pop("insider_ownership", None)
+
+        service._enrich_with_quality_metadata("0700.HK", payload, market="HK")
+
+        availability = payload.get("field_availability")
+        assert isinstance(availability, dict)
+        assert availability["institutional_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP
+        assert availability["insider_ownership"]["reason_code"] == REASON_CODE_NON_US_GAP

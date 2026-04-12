@@ -8,7 +8,7 @@ Uses Redis for hot cache and database for persistence.
 import logging
 import pickle
 from typing import Any, Optional, Dict, Callable
-from datetime import datetime, timedelta, date
+from datetime import datetime, date
 from sqlalchemy.orm import Session
 
 try:
@@ -24,6 +24,7 @@ from .fundamentals_completeness import (
     compute_completeness_score,
     derive_field_provenance,
 )
+from .field_capability_registry import field_capability_registry
 from .fx_service import FXQuote, FXService, currency_for_market, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
@@ -180,6 +181,7 @@ class FundamentalsCacheService:
                         enriched = self._fetch_and_cache(symbol, market=market)
                         if enriched is not None:
                             return enriched
+                    self._ensure_field_availability_metadata(symbol, fundamentals, market)
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except (pickle.PickleError, TypeError, ValueError, RuntimeError, OSError) as exc:
@@ -226,6 +228,7 @@ class FundamentalsCacheService:
                     enriched = self._fetch_and_cache(symbol, market=market)
                     if enriched is not None:
                         return enriched
+                self._ensure_field_availability_metadata(symbol, cached_data, market)
                 logger.info(f"Cache HIT for {symbol} (Database, updated: {last_update})")
 
                 # Also store in Redis for faster next access
@@ -386,6 +389,11 @@ class FundamentalsCacheService:
 
             # Compute fallback description (finviz preferred, yfinance as fallback)
             fundamentals["description"] = fundamentals.get("description_finviz") or fundamentals.get("description_yfinance")
+            fundamentals["field_availability"] = (
+                field_capability_registry.derive_ownership_sentiment_availability(
+                    fundamentals, self._resolve_market(symbol)
+                )
+            )
 
             # Get last update timestamp
             last_update = record.updated_at
@@ -419,7 +427,28 @@ class FundamentalsCacheService:
             market = self._resolve_market(symbol)
         data['field_completeness_score'] = compute_completeness_score(data, market)
         data['field_provenance'] = derive_field_provenance(data, market)
+        data['field_availability'] = (
+            field_capability_registry.derive_ownership_sentiment_availability(
+                data, market
+            )
+        )
         return market
+
+    def _ensure_field_availability_metadata(
+        self,
+        symbol: str,
+        data: Dict,
+        market: Optional[str],
+    ) -> None:
+        """Backfill ownership/sentiment availability metadata for older cache rows."""
+        if "field_availability" in data:
+            return
+        resolved_market = market if market is not None else self._resolve_market(symbol)
+        data["field_availability"] = (
+            field_capability_registry.derive_ownership_sentiment_availability(
+                data, resolved_market
+            )
+        )
 
     def _get_fx_service(self) -> FXService:
         """Return the FX service, lazily resolving the process-wide default.

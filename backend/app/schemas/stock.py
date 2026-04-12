@@ -1,7 +1,6 @@
 """Stock data schemas"""
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 from .scanning import ScanResultItem, ScreenerExplanationResponse
 
@@ -34,6 +33,9 @@ class StockFundamentals(BaseModel):
     # {field: provider} provenance map. NULL when not yet computed.
     field_completeness_score: Optional[int] = None
     field_provenance: Optional[Dict[str, str]] = None
+    # T6 graceful-degrade metadata for ownership/sentiment fields.
+    # Shape: {field_name: {status, reason_code, canonical_provider, support_state}}.
+    field_availability: Optional[Dict[str, Dict[str, Any]]] = None
     # T3 FX normalisation — USD comparables for mixed-market ranking, plus
     # a per-row FX snapshot (rate, currency, as_of_date, source) for replay.
     market_cap_usd: Optional[int] = None
