@@ -815,3 +815,58 @@ def test_ingest_tw_snapshot_rows_reconciliation_is_idempotent_for_same_snapshot(
     assert second_stats["reconciliation"]["counts"]["changed"] == 0
     assert second_stats["reconciliation"]["counts"]["unchanged"] == 0
     db.close()
+
+
+def test_ingest_hk_reconciliation_preserves_existing_snapshot_baseline_on_rerun():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    rows_a = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    rows_b = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent Holdings"},
+    ]
+
+    first_a = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_b,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+    second_a = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=rows_a,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    run_a = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-a",
+        )
+        .one()
+    )
+    run_b = (
+        db.query(StockUniverseReconciliationRun)
+        .filter(
+            StockUniverseReconciliationRun.market == "HK",
+            StockUniverseReconciliationRun.snapshot_id == "hk-20260412-b",
+        )
+        .one()
+    )
+
+    assert run_a.previous_snapshot_id is None
+    assert first_a["reconciliation"]["previous_snapshot_id"] is None
+    assert second_a["reconciliation"]["previous_snapshot_id"] is None
+    assert second_a["reconciliation"]["artifact_hash"] == first_a["reconciliation"]["artifact_hash"]
+    assert run_b.previous_snapshot_id == "hk-20260412-a"
+    db.close()

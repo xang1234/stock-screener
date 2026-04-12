@@ -433,23 +433,47 @@ class StockUniverseService:
             .one_or_none()
         )
 
-        previous_run = (
-            db.query(StockUniverseReconciliationRun)
-            .filter(
-                StockUniverseReconciliationRun.market == market,
-                StockUniverseReconciliationRun.snapshot_id != snapshot_id,
-            )
-            .order_by(
-                StockUniverseReconciliationRun.created_at.desc(),
-                StockUniverseReconciliationRun.id.desc(),
-            )
-            .first()
+        previous_snapshot_id: str | None = (
+            current_run.previous_snapshot_id
+            if current_run is not None
+            else None
         )
+        previous_run: StockUniverseReconciliationRun | None = None
+        if previous_snapshot_id:
+            previous_run = (
+                db.query(StockUniverseReconciliationRun)
+                .filter(
+                    StockUniverseReconciliationRun.market == market,
+                    StockUniverseReconciliationRun.snapshot_id == previous_snapshot_id,
+                )
+                .one_or_none()
+            )
+            if previous_run is None:
+                logger.warning(
+                    "Reconciliation baseline snapshot not found for existing run",
+                    extra={
+                        "market": market,
+                        "snapshot_id": snapshot_id,
+                        "previous_snapshot_id": previous_snapshot_id,
+                    },
+                )
+        elif current_run is None:
+            previous_run = (
+                db.query(StockUniverseReconciliationRun)
+                .filter(
+                    StockUniverseReconciliationRun.market == market,
+                    StockUniverseReconciliationRun.snapshot_id != snapshot_id,
+                )
+                .order_by(
+                    StockUniverseReconciliationRun.created_at.desc(),
+                    StockUniverseReconciliationRun.id.desc(),
+                )
+                .first()
+            )
+            previous_snapshot_id = previous_run.snapshot_id if previous_run is not None else None
 
-        previous_snapshot_id: str | None = None
         previous_rows: list[dict[str, Any]] = []
         if previous_run is not None:
-            previous_snapshot_id = previous_run.snapshot_id
             if previous_run.artifact_json:
                 try:
                     parsed = json.loads(previous_run.artifact_json)
