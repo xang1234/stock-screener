@@ -20,6 +20,10 @@ from ..database import SessionLocal
 from ..models.stock import StockFundamental
 from ..config import settings
 from .errors import CacheRefreshError
+from .fundamentals_completeness import (
+    compute_completeness_score,
+    derive_field_provenance,
+)
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
@@ -364,6 +368,9 @@ class FundamentalsCacheService:
                 "technicals_refreshed_at": (
                     record.technicals_refreshed_at.isoformat() if record.technicals_refreshed_at else None
                 ),
+                # T2 quality metadata
+                "field_completeness_score": record.field_completeness_score,
+                "field_provenance": record.field_provenance,
             }
 
             # Compute fallback description (finviz preferred, yfinance as fallback)
@@ -458,8 +465,12 @@ class FundamentalsCacheService:
             # Cache in Redis (7-day TTL)
             self._store_in_redis(symbol, fundamentals)
 
-            # Persist to database (permanent storage) with data source metadata
-            self._store_in_database(symbol, fundamentals, data_source=data_source)
+            # Persist to database (permanent storage) with data source metadata.
+            # ``market`` was already resolved (or passed in) earlier in this
+            # method; passing it avoids a second DB lookup in _store_in_database.
+            self._store_in_database(
+                symbol, fundamentals, data_source=data_source, market=market
+            )
 
             # Re-add metadata for return value
             fundamentals['data_source'] = data_source
@@ -510,7 +521,13 @@ class FundamentalsCacheService:
         except Exception as e:
             logger.error(f"Error storing {symbol} in Redis: {e}", exc_info=True)
 
-    def _store_in_database(self, symbol: str, data: Dict, data_source: str = 'unknown') -> None:
+    def _store_in_database(
+        self,
+        symbol: str,
+        data: Dict,
+        data_source: str = 'unknown',
+        market: Optional[str] = None,
+    ) -> None:
         """
         Store fundamental data in database (StockFundamental table).
 
@@ -518,12 +535,23 @@ class FundamentalsCacheService:
             symbol: Stock ticker symbol
             data: Fundamental data dict
             data_source: Data source ('finviz' or 'yfinance')
+            market: Market code used for completeness/provenance scoring.
+                When omitted, falls back to a DB lookup via _resolve_market.
+
+        Also persists T2 quality metadata: ``field_completeness_score``
+        and ``field_provenance``.
 
         Uses upsert to handle existing records gracefully.
         """
         db = self._session_factory()
 
         try:
+            if market is None:
+                market = self._resolve_market(symbol)
+
+            completeness_score = compute_completeness_score(data, market)
+            provenance = derive_field_provenance(data, market)
+
             # Check if record exists
             existing_record = db.query(StockFundamental).filter(
                 StockFundamental.symbol == symbol
@@ -657,6 +685,9 @@ class FundamentalsCacheService:
                 existing_record.technicals_refreshed_at = self._coerce_datetime(
                     data.get("technicals_refreshed_at")
                 )
+                # T2 quality metadata
+                existing_record.field_completeness_score = completeness_score
+                existing_record.field_provenance = provenance
                 existing_record.updated_at = datetime.now()
 
                 logger.info(f"Updated fundamental data for {symbol} in database")
@@ -775,6 +806,9 @@ class FundamentalsCacheService:
                     technicals_refreshed_at=self._coerce_datetime(
                         data.get("technicals_refreshed_at")
                     ),
+                    # T2 quality metadata
+                    field_completeness_score=completeness_score,
+                    field_provenance=provenance,
                 )
                 db.add(new_record)
                 logger.info(f"Inserted fundamental data for {symbol} in database")
@@ -1160,7 +1194,13 @@ class FundamentalsCacheService:
         )
         return {symbol: data for symbol, (data, _) in db_results.items()}
 
-    def store(self, symbol: str, data: Dict, data_source: str = 'hybrid') -> None:
+    def store(
+        self,
+        symbol: str,
+        data: Dict,
+        data_source: str = 'hybrid',
+        market: Optional[str] = None,
+    ) -> None:
         """
         Store fundamental data in cache (Redis + Database).
 
@@ -1171,6 +1211,9 @@ class FundamentalsCacheService:
             symbol: Stock ticker symbol
             data: Fundamental data dict
             data_source: Source identifier (default 'hybrid')
+            market: Market code; used to compute T2 completeness and
+                provenance without an extra DB lookup. When omitted,
+                ``_store_in_database`` falls back to DB resolve.
         """
         if not data:
             logger.warning(f"Cannot store empty data for {symbol}")
@@ -1182,7 +1225,9 @@ class FundamentalsCacheService:
         self._store_in_redis(symbol, normalized_data)
 
         # Store in database
-        self._store_in_database(symbol, normalized_data, data_source=data_source)
+        self._store_in_database(
+            symbol, normalized_data, data_source=data_source, market=market
+        )
 
         logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
 

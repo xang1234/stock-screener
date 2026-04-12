@@ -1,6 +1,6 @@
 """Stock data schemas"""
 from pydantic import BaseModel
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from .scanning import ScanResultItem, ScreenerExplanationResponse
@@ -30,6 +30,10 @@ class StockFundamentals(BaseModel):
     profit_margin: Optional[float] = None
     institutional_ownership: Optional[float] = None
     description: Optional[str] = None
+    # T2 quality metadata — 0-100 market-aware completeness and
+    # {field: provider} provenance map. NULL when not yet computed.
+    field_completeness_score: Optional[int] = None
+    field_provenance: Optional[Dict[str, str]] = None
 
 
 class StockTechnicals(BaseModel):

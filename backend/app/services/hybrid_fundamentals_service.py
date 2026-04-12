@@ -448,6 +448,7 @@ class HybridFundamentalsService:
         *,
         session_factory: Callable[[], Session],
         include_quarterly: bool = True,  # kept for compatibility with existing task call sites
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, int]:
         """
         Store hybrid results in fundamentals cache.
@@ -461,6 +462,9 @@ class HybridFundamentalsService:
         Args:
             results: Dict mapping symbols to their fundamental data
             fundamentals_cache: FundamentalsCacheService instance
+            market_by_symbol: Optional {symbol: market_code} map. Passed
+                through to ``fundamentals_cache.store`` so T2 completeness
+                scoring is market-aware without a per-symbol DB lookup.
 
         Returns:
             Dict with storage statistics
@@ -471,6 +475,7 @@ class HybridFundamentalsService:
             'ownership_updated': 0,
             'failed': 0
         }
+        markets = market_by_symbol or {}
 
         for symbol, data in results.items():
             if not data or data.get('has_error'):
@@ -479,7 +484,10 @@ class HybridFundamentalsService:
 
             try:
                 # Store in fundamentals cache (includes quarterly growth fields)
-                fundamentals_cache.store(symbol, data, data_source='hybrid')
+                fundamentals_cache.store(
+                    symbol, data, data_source='hybrid',
+                    market=markets.get(symbol),
+                )
                 stats['fundamentals_stored'] += 1
                 if include_quarterly:
                     stats['quarterly_stored'] += 1

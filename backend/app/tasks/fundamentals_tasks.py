@@ -653,7 +653,8 @@ def refresh_all_fundamentals_hybrid(
             all_data,
             cache,
             session_factory=SessionLocal,
-            include_quarterly=True
+            include_quarterly=True,
+            market_by_symbol=market_by_symbol,
         )
 
         stats = {
