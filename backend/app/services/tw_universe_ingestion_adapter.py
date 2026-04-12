@@ -101,8 +101,20 @@ class TWUniverseIngestionAdapter:
         return symbol
 
     @staticmethod
-    def _normalize_exchange(raw_exchange: Any) -> str:
-        exchange = str(raw_exchange or "").strip().upper() or "TWSE"
+    def _infer_exchange_from_symbol(source_symbol: str) -> str | None:
+        token = str(source_symbol or "").strip().upper()
+        if token.startswith(("TPEX:", "TWO:")) or token.endswith(".TWO"):
+            return "TPEX"
+        if token.startswith(("TWSE:", "XTAI:")) or token.endswith(".TW"):
+            return "TWSE"
+        return None
+
+    @classmethod
+    def _normalize_exchange(cls, raw_exchange: Any, *, source_symbol: str = "") -> str:
+        exchange = str(raw_exchange or "").strip().upper()
+        if not exchange:
+            inferred = cls._infer_exchange_from_symbol(source_symbol)
+            return inferred or "TWSE"
         normalized = _TW_EXCHANGE_ALIASES.get(exchange)
         if normalized is None:
             raise ValueError(
@@ -269,7 +281,10 @@ class TWUniverseIngestionAdapter:
                 continue
 
             try:
-                exchange = self._normalize_exchange(raw_row.get("exchange"))
+                exchange = self._normalize_exchange(
+                    raw_row.get("exchange"),
+                    source_symbol=source_symbol,
+                )
                 local_code = self._normalize_tw_local_code(source_symbol)
                 identity = security_master_resolver.resolve_identity(
                     symbol=f"{local_code}.TW",
@@ -354,4 +369,3 @@ class TWUniverseIngestionAdapter:
 
 
 tw_universe_ingestion_adapter = TWUniverseIngestionAdapter()
-

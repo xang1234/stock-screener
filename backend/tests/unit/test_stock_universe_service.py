@@ -560,6 +560,35 @@ def test_ingest_tw_from_csv_reactivates_existing_inactive_symbol():
     db.close()
 
 
+def test_ingest_tw_from_csv_infers_tpex_exchange_from_symbol_when_exchange_missing():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "3008.TWO,Largan Precision,,Technology,Electronics,120B",
+            "TWO:3008,Largan Precision,,Technology,Electronics,120B",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_tw_from_csv(
+        db,
+        csv_content,
+        source_name="tw_reference_bundle",
+        snapshot_id="tw-20260412",
+    )
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "3008.TWO").one()
+
+    assert stats["added"] == 1
+    assert stats["updated"] == 0
+    assert stats["total"] == 1
+    assert stats["rejected"] == 0
+    assert row.exchange == "TPEX"
+    assert row.market == "TW"
+    assert row.local_code == "3008"
+    db.close()
+
+
 def test_ingest_tw_from_csv_rejects_unapproved_source():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
