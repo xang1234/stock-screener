@@ -105,6 +105,11 @@ class StockData:
     earnings_history: Optional[pd.DataFrame] = None  # Historical earnings data
 
     # Additional metadata
+    market: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+    timezone: Optional[str] = None
+    local_code: Optional[str] = None
     fetch_errors: Dict[str, str] = field(default_factory=dict)  # Any errors during fetch
 
     def has_sufficient_data(self, min_days: int = 100) -> bool:

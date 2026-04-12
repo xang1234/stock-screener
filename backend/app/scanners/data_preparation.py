@@ -17,6 +17,7 @@ from ..services.benchmark_cache_service import BenchmarkCacheService
 from ..services.fundamentals_cache_service import FundamentalsCacheService
 from ..services.price_cache_service import PriceCacheService
 from ..services.rate_limiter import RateLimitTimeoutError
+from ..services.security_master_service import SecurityMasterResolver, security_master_resolver
 from ..wiring.bootstrap import get_rate_limiter, get_yfinance_service
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,11 @@ class DataPreparationLayer:
         self._retry_base_delay = retry_base_delay
         self._yfinance_service = get_yfinance_service()
         self._rate_limiter = get_rate_limiter()
+        self._security_master = security_master_resolver
+
+    def _resolve_identity(self, symbol: str):
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        return resolver.resolve_identity(symbol=symbol)
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -116,6 +122,9 @@ class DataPreparationLayer:
         Returns:
             StockData object with all fetched data
         """
+        identity = self._resolve_identity(symbol)
+        normalized_symbol = identity.normalized_symbol
+        canonical_symbol = identity.canonical_symbol
         fetch_errors = {}
 
         # 1. Fetch price data (always needed)
@@ -124,25 +133,32 @@ class DataPreparationLayer:
         try:
             # Check cache first (no rate limiting)
             # Note: get_historical_data() handles Redis → DB fallback internally and ensures sufficient data
-            price_data = self.price_cache.get_historical_data(symbol, period=requirements.price_period)
+            price_data = self.price_cache.get_historical_data(
+                canonical_symbol,
+                period=requirements.price_period,
+            )
 
             if price_data is None or price_data.empty:
                 # Cache miss or insufficient - fetch directly
                 # (yfinance_service has its own rate limiter)
-                logger.debug(f"Cache MISS for {symbol} - fetching from yfinance")
+                logger.debug(f"Cache MISS for {normalized_symbol} - fetching from yfinance")
                 price_data = self._fetch_with_retry(
                     self._yfinance_service.get_historical_data,
-                    symbol,
+                    canonical_symbol,
                     period=requirements.price_period,
                     use_cache=False,  # Already checked cache
                 )
             else:
-                logger.debug(f"Cache HIT for {symbol} ({len(price_data)} days) - no rate limiting")
+                logger.debug(
+                    "Cache HIT for %s (%d days) - no rate limiting",
+                    normalized_symbol,
+                    len(price_data),
+                )
 
             if price_data is None or price_data.empty:
                 fetch_errors["price_data"] = "No price data returned"
         except Exception as e:
-            logger.error(f"Error fetching price data for {symbol}: {e}")
+            logger.error(f"Error fetching price data for {normalized_symbol}: {e}")
             fetch_errors["price_data"] = str(e)
 
         # 2. Fetch benchmark data (if needed)
@@ -150,7 +166,8 @@ class DataPreparationLayer:
         if requirements.needs_benchmark:
             try:
                 benchmark_data = self._fetch_with_retry(
-                    self.benchmark_cache.get_spy_data,
+                    self.benchmark_cache.get_benchmark_data,
+                    market=identity.market,
                     period=requirements.price_period,
                 )
                 if benchmark_data is None or benchmark_data.empty:
@@ -166,13 +183,13 @@ class DataPreparationLayer:
                 # Use cache service instead of direct API call (no rate limiting needed - cache handles it)
                 fundamentals = self._fetch_with_retry(
                     self.fundamentals_cache.get_fundamentals,
-                    symbol,
+                    canonical_symbol,
                     force_refresh=False,  # Use cache by default
                 )
                 if fundamentals is None:
                     fetch_errors["fundamentals"] = "No fundamental data returned"
             except Exception as e:
-                logger.warning(f"Error fetching fundamentals for {symbol}: {e}")
+                logger.warning(f"Error fetching fundamentals for {normalized_symbol}: {e}")
                 fetch_errors["fundamentals"] = str(e)
 
         # 4. Extract quarterly growth from fundamentals (consolidated cache)
@@ -193,17 +210,22 @@ class DataPreparationLayer:
 
         # Create StockData container
         stock_data = StockData(
-            symbol=symbol,
+            symbol=canonical_symbol,
             price_data=price_data if price_data is not None else pd.DataFrame(),
             benchmark_data=benchmark_data if benchmark_data is not None else pd.DataFrame(),
             fundamentals=fundamentals,
             quarterly_growth=quarterly_growth,
             earnings_history=earnings_history,
+            market=identity.market,
+            exchange=identity.exchange,
+            currency=identity.currency,
+            timezone=identity.timezone,
+            local_code=identity.local_code,
             fetch_errors=fetch_errors
         )
 
         if not allow_partial and fetch_errors:
-            raise DataFetchError(symbol, fetch_errors, partial_data=stock_data)
+            raise DataFetchError(canonical_symbol, fetch_errors, partial_data=stock_data)
 
         return stock_data
 
@@ -238,32 +260,55 @@ class DataPreparationLayer:
             return {}
 
         logger.info(f"Preparing data for {len(symbols)} symbols using bulk cache operations")
+        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        requested_keys = [resolver.normalize_symbol(symbol) for symbol in symbols]
+        identities = [self._resolve_identity(symbol) for symbol in symbols]
+        canonical_symbols = [identity.canonical_symbol for identity in identities]
+        unique_canonical_symbols = list(dict.fromkeys(canonical_symbols))
 
         # PHASE 3 OPTIMIZATION: Bulk cache lookups using Redis pipelines
         # Instead of N individual Redis calls, make 2 pipeline calls (1 per cache type)
         # Get cached data for all symbols in parallel
         # Price data is always needed (no needs_price_data flag)
         # IMPORTANT: Pass period so get_many() can fall back to database if Redis only has 30 days
-        cached_prices = self.price_cache.get_many(symbols, period=requirements.price_period)
+        cached_prices = self.price_cache.get_many(
+            unique_canonical_symbols,
+            period=requirements.price_period,
+        )
         # Fundamentals cache now includes quarterly growth data (consolidated)
-        cached_fundamentals = self.fundamentals_cache.get_many(symbols) if requirements.needs_fundamentals else {}
+        cached_fundamentals = (
+            self.fundamentals_cache.get_many(unique_canonical_symbols)
+            if requirements.needs_fundamentals
+            else {}
+        )
 
-        # Get benchmark data once (shared by all stocks)
-        benchmark_data = None
+        # Get benchmark data once per market (shared by symbols in that market)
+        benchmark_data_by_market: dict[str, pd.DataFrame | None] = {}
         all_errors: dict[str, str] = {}
         if requirements.needs_benchmark:
-            try:
-                benchmark_data = self._fetch_with_retry(
-                    self.benchmark_cache.get_spy_data,
-                    period=requirements.price_period,
-                )
-            except Exception as e:
-                logger.warning(f"Error fetching benchmark data: {e}")
-                all_errors["<bulk>/benchmark_data"] = str(e)
+            unique_markets = sorted({identity.market for identity in identities})
+            for market in unique_markets:
+                try:
+                    benchmark_data = self._fetch_with_retry(
+                        self.benchmark_cache.get_benchmark_data,
+                        market=market,
+                        period=requirements.price_period,
+                    )
+                    if benchmark_data is None or benchmark_data.empty:
+                        logger.warning("No benchmark data returned for market %s", market)
+                        all_errors[f"<bulk>/benchmark_data:{market}"] = "No benchmark data returned"
+                        benchmark_data_by_market[market] = None
+                    else:
+                        benchmark_data_by_market[market] = benchmark_data
+                except Exception as e:
+                    logger.warning("Error fetching benchmark data for market %s: %s", market, e)
+                    all_errors[f"<bulk>/benchmark_data:{market}"] = str(e)
+                    benchmark_data_by_market[market] = None
 
         # Build StockData for each symbol
         results = {}
-        for symbol in symbols:
+        for requested_key, identity in zip(requested_keys, identities):
+            symbol = identity.canonical_symbol
             fetch_errors = {}
 
             # Get price data (from cache or fetch)
@@ -326,19 +371,37 @@ class DataPreparationLayer:
             earnings_history = None
 
             # Create StockData
-            results[symbol] = StockData(
+            market_benchmark_data = (
+                benchmark_data_by_market.get(identity.market)
+                if requirements.needs_benchmark
+                else None
+            )
+            if requirements.needs_benchmark and (
+                market_benchmark_data is None or market_benchmark_data.empty
+            ):
+                fetch_errors["benchmark_data"] = f"No benchmark data returned for market {identity.market}"
+            results[requested_key] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
-                benchmark_data=benchmark_data if benchmark_data is not None else pd.DataFrame(),
+                benchmark_data=(
+                    market_benchmark_data
+                    if market_benchmark_data is not None
+                    else pd.DataFrame()
+                ),
                 fundamentals=fundamentals,
                 quarterly_growth=quarterly_growth,
                 earnings_history=earnings_history,
+                market=identity.market,
+                exchange=identity.exchange,
+                currency=identity.currency,
+                timezone=identity.timezone,
+                local_code=identity.local_code,
                 fetch_errors=fetch_errors
             )
 
             # Collect per-symbol errors into namespaced dict for bulk error reporting
             for key, msg in fetch_errors.items():
-                all_errors[f"{symbol}/{key}"] = msg
+                all_errors[f"{requested_key}/{key}"] = msg
 
         logger.info(f"Bulk data preparation completed for {len(results)} symbols")
 

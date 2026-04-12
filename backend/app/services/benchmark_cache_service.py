@@ -1,7 +1,7 @@
 """
-Benchmark Cache Service for SPY data caching.
+Benchmark Cache Service for market-aware benchmark data caching.
 
-Provides singleton caching of SPY benchmark data to eliminate redundant API calls
+Provides singleton-style caching of benchmark data to eliminate redundant API calls
 during bulk scans. Uses Redis for hot cache with database persistence.
 """
 import logging
@@ -21,7 +21,9 @@ from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..config import settings
 from .redis_pool import get_redis_client, is_redis_enabled
-from ..utils.market_hours import get_eastern_now, is_trading_day, is_market_open, get_last_trading_day
+from .market_calendar_service import MarketCalendarService
+from .benchmark_registry_service import benchmark_registry
+from ..utils.market_hours import get_eastern_now, get_last_trading_day, is_market_open, is_trading_day
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +41,7 @@ class BenchmarkCacheService:
 
     # Redis keys
     REDIS_KEY_PREFIX = "benchmark:"
-    REDIS_KEY_SPY_2Y = "benchmark:SPY:2y"
-    REDIS_KEY_SPY_1Y = "benchmark:SPY:1y"
-    REDIS_LOCK_KEY = "benchmark:SPY:lock"
+    REDIS_LOCK_KEY_SUFFIX = ":lock"
 
     # TTL: expires at market close + 1 hour buffer
     CACHE_TTL_SECONDS = 86400  # 24 hours
@@ -66,6 +66,23 @@ class BenchmarkCacheService:
                 logger.warning("Redis connection failed. Will use database fallback.")
             else:
                 logger.info("Redis disabled for this runtime. Using database fallback.")
+        self._market_calendar = MarketCalendarService()
+        self._benchmark_registry = benchmark_registry
+
+    def _normalize_market(self, market: str | None) -> str:
+        return self._benchmark_registry.normalize_market(market)
+
+    def get_benchmark_symbol(self, market: str = "US") -> str:
+        return self._benchmark_registry.get_primary_symbol(market)
+
+    def get_benchmark_candidates(self, market: str = "US") -> list[str]:
+        return self._benchmark_registry.get_candidate_symbols(market)
+
+    def _redis_data_key(self, benchmark_symbol: str, period: str) -> str:
+        return f"{self.REDIS_KEY_PREFIX}{benchmark_symbol}:{period}"
+
+    def _redis_lock_key(self, benchmark_symbol: str, period: str) -> str:
+        return f"{self._redis_data_key(benchmark_symbol, period)}{self.REDIS_LOCK_KEY_SUFFIX}"
 
     def get_spy_data(
         self,
@@ -73,56 +90,131 @@ class BenchmarkCacheService:
         force_refresh: bool = False
     ) -> Optional[pd.DataFrame]:
         """
-        Get SPY benchmark data with caching.
+        Compatibility wrapper for legacy SPY callers.
+        """
+        return self.get_benchmark_data(
+            market="US",
+            period=period,
+            force_refresh=force_refresh,
+        )
+
+    def get_benchmark_data(
+        self,
+        market: str = "US",
+        period: str = "2y",
+        force_refresh: bool = False,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get benchmark data with market-aware caching.
 
         Args:
+            market: Market code (US, HK, JP, TW)
             period: Time period ('1y' or '2y')
             force_refresh: Force fetch from yfinance, bypass cache
 
         Returns:
-            DataFrame with OHLCV data for SPY
+            DataFrame with OHLCV data for market benchmark
 
         Logic:
-        1. Check Redis for cached SPY
+        1. Check Redis for cached benchmark
         2. If miss, acquire distributed lock
         3. Fetch from yfinance (once!)
         4. Cache in Redis + persist to database
         5. Return to all waiting callers
         """
-        if force_refresh:
-            logger.info(f"Force refresh requested for SPY {period}")
-            return self._fetch_and_cache_spy(period)
+        normalized_market = self._normalize_market(market)
+        candidates = self.get_benchmark_candidates(normalized_market)
 
-        # Try Redis cache first
-        cached_data = self._get_from_redis(period)
-        if cached_data is not None:
-            logger.info(f"Cache HIT for SPY {period} (Redis)")
-            return cached_data
+        # Pass 1: Prefer any cached candidate before triggering network fetches.
+        if not force_refresh:
+            for idx, benchmark_symbol in enumerate(candidates):
+                role = "primary" if idx == 0 else "fallback"
+                cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
+                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
+                    logger.info(
+                        "Cache HIT for %s benchmark %s (%s, %s) (Redis)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
+                    return cached_data
+                if cached_data is not None:
+                    logger.info(
+                        "Cache STALE for %s benchmark %s (%s, %s) (Redis)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
 
-        # Try database cache as fallback
-        cached_data = self._get_from_database(period)
-        if cached_data is not None and self._is_data_fresh(cached_data):
-            logger.info(f"Cache HIT for SPY {period} (Database)")
-            # Store in Redis for next time
-            self._store_in_redis(period, cached_data)
-            return cached_data
+                cached_data = self._get_from_database(
+                    benchmark_symbol=benchmark_symbol,
+                    period=period,
+                    market=normalized_market,
+                )
+                if cached_data is not None and self._is_data_fresh(cached_data, market=normalized_market):
+                    logger.info(
+                        "Cache HIT for %s benchmark %s (%s, %s) (Database)",
+                        normalized_market,
+                        benchmark_symbol,
+                        period,
+                        role,
+                    )
+                    self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=cached_data)
+                    return cached_data
 
-        # Cache MISS - need to fetch from yfinance
-        logger.info(f"Cache MISS for SPY {period} - fetching from yfinance")
-        return self._fetch_and_cache_spy(period)
+        # Pass 2: Fetch candidates in deterministic order.
+        for idx, benchmark_symbol in enumerate(candidates):
+            role = "primary" if idx == 0 else "fallback"
+            if force_refresh:
+                logger.info(
+                    "Force refresh requested for %s benchmark %s (%s, %s)",
+                    normalized_market,
+                    benchmark_symbol,
+                    period,
+                    role,
+                )
+                fetched = self._fetch_and_cache_benchmark(
+                    benchmark_symbol=benchmark_symbol,
+                    market=normalized_market,
+                    period=period,
+                )
+                if fetched is not None and not fetched.empty:
+                    return fetched
+                continue
 
-    def _get_from_redis(self, period: str) -> Optional[pd.DataFrame]:
-        """Get cached SPY data from Redis."""
+            # Cache MISS - attempt fetch for this candidate
+            logger.info(
+                "Cache MISS for %s benchmark %s (%s, %s) - fetching from yfinance",
+                normalized_market,
+                benchmark_symbol,
+                period,
+                role,
+            )
+            fetched = self._fetch_and_cache_benchmark(
+                benchmark_symbol=benchmark_symbol,
+                market=normalized_market,
+                period=period,
+            )
+            if fetched is not None and not fetched.empty:
+                return fetched
+
+        logger.warning("No benchmark candidate produced data for market=%s period=%s", normalized_market, period)
+        return None
+
+    def _get_from_redis(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Get cached benchmark data from Redis."""
         if not self._redis_client:
             return None
 
         try:
-            redis_key = self.REDIS_KEY_SPY_2Y if period == "2y" else self.REDIS_KEY_SPY_1Y
+            redis_key = self._redis_data_key(benchmark_symbol, period)
             cached_bytes = self._redis_client.get(redis_key)
 
             if cached_bytes:
                 df = pickle.loads(cached_bytes)
-                logger.debug(f"Retrieved SPY {period} from Redis ({len(df)} rows)")
+                logger.debug("Retrieved benchmark %s %s from Redis (%s rows)", benchmark_symbol, period, len(df))
                 return df
 
             return None
@@ -131,13 +223,21 @@ class BenchmarkCacheService:
             logger.warning(f"Error reading from Redis: {e}")
             return None
 
-    def _get_from_database(self, period: str) -> Optional[pd.DataFrame]:
-        """Get cached SPY data from database."""
+    def _get_from_database(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        market: str = "US",
+    ) -> Optional[pd.DataFrame]:
+        """Get cached benchmark data from database."""
         db = self._session_factory()
 
         try:
             # Calculate date range
-            end_date = get_eastern_now().date()
+            try:
+                end_date = self._market_calendar.market_now(market).date()
+            except Exception:
+                end_date = datetime.utcnow().date()
 
             if period == "2y":
                 start_date = end_date - timedelta(days=730)  # ~2 years
@@ -146,13 +246,13 @@ class BenchmarkCacheService:
 
             # Query StockPrice table
             prices = db.query(StockPrice).filter(
-                StockPrice.symbol == "SPY",
+                StockPrice.symbol == benchmark_symbol,
                 StockPrice.date >= start_date,
                 StockPrice.date <= end_date
             ).order_by(StockPrice.date.asc()).all()
 
             if not prices or len(prices) < 100:  # Need substantial data
-                logger.debug(f"Insufficient data in database for SPY {period}")
+                logger.debug("Insufficient data in database for benchmark %s %s", benchmark_symbol, period)
                 return None
 
             # Convert to DataFrame
@@ -169,7 +269,7 @@ class BenchmarkCacheService:
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
 
-            logger.debug(f"Retrieved SPY {period} from database ({len(df)} rows)")
+            logger.debug("Retrieved benchmark %s %s from database (%s rows)", benchmark_symbol, period, len(df))
             return df
 
         except Exception as e:
@@ -179,18 +279,37 @@ class BenchmarkCacheService:
         finally:
             db.close()
 
-    def _fetch_and_cache_spy(self, period: str) -> Optional[pd.DataFrame]:
+    def _fetch_from_yfinance(self, benchmark_symbol: str, period: str) -> Optional[pd.DataFrame]:
+        """Fetch benchmark data from yfinance."""
+        # Import here to avoid circular dependency
+        from .yfinance_service import YFinanceService
+
+        yfinance_service = YFinanceService()
+        return yfinance_service.get_historical_data(benchmark_symbol, period=period)
+
+    def _fetch_and_cache_benchmark(self, benchmark_symbol: str, market: str, period: str) -> Optional[pd.DataFrame]:
         """
-        Fetch SPY from yfinance and cache it.
+        Fetch benchmark from yfinance and cache it.
 
         Uses distributed lock to prevent multiple workers from fetching simultaneously.
         """
+        # No Redis means no distributed coordination is possible; fetch directly
+        # and persist to DB so subsequent calls can still hit local cache.
+        if not self._redis_client:
+            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
+            if benchmark_data is None or benchmark_data.empty:
+                logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
+                return None
+            self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
+            return benchmark_data
+
+        lock_key = self._redis_lock_key(benchmark_symbol, period)
         # Try to acquire lock
         lock_acquired = False
         if self._redis_client:
             try:
                 lock_acquired = self._redis_client.set(
-                    self.REDIS_LOCK_KEY,
+                    lock_key,
                     "locked",
                     nx=True,  # Only set if not exists
                     ex=self.LOCK_EXPIRY_SECONDS
@@ -200,44 +319,45 @@ class BenchmarkCacheService:
 
         if not lock_acquired:
             # Another worker is fetching - wait for it to complete
-            logger.info("Another worker is fetching SPY - waiting...")
-            return self._wait_for_cache(period)
+            logger.info("Another worker is fetching benchmark %s (%s) - waiting...", benchmark_symbol, period)
+            return self._wait_for_cache(benchmark_symbol=benchmark_symbol, period=period)
 
         try:
             # We have the lock - fetch from yfinance
-            logger.info(f"Fetching SPY {period} from yfinance")
+            logger.info("Fetching benchmark %s for market %s (%s) from yfinance", benchmark_symbol, market, period)
 
-            # Import here to avoid circular dependency
-            from .yfinance_service import YFinanceService
+            benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
 
-            yfinance_service = YFinanceService()
-            spy_data = yfinance_service.get_historical_data("SPY", period=period)
-
-            if spy_data is None or spy_data.empty:
-                logger.error("Failed to fetch SPY data from yfinance")
+            if benchmark_data is None or benchmark_data.empty:
+                logger.error("Failed to fetch benchmark %s data from yfinance", benchmark_symbol)
                 return None
 
-            logger.info(f"Fetched SPY {period}: {len(spy_data)} rows")
+            logger.info("Fetched benchmark %s %s: %s rows", benchmark_symbol, period, len(benchmark_data))
 
             # Cache in Redis
-            self._store_in_redis(period, spy_data)
+            self._store_in_redis(benchmark_symbol=benchmark_symbol, period=period, data=benchmark_data)
 
             # Persist to database
-            self._store_in_database(spy_data)
+            self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
 
-            return spy_data
+            return benchmark_data
 
         finally:
             # Release lock
             if self._redis_client and lock_acquired:
                 try:
-                    self._redis_client.delete(self.REDIS_LOCK_KEY)
+                    self._redis_client.delete(lock_key)
                 except Exception as e:
                     logger.warning(f"Error releasing lock: {e}")
 
-    def _wait_for_cache(self, period: str, max_wait_seconds: int = None) -> Optional[pd.DataFrame]:
+    def _wait_for_cache(
+        self,
+        benchmark_symbol: str,
+        period: str,
+        max_wait_seconds: int = None,
+    ) -> Optional[pd.DataFrame]:
         """
-        Wait for another worker to cache SPY data.
+        Wait for another worker to cache benchmark data.
 
         Polls Redis every 0.5 seconds for cached data.
         """
@@ -248,26 +368,29 @@ class BenchmarkCacheService:
 
         while (time.time() - start_time) < max_wait_seconds:
             # Check if data is now in cache
-            cached_data = self._get_from_redis(period)
+            cached_data = self._get_from_redis(benchmark_symbol=benchmark_symbol, period=period)
             if cached_data is not None:
-                logger.info(f"SPY {period} is now cached by another worker")
+                logger.info("Benchmark %s %s is now cached by another worker", benchmark_symbol, period)
                 return cached_data
 
             time.sleep(0.5)
 
         # Timeout - fetch directly as fallback
-        logger.warning(f"Timeout waiting for SPY {period} cache - fetching directly")
-        from .yfinance_service import YFinanceService
-        yfinance_service = YFinanceService()
-        return yfinance_service.get_historical_data("SPY", period=period)
+        logger.warning("Timeout waiting for benchmark %s %s cache - fetching directly", benchmark_symbol, period)
+        benchmark_data = self._fetch_from_yfinance(benchmark_symbol, period)
+        if benchmark_data is not None and not benchmark_data.empty:
+            # Persist fallback fetch so future calls can use DB cache even when
+            # lock-holder failed to populate Redis.
+            self._store_in_database(benchmark_symbol=benchmark_symbol, data=benchmark_data)
+        return benchmark_data
 
-    def _store_in_redis(self, period: str, data: pd.DataFrame) -> None:
-        """Store SPY data in Redis."""
+    def _store_in_redis(self, benchmark_symbol: str, period: str, data: pd.DataFrame) -> None:
+        """Store benchmark data in Redis."""
         if not self._redis_client:
             return
 
         try:
-            redis_key = self.REDIS_KEY_SPY_2Y if period == "2y" else self.REDIS_KEY_SPY_1Y
+            redis_key = self._redis_data_key(benchmark_symbol, period)
             pickled_data = pickle.dumps(data)
 
             self._redis_client.setex(
@@ -276,14 +399,14 @@ class BenchmarkCacheService:
                 pickled_data
             )
 
-            logger.info(f"Cached SPY {period} in Redis (TTL: {self.CACHE_TTL_SECONDS}s)")
+            logger.info("Cached benchmark %s %s in Redis (TTL: %ss)", benchmark_symbol, period, self.CACHE_TTL_SECONDS)
 
         except Exception as e:
             logger.error(f"Error storing in Redis: {e}", exc_info=True)
 
-    def _store_in_database(self, data: pd.DataFrame) -> None:
+    def _store_in_database(self, benchmark_symbol: str, data: pd.DataFrame) -> None:
         """
-        Store SPY data in database (StockPrice table).
+        Store benchmark data in database (StockPrice table).
 
         Uses bulk insert for efficiency (same pattern as PriceCacheService).
         """
@@ -293,9 +416,9 @@ class BenchmarkCacheService:
             # Reset index to get Date as a column
             df = data.reset_index()
 
-            # Fetch all existing dates for SPY upfront (avoid N+1 queries)
+            # Fetch all existing dates for benchmark upfront (avoid N+1 queries)
             existing_dates_query = db.query(StockPrice.date).filter(
-                StockPrice.symbol == "SPY"
+                StockPrice.symbol == benchmark_symbol
             )
             existing_dates = set([row[0] for row in existing_dates_query.all()])
 
@@ -318,7 +441,7 @@ class BenchmarkCacheService:
                 # Prepare row for bulk insert
                 try:
                     price_dict = {
-                        'symbol': "SPY",
+                        'symbol': benchmark_symbol,
                         'date': row_date,
                         'open': float(row.get('Open', 0)),
                         'high': float(row.get('High', 0)),
@@ -330,30 +453,30 @@ class BenchmarkCacheService:
                     rows_to_insert.append(price_dict)
 
                 except Exception as e:
-                    logger.warning(f"Error preparing SPY row for {row.get('Date')}: {e}")
+                    logger.warning("Error preparing benchmark %s row for %s: %s", benchmark_symbol, row.get("Date"), e)
                     continue
 
             # Bulk insert all new rows in one operation
             if rows_to_insert:
                 db.bulk_insert_mappings(StockPrice, rows_to_insert)
                 db.commit()
-                logger.info(f"Bulk inserted {len(rows_to_insert)} new SPY rows to database")
+                logger.info("Bulk inserted %s new benchmark %s rows to database", len(rows_to_insert), benchmark_symbol)
             else:
-                logger.debug("No new SPY rows to persist")
+                logger.debug("No new benchmark %s rows to persist", benchmark_symbol)
 
         except Exception as e:
-            logger.error(f"Error storing SPY in database: {e}", exc_info=True)
+            logger.error("Error storing benchmark %s in database: %s", benchmark_symbol, e, exc_info=True)
             db.rollback()
 
         finally:
             db.close()
 
-    def _is_data_fresh(self, data: pd.DataFrame, max_age_hours: int = 24) -> bool:
+    def _is_data_fresh(self, data: pd.DataFrame, market: str = "US", max_age_hours: int = 24) -> bool:
         """
-        Check if cached SPY data is still fresh using trading-day awareness.
+        Check if cached benchmark data is still fresh using market-aware trading-day logic.
 
-        Uses market calendar to determine expected data date instead of
-        naive timedelta checks that break on holidays and weekends.
+        US continues using legacy NYSE helper for parity. Non-US uses
+        exchange_calendars where available and falls back to max-age checks.
         """
         if data is None or data.empty:
             return False
@@ -363,30 +486,74 @@ class BenchmarkCacheService:
             if not isinstance(last_date, pd.Timestamp):
                 last_date = pd.Timestamp(last_date)
 
-            now_et = get_eastern_now()
-            today = now_et.date()
-
-            # Determine what date we should have data for
-            if is_trading_day(today) and not is_market_open(now_et) and now_et.hour >= 17:
-                # After 5 PM on trading day: expect today's close
-                expected = today
-            else:
-                # During market hours, before open, grace period, weekend, holiday:
-                # last completed trading day's data is sufficient
-                expected = get_last_trading_day(today - timedelta(days=1))
+            normalized_market = self._normalize_market(market)
+            expected = None
+            try:
+                expected = self._market_calendar.last_completed_trading_day(normalized_market)
+            except Exception:
+                expected = None
+            if expected is None:
+                if normalized_market == "US":
+                    return self._is_us_data_fresh_without_exchange_calendars(last_date)
+                # Calendar fallback: avoid weekend/holiday false-stale by allowing data
+                # through the next business day when exchange calendar lookup is unavailable.
+                return self._is_data_fresh_without_calendar(last_date, max_age_hours=max_age_hours)
 
             is_fresh = last_date.date() >= expected
             if not is_fresh:
-                logger.debug(f"SPY data stale (last: {last_date.date()}, expected: {expected})")
+                logger.debug(
+                    "Benchmark data stale for market %s (last: %s, expected: %s)",
+                    normalized_market,
+                    last_date.date(),
+                    expected,
+                )
             return is_fresh
 
         except Exception as e:
             logger.warning(f"Error checking data freshness: {e}")
             return False
 
+    @staticmethod
+    def _is_data_fresh_without_calendar(last_date: pd.Timestamp, max_age_hours: int = 24) -> bool:
+        """Fallback freshness policy when exchange calendar is unavailable."""
+        last_ts = pd.Timestamp(last_date)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.tz_localize("UTC")
+        else:
+            last_ts = last_ts.tz_convert("UTC")
+
+        now_utc = pd.Timestamp.utcnow()
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.tz_localize("UTC")
+
+        latest_allowed = now_utc - pd.Timedelta(hours=max_age_hours)
+        if last_ts >= latest_allowed:
+            return True
+
+        # Allow Friday (or latest business-day) data to remain fresh until the end of
+        # the next business day when calendars are unavailable (e.g., lookup failure).
+        business_days_after_last = pd.bdate_range(
+            start=last_ts.date() + timedelta(days=1),
+            end=now_utc.date(),
+        )
+        return len(business_days_after_last) <= 1
+
+    @staticmethod
+    def _is_us_data_fresh_without_exchange_calendars(last_date: pd.Timestamp) -> bool:
+        """US-specific fallback that preserves NYSE holiday semantics via market_hours."""
+        eastern_now = get_eastern_now()
+        today = eastern_now.date()
+        if is_trading_day(today) and not is_market_open(eastern_now) and eastern_now.hour >= 17:
+            # After 5 PM ET on a trading day, today's close should be available.
+            expected = today
+        else:
+            # Pre-market, intraday, weekend, and holidays: previous completed trading day.
+            expected = get_last_trading_day(today - timedelta(days=1))
+        return last_date.date() >= expected
+
     def invalidate_cache(self, period: str = None) -> None:
         """
-        Invalidate cached SPY data.
+        Invalidate cached benchmark data.
 
         Args:
             period: Specific period to invalidate, or None for all
@@ -396,15 +563,27 @@ class BenchmarkCacheService:
             return
 
         try:
+            keys: list[str]
+            symbols = set()
+            for market in self._benchmark_registry.supported_markets():
+                symbols.update(self._benchmark_registry.get_candidate_symbols(market))
             if period:
-                redis_key = self.REDIS_KEY_SPY_2Y if period == "2y" else self.REDIS_KEY_SPY_1Y
-                self._redis_client.delete(redis_key)
-                logger.info(f"Invalidated SPY {period} cache")
+                keys = [
+                    self._redis_data_key(symbol, period)
+                    for symbol in symbols
+                ]
             else:
-                # Invalidate all
-                self._redis_client.delete(self.REDIS_KEY_SPY_2Y)
-                self._redis_client.delete(self.REDIS_KEY_SPY_1Y)
-                logger.info("Invalidated all SPY cache")
+                keys = []
+                for symbol in symbols:
+                    keys.append(self._redis_data_key(symbol, "1y"))
+                    keys.append(self._redis_data_key(symbol, "2y"))
+
+            if keys:
+                self._redis_client.delete(*keys)
+            if period:
+                logger.info("Invalidated all benchmark %s cache keys", period)
+            else:
+                logger.info("Invalidated all benchmark cache keys")
 
         except Exception as e:
             logger.error(f"Error invalidating cache: {e}", exc_info=True)

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from app.services.price_cache_service import PriceCacheService
     from app.services.provider_snapshot_service import ProviderSnapshotService
     from app.services.rate_limiter import RedisRateLimiter
+    from app.services.security_master_service import SecurityMasterResolver
     from app.services.stock_universe_service import StockUniverseService
     from app.services.task_registry_service import TaskRegistryService
     from app.services.ticker_validation_service import TickerValidationService
@@ -100,6 +101,7 @@ class RuntimeServices:
         self._groq_key_manager: GroqKeyManager | None = None
         self._zai_key_manager: ZAIKeyManager | None = None
         self._rate_limiter: RedisRateLimiter | None = None
+        self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
         self._yfinance_service: YFinanceService | None = None
         self._finviz_service: FinvizService | None = None
@@ -228,6 +230,15 @@ class RuntimeServices:
 
                     self._rate_limiter = RedisRateLimiter()
         return self._rate_limiter
+
+    def security_master_resolver(self) -> SecurityMasterResolver:
+        if self._security_master_resolver is None:
+            with self._init_lock:
+                if self._security_master_resolver is None:
+                    from app.services.security_master_service import security_master_resolver
+
+                    self._security_master_resolver = security_master_resolver
+        return self._security_master_resolver
 
     def eps_rating_service(self) -> EPSRatingService:
         if self._eps_rating_service is None:
@@ -367,6 +378,7 @@ class RuntimeServices:
             self._groq_key_manager = None
             self._zai_key_manager = None
             self._rate_limiter = None
+            self._security_master_resolver = None
             self._eps_rating_service = None
             self._yfinance_service = None
             self._finviz_service = None
@@ -551,6 +563,11 @@ def get_zai_key_manager() -> ZAIKeyManager:
 def get_rate_limiter() -> RedisRateLimiter:
     """Return process-scoped distributed rate limiter."""
     return _resolve_runtime_services().rate_limiter()
+
+
+def get_security_master_resolver() -> SecurityMasterResolver:
+    """Return process-scoped SecurityMaster resolver."""
+    return _resolve_runtime_services().security_master_resolver()
 
 
 def get_eps_rating_service() -> EPSRatingService:

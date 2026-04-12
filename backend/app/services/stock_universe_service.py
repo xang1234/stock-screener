@@ -22,6 +22,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from .security_master_service import security_master_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,14 @@ class StockUniverseService:
 
     def __init__(self):
         """Initialize stock universe service."""
-        pass
+        self._security_master = security_master_resolver
+
+    def _resolved_identity(self, stock_data: Dict[str, Any]):
+        return self._security_master.resolve_identity(
+            symbol=stock_data.get("symbol", ""),
+            market=stock_data.get("market"),
+            exchange=stock_data.get("exchange"),
+        )
 
     @staticmethod
     def _normalize_status(record: StockUniverse) -> str:
@@ -313,20 +321,37 @@ class StockUniverseService:
             added_count = 0
             updated_count = 0
             now = datetime.utcnow()
+            resolved_rows: list[tuple[dict[str, Any], Any, str, str]] = []
+            lookup_symbols: set[str] = set()
+            for stock_data in stocks:
+                identity = self._resolved_identity(stock_data)
+                source_symbol = stock_data["symbol"]
+                canonical_symbol = identity.canonical_symbol
+                resolved_rows.append((stock_data, identity, source_symbol, canonical_symbol))
+                lookup_symbols.add(source_symbol)
+                lookup_symbols.add(canonical_symbol)
+
             stock_map = {
                 stock.symbol: stock
                 for stock in db.query(StockUniverse).filter(
-                    StockUniverse.symbol.in_([row["symbol"] for row in stocks])
+                    StockUniverse.symbol.in_(list(lookup_symbols))
                 ).all()
             }
 
-            for stock_data in stocks:
-                symbol = stock_data["symbol"]
-                existing = stock_map.get(symbol)
+            for stock_data, identity, source_symbol, canonical_symbol in resolved_rows:
+                existing = stock_map.get(canonical_symbol) or stock_map.get(source_symbol)
+                if existing and existing.symbol != canonical_symbol and canonical_symbol not in stock_map:
+                    stock_map.pop(existing.symbol, None)
+                    existing.symbol = canonical_symbol
+                    stock_map[canonical_symbol] = existing
 
                 if existing:
                     existing.name = stock_data["name"] or existing.name
-                    existing.exchange = stock_data["exchange"] or existing.exchange
+                    existing.exchange = identity.exchange or existing.exchange
+                    existing.market = identity.market
+                    existing.currency = identity.currency
+                    existing.timezone = identity.timezone
+                    existing.local_code = identity.local_code or existing.local_code
                     existing.sector = stock_data["sector"] or existing.sector
                     existing.industry = stock_data["industry"] or existing.industry
                     existing.market_cap = stock_data["market_cap"] or existing.market_cap
@@ -344,9 +369,13 @@ class StockUniverseService:
                     updated_count += 1
                 else:
                     new_stock = StockUniverse(
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         name=stock_data["name"],
-                        exchange=stock_data["exchange"],
+                        market=identity.market,
+                        exchange=identity.exchange,
+                        currency=identity.currency,
+                        timezone=identity.timezone,
+                        local_code=identity.local_code,
                         sector=stock_data["sector"],
                         industry=stock_data["industry"],
                         market_cap=stock_data["market_cap"],
@@ -361,7 +390,7 @@ class StockUniverseService:
                     db.add(new_stock)
                     self._add_status_event(
                         db,
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="csv_import",
@@ -460,16 +489,30 @@ class StockUniverseService:
                 stock.symbol: stock
                 for stock in db.query(StockUniverse).all()
             }
-            fetched_symbols = {stock_data["symbol"] for stock_data in stocks}
-
+            resolved_rows: list[tuple[dict[str, Any], Any, str, str]] = []
+            fetched_symbols: set[str] = set()
             for stock_data in stocks:
-                symbol = stock_data["symbol"]
-                existing = existing_stocks.get(symbol)
+                identity = self._resolved_identity(stock_data)
+                source_symbol = stock_data["symbol"]
+                canonical_symbol = identity.canonical_symbol
+                resolved_rows.append((stock_data, identity, source_symbol, canonical_symbol))
+                fetched_symbols.add(canonical_symbol)
+
+            for stock_data, identity, source_symbol, canonical_symbol in resolved_rows:
+                existing = existing_stocks.get(canonical_symbol) or existing_stocks.get(source_symbol)
+                if existing and existing.symbol != canonical_symbol and canonical_symbol not in existing_stocks:
+                    existing_stocks.pop(existing.symbol, None)
+                    existing.symbol = canonical_symbol
+                    existing_stocks[canonical_symbol] = existing
                 if existing is None:
                     new_stock = StockUniverse(
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         name=stock_data["name"],
-                        exchange=stock_data["exchange"],
+                        market=identity.market,
+                        exchange=identity.exchange,
+                        currency=identity.currency,
+                        timezone=identity.timezone,
+                        local_code=identity.local_code,
                         sector=stock_data["sector"],
                         industry=stock_data["industry"],
                         market_cap=stock_data["market_cap"],
@@ -485,7 +528,7 @@ class StockUniverseService:
                     db.add(new_stock)
                     self._add_status_event(
                         db,
-                        symbol=symbol,
+                        symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="finviz_sync",
@@ -496,7 +539,11 @@ class StockUniverseService:
                     continue
 
                 existing.name = stock_data["name"] or existing.name
-                existing.exchange = stock_data["exchange"] or existing.exchange
+                existing.exchange = identity.exchange or existing.exchange
+                existing.market = identity.market
+                existing.currency = identity.currency
+                existing.timezone = identity.timezone
+                existing.local_code = identity.local_code or existing.local_code
                 existing.sector = stock_data["sector"] or existing.sector
                 existing.industry = stock_data["industry"] or existing.industry
                 existing.market_cap = stock_data["market_cap"]

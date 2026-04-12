@@ -72,7 +72,7 @@ def mock_yfinance():
 @pytest.fixture
 def mock_benchmark_cache():
     bc = MagicMock()
-    bc.get_spy_data.return_value = _make_price_df(days=252, price=450.0)
+    bc.get_benchmark_data.return_value = _make_price_df(days=252, price=450.0)
     return bc
 
 
@@ -126,7 +126,7 @@ class TestPartialFailureAllowPartialTrue:
     def test_benchmark_failure_does_not_crash(
         self, data_layer, mock_benchmark_cache,
     ):
-        mock_benchmark_cache.get_spy_data.side_effect = TimeoutError("SPY timeout")
+        mock_benchmark_cache.get_benchmark_data.side_effect = TimeoutError("SPY timeout")
 
         result = data_layer.prepare_data("AAPL", REQUIREMENTS)
 
@@ -144,13 +144,33 @@ class TestPartialFailureAllowPartialTrue:
         assert result.fundamentals is None
         assert "fundamentals" in result.fetch_errors
 
+    def test_prepare_data_uses_canonical_symbol_for_price_and_fundamentals(
+        self, data_layer, mock_price_cache, mock_fundamentals_cache
+    ):
+        data_layer._resolve_identity = MagicMock(return_value=MagicMock(
+            normalized_symbol="700",
+            canonical_symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+            local_code="0700",
+        ))
+        mock_price_cache.get_historical_data.return_value = _make_price_df()
+
+        result = data_layer.prepare_data("700", REQUIREMENTS)
+
+        assert result.symbol == "0700.HK"
+        mock_price_cache.get_historical_data.assert_called_once_with("0700.HK", period="2y")
+        mock_fundamentals_cache.get_fundamentals.assert_called_once_with("0700.HK", force_refresh=False)
+
     def test_all_components_fail_returns_stock_data_with_all_errors(
         self, data_layer, mock_price_cache, mock_yfinance,
         mock_benchmark_cache, mock_fundamentals_cache,
     ):
         mock_price_cache.get_historical_data.return_value = None
         mock_yfinance.get_historical_data.side_effect = ConnectionError("no net")
-        mock_benchmark_cache.get_spy_data.side_effect = TimeoutError("spy down")
+        mock_benchmark_cache.get_benchmark_data.side_effect = TimeoutError("spy down")
         mock_fundamentals_cache.get_fundamentals.side_effect = RuntimeError("db")
 
         result = data_layer.prepare_data("AAPL", REQUIREMENTS)
@@ -277,7 +297,7 @@ class TestRetryWithBackoff:
     def test_retry_on_benchmark_and_fundamentals(
         self, data_layer, mock_benchmark_cache, mock_fundamentals_cache, mock_sleep,
     ):
-        mock_benchmark_cache.get_spy_data.side_effect = [
+        mock_benchmark_cache.get_benchmark_data.side_effect = [
             TimeoutError("timeout"),
             _make_price_df(days=252, price=450.0),
         ]
@@ -290,8 +310,17 @@ class TestRetryWithBackoff:
 
         assert "benchmark_data" not in result.fetch_errors
         assert result.fundamentals == FUNDAMENTALS
-        assert mock_benchmark_cache.get_spy_data.call_count == 2
+        assert mock_benchmark_cache.get_benchmark_data.call_count == 2
         assert mock_fundamentals_cache.get_fundamentals.call_count == 2
+
+    def test_non_us_symbol_routes_benchmark_by_market(self, data_layer, mock_benchmark_cache):
+        result = data_layer.prepare_data("700.HK", REQUIREMENTS)
+
+        assert "benchmark_data" not in result.fetch_errors
+        mock_benchmark_cache.get_benchmark_data.assert_called_once_with(
+            market="HK",
+            period="2y",
+        )
 
 
 # ===================================================================
@@ -425,9 +454,106 @@ class TestBulkDataPreparation:
         results = data_layer.prepare_data_bulk(["AAPL", "MSFT"], REQUIREMENTS)
 
         # Benchmark fetched once, shared across both symbols
-        mock_benchmark_cache.get_spy_data.assert_called_once()
+        mock_benchmark_cache.get_benchmark_data.assert_called_once_with(
+            market="US",
+            period="2y",
+        )
         # Both symbols should have the same benchmark_data reference
         assert results["AAPL"].benchmark_data is results["MSFT"].benchmark_data
+
+    def test_bulk_fetches_benchmark_once_per_market_for_mixed_symbols(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        hk_df = _make_price_df(price=280.0)
+        us_df = _make_price_df(price=450.0)
+        mock_benchmark_cache.get_benchmark_data.side_effect = lambda *, market, period: (
+            hk_df if market == "HK" else us_df
+        )
+        mock_price_cache.get_many.return_value = {
+            "AAPL": _make_price_df(),
+            "0700.HK": _make_price_df(),
+        }
+
+        results = data_layer.prepare_data_bulk(["AAPL", "0700.HK"], REQUIREMENTS)
+
+        assert mock_benchmark_cache.get_benchmark_data.call_count == 2
+        assert results["AAPL"].benchmark_data is us_df
+        assert results["0700.HK"].benchmark_data is hk_df
+
+    def test_bulk_results_preserve_requested_input_key_for_unsuffixed_symbol(
+        self, data_layer, mock_price_cache
+    ):
+        data_layer._resolve_identity = MagicMock(side_effect=[
+            MagicMock(
+                normalized_symbol="700",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            )
+        ])
+        mock_price_cache.get_many.return_value = {"0700.HK": _make_price_df(price=380.0)}
+
+        results = data_layer.prepare_data_bulk(["700"], REQUIREMENTS)
+
+        assert "700" in results
+        assert "0700.HK" not in results
+        assert results["700"].symbol == "0700.HK"
+
+    def test_bulk_keeps_entries_for_aliases_that_share_same_canonical_symbol(
+        self, data_layer, mock_price_cache
+    ):
+        data_layer._resolve_identity = MagicMock(side_effect=[
+            MagicMock(
+                normalized_symbol="700",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            ),
+            MagicMock(
+                normalized_symbol="0700.HK",
+                canonical_symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                local_code="0700",
+            ),
+        ])
+        mock_price_cache.get_many.return_value = {"0700.HK": _make_price_df(price=380.0)}
+
+        results = data_layer.prepare_data_bulk(["700", "0700.HK"], REQUIREMENTS)
+
+        assert set(results.keys()) == {"700", "0700.HK"}
+        assert results["700"].symbol == "0700.HK"
+        assert results["0700.HK"].symbol == "0700.HK"
+
+    def test_bulk_records_benchmark_error_when_market_benchmark_missing(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        mock_benchmark_cache.get_benchmark_data.return_value = None
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df()}
+
+        results = data_layer.prepare_data_bulk(["AAPL"], REQUIREMENTS)
+
+        assert results["AAPL"].benchmark_data.empty
+        assert "benchmark_data" in results["AAPL"].fetch_errors
+
+    def test_bulk_strict_mode_raises_when_market_benchmark_missing(
+        self, data_layer, mock_price_cache, mock_benchmark_cache
+    ):
+        mock_benchmark_cache.get_benchmark_data.return_value = None
+        mock_price_cache.get_many.return_value = {"AAPL": _make_price_df()}
+
+        with pytest.raises(DataFetchError) as exc_info:
+            data_layer.prepare_data_bulk(["AAPL"], REQUIREMENTS, allow_partial=False)
+
+        assert "AAPL/benchmark_data" in exc_info.value.errors
 
     def test_bulk_batch_only_prices_never_falls_back_to_per_symbol_fetch(
         self, data_layer, mock_price_cache, mock_yfinance,
