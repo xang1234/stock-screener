@@ -246,9 +246,10 @@ class FXService:
     ) -> tuple[Optional[float], Optional[FXQuote]]:
         """Return ``(usd_amount, quote)``.
 
-        Returns ``(None, None)`` if ``amount`` is missing. Returns
-        ``(None, quote)`` if the rate is unavailable for a non-USD
-        amount — callers can still persist the attempted-rate metadata.
+        Returns ``(None, None)`` if ``amount`` is missing *or* the rate
+        is unavailable. Callers that need to distinguish the two cases
+        (e.g., to persist "attempted but failed" metadata) should call
+        ``get_usd_rate`` directly and handle ``amount`` themselves.
         """
         if amount is None:
             return None, None

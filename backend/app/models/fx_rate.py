@@ -1,12 +1,14 @@
 """FX rate log — historical record of exchange rates used for USD normalisation.
 
-Rows are append-only per ``(from_currency, as_of_date, source)``. Each row
-represents "at this date, from this source, the rate used to convert
-``from_currency`` → USD was ``rate``".
+One row per ``(from_currency, to_currency, as_of_date, source)`` (enforced
+by UNIQUE). Re-fetching for the same tuple updates the stored rate in
+place rather than appending — intraday rate drift is overwritten, only
+the last-seen value is kept.
 
 This is the *log*; the per-fundamentals-row FX snapshot lives in
 ``StockFundamental.fx_metadata`` (JSONB). The table supports time-series
-auditing; the row snapshot supports single-row replay without a join.
+auditing across days; the row snapshot supports single-row replay
+without a join.
 """
 from sqlalchemy import Column, Integer, String, Float, Date, DateTime, UniqueConstraint, Index
 from sqlalchemy.sql import func

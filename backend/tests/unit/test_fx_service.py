@@ -80,11 +80,9 @@ class TestFXQuoteSerialisation:
 def _make_service(rate_fetcher=None, db_rows=None):
     """Return an FXService wired with mocks and no Redis/DB."""
     fake_db = MagicMock()
-    if db_rows is not None:
-        fake_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = db_rows
-    else:
-        fake_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
-    fake_db.query.return_value.filter.return_value.first.return_value = None  # _persist_database dedupe check
+    # _read_database uses .order_by().first(); stub accordingly. None = no
+    # persisted rate, forces the fetcher path.
+    fake_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = db_rows
     return FXService(
         rate_fetcher=rate_fetcher or (lambda c: None),
         session_factory=lambda: fake_db,
