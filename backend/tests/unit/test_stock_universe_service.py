@@ -12,6 +12,7 @@ from app.models.stock_universe import (
     StockUniverseReconciliationRun,
     StockUniverseStatusEvent,
     UNIVERSE_STATUS_ACTIVE,
+    UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
 )
 from app.services.stock_universe_service import StockUniverseService
@@ -869,4 +870,103 @@ def test_ingest_hk_reconciliation_preserves_existing_snapshot_baseline_on_rerun(
     assert second_a["reconciliation"]["previous_snapshot_id"] is None
     assert second_a["reconciliation"]["artifact_hash"] == first_a["reconciliation"]["artifact_hash"]
     assert run_b.previous_snapshot_id == "hk-20260412-a"
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_quarantines_unsafe_deactivation(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_QUARANTINE_ENFORCED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MIN_COUNT_HK", "0")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MAX_REMOVED_PERCENT", "20")
+    monkeypatch.setenv("ASIA_RECONCILIATION_ANOMALY_PERCENT", "90")
+
+    baseline_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=baseline_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-a",
+    )
+
+    reduced_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+    ]
+    stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=reduced_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260412-b",
+    )
+
+    safety = stats["reconciliation"]["safety"]
+    hsbc = db.query(StockUniverse).filter(StockUniverse.symbol == "0005.HK").one()
+    shk = db.query(StockUniverse).filter(StockUniverse.symbol == "0016.HK").one()
+
+    assert safety["quarantined"] is True
+    assert safety["destructive_apply_blocked"] is True
+    assert safety["deactivated_count"] == 0
+    assert any(breach["gate"] == "max_removed_percent" for breach in safety["gate_breaches"])
+    assert safety["alerts"]
+    assert hsbc.status == UNIVERSE_STATUS_ACTIVE
+    assert hsbc.is_active is True
+    assert shk.status == UNIVERSE_STATUS_ACTIVE
+    assert shk.is_active is True
+    db.close()
+
+
+def test_ingest_hk_snapshot_rows_applies_safe_deactivation_when_enabled(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    monkeypatch.setenv("ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_QUARANTINE_ENFORCED", "true")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MIN_COUNT_HK", "0")
+    monkeypatch.setenv("ASIA_RECONCILIATION_MAX_REMOVED_PERCENT", "90")
+    monkeypatch.setenv("ASIA_RECONCILIATION_ANOMALY_PERCENT", "90")
+
+    baseline_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "5", "exchange": "SEHK", "name": "HSBC"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=baseline_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260413-a",
+    )
+
+    updated_rows = [
+        {"symbol": "700", "exchange": "SEHK", "name": "Tencent"},
+        {"symbol": "16", "exchange": "SEHK", "name": "Sun Hung Kai"},
+    ]
+    stats = stock_universe_service.ingest_hk_snapshot_rows(
+        db,
+        rows=updated_rows,
+        source_name="hkex_official",
+        snapshot_id="hk-20260413-b",
+    )
+
+    safety = stats["reconciliation"]["safety"]
+    hsbc = db.query(StockUniverse).filter(StockUniverse.symbol == "0005.HK").one()
+    events = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "0005.HK")
+        .all()
+    )
+
+    assert safety["quarantined"] is False
+    assert safety["allow_destructive_apply"] is True
+    assert safety["deactivated_count"] == 1
+    assert safety["deactivated_symbols"] == ["0005.HK"]
+    assert hsbc.status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE
+    assert hsbc.is_active is False
+    assert any(event.new_status == UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE for event in events)
     db.close()

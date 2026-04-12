@@ -8,6 +8,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
@@ -24,6 +25,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
 from .jp_universe_ingestion_adapter import jp_universe_ingestion_adapter
 from .security_master_service import security_master_resolver
@@ -572,6 +574,267 @@ class StockUniverseService:
         }
 
     @staticmethod
+    def _min_count_threshold_for_market(market: str) -> int:
+        default_min = StockUniverseService._safety_int_setting(
+            field_name="asia_reconciliation_min_count_default",
+            env_name="ASIA_RECONCILIATION_MIN_COUNT_DEFAULT",
+            default=0,
+        )
+        normalized_market = (market or "").strip().upper()
+        if normalized_market == "HK":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_hk",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_HK",
+                default=default_min,
+            )
+        if normalized_market == "JP":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_jp",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_JP",
+                default=default_min,
+            )
+        if normalized_market == "TW":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_tw",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_TW",
+                default=default_min,
+            )
+        return default_min
+
+    @staticmethod
+    def _safety_bool_setting(*, field_name: str, env_name: str, default: bool) -> bool:
+        if hasattr(settings, field_name):
+            return bool(getattr(settings, field_name))
+        raw = (os.getenv(env_name) or "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    @staticmethod
+    def _safety_int_setting(*, field_name: str, env_name: str, default: int) -> int:
+        if hasattr(settings, field_name):
+            return max(0, int(getattr(settings, field_name)))
+        raw = (os.getenv(env_name) or "").strip()
+        if not raw:
+            return max(0, int(default))
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return max(0, int(default))
+
+    @staticmethod
+    def _safety_float_setting(*, field_name: str, env_name: str, default: float) -> float:
+        if hasattr(settings, field_name):
+            return float(getattr(settings, field_name))
+        raw = (os.getenv(env_name) or "").strip()
+        if not raw:
+            return float(default)
+        try:
+            return float(raw)
+        except ValueError:
+            return float(default)
+
+    def _evaluate_reconciliation_safety(
+        self,
+        *,
+        market: str,
+        snapshot_id: str,
+        counts: Mapping[str, Any],
+        removed_symbols: list[str],
+    ) -> dict[str, Any]:
+        total_current = int(counts.get("total_current") or 0)
+        total_previous = int(counts.get("total_previous") or 0)
+        removed_count = int(counts.get("removed") or 0)
+        changed_count = int(counts.get("changed") or 0)
+
+        min_count_threshold = self._min_count_threshold_for_market(market)
+        max_removed_percent = self._safety_float_setting(
+            field_name="asia_reconciliation_max_removed_percent",
+            env_name="ASIA_RECONCILIATION_MAX_REMOVED_PERCENT",
+            default=25.0,
+        )
+        anomaly_percent_threshold = self._safety_float_setting(
+            field_name="asia_reconciliation_anomaly_percent",
+            env_name="ASIA_RECONCILIATION_ANOMALY_PERCENT",
+            default=35.0,
+        )
+
+        removed_percent = (removed_count / total_previous * 100.0) if total_previous > 0 else 0.0
+        anomaly_percent = (
+            (removed_count + changed_count) / total_previous * 100.0
+            if total_previous > 0
+            else 0.0
+        )
+
+        gate_breaches: list[dict[str, Any]] = []
+        if total_current < min_count_threshold:
+            gate_breaches.append(
+                {
+                    "gate": "min_count",
+                    "actual": total_current,
+                    "threshold": min_count_threshold,
+                    "comparator": ">=",
+                }
+            )
+        if total_previous > 0 and removed_percent > max_removed_percent:
+            gate_breaches.append(
+                {
+                    "gate": "max_removed_percent",
+                    "actual": round(removed_percent, 4),
+                    "threshold": round(max_removed_percent, 4),
+                    "comparator": "<=",
+                }
+            )
+        if total_previous > 0 and anomaly_percent > anomaly_percent_threshold:
+            gate_breaches.append(
+                {
+                    "gate": "anomaly_percent",
+                    "actual": round(anomaly_percent, 4),
+                    "threshold": round(anomaly_percent_threshold, 4),
+                    "comparator": "<=",
+                }
+            )
+
+        apply_destructive_enabled = self._safety_bool_setting(
+            field_name="asia_universe_apply_destructive_enabled",
+            env_name="ASIA_UNIVERSE_APPLY_DESTRUCTIVE_ENABLED",
+            default=False,
+        )
+        quarantine_enforced = self._safety_bool_setting(
+            field_name="asia_reconciliation_quarantine_enforced",
+            env_name="ASIA_RECONCILIATION_QUARANTINE_ENFORCED",
+            default=True,
+        )
+        quarantined = bool(gate_breaches) and quarantine_enforced
+        allow_destructive_apply = apply_destructive_enabled and not quarantined
+        destructive_apply_blocked = bool(removed_symbols) and not allow_destructive_apply
+
+        alerts: list[str] = []
+        if gate_breaches:
+            alerts.append(
+                f"{market} snapshot {snapshot_id} breached reconciliation safety thresholds"
+            )
+        if destructive_apply_blocked and not apply_destructive_enabled:
+            alerts.append(
+                "Destructive apply disabled by asia_universe_apply_destructive_enabled=false"
+            )
+        if destructive_apply_blocked and quarantined:
+            alerts.append(
+                "Destructive apply blocked by enforced reconciliation quarantine"
+            )
+
+        return {
+            "quarantined": quarantined,
+            "apply_destructive_enabled": apply_destructive_enabled,
+            "quarantine_enforced": quarantine_enforced,
+            "allow_destructive_apply": allow_destructive_apply,
+            "destructive_apply_blocked": destructive_apply_blocked,
+            "gate_breaches": gate_breaches,
+            "thresholds": {
+                "min_count": min_count_threshold,
+                "max_removed_percent": max_removed_percent,
+                "anomaly_percent": anomaly_percent_threshold,
+            },
+            "metrics": {
+                "total_current": total_current,
+                "total_previous": total_previous,
+                "removed_percent": round(removed_percent, 4),
+                "anomaly_percent": round(anomaly_percent, 4),
+            },
+            "alerts": alerts,
+        }
+
+    def _apply_market_reconciliation_policy(
+        self,
+        db: Session,
+        *,
+        market: str,
+        snapshot_id: str,
+        trigger_source: str,
+        reconciliation: Mapping[str, Any],
+        now: datetime,
+    ) -> dict[str, Any]:
+        run_id = int(reconciliation.get("run_id") or 0)
+        run = (
+            db.query(StockUniverseReconciliationRun)
+            .filter(StockUniverseReconciliationRun.id == run_id)
+            .one_or_none()
+        )
+        if run is None:
+            raise ValueError(f"Missing reconciliation run {run_id} for {market}:{snapshot_id}")
+
+        artifact_payload = json.loads(run.artifact_json or "{}")
+        removed_symbols_full = sorted(
+            {
+                str(symbol).strip().upper()
+                for symbol in artifact_payload.get("removed_symbols", [])
+                if str(symbol).strip()
+            }
+        )
+        safety = self._evaluate_reconciliation_safety(
+            market=market,
+            snapshot_id=snapshot_id,
+            counts=reconciliation.get("counts") or {},
+            removed_symbols=removed_symbols_full,
+        )
+
+        deactivated_symbols: list[str] = []
+        if safety["allow_destructive_apply"] and removed_symbols_full:
+            candidates = (
+                db.query(StockUniverse)
+                .filter(
+                    StockUniverse.market == market,
+                    StockUniverse.symbol.in_(removed_symbols_full),
+                )
+                .all()
+            )
+            for record in candidates:
+                if self._normalize_status(record) != UNIVERSE_STATUS_ACTIVE:
+                    continue
+                changed = self._apply_status_transition(
+                    db,
+                    record,
+                    new_status=UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
+                    trigger_source=f"{trigger_source}_reconcile_apply",
+                    reason=f"Missing from {market} source snapshot {snapshot_id}",
+                    now=now,
+                    payload={
+                        "snapshot_id": snapshot_id,
+                        "reconciliation_run_id": run_id,
+                        "market": market,
+                    },
+                )
+                if changed:
+                    deactivated_symbols.append(record.symbol)
+
+        if safety["alerts"]:
+            logger.warning(
+                "UNIVERSE SAFETY ALERT market=%s snapshot=%s run_id=%s alerts=%s breaches=%s",
+                market,
+                snapshot_id,
+                run_id,
+                safety["alerts"],
+                safety["gate_breaches"],
+            )
+
+        details_limit = 25
+        safety["deactivated_count"] = len(deactivated_symbols)
+        safety["deactivated_symbols"] = sorted(deactivated_symbols)[:details_limit]
+        safety["deactivated_symbols_truncated"] = len(deactivated_symbols) > details_limit
+
+        artifact_payload["safety"] = safety
+        run.artifact_json = self._stable_json(artifact_payload)
+        run.artifact_hash = self._sha256_text(run.artifact_json)
+        db.flush()
+
+        updated_reconciliation = dict(reconciliation)
+        updated_reconciliation["artifact_hash"] = run.artifact_hash
+        updated_reconciliation["safety"] = safety
+        return updated_reconciliation
+
+    @staticmethod
     def _parse_hk_csv_rows(csv_content: str) -> list[dict[str, Any]]:
         """Parse HK ingestion CSV into normalized lowercase-key row dicts."""
         csv_file = io.StringIO(csv_content)
@@ -719,6 +982,14 @@ class StockUniverseService:
             source_name=source_name,
             snapshot_id=snapshot_id,
             canonical_rows=canonicalized.canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="HK",
+            snapshot_id=snapshot_id,
+            trigger_source="hk_ingest",
+            reconciliation=reconciliation,
+            now=now,
         )
         db.commit()
         details_limit = 25
@@ -929,6 +1200,14 @@ class StockUniverseService:
             snapshot_id=snapshot_id,
             canonical_rows=canonicalized.canonical_rows,
         )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="JP",
+            snapshot_id=snapshot_id,
+            trigger_source="jp_ingest",
+            reconciliation=reconciliation,
+            now=now,
+        )
         db.commit()
         details_limit = 25
         canonical_preview = canonicalized.canonical_rows[:details_limit]
@@ -1137,6 +1416,14 @@ class StockUniverseService:
             source_name=source_name,
             snapshot_id=snapshot_id,
             canonical_rows=canonicalized.canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="TW",
+            snapshot_id=snapshot_id,
+            trigger_source="tw_ingest",
+            reconciliation=reconciliation,
+            now=now,
         )
         db.commit()
         details_limit = 25
