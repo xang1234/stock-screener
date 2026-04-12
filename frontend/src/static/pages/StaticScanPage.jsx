@@ -64,6 +64,8 @@ function StaticScanPage() {
     () => applyScanFilterDefaults(scanManifestQuery.data?.default_filters),
     [scanManifestQuery.data?.default_filters]
   );
+  const manifestDefaultSortBy = scanManifestQuery.data?.sort?.field ?? 'composite_score';
+  const manifestDefaultSortOrder = scanManifestQuery.data?.sort?.order ?? 'desc';
   const presetScreens = scanManifestQuery.data?.preset_screens;
 
   useEffect(() => {
@@ -176,8 +178,8 @@ function StaticScanPage() {
     setActiveScreenId(screenId);
     if (!screenId) {
       setFilters(manifestDefaultFilters);
-      setSortBy('composite_score');
-      setSortOrder('desc');
+      setSortBy(manifestDefaultSortBy);
+      setSortOrder(manifestDefaultSortOrder);
     } else {
       const screen = presetScreens?.find((s) => s.id === screenId);
       if (screen) {
@@ -186,7 +188,7 @@ function StaticScanPage() {
         setSortOrder(screen.sort_order);
       }
     }
-  }, [presetScreens, manifestDefaultFilters, setActiveScreenId]);
+  }, [presetScreens, manifestDefaultFilters, manifestDefaultSortBy, manifestDefaultSortOrder, setActiveScreenId]);
 
   const filterKey = useMemo(() => getStableFilterKey(filters), [filters]);
   useEffect(() => {
@@ -299,7 +301,7 @@ function StaticScanPage() {
         <FilterPanel
           filters={filters}
           onFilterChange={setFilters}
-          onReset={() => { setFilters(manifestDefaultFilters); setActiveScreenId(null); }}
+          onReset={() => { setFilters(manifestDefaultFilters); setSortBy(manifestDefaultSortBy); setSortOrder(manifestDefaultSortOrder); setActiveScreenId(null); }}
           filterOptions={normalizeScanFilterOptions(scanManifestQuery.data.filter_options)}
           expanded={showFilters}
           onToggle={() => setShowFilters((previous) => !previous)}
