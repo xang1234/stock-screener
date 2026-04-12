@@ -204,6 +204,12 @@ def apply_quality_policy(
         return QualityAdjustment(rating=rating, reason=None)
 
     if field_completeness_score < QUALITY_EXCLUSION_THRESHOLD:
+        if rating is RatingCategory.PASS:
+            # Row was already PASS for other reasons (low composite score
+            # or pass-rate downgrade). Don't attribute the PASS to the
+            # quality policy — misleading. Floor-case consistent with
+            # the downgrade branch below.
+            return QualityAdjustment(rating=rating, reason=None)
         return QualityAdjustment(
             rating=RatingCategory.PASS,
             reason=(

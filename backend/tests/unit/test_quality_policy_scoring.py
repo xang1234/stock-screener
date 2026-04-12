@@ -47,12 +47,12 @@ class TestPassThrough:
 
 
 class TestExclusion:
-    """Completeness below EXCLUSION_THRESHOLD → force PASS with reason."""
+    """Completeness below EXCLUSION_THRESHOLD → force PASS with reason
+    (unless rating was already PASS for other reasons)."""
 
     @pytest.mark.parametrize("completeness", [0, 10, 29])
     @pytest.mark.parametrize("rating", [
-        RatingCategory.STRONG_BUY, RatingCategory.BUY,
-        RatingCategory.WATCH, RatingCategory.PASS,
+        RatingCategory.STRONG_BUY, RatingCategory.BUY, RatingCategory.WATCH,
     ])
     def test_very_low_completeness_forces_pass(self, rating, completeness):
         result = apply_quality_policy(rating, completeness)
@@ -60,6 +60,14 @@ class TestExclusion:
         assert result.reason is not None
         assert str(completeness) in result.reason
         assert "exclusion" in result.reason
+
+    def test_pass_in_stays_pass_without_attributing_to_policy(self):
+        """If the row was already PASS (low composite score or pass-rate
+        downgrade), the quality policy didn't cause the PASS — so no
+        reason should be recorded. Consistent with the downgrade floor."""
+        result = apply_quality_policy(RatingCategory.PASS, 10)
+        assert result.rating is RatingCategory.PASS
+        assert result.reason is None
 
     def test_boundary_at_exclusion_threshold_is_downgrade_not_exclusion(self):
         """At exactly EXCLUSION_THRESHOLD, we're in the DOWNGRADE band."""
