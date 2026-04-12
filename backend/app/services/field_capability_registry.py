@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from typing import Dict, Mapping, Tuple
 
 from . import provider_routing_policy as routing_policy
-from .fundamentals_completeness import field_source_map, field_tier_map, screening_fields
+from .finviz_parser import FinvizParser
+from .fundamentals_completeness import (
+    ENHANCED_FIELDS,
+    TECHNICAL_FIELDS,
+    field_source_map,
+    field_tier_map,
+    screening_fields,
+)
 
 SUPPORT_STATE_SUPPORTED = "supported"
 SUPPORT_STATE_COMPUTED = "computed"
@@ -65,19 +72,80 @@ class FieldCapabilityRegistryService:
         SUPPORT_STATE_UNSUPPORTED,
     )
 
+    def __init__(self) -> None:
+        self._provider_supported_fields = self._build_provider_supported_fields()
+
+    @staticmethod
+    def _finviz_supported_fields() -> frozenset[str]:
+        all_finviz_fields = set(FinvizParser.FUNDAMENTAL_FIELD_MAP.values())
+        all_finviz_fields.update(FinvizParser.GROWTH_FIELD_MAP.values())
+        return frozenset(all_finviz_fields & set(screening_fields()))
+
+    def _build_provider_supported_fields(self) -> Dict[str, frozenset[str]]:
+        fields = set(screening_fields())
+        technical_fields = set(TECHNICAL_FIELDS)
+        finviz_only_fields = set(ENHANCED_FIELDS)
+        return {
+            routing_policy.PROVIDER_FINVIZ: self._finviz_supported_fields(),
+            # yfinance supports the baseline screening surface; enhanced
+            # finviz-only and local technicals are excluded.
+            routing_policy.PROVIDER_YFINANCE: frozenset(
+                fields - finviz_only_fields - technical_fields
+            ),
+            # Keep alphavantage fail-closed until field-level support is
+            # explicitly mapped and integrated in pipeline flows.
+            routing_policy.PROVIDER_ALPHAVANTAGE: frozenset(),
+            SOURCE_TECHNICALS: frozenset(technical_fields),
+        }
+
+    def _provider_state_for_market(
+        self,
+        field: str,
+        market: str,
+        provider: str,
+        canonical_provider: str,
+        canonical_support_state: str,
+    ) -> str:
+        if field not in self._provider_supported_fields[provider]:
+            return SUPPORT_STATE_UNSUPPORTED
+
+        if provider == SOURCE_TECHNICALS:
+            return SUPPORT_STATE_COMPUTED
+
+        policy_chain = routing_policy.providers_for(market)
+        if provider not in policy_chain:
+            return SUPPORT_STATE_UNSUPPORTED
+
+        if provider == canonical_provider:
+            return canonical_support_state
+
+        return (
+            SUPPORT_STATE_SUPPORTED
+            if policy_chain.index(provider) == 0
+            else SUPPORT_STATE_PARTIAL
+        )
+
     def _provider_states(
         self,
+        field: str,
+        market: str,
         canonical_provider: str,
-        support_state: str,
+        canonical_support_state: str,
     ) -> Dict[str, str]:
-        provider_states = {
-            provider: SUPPORT_STATE_UNSUPPORTED for provider in self.PROVIDER_ORDER
+        return {
+            provider: self._provider_state_for_market(
+                field=field,
+                market=market,
+                provider=provider,
+                canonical_provider=canonical_provider,
+                canonical_support_state=canonical_support_state,
+            )
+            for provider in self.PROVIDER_ORDER
         }
-        provider_states[canonical_provider] = support_state
-        return provider_states
 
     def _market_capability(
         self,
+        field: str,
         market: str,
         canonical_provider: str,
     ) -> FieldMarketCapability:
@@ -94,8 +162,10 @@ class FieldCapabilityRegistryService:
                 providers_before_canonical=tuple(),
                 providers_after_canonical=tuple(),
                 provider_states=self._provider_states(
+                    field=field,
+                    market=market,
                     canonical_provider=canonical_provider,
-                    support_state=SUPPORT_STATE_COMPUTED,
+                    canonical_support_state=SUPPORT_STATE_COMPUTED,
                 ),
             )
 
@@ -110,8 +180,10 @@ class FieldCapabilityRegistryService:
                 providers_before_canonical=tuple(),
                 providers_after_canonical=tuple(),
                 provider_states=self._provider_states(
+                    field=field,
+                    market=market,
                     canonical_provider=canonical_provider,
-                    support_state=SUPPORT_STATE_UNSUPPORTED,
+                    canonical_support_state=SUPPORT_STATE_UNSUPPORTED,
                 ),
             )
 
@@ -133,8 +205,10 @@ class FieldCapabilityRegistryService:
             providers_before_canonical=policy_chain[:position],
             providers_after_canonical=policy_chain[position + 1 :],
             provider_states=self._provider_states(
+                field=field,
+                market=market,
                 canonical_provider=canonical_provider,
-                support_state=support_state,
+                canonical_support_state=support_state,
             ),
         )
 
@@ -151,7 +225,7 @@ class FieldCapabilityRegistryService:
                 continue
 
             market_caps = {
-                market: self._market_capability(market, source)
+                market: self._market_capability(field, market, source)
                 for market in self.MARKET_ORDER
             }
             entries.append(

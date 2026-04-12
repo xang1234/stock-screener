@@ -69,6 +69,8 @@ def test_yfinance_core_field_is_partial_for_us_and_supported_for_asia():
     assert us["canonical_provider_position"] == 1
     assert us["providers_before_canonical"] == [PROVIDER_FINVIZ]
     assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+    # Finviz can also supply market_cap in US and is primary in the chain.
+    assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_SUPPORTED
 
     for market in (MARKET_HK, MARKET_JP, MARKET_TW):
         row = market_cap[market]
@@ -77,6 +79,7 @@ def test_yfinance_core_field_is_partial_for_us_and_supported_for_asia():
         assert row["fallback_behavior"] == FALLBACK_BEHAVIOR_PRIMARY
         assert row["canonical_provider_position"] == 0
         assert row["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_SUPPORTED
+        assert row["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_UNSUPPORTED
 
 
 def test_finviz_only_field_is_unsupported_for_non_us_markets():
@@ -102,7 +105,17 @@ def test_technical_fields_are_computed_for_all_markets():
     artifact = field_capability_registry.artifact()
     rsi = _field_map(artifact)["rsi_14"]["markets"]
 
-    for market in (MARKET_US, MARKET_HK, MARKET_JP, MARKET_TW):
+    us = rsi[MARKET_US]
+    assert us["canonical_provider"] == SOURCE_TECHNICALS
+    assert us["support_state"] == SUPPORT_STATE_COMPUTED
+    assert us["fallback_behavior"] == FALLBACK_BEHAVIOR_COMPUTED
+    assert us["canonical_provider_position"] is None
+    assert us["provider_states"][SOURCE_TECHNICALS] == SUPPORT_STATE_COMPUTED
+    # Finviz can provide RSI in US but technicals remain canonical.
+    assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_SUPPORTED
+    assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_UNSUPPORTED
+
+    for market in (MARKET_HK, MARKET_JP, MARKET_TW):
         row = rsi[market]
         assert row["canonical_provider"] == SOURCE_TECHNICALS
         assert row["support_state"] == SUPPORT_STATE_COMPUTED
@@ -117,3 +130,20 @@ def test_registry_artifact_is_repeatable():
     first = field_capability_registry.artifact()
     second = field_capability_registry.artifact()
     assert first == second
+
+
+def test_auxiliary_scan_field_is_enumerated():
+    artifact = field_capability_registry.artifact()
+    first_trade_date = _field_map(artifact)["first_trade_date"]["markets"]
+    assert _field_map(artifact)["first_trade_date"]["tier"] == "auxiliary"
+
+    us = first_trade_date[MARKET_US]
+    assert us["canonical_provider"] == PROVIDER_YFINANCE
+    assert us["support_state"] == SUPPORT_STATE_PARTIAL
+    assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+    assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_UNSUPPORTED
+
+    for market in (MARKET_HK, MARKET_JP, MARKET_TW):
+        row = first_trade_date[market]
+        assert row["support_state"] == SUPPORT_STATE_SUPPORTED
+        assert row["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_SUPPORTED

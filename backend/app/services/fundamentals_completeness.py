@@ -149,6 +149,28 @@ STANDARD_FIELDS: FrozenSet[str] = frozenset({
     "dividend_yield",
 })
 
+# Fields computed locally from cached price history rather than fetched
+# directly from a remote fundamentals provider.
+TECHNICAL_FIELDS: FrozenSet[str] = frozenset({
+    "rsi_14",
+    "atr_14",
+    "sma_20",
+    "sma_50",
+    "sma_200",
+    "volatility_week",
+    "volatility_month",
+    "perf_week",
+    "perf_month",
+    "perf_quarter",
+    "perf_half_year",
+    "perf_year",
+    "perf_ytd",
+    "week_52_high",
+    "week_52_low",
+    "week_52_high_distance",
+    "week_52_low_distance",
+})
+
 # Fields only the finviz provider supplies in the hybrid pipeline.
 # Not expected for markets where routing excludes finviz.
 ENHANCED_FIELDS: FrozenSet[str] = frozenset({
@@ -164,6 +186,15 @@ ENHANCED_FIELDS: FrozenSet[str] = frozenset({
     "roic",
     "price_to_cash",
     "price_to_fcf",
+})
+
+# Scan-critical fields that are not part of completeness scoring tiers.
+# These are still screening fields and must be represented in capability
+# artifacts used by transparency/governance surfaces.
+AUXILIARY_FIELDS: FrozenSet[str] = frozenset({
+    "first_trade_date",
+    "recent_quarter_date",
+    "previous_quarter_date",
 })
 
 
@@ -182,20 +213,15 @@ def _build_field_source_map() -> Mapping[str, str]:
     for field in ENHANCED_FIELDS:
         mapping[field] = routing_policy.PROVIDER_FINVIZ
     # Technical-calculator fields.
-    for field in (
-        "rsi_14", "atr_14", "sma_20", "sma_50", "sma_200",
-        "volatility_week", "volatility_month",
-        "perf_week", "perf_month", "perf_quarter",
-        "perf_half_year", "perf_year", "perf_ytd",
-        "week_52_high", "week_52_low",
-        "week_52_high_distance", "week_52_low_distance",
-    ):
+    for field in TECHNICAL_FIELDS:
         mapping[field] = _SOURCE_TECHNICALS
     # Everything else in CORE/STANDARD that isn't technicals comes from
     # yfinance as the baseline provider (finviz may overwrite some in US,
     # but we tag the *canonical* source — the one that guarantees the
     # field exists across markets).
     for field in CORE_FIELDS | STANDARD_FIELDS:
+        mapping.setdefault(field, routing_policy.PROVIDER_YFINANCE)
+    for field in AUXILIARY_FIELDS:
         mapping.setdefault(field, routing_policy.PROVIDER_YFINANCE)
     return mapping
 
@@ -211,6 +237,8 @@ def _build_field_tier_map() -> Mapping[str, str]:
         mapping[field] = "standard"
     for field in ENHANCED_FIELDS:
         mapping[field] = "enhanced"
+    for field in AUXILIARY_FIELDS:
+        mapping[field] = "auxiliary"
     return mapping
 
 

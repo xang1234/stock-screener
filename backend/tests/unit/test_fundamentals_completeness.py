@@ -1,8 +1,6 @@
 """Unit tests for market-aware fundamentals completeness and provenance."""
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from app.services.fundamentals_completeness import (
@@ -12,6 +10,7 @@ from app.services.fundamentals_completeness import (
     compute_completeness_score,
     derive_field_provenance,
     expected_fields,
+    screening_fields,
 )
 from app.services.provider_routing_policy import (
     MARKET_HK,
@@ -108,17 +107,16 @@ class TestCompletenessScore:
 
 
 class TestFieldSourceMapConsistency:
-    """Every field in the source map must be expected by at least one market,
-    otherwise the map entry is dead code and its field is silently ignored."""
+    """Every field in the source map must be represented in the screening
+    capability surface, otherwise the map entry is dead code."""
 
-    def test_every_source_map_field_is_expected_somewhere(self):
-        # Expected fields across ALL markets is the US set (superset).
+    def test_every_source_map_field_is_in_screening_surface(self):
         from app.services.fundamentals_completeness import _FIELD_SOURCE
-        us_expected = expected_fields(MARKET_US)
-        orphans = set(_FIELD_SOURCE.keys()) - set(us_expected)
+        surface = screening_fields()
+        orphans = set(_FIELD_SOURCE.keys()) - set(surface)
         assert not orphans, (
-            f"Fields in _FIELD_SOURCE but not in any expected tier: {orphans}. "
-            "Either add them to CORE/STANDARD/ENHANCED or drop the map entry."
+            f"Fields in _FIELD_SOURCE but not in screening surface: {orphans}. "
+            "Either add them to screening_fields() or drop the map entry."
         )
 
 
