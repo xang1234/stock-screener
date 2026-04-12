@@ -451,15 +451,15 @@ class FundamentalsCacheService:
         """
         changed = False
         resolved_market = market if market is not None else self._resolve_market(symbol)
-        if "field_completeness_score" not in data:
+        if data.get("field_completeness_score") is None:
             data["field_completeness_score"] = compute_completeness_score(
                 data, resolved_market
             )
             changed = True
-        if "field_provenance" not in data:
+        if not isinstance(data.get("field_provenance"), dict):
             data["field_provenance"] = derive_field_provenance(data, resolved_market)
             changed = True
-        if "field_availability" not in data:
+        if not isinstance(data.get("field_availability"), dict):
             data["field_availability"] = (
                 field_capability_registry.derive_ownership_sentiment_availability(
                     data, resolved_market
@@ -467,14 +467,26 @@ class FundamentalsCacheService:
             )
             changed = True
 
+        previous_fx_values = (
+            data.get("market_cap_usd"),
+            data.get("adv_usd"),
+            data.get("fx_metadata"),
+        )
         missing_fx_metadata = (
-            "market_cap_usd" not in data
-            or "adv_usd" not in data
-            or "fx_metadata" not in data
+            data.get("market_cap_usd") is None
+            or data.get("adv_usd") is None
+            or not isinstance(data.get("fx_metadata"), dict)
         )
         if missing_fx_metadata:
             self._enrich_with_fx_normalization(data, resolved_market)
-            changed = True
+            changed = changed or (
+                previous_fx_values
+                != (
+                    data.get("market_cap_usd"),
+                    data.get("adv_usd"),
+                    data.get("fx_metadata"),
+                )
+            )
 
         return changed
 

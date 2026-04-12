@@ -12,13 +12,14 @@ import pytest
 
 from app.models.stock import StockFundamental
 from app.services.fundamentals_cache_service import FundamentalsCacheService
-from app.services.fx_service import FXQuote, FXService
+from app.services.fx_service import FXService
 
 
 def _make_fx(rate_by_currency):
     """FX service with a deterministic in-memory fetcher."""
     return FXService(
         rate_fetcher=lambda c: rate_by_currency.get(c),
+        rate_fetch_source=FXService.SOURCE_YFINANCE,
         session_factory=lambda: _dummy_session(),
         redis_client=None,
     )

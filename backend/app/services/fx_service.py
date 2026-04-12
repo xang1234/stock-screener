@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
@@ -72,8 +72,8 @@ def currency_for_market(market: str | None) -> str:
     return MARKET_CURRENCY_MAP.get(market.strip().upper(), USD)
 
 
-RateFetcher = Callable[[str], Optional[float | Tuple[float, date]]]
-"""``fetcher(from_currency) -> rate`` or ``(rate, as_of_date)``.
+RateFetcher = Callable[[str], Optional[float | Tuple[float, date] | Tuple[float, date, str]]]
+"""``fetcher(from_currency) -> rate`` / ``(rate, as_of_date)`` / ``(rate, as_of_date, source)``.
 
 Returning ``None`` signals "unavailable" so the caller can fall back to
 NULL USD columns rather than silently assume a rate.
@@ -163,15 +163,22 @@ class FXService:
     SOURCE_IDENTITY = "identity"
     SOURCE_YFINANCE = "yfinance"
     SOURCE_DATABASE = "database"
+    SOURCE_FETCHER = "fetcher"
 
     def __init__(
         self,
         *,
         rate_fetcher: Optional[RateFetcher] = None,
+        rate_fetch_source: Optional[str] = None,
         session_factory: Optional[Callable] = None,
         redis_client: Optional[Any] = None,
     ):
-        self._rate_fetcher: RateFetcher = rate_fetcher or _yfinance_rate_fetcher
+        if rate_fetcher is None:
+            self._rate_fetcher = _yfinance_rate_fetcher
+            self._rate_fetch_source = self.SOURCE_YFINANCE
+        else:
+            self._rate_fetcher = rate_fetcher
+            self._rate_fetch_source = rate_fetch_source or self.SOURCE_FETCHER
         if session_factory is None:
             from ..database import SessionLocal
             session_factory = SessionLocal
@@ -205,13 +212,18 @@ class FXService:
                 source=self.SOURCE_IDENTITY,
             )
         today = date.today()
+        latest_close = self._latest_trading_close(today)
         stale_quote: Optional[FXQuote] = None
 
         # 1. In-memory cache — stale if the quote is from a prior day. Without
         # this check, a long-lived Celery worker would keep yesterday's rate
         # forever since the memo has no TTL.
         memoed = self._memo.get(currency)
-        if memoed is not None and memoed.as_of_date == today:
+        if memoed is not None and self._is_fresh_quote_date(
+            memoed.as_of_date,
+            today=today,
+            latest_close=latest_close,
+        ):
             return memoed
         if memoed is not None:
             stale_quote = memoed
@@ -219,7 +231,11 @@ class FXService:
         # 2. Redis
         quote = self._read_redis(currency)
         if quote is not None:
-            if quote.as_of_date == today:
+            if self._is_fresh_quote_date(
+                quote.as_of_date,
+                today=today,
+                latest_close=latest_close,
+            ):
                 self._memo[currency] = quote
                 return quote
             stale_quote = quote
@@ -227,7 +243,11 @@ class FXService:
         # 3. DB (most recent row)
         quote = self._read_database(currency)
         if quote is not None:
-            if quote.as_of_date == today:
+            if self._is_fresh_quote_date(
+                quote.as_of_date,
+                today=today,
+                latest_close=latest_close,
+            ):
                 self._memo[currency] = quote
                 self._write_redis(quote)
                 return quote
@@ -257,6 +277,24 @@ class FXService:
         self._write_redis(quote)
         self._memo[currency] = quote
         return quote
+
+    @staticmethod
+    def _latest_trading_close(reference_date: date) -> date:
+        """Return the most recent weekday close date (weekends roll back)."""
+        close_date = reference_date
+        while close_date.weekday() >= 5:
+            close_date -= timedelta(days=1)
+        return close_date
+
+    @staticmethod
+    def _is_fresh_quote_date(
+        quote_date: date,
+        *,
+        today: date,
+        latest_close: date,
+    ) -> bool:
+        """Treat either today's quote or latest trading close as fresh."""
+        return quote_date == today or quote_date == latest_close
 
     def convert_to_usd(
         self,
@@ -293,13 +331,19 @@ class FXService:
     def _quote_from_fetch_result(
         self,
         currency: str,
-        fetched: Optional[float | Tuple[float, date]],
+        fetched: Optional[float | Tuple[float, date] | Tuple[float, date, str]],
     ) -> Optional[FXQuote]:
         """Normalize fetcher output to a concrete ``FXQuote``."""
         if fetched is None:
             return None
+        source = self._rate_fetch_source
         if isinstance(fetched, tuple):
-            rate, as_of_date = fetched
+            if len(fetched) == 3:
+                rate, as_of_date, source = fetched
+            elif len(fetched) == 2:
+                rate, as_of_date = fetched
+            else:
+                return None
         else:
             rate, as_of_date = fetched, date.today()
         if rate is None:
@@ -312,7 +356,7 @@ class FXService:
             to_currency=USD,
             rate=rate_value,
             as_of_date=as_of_date,
-            source=self.SOURCE_YFINANCE,
+            source=source,
         )
 
     # --- Redis ------------------------------------------------------------

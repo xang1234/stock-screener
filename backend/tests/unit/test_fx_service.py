@@ -112,7 +112,7 @@ class TestLookupChain:
         quote = svc.get_usd_rate("HKD")
         assert quote is not None
         assert quote.rate == 0.128
-        assert quote.source == FXService.SOURCE_YFINANCE
+        assert quote.source == FXService.SOURCE_FETCHER
         assert calls == ["HKD"]
 
     def test_memo_short_circuits_repeat_call(self):
@@ -139,6 +139,14 @@ class TestLookupChain:
         assert quote is not None
         assert quote.rate == 0.128
         assert quote.as_of_date == market_date
+        assert quote.source == FXService.SOURCE_FETCHER
+
+    def test_fetcher_tuple_can_provide_explicit_source(self):
+        market_date = date(2026, 4, 10)
+        svc = _make_service(rate_fetcher=lambda c: (0.128, market_date, "ecb"))
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.source == "ecb"
 
     def test_stale_database_quote_does_not_block_fresh_fetch(self):
         stale_row = MagicMock()
@@ -157,7 +165,7 @@ class TestLookupChain:
         quote = svc.get_usd_rate("HKD")
         assert quote is not None
         assert quote.rate == 0.128
-        assert quote.source == FXService.SOURCE_YFINANCE
+        assert quote.source == FXService.SOURCE_FETCHER
         assert quote.as_of_date == date.today()
         assert calls == ["HKD"]
 
@@ -185,6 +193,36 @@ class TestLookupChain:
         quote = svc.get_usd_rate("HKD")
         assert quote is not None
         assert quote.source == "yfinance"
+
+    def test_latest_trading_close_rolls_weekend_to_friday(self):
+        svc = _make_service()
+        assert svc._latest_trading_close(date(2026, 4, 11)) == date(2026, 4, 10)
+        assert svc._latest_trading_close(date(2026, 4, 12)) == date(2026, 4, 10)
+
+    def test_weekend_uses_friday_quote_without_refetch(self, monkeypatch):
+        import app.services.fx_service as fx_module
+
+        class _Sunday(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 4, 12)  # Sunday
+
+        monkeypatch.setattr(fx_module, "date", _Sunday)
+
+        fetcher = MagicMock(return_value=0.128)
+        svc = _make_service(rate_fetcher=fetcher)
+        svc._memo["HKD"] = FXQuote(
+            from_currency="HKD",
+            to_currency="USD",
+            rate=0.127,
+            as_of_date=_Sunday(2026, 4, 10),  # Friday close
+            source="yfinance",
+        )
+
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.rate == 0.127
+        fetcher.assert_not_called()
 
 
 class TestConvertToUSD:
