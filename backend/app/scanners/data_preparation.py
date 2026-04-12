@@ -443,7 +443,7 @@ class DataPreparationLayer:
         benchmark_bundle_by_market: dict[str, BenchmarkDataBundle | None] = {}
         all_errors: dict[str, str] = {}
         if requirements.needs_benchmark:
-            unique_markets = sorted({identity.market for identity in identities})
+            unique_markets = sorted({identity.market or "US" for identity in identities})
             for market in unique_markets:
                 try:
                     benchmark_bundle = self._fetch_benchmark_bundle(
@@ -527,9 +527,13 @@ class DataPreparationLayer:
             # CANSLIM now uses eps_growth_yy from fundamentals instead
             earnings_history = None
 
+            # Normalize None market to "US" so None and "US" map to the same
+            # benchmark bucket (consistent with _attach_market_rs_universe_performances).
+            normalized_market = identity.market or "US"
+
             # Create StockData
             market_benchmark_bundle = (
-                benchmark_bundle_by_market.get(identity.market)
+                benchmark_bundle_by_market.get(normalized_market)
                 if requirements.needs_benchmark
                 else None
             )
@@ -541,7 +545,9 @@ class DataPreparationLayer:
             if requirements.needs_benchmark and (
                 market_benchmark_data is None or market_benchmark_data.empty
             ):
-                fetch_errors["benchmark_data"] = f"No benchmark data returned for market {identity.market}"
+                fetch_errors["benchmark_data"] = (
+                    f"No benchmark data returned for market {normalized_market}"
+                )
             results[requested_key] = StockData(
                 symbol=symbol,
                 price_data=price_data if price_data is not None else pd.DataFrame(),
@@ -573,7 +579,7 @@ class DataPreparationLayer:
                     if market_benchmark_bundle is not None
                     else ()
                 ),
-                market=identity.market,
+                market=normalized_market,
                 exchange=identity.exchange,
                 currency=identity.currency,
                 timezone=identity.timezone,

@@ -144,8 +144,11 @@ class RelativeStrengthCalculator:
         if universe_performances:
             # Count how many stocks have worse performance
             better_count = sum(1 for perf in universe_performances if perf < rel_performance)
-            percentile = (better_count / len(universe_performances)) * 100
-            rs_rating = round(percentile, 2)
+            percentile = round(
+                (better_count / len(universe_performances)) * 100,
+                2,
+            )
+            rs_rating = percentile
         else:
             # Without universe, use a simple scaling
             # Positive performance > 0 gets score 50-100, negative gets 0-50
@@ -217,8 +220,11 @@ class RelativeStrengthCalculator:
         if universe_performances:
             # Count how many stocks have worse performance
             better_count = sum(1 for perf in universe_performances if perf < rel_performance)
-            percentile = (better_count / len(universe_performances)) * 100
-            rs_rating = round(percentile, 2)
+            percentile = round(
+                (better_count / len(universe_performances)) * 100,
+                2,
+            )
+            rs_rating = percentile
         else:
             # Without universe, use simple scaling
             # Positive performance > 0 gets score 50-100, negative gets 0-50
