@@ -307,7 +307,10 @@ class ScanOrchestrator:
             "screeners_passed": sum(1 for r in screener_results.values() if r.passes),
             "screeners_total": len(screener_results),
 
-            # T4 quality-aware fallback surface
+            # T4 quality-aware fallback surface (top-level so API consumers
+            # don't have to drill into details — mirrors how ``rating`` is
+            # exposed). ``field_completeness_score`` doubles as the secondary
+            # sort key for tie-break (see scoring.py policy docstring).
             "field_completeness_score": field_completeness_score,
             "quality_downgrade_reason": quality_downgrade_reason,
 
@@ -315,7 +318,6 @@ class ScanOrchestrator:
             "details": {
                 "screeners": screener_details,
                 "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
-                "quality_downgrade_reason": quality_downgrade_reason,
             }
         }
 

@@ -27,7 +27,15 @@ class _FakeProvider(StockDataProvider):
     def prepare_data(self, symbol, requirements):
         return self._stock_data
 
-    def prepare_data_bulk(self, symbols, requirements, **kwargs):
+    def prepare_data_bulk(
+        self,
+        symbols,
+        requirements,
+        *,
+        allow_partial: bool = True,
+        batch_only_prices: bool = False,
+        batch_only_fundamentals: bool = False,
+    ):
         return {s: self._stock_data for s in symbols}
 
 
@@ -116,9 +124,12 @@ class TestOrchestratorAppliesQualityPolicy:
         assert result["composite_score"] == 90.0  # unchanged by downgrade
         assert result["rating"] == "Buy"  # but rating reflects the quality hit
 
-    def test_reason_duplicated_into_details(self):
-        """The reason surfaces both at the top level (for quick display) and
-        inside details (where other structured data lives)."""
+    def test_reason_lives_at_top_level_only(self):
+        """The reason is a primary signal (like ``rating``), so it lives at
+        the top level where API consumers find it without drilling into
+        ``details``. Keeping a second copy inside ``details`` risked drift
+        between the two and bloated the serialised payload."""
         orch = _build(completeness=10)
         result = orch.scan_stock_multi("TEST", ["alpha"], composite_method="weighted_average")
-        assert result["quality_downgrade_reason"] == result["details"]["quality_downgrade_reason"]
+        assert result["quality_downgrade_reason"] is not None
+        assert "quality_downgrade_reason" not in result["details"]

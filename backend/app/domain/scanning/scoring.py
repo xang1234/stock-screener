@@ -159,6 +159,11 @@ QUALITY_DOWNGRADE_THRESHOLD: int = 60
 """Below this ``field_completeness_score`` (but above exclusion), drop
 one rating tier. Rows in this band have usable but partial data; the
 displayed score is retained and the rating carries the quality signal.
+
+Note: this value coincidentally equals ``WATCH_THRESHOLD`` (60), but the
+semantics are orthogonal — WATCH_THRESHOLD is a 0-100 composite-score
+cutoff, this is a 0-100 completeness-score cutoff. Changing one does
+not imply changing the other.
 """
 
 

@@ -95,6 +95,10 @@ class TestDowngrade:
         assert result.reason is None
 
     def test_pass_stays_pass_without_spurious_reason(self):
+        """Reachable: ``calculate_overall_rating`` can emit PASS via low
+        composite score OR via the pass-rate downgrade, then this policy
+        sees (PASS, mid-completeness). Policy must not record a "downgrade"
+        reason when nothing changed."""
         result = apply_quality_policy(RatingCategory.PASS, 45)
         assert result.rating is RatingCategory.PASS
         assert result.reason is None
