@@ -20,6 +20,7 @@ from app.models.stock import StockPrice
 from app.schemas.groups import GroupRankResponse, GroupRankingsResponse, MoversResponse
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.ui_snapshot_service import UISnapshotService
+from app.services.preset_screens import PRESET_SCREENS, get_preset_chart_symbols
 from app.wiring.bootstrap import (
     get_fundamentals_cache,
     get_group_rank_service,
@@ -38,6 +39,7 @@ STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
 STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 STATIC_DEFAULT_SCAN_FILTERS = {"minVolume": 100_000_000}
+STATIC_CHART_PRESET_TOP_N = 50
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 
 _DEFAULT_KEY_MARKETS = (
@@ -93,7 +95,7 @@ class StaticSiteExportService:
                 raise RuntimeError("No published feature run is available for static-site export")
 
             scan_rows, filter_options = self._load_scan_export_source(db, latest_run)
-            scan_manifest = self._export_scan_bundle(
+            scan_manifest, serialized_rows = self._export_scan_bundle(
                 db=db,
                 output_dir=output_dir,
                 generated_at=generated_at,
@@ -106,6 +108,7 @@ class StaticSiteExportService:
                 generated_at=generated_at,
                 run=latest_run,
                 rows=scan_rows,
+                serialized_rows=serialized_rows,
             )
             breadth_payload = self._build_optional_section_payload(
                 section="breadth",
@@ -272,7 +275,7 @@ class StaticSiteExportService:
         run: FeatureRun,
         rows: list[Any] | None = None,
         filter_options: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if rows is None or filter_options is None:
             repo = SqlFeatureStoreRepository(db)
             rows = repo.query_all_as_scan_results(
@@ -326,12 +329,13 @@ class StaticSiteExportService:
                 gics_sectors=list(filter_options.gics_sectors),
                 ratings=list(filter_options.ratings),
             ).model_dump(mode="json"),
+            "preset_screens": PRESET_SCREENS,
             "chunks": chunk_refs,
             "initial_rows": default_filtered_rows[:50],
             "preview_rows": default_filtered_rows[:10],
         }
         self._write_json(scan_dir / "manifest.json", manifest)
-        return manifest
+        return manifest, serialized_rows
 
     def _export_chart_bundle(
         self,
@@ -340,12 +344,16 @@ class StaticSiteExportService:
         generated_at: str,
         run: FeatureRun,
         rows: list[Any],
+        serialized_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         chart_dir = output_dir / "charts"
         chart_dir.mkdir(parents=True, exist_ok=True)
 
         entries: list[dict[str, Any]] = []
         skipped_symbols: list[str] = []
+        row_by_symbol: dict[str, Any] = {}
+
+        # --- Pass 1: export charts for top-N by composite score (default) ---
         for start in range(0, len(rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
             if len(entries) >= STATIC_CHART_LIMIT:
                 break
@@ -363,6 +371,7 @@ class StaticSiteExportService:
                 if not symbol:
                     continue
 
+                row_by_symbol[symbol] = row
                 bars = self._serialize_chart_bars(price_data.get(symbol))
                 if not bars:
                     skipped_symbols.append(symbol)
@@ -387,6 +396,64 @@ class StaticSiteExportService:
                         "rank": rank,
                         "path": rel_path.as_posix(),
                     }
+                )
+
+        # --- Pass 2: expand charts for preset screen top-50s ---
+        if serialized_rows is not None:
+            preset_symbols = get_preset_chart_symbols(
+                serialized_rows, PRESET_SCREENS, STATIC_CHART_PRESET_TOP_N,
+            )
+            exported_symbols = {e["symbol"] for e in entries}
+            extra_symbols = sorted(preset_symbols - exported_symbols - set(skipped_symbols))
+            entries_before_pass_2 = len(entries)
+
+            if extra_symbols:
+                # Build a lookup from serialized rows for extra symbols
+                ser_by_symbol = {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
+                # Also need domain rows for _serialize_scan_row
+                for row in rows:
+                    sym = getattr(row, "symbol", None)
+                    if sym and sym not in row_by_symbol:
+                        row_by_symbol[sym] = row
+
+                for batch_start in range(0, len(extra_symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
+                    batch = extra_symbols[batch_start:batch_start + STATIC_CHART_LOOKUP_BATCH_SIZE]
+                    price_data = self._price_cache.get_many_cached_only(batch, period="2y")
+                    fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
+
+                    for symbol in batch:
+                        bars = self._serialize_chart_bars(price_data.get(symbol))
+                        if not bars:
+                            skipped_symbols.append(symbol)
+                            continue
+
+                        rel_path = self._chart_payload_path(symbol)
+                        domain_row = row_by_symbol.get(symbol)
+                        stock_data = self._serialize_scan_row(domain_row) if domain_row else ser_by_symbol.get(symbol)
+                        payload = {
+                            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+                            "generated_at": generated_at,
+                            "as_of_date": run.as_of_date.isoformat(),
+                            "symbol": symbol,
+                            "rank": None,
+                            "period": STATIC_CHART_PERIOD,
+                            "bars": bars,
+                            "stock_data": stock_data,
+                            "fundamentals": fundamentals.get(symbol),
+                        }
+                        self._write_json(output_dir / rel_path, payload)
+                        entries.append(
+                            {
+                                "symbol": symbol,
+                                "rank": None,
+                                "path": rel_path.as_posix(),
+                            }
+                        )
+
+                logger.info(
+                    "Preset screen expansion added %d charts (%d extra symbols attempted)",
+                    len(entries) - entries_before_pass_2,
+                    len(extra_symbols),
                 )
 
         index_rel_path = Path("charts/index.json")
