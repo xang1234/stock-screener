@@ -6,6 +6,7 @@ Manages the list of scannable stocks from NYSE/NASDAQ.
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 from sqlalchemy.orm import Session
 import logging
+from typing import Any
 
 from ...database import get_db
 from ...wiring.bootstrap import get_stock_universe_service
@@ -106,6 +107,55 @@ async def import_csv(
         raise HTTPException(
             status_code=500,
             detail=f"Error importing CSV: {str(e)}"
+        )
+
+
+@router.post("/import-hk-csv")
+async def import_hk_csv(
+    csv_content: str = Body(None, embed=True),
+    source_name: str = Body("hk_manual_csv", embed=True),
+    snapshot_id: str | None = Body(None, embed=True),
+    snapshot_as_of: str | None = Body(None, embed=True),
+    source_metadata: dict[str, Any] | None = Body(None, embed=True),
+    strict: bool = Body(True, embed=True),
+    db: Session = Depends(get_db),
+):
+    """
+    Import HK universe rows from CSV using HK-specific canonical normalization.
+
+    This path supports local code variants (e.g. 700, 0700.HK) and applies
+    deterministic zero-padding + canonical symbol generation.
+    """
+    try:
+        if not csv_content:
+            raise HTTPException(
+                status_code=400,
+                detail="csv_content must be provided in request body",
+            )
+
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_hk_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        return {
+            "message": "HK CSV imported successfully",
+            **stats,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error importing HK CSV: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error importing HK CSV: {str(e)}",
         )
 
 

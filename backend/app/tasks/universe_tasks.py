@@ -7,6 +7,7 @@ Provides scheduled tasks for:
 """
 import logging
 from datetime import datetime
+from typing import Any
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
@@ -66,6 +67,66 @@ def refresh_stock_universe(self, exchange_filter: str = None):
             'status': 'error',
             'error': str(e),
             'timestamp': datetime.now().isoformat()
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_hk_universe_csv')
+@serialized_data_fetch('ingest_hk_universe_csv')
+def ingest_hk_universe_csv(
+    self,
+    csv_content: str,
+    source_name: str = "hk_manual_csv",
+    snapshot_id: str | None = None,
+    snapshot_as_of: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
+    strict: bool = True,
+):
+    """
+    Ingest HK universe rows from CSV using canonical HK normalization.
+
+    This task applies deterministic HK canonicalization (local-code variant
+    handling and zero-padding) before upserting rows into stock_universe.
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: HK Universe Ingestion")
+    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Source: {source_name}")
+    if snapshot_id:
+        logger.info(f"Snapshot ID: {snapshot_id}")
+    logger.info("=" * 60)
+
+    db = SessionLocal()
+    try:
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_hk_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        logger.info("=" * 60)
+        logger.info("HK Universe Ingestion Complete!")
+        logger.info(f"Added: {stats.get('added', 0)}")
+        logger.info(f"Updated: {stats.get('updated', 0)}")
+        logger.info(f"Canonical rows: {stats.get('total', 0)}")
+        logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
+        logger.info("=" * 60)
+        return {
+            'status': 'success',
+            **stats,
+            'timestamp': datetime.now().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error ingesting HK universe CSV: {e}", exc_info=True)
+        return {
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat(),
         }
     finally:
         db.close()
