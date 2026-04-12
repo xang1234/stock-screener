@@ -306,10 +306,11 @@ class TWUniverseIngestionAdapter:
                     "source_symbol": source_symbol,
                     "canonical_symbol": identity.canonical_symbol,
                 }
+                canonical_exchange = identity.exchange or exchange
                 canonical_payload = {
                     "symbol": identity.canonical_symbol,
                     "market": identity.market,
-                    "exchange": identity.exchange,
+                    "exchange": canonical_exchange,
                     "local_code": identity.local_code,
                     "name": row_name,
                     "sector": row_sector,
@@ -322,7 +323,7 @@ class TWUniverseIngestionAdapter:
                     symbol=identity.canonical_symbol,
                     name=row_name,
                     market=identity.market,
-                    exchange=identity.exchange or exchange,
+                    exchange=canonical_exchange,
                     currency=identity.currency,
                     timezone=identity.timezone,
                     local_code=identity.local_code,
