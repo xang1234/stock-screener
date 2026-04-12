@@ -28,7 +28,7 @@ class TestPolicyVersion:
 
     def test_policy_version_is_date_stamped(self):
         # Format: YYYY.MM.DD.N — bump when routing semantics change.
-        assert POLICY_VERSION == "2026.04.12.1"
+        assert POLICY_VERSION == "2026.04.12.2"
         assert policy_version() == POLICY_VERSION
 
 
@@ -127,6 +127,12 @@ class TestFailClosed:
             PROVIDER_YFINANCE,
             PROVIDER_ALPHAVANTAGE,
         )
+
+    def test_unknown_non_empty_market_has_no_providers(self):
+        assert providers_for("XX") == ()
+
+    def test_unknown_non_empty_market_rejects_known_provider(self):
+        assert is_supported("XX", PROVIDER_FINVIZ) is False
 
 
 class TestDeterminism:

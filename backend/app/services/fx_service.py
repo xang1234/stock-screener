@@ -40,7 +40,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -72,15 +72,15 @@ def currency_for_market(market: str | None) -> str:
     return MARKET_CURRENCY_MAP.get(market.strip().upper(), USD)
 
 
-RateFetcher = Callable[[str], Optional[float]]
-"""``fetcher(from_currency) -> rate`` returning the most recent rate to USD.
+RateFetcher = Callable[[str], Optional[float | Tuple[float, date]]]
+"""``fetcher(from_currency) -> rate`` or ``(rate, as_of_date)``.
 
 Returning ``None`` signals "unavailable" so the caller can fall back to
 NULL USD columns rather than silently assume a rate.
 """
 
 
-def _yfinance_rate_fetcher(from_currency: str) -> Optional[float]:
+def _yfinance_rate_fetcher(from_currency: str) -> Optional[Tuple[float, date]]:
     """Default rate fetcher — queries yfinance for ``{CUR}USD=X`` close."""
     try:
         import yfinance as yf  # local import to avoid hard dep at module load
@@ -94,10 +94,16 @@ def _yfinance_rate_fetcher(from_currency: str) -> Optional[float]:
         if hist is None or hist.empty:
             logger.warning("No FX history returned for %s->USD", from_currency)
             return None
-        value = float(hist["Close"].iloc[-1])
+        closes = hist["Close"].dropna()
+        if closes.empty:
+            logger.warning("No FX close values returned for %s->USD", from_currency)
+            return None
+        value = float(closes.iloc[-1])
         if value <= 0:
             return None
-        return value
+        market_ts = closes.index[-1]
+        market_date = market_ts.date() if hasattr(market_ts, "date") else date.today()
+        return value, market_date
     except Exception as exc:  # pragma: no cover - network variability
         logger.warning("FX fetch for %s failed: %s", from_currency, exc)
         return None
@@ -198,42 +204,55 @@ class FXService:
                 as_of_date=date.today(),
                 source=self.SOURCE_IDENTITY,
             )
+        today = date.today()
+        stale_quote: Optional[FXQuote] = None
 
         # 1. In-memory cache — stale if the quote is from a prior day. Without
         # this check, a long-lived Celery worker would keep yesterday's rate
         # forever since the memo has no TTL.
         memoed = self._memo.get(currency)
-        if memoed is not None and memoed.as_of_date == date.today():
+        if memoed is not None and memoed.as_of_date == today:
             return memoed
+        if memoed is not None:
+            stale_quote = memoed
 
         # 2. Redis
         quote = self._read_redis(currency)
         if quote is not None:
-            self._memo[currency] = quote
-            return quote
+            if quote.as_of_date == today:
+                self._memo[currency] = quote
+                return quote
+            stale_quote = quote
 
         # 3. DB (most recent row)
         quote = self._read_database(currency)
         if quote is not None:
-            self._memo[currency] = quote
-            self._write_redis(quote)
-            return quote
+            if quote.as_of_date == today:
+                self._memo[currency] = quote
+                self._write_redis(quote)
+                return quote
+            if stale_quote is None or quote.as_of_date > stale_quote.as_of_date:
+                stale_quote = quote
 
         # 4. Upstream fetch
-        rate = self._rate_fetcher(currency)
-        if rate is None:
+        fetched = self._rate_fetcher(currency)
+        quote = self._quote_from_fetch_result(currency, fetched)
+        if quote is None:
+            if stale_quote is not None:
+                logger.warning(
+                    "FX fetch unavailable for %s -> USD; using stale %s quote from %s",
+                    currency,
+                    stale_quote.source,
+                    stale_quote.as_of_date,
+                )
+                self._memo[currency] = stale_quote
+                self._write_redis(stale_quote)
+                return stale_quote
             logger.warning(
                 "FX rate unavailable for %s -> USD; USD fields will be NULL",
                 currency,
             )
             return None
-        quote = FXQuote(
-            from_currency=currency,
-            to_currency=USD,
-            rate=float(rate),
-            as_of_date=date.today(),
-            source=self.SOURCE_YFINANCE,
-        )
         self._persist_database(quote)
         self._write_redis(quote)
         self._memo[currency] = quote
@@ -271,6 +290,31 @@ class FXService:
                 quotes[currency] = quote
         return quotes
 
+    def _quote_from_fetch_result(
+        self,
+        currency: str,
+        fetched: Optional[float | Tuple[float, date]],
+    ) -> Optional[FXQuote]:
+        """Normalize fetcher output to a concrete ``FXQuote``."""
+        if fetched is None:
+            return None
+        if isinstance(fetched, tuple):
+            rate, as_of_date = fetched
+        else:
+            rate, as_of_date = fetched, date.today()
+        if rate is None:
+            return None
+        rate_value = float(rate)
+        if rate_value <= 0:
+            return None
+        return FXQuote(
+            from_currency=currency,
+            to_currency=USD,
+            rate=rate_value,
+            as_of_date=as_of_date,
+            source=self.SOURCE_YFINANCE,
+        )
+
     # --- Redis ------------------------------------------------------------
 
     def _read_redis(self, currency: str) -> Optional[FXQuote]:
@@ -294,7 +338,7 @@ class FXService:
                 to_currency=payload["to_currency"],
                 rate=payload["rate"],
                 as_of_date=date.fromisoformat(payload["as_of_date"]),
-                source=payload["source"],
+                source=payload.get("source") or self.SOURCE_DATABASE,
             )
         except Exception as exc:  # pragma: no cover - corruption
             logger.debug("FX redis decode failed for %s: %s", currency, exc)
@@ -330,7 +374,7 @@ class FXService:
                 to_currency=row.to_currency,
                 rate=row.rate,
                 as_of_date=row.as_of_date,
-                source=self.SOURCE_DATABASE,
+                source=row.source or self.SOURCE_DATABASE,
             )
         except Exception as exc:  # pragma: no cover
             logger.debug("FX DB read failed for %s: %s", currency, exc)

@@ -194,9 +194,8 @@ def compute_cadence_aware_growth(
         result["sales_growth_qq"] = comparable_sales
         return result
 
-    result["growth_metric_basis"] = (
-        BASIS_COMPARABLE_YOY
-        if comparable_eps is not None or comparable_sales is not None
-        else BASIS_UNAVAILABLE
-    )
+    # For markets where comparable-period YoY is not the primary growth
+    # contract, keep QoQ fields unpopulated instead of implicitly remapping
+    # them. Comparable-period values remain available via *_yy fields.
+    result["growth_metric_basis"] = BASIS_UNAVAILABLE
     return result

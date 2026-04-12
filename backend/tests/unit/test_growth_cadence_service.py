@@ -5,6 +5,7 @@ import pandas as pd
 from app.services.growth_cadence_service import (
     BASIS_COMPARABLE_YOY,
     BASIS_QOQ,
+    BASIS_UNAVAILABLE,
     CADENCE_INSUFFICIENT,
     CADENCE_QUARTERLY,
     CADENCE_SEMIANNUAL,
@@ -68,6 +69,7 @@ def test_us_non_quarterly_does_not_emit_fabricated_qoq():
     result = compute_cadence_aware_growth(df, market="US")
 
     assert result["growth_reporting_cadence"] == CADENCE_SEMIANNUAL
+    assert result["growth_metric_basis"] == BASIS_UNAVAILABLE
     assert result["eps_growth_qq"] is None
     assert result["sales_growth_qq"] is None
     assert result["eps_growth_yy"] == 50.0

@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.04.12.1"
+POLICY_VERSION = "2026.04.12.2"
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream
@@ -87,7 +87,7 @@ KNOWN_MARKETS: FrozenSet[str] = frozenset(
 )
 
 DEFAULT_MARKET = MARKET_US
-"""Market used when the caller's value is ``None``/empty/unknown.
+"""Market used when the caller's value is ``None``/empty.
 
 Defaulting to US preserves legacy behaviour for call sites that have not yet
 been threaded with market context — they continue to see the existing
@@ -148,6 +148,15 @@ def providers_for(market: str | None) -> Tuple[str, ...]:
     deterministic fallbacks. Providers missing from the returned tuple
     MUST NOT be attempted for this market.
     """
+    if isinstance(market, str):
+        candidate = market.strip().upper()
+        if candidate and candidate not in KNOWN_MARKETS:
+            logger.warning(
+                "Unknown market %r - failing closed with no providers "
+                "(policy version %s).",
+                market, POLICY_VERSION,
+            )
+            return ()
     return _POLICY_MATRIX[normalize_market(market)]
 
 
@@ -159,7 +168,7 @@ def is_supported(market: str | None, provider: str) -> bool:
     """
     if provider not in KNOWN_PROVIDERS:
         return False
-    return provider in _POLICY_MATRIX[normalize_market(market)]
+    return provider in providers_for(market)
 
 
 def supported_markets() -> Tuple[str, ...]:

@@ -91,3 +91,37 @@ class TestPhase3PolicyFiltering:
         assert svc.bulk_fetcher.fetch_batch_fundamentals.call_count == 1
         kwargs = svc.bulk_fetcher.fetch_batch_fundamentals.call_args.kwargs
         assert kwargs.get("market_by_symbol") == market_by_symbol
+
+    def test_progress_callback_reaches_completion_when_finviz_phase_is_empty(self):
+        svc = _make_service()
+        symbols = ["0700.HK", "7203.T"]
+        market_by_symbol = {"0700.HK": "HK", "7203.T": "JP"}
+        progress_calls = []
+
+        svc.fetch_fundamentals_batch(
+            symbols,
+            include_technicals=False,
+            include_finviz=True,
+            progress_callback=lambda current, total: progress_calls.append((current, total)),
+            market_by_symbol=market_by_symbol,
+        )
+
+        assert progress_calls
+        assert progress_calls[-1] == (len(symbols), len(symbols))
+
+    def test_parallel_hybrid_forwards_market_map_to_parallel_growth_extractor(self):
+        svc = _make_service()
+        svc.bulk_fetcher.fetch_fundamentals_parallel.return_value = {}
+        symbols = ["0700.HK", "AAPL"]
+        market_by_symbol = {"0700.HK": "HK", "AAPL": "US"}
+
+        svc.fetch_fundamentals_with_parallel_finviz(
+            symbols,
+            include_technicals=False,
+            finviz_workers=1,
+            market_by_symbol=market_by_symbol,
+        )
+
+        assert svc.bulk_fetcher.fetch_fundamentals_parallel.call_count == 1
+        kwargs = svc.bulk_fetcher.fetch_fundamentals_parallel.call_args.kwargs
+        assert kwargs.get("market_by_symbol") == market_by_symbol

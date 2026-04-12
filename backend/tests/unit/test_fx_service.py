@@ -6,7 +6,7 @@ that fundamentals storage consumes.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +16,6 @@ from app.services.fx_service import (
     FXService,
     MARKET_CURRENCY_MAP,
     SUPPORTED_CURRENCIES,
-    USD,
     currency_for_market,
 )
 
@@ -132,6 +131,60 @@ class TestLookupChain:
     def test_missing_rate_returns_none(self):
         svc = _make_service(rate_fetcher=lambda c: None)
         assert svc.get_usd_rate("HKD") is None
+
+    def test_fetcher_tuple_uses_market_date(self):
+        market_date = date(2026, 4, 10)
+        svc = _make_service(rate_fetcher=lambda c: (0.128, market_date))
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.rate == 0.128
+        assert quote.as_of_date == market_date
+
+    def test_stale_database_quote_does_not_block_fresh_fetch(self):
+        stale_row = MagicMock()
+        stale_row.from_currency = "HKD"
+        stale_row.to_currency = "USD"
+        stale_row.rate = 0.12
+        stale_row.as_of_date = date.today() - timedelta(days=1)
+        stale_row.source = "yfinance"
+        calls = []
+
+        def fetcher(currency):
+            calls.append(currency)
+            return 0.128
+
+        svc = _make_service(rate_fetcher=fetcher, db_rows=stale_row)
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.rate == 0.128
+        assert quote.source == FXService.SOURCE_YFINANCE
+        assert quote.as_of_date == date.today()
+        assert calls == ["HKD"]
+
+    def test_stale_database_quote_is_fallback_when_fetch_unavailable(self):
+        stale_row = MagicMock()
+        stale_row.from_currency = "HKD"
+        stale_row.to_currency = "USD"
+        stale_row.rate = 0.12
+        stale_row.as_of_date = date.today() - timedelta(days=1)
+        stale_row.source = "yfinance"
+        svc = _make_service(rate_fetcher=lambda c: None, db_rows=stale_row)
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.rate == 0.12
+        assert quote.source == "yfinance"
+
+    def test_database_source_is_preserved_on_rehydrate(self):
+        db_row = MagicMock()
+        db_row.from_currency = "HKD"
+        db_row.to_currency = "USD"
+        db_row.rate = 0.128
+        db_row.as_of_date = date.today()
+        db_row.source = "yfinance"
+        svc = _make_service(rate_fetcher=lambda c: 999, db_rows=db_row)
+        quote = svc.get_usd_rate("HKD")
+        assert quote is not None
+        assert quote.source == "yfinance"
 
 
 class TestConvertToUSD:

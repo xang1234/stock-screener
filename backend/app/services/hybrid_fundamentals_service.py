@@ -304,6 +304,9 @@ class HybridFundamentalsService:
                 f"Phase 3 complete: {finviz_success}/{finviz_total} in "
                 f"{phase3_time:.1f}s"
             )
+            if progress_callback:
+                # Always emit completion even when finviz_eligible is empty.
+                progress_callback(total, total)
 
         # Add metadata to all results
         for symbol in symbols:
@@ -346,7 +349,8 @@ class HybridFundamentalsService:
         symbols: List[str],
         include_technicals: bool = True,
         finviz_workers: int = 2,
-        progress_callback=None
+        progress_callback=None,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals with parallel finviz fetching for faster performance.
@@ -359,6 +363,8 @@ class HybridFundamentalsService:
             include_technicals: Whether to calculate technical indicators
             finviz_workers: Number of parallel workers for finviz (default 2)
             progress_callback: Optional progress callback
+            market_by_symbol: Optional mapping ``{symbol: market}`` forwarded
+                to cadence-aware quarterly growth extraction.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -379,7 +385,8 @@ class HybridFundamentalsService:
             batch_size=self.yfinance_batch_size,
             max_workers=3,
             include_quarterly=True,
-            delay_per_ticker=self.yfinance_delay_per_ticker
+            delay_per_ticker=self.yfinance_delay_per_ticker,
+            market_by_symbol=market_by_symbol,
         )
 
         for symbol in symbols:

@@ -663,7 +663,8 @@ class BulkDataFetcher:
         batch_size: int = 50,
         max_workers: int = 3,
         include_quarterly: bool = True,
-        delay_per_ticker: float = 1.5
+        delay_per_ticker: float = 1.5,
+        market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals using parallel batch processing.
@@ -677,6 +678,8 @@ class BulkDataFetcher:
             max_workers: Number of parallel workers
             include_quarterly: Whether to include quarterly growth data
             delay_per_ticker: Seconds between individual ticker fetches (default 0.2)
+            market_by_symbol: Optional mapping ``{symbol: market}`` for
+                cadence-aware growth extraction.
 
         Returns:
             Dict mapping symbols to fundamental data
@@ -707,7 +710,10 @@ class BulkDataFetcher:
                         fundamentals = self._extract_fundamentals(info)
 
                         if include_quarterly:
-                            quarterly = self._extract_quarterly_growth(ticker)
+                            quarterly = self._extract_quarterly_growth(
+                                ticker,
+                                market=(market_by_symbol or {}).get(symbol),
+                            )
                             fundamentals.update(quarterly)
 
                             # Also extract EPS rating data

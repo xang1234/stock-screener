@@ -181,7 +181,8 @@ class FundamentalsCacheService:
                         enriched = self._fetch_and_cache(symbol, market=market)
                         if enriched is not None:
                             return enriched
-                    self._ensure_field_availability_metadata(symbol, fundamentals, market)
+                    if self._ensure_field_availability_metadata(symbol, fundamentals, market):
+                        self._store_in_redis(symbol, fundamentals)
                     logger.debug(f"Cache HIT for {symbol} (Redis)")
                     return fundamentals
             except (pickle.PickleError, TypeError, ValueError, RuntimeError, OSError) as exc:
@@ -443,16 +444,39 @@ class FundamentalsCacheService:
         symbol: str,
         data: Dict,
         market: Optional[str],
-    ) -> None:
-        """Backfill ownership/sentiment availability metadata for older cache rows."""
-        if "field_availability" in data:
-            return
+    ) -> bool:
+        """Backfill derived metadata fields for older cache rows.
+
+        Returns ``True`` when any field was backfilled.
+        """
+        changed = False
         resolved_market = market if market is not None else self._resolve_market(symbol)
-        data["field_availability"] = (
-            field_capability_registry.derive_ownership_sentiment_availability(
+        if "field_completeness_score" not in data:
+            data["field_completeness_score"] = compute_completeness_score(
                 data, resolved_market
             )
+            changed = True
+        if "field_provenance" not in data:
+            data["field_provenance"] = derive_field_provenance(data, resolved_market)
+            changed = True
+        if "field_availability" not in data:
+            data["field_availability"] = (
+                field_capability_registry.derive_ownership_sentiment_availability(
+                    data, resolved_market
+                )
+            )
+            changed = True
+
+        missing_fx_metadata = (
+            "market_cap_usd" not in data
+            or "adv_usd" not in data
+            or "fx_metadata" not in data
         )
+        if missing_fx_metadata:
+            self._enrich_with_fx_normalization(data, resolved_market)
+            changed = True
+
+        return changed
 
     def _get_fx_service(self) -> FXService:
         """Return the FX service, lazily resolving the process-wide default.

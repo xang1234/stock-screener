@@ -69,7 +69,11 @@ def upgrade() -> None:
     # deserialising every row.
     op.add_column(
         "stock_fundamentals",
-        sa.Column("fx_metadata", postgresql.JSONB(), nullable=True),
+        sa.Column(
+            "fx_metadata",
+            sa.JSON().with_variant(postgresql.JSONB(), "postgresql"),
+            nullable=True,
+        ),
     )
     # Indexes on the USD columns so T4 can rank/filter cross-market
     # without full scans.
