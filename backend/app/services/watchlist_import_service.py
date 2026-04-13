@@ -7,6 +7,8 @@ import io
 import re
 from collections.abc import Iterable
 
+from .symbol_format import SYMBOL_SHAPE_RE
+
 _HEADER_TOKENS = {
     "symbol",
     "symbols",
@@ -14,7 +16,8 @@ _HEADER_TOKENS = {
     "tickers",
     "code",
 }
-_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+# Heuristic requires at least one A-Z letter so numeric-only cells
+# (price/volume columns) don't masquerade as symbols.
 _SYMBOL_HEURISTIC_PATTERN = re.compile(r"^(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
 
@@ -121,7 +124,7 @@ def split_import_results(
         upper_symbol = symbol.upper()
         if upper_symbol in existing_symbols:
             skipped_existing.append(upper_symbol)
-        elif upper_symbol not in known_symbols or not _SYMBOL_PATTERN.match(upper_symbol):
+        elif upper_symbol not in known_symbols or not SYMBOL_SHAPE_RE.match(upper_symbol):
             invalid_symbols.append(upper_symbol)
         else:
             added_candidates.append(upper_symbol)

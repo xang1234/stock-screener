@@ -28,6 +28,7 @@ from ...schemas.user_watchlist import (
     WatchlistImportRequest, WatchlistImportResult,
     WatchlistStewardshipResponse,
 )
+from ...services.symbol_format import normalize_symbol
 from ...services.watchlist_import_service import (
     parse_watchlist_import_symbols,
     split_import_results,
@@ -357,7 +358,23 @@ async def add_item(
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    symbol = item_data.symbol.upper()
+    symbol = normalize_symbol(item_data.symbol)
+    if symbol is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid symbol format: {item_data.symbol!r}",
+        )
+
+    known = db.query(StockUniverse.symbol).filter(
+        StockUniverse.active_filter(),
+        StockUniverse.symbol == symbol,
+    ).first()
+    if known is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Symbol {symbol} is not in the active stock universe",
+        )
+
     existing = db.query(WatchlistItem).filter(
         WatchlistItem.watchlist_id == watchlist_id,
         WatchlistItem.symbol == symbol
@@ -399,17 +416,36 @@ async def bulk_add_items(
     ).all()
     existing_symbols = {item.symbol for item in existing_items}
 
-    # Get current max position
+    # Gather every format-valid candidate, then batch-verify against the
+    # active universe in a single query to avoid N+1 lookups.
+    candidates: list[str] = []
+    for raw in bulk_data.symbols:
+        normalized = normalize_symbol(raw)
+        if normalized is None or normalized in existing_symbols:
+            continue
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    known_rows = (
+        db.query(StockUniverse.symbol)
+        .filter(
+            StockUniverse.active_filter(),
+            StockUniverse.symbol.in_(candidates),
+        )
+        .all()
+        if candidates
+        else []
+    )
+    known_symbols = {row.symbol for row in known_rows}
+
     max_pos = db.query(func.max(WatchlistItem.position)).filter(
         WatchlistItem.watchlist_id == watchlist_id
     ).scalar() or -1
 
     added_items = []
-    for symbol in bulk_data.symbols:
-        symbol = symbol.upper()
-        if symbol in existing_symbols:
-            continue  # Skip duplicates silently
-
+    for symbol in candidates:
+        if symbol not in known_symbols:
+            continue  # Skip unknown symbols silently; import endpoint surfaces them.
         max_pos += 1
         item = WatchlistItem(
             watchlist_id=watchlist_id,

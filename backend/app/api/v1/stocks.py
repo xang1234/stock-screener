@@ -23,6 +23,7 @@ from ...schemas.stock import (
 )
 from ...services.stock_event_context_service import StockEventContextService
 from ...services.strategy_profile_service import DEFAULT_PROFILE, StrategyProfileService
+from ...services.symbol_format import require_valid_symbol
 from ...schemas.validation import StockValidationResponse
 from ...services.validation_service import ValidationService
 from ...use_cases.scanning.explain_stock import ExplainStockUseCase
@@ -442,7 +443,7 @@ async def search_stocks(
 
 
 @router.get("/{symbol}/info", response_model=StockInfo)
-async def get_stock_info(symbol: str):
+async def get_stock_info(symbol: str = Depends(require_valid_symbol)):
     """
     Get basic stock information.
 
@@ -457,9 +458,9 @@ async def get_stock_info(symbol: str):
 
 @router.get("/{symbol}/fundamentals")
 async def get_stock_fundamentals(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     force_refresh: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get stock fundamental data.
@@ -482,9 +483,9 @@ async def get_stock_fundamentals(
 
 @router.get("/{symbol}/technicals", response_model=StockTechnicals)
 async def get_stock_technicals(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     force_refresh: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get stock technical indicators.
@@ -509,11 +510,11 @@ async def get_stock_technicals(
 
 @router.get("/{symbol}", response_model=StockData)
 async def get_stock_data(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     include_fundamentals: bool = True,
     include_technicals: bool = True,
     force_refresh: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get complete stock data (info + fundamentals + technicals).
@@ -527,8 +528,6 @@ async def get_stock_data(
     Returns:
         Complete stock data
     """
-    symbol = symbol.upper()
-
     # Get basic info
     info = _get_stock_info_or_404(symbol)
 
@@ -548,7 +547,10 @@ async def get_stock_data(
 
 
 @router.get("/{symbol}/industry")
-async def get_stock_industry(symbol: str, db: Session = Depends(get_db)):
+async def get_stock_industry(
+    symbol: str = Depends(require_valid_symbol),
+    db: Session = Depends(get_db),
+):
     """
     Get stock industry classification.
 
@@ -582,7 +584,7 @@ async def get_stock_industry(symbol: str, db: Session = Depends(get_db)):
 
 @router.get("/{symbol}/chart-data")
 async def get_chart_data(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     uow=Depends(get_uow),
 ):
     """
@@ -618,7 +620,7 @@ async def get_chart_data(
 
 @router.get("/{symbol}/decision-dashboard", response_model=StockDecisionDashboardResponse)
 async def get_stock_decision_dashboard(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     profile: str | None = Query(None),
     db: Session = Depends(get_db),
     uow=Depends(get_uow),
@@ -778,14 +780,13 @@ async def get_stock_decision_dashboard(
 
 @router.get("/{symbol}/peers", response_model=list[ScanResultItem])
 async def get_stock_peers(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     peer_type: str = Query("industry", pattern="^(industry|sector)$"),
     uow=Depends(get_uow),
 ):
     """Get industry/sector peers from the latest published feature run."""
     from ...domain.scanning.models import PeerType
 
-    symbol = symbol.upper()
     pt = PeerType(peer_type)
 
     with uow:
@@ -813,13 +814,16 @@ async def get_stock_peers(
 
 
 @router.get("/{symbol}/history", response_model=list[StockPriceHistoryPoint])
-async def get_price_history(symbol: str, period: str = "6mo"):
+async def get_price_history(
+    symbol: str = Depends(require_valid_symbol),
+    period: str = "6mo",
+):
     return _load_price_history(symbol, period)
 
 
 @router.get("/{symbol}/validation", response_model=StockValidationResponse)
 async def get_stock_validation(
-    symbol: str,
+    symbol: str = Depends(require_valid_symbol),
     lookback_days: int = Query(365, ge=30, le=365),
     db: Session = Depends(get_db),
     service: ValidationService = Depends(_get_validation_service),
