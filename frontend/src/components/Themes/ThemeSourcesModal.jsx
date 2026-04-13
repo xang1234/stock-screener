@@ -24,6 +24,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ArticleIcon from '@mui/icons-material/Article';
 import { getThemeMentions } from '../../api/themes';
+import TranslatedText from '../common/TranslatedText';
 
 // Sentiment color mapping
 const getSentimentColor = (sentiment) => {
@@ -167,20 +168,20 @@ function ThemeSourcesModal({ open, onClose, themeId, themeName }) {
                       </TableCell>
 
                       <TableCell>
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={{
+                        <TranslatedText
+                          originalText={mention.excerpt}
+                          translatedText={mention.translated_excerpt}
+                          sourceLanguage={mention.source_language}
+                          translationMetadata={mention.translation_metadata}
+                          typographySx={{
                             display: '-webkit-box',
                             WebkitLineClamp: 3,
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                             maxWidth: 280,
+                            color: 'text.secondary',
                           }}
-                          title={mention.excerpt}
-                        >
-                          {mention.excerpt || '-'}
-                        </Typography>
+                        />
                       </TableCell>
 
                       <TableCell align="center">

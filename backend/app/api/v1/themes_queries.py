@@ -540,6 +540,10 @@ def get_theme_mentions(
                 tickers=mention.tickers or [],
                 source_type=mention.source_type,
                 source_name=mention.source_name or content.source_name,
+                source_language=content.source_language,
+                translated_excerpt=mention.translated_excerpt,
+                translated_raw_theme=mention.translated_raw_theme,
+                translation_metadata=mention.translation_metadata or content.translation_metadata,
             )
             for mention, content in mentions
         ],

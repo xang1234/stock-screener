@@ -33,6 +33,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import ArticleIcon from '@mui/icons-material/Article';
 import { getContentItems, exportContentItems } from '../../api/themes';
+import TranslatedText from '../common/TranslatedText';
 
 const SOURCE_TYPE_OPTIONS = [
   { value: '', label: 'All Sources' },
@@ -318,48 +319,48 @@ function ArticleBrowserModal({ open, onClose, pipeline }) {
                       {/* Title */}
                       <TableCell>
                         <Box sx={{ maxWidth: 300 }}>
-                          {item.url ? (
-                            <Link
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              sx={{
-                                display: 'flex',
-                                alignItems: 'flex-start',
-                                textDecoration: 'none',
-                                color: 'primary.main',
-                                '&:hover': { textDecoration: 'underline' },
-                              }}
-                            >
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  display: '-webkit-box',
-                                  WebkitLineClamp: 2,
-                                  WebkitBoxOrient: 'vertical',
-                                  fontWeight: 500,
-                                }}
+                          {(() => {
+                            const originalDisplay = item.title
+                              || (item.content
+                                ? item.content.slice(0, 100) + (item.content.length > 100 ? '...' : '')
+                                : 'Untitled');
+                            const translatedDisplay = item.translated_title || null;
+                            const titleSx = {
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              fontWeight: item.url ? 500 : undefined,
+                              color: item.url ? 'primary.main' : undefined,
+                            };
+                            const titleNode = (
+                              <Box sx={{ display: 'flex', alignItems: 'flex-start' }}>
+                                <TranslatedText
+                                  originalText={originalDisplay}
+                                  translatedText={translatedDisplay}
+                                  sourceLanguage={item.source_language}
+                                  translationMetadata={item.translation_metadata}
+                                  typographySx={titleSx}
+                                />
+                                {item.url && (
+                                  <OpenInNewIcon sx={{ fontSize: 12, ml: 0.5, flexShrink: 0, mt: 0.5, color: 'primary.main' }} />
+                                )}
+                              </Box>
+                            );
+                            return item.url ? (
+                              <Link
+                                href={item.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
                               >
-                                {item.title || (item.content ? item.content.slice(0, 100) + (item.content.length > 100 ? '...' : '') : 'Untitled')}
-                              </Typography>
-                              <OpenInNewIcon sx={{ fontSize: 12, ml: 0.5, flexShrink: 0, mt: 0.5 }} />
-                            </Link>
-                          ) : (
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 2,
-                                WebkitBoxOrient: 'vertical',
-                              }}
-                            >
-                              {item.title || (item.content ? item.content.slice(0, 100) + (item.content.length > 100 ? '...' : '') : 'Untitled')}
-                            </Typography>
-                          )}
+                                {titleNode}
+                              </Link>
+                            ) : (
+                              titleNode
+                            );
+                          })()}
                           {item.author && (
                             <Typography variant="caption" color="text.secondary">
                               by {item.author}
