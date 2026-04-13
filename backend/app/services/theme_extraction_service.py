@@ -34,6 +34,7 @@ from .errors import ProviderQuotaServiceError, ProviderRateLimitServiceError
 from .llm import LLMService, LLMError, LLMQuotaExceededError, LLMRateLimitError
 from .llm.config import is_model_supported_for_use_case
 from .security_master_service import SecurityMasterResolver, security_master_resolver
+from . import multi_market_ticker_validator as multi_market
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from .theme_lifecycle_service import set_initial_lifecycle_defaults
@@ -92,10 +93,18 @@ Your task is to identify:
    Examples: "AI infrastructure", "GLP-1 weight loss drugs", "nuclear energy renaissance",
    "defense drones", "quantum computing", "nearshoring/reshoring", "datacenter power demand"
 
-2. STOCK TICKERS - US-listed stock symbols mentioned or clearly implied
-   - Only include actual tradeable US stock tickers (NYSE, NASDAQ)
-   - Convert company names to tickers when confident (e.g., "Nvidia" -> "NVDA")
-   - Do NOT include ETFs, indices, or non-US stocks unless they're ADRs
+2. STOCK TICKERS - Publicly listed stock symbols mentioned or clearly implied
+   Supported markets and canonical symbol forms:
+   - US (NYSE, NASDAQ): plain ticker, e.g. NVDA, AAPL, AMZN
+   - Hong Kong (HKEX): 4-digit zero-padded code with ``.HK`` suffix, e.g. 0700.HK, 0005.HK
+   - Japan (TSE): 4-digit code with ``.T`` suffix, e.g. 6758.T, 9984.T
+   - Taiwan (TWSE): 4-digit code with ``.TW`` suffix (use ``.TWO`` for TPEx), e.g. 2330.TW
+   Rules:
+   - Convert company names to canonical symbols ONLY when the mapping is unambiguous
+     (e.g., "Nvidia" -> NVDA; "Tencent" -> 0700.HK; "ソニー" -> 6758.T; "台積電" -> 2330.TW)
+   - Leave ambiguous or unknown company references as company names in the excerpt, not in the tickers list
+   - Do NOT include ETFs or indices unless they are the actual subject of the theme
+   - Do NOT fabricate or guess tickers - only include symbols clearly identified in the text
 
 3. SENTIMENT - The author's view on each theme (bullish, bearish, neutral)
 
@@ -138,7 +147,7 @@ Content:
 
 Return a JSON array of theme mentions. Each mention should have:
 - theme: string (the market theme/narrative)
-- tickers: array of strings (US stock tickers related to this theme in this content)
+- tickers: array of strings (canonical stock symbols related to this theme — US tickers, or suffixed forms for Hong Kong (``.HK``), Japan (``.T``), Taiwan (``.TW``/``.TWO``))
 - sentiment: string ("bullish", "bearish", or "neutral")
 - confidence: float (0.0 to 1.0)
 - excerpt: string (relevant quote from content, max 200 chars)
@@ -240,9 +249,6 @@ class ThemeExtractionService:
         self._init_client()
         self._load_reprocessing_config()
         self.theme_policy_overrides = self._load_theme_policy_overrides()
-
-        # Known ticker patterns for validation
-        self.ticker_pattern = re.compile(r"^[A-Z0-9][A-Z0-9\.\-]{0,11}$")
 
         # Cache of valid tickers (loaded from universe)
         self._valid_tickers: Optional[set] = None
@@ -426,33 +432,66 @@ class ThemeExtractionService:
                         break
         return matches
 
-    def _validate_ticker(self, ticker: str) -> bool:
-        """Check if ticker is valid"""
-        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
-        normalized_ticker = resolver.normalize_symbol(ticker)
-        if not self.ticker_pattern.match(normalized_ticker):
-            return False
+    def _gate_ticker(
+        self, raw: object, resolver, valid_tickers: set,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Apply every acceptance gate to a single raw ticker.
 
-        valid_tickers = self._get_valid_tickers()
+        Returns ``(canonical, None)`` on accept and ``(canonical_or_None,
+        reason)`` on drop, where ``reason`` is a ``multi_market.REASON_*``
+        tag. The canonical field may still be populated on drop so the
+        log line carries both the raw and canonical forms.
+        """
+        result = multi_market.normalize_extracted_ticker(raw, resolver=resolver)
+        if result.canonical is None:
+            return None, result.reason
+        canonical = result.canonical
+        if canonical in self.TICKER_FALSE_POSITIVES:
+            return canonical, multi_market.REASON_FALSE_POSITIVE
+        if not multi_market.TICKER_SHAPE_RE.match(canonical):
+            return canonical, multi_market.REASON_SHAPE
         if not valid_tickers:
-            return False
-        if normalized_ticker not in valid_tickers:
-            return False
-
-        return True
+            return canonical, multi_market.REASON_UNIVERSE_EMPTY
+        if canonical not in valid_tickers:
+            # The CJK resolver may have mapped an English company name to an
+            # Asian canonical (e.g. "HSBC" → "0005.HK"). If that canonical
+            # misses the active universe, retry with SecurityMaster-only
+            # normalization so dual-listed tickers that also trade under the
+            # same name in the US (e.g. NYSE: HSBC) still land correctly in
+            # US-only deployments, preserving the documented US-parity contract.
+            sm_canonical = resolver.normalize_symbol(str(raw))
+            if (
+                sm_canonical
+                and sm_canonical != canonical
+                and sm_canonical not in self.TICKER_FALSE_POSITIVES
+                and multi_market.TICKER_SHAPE_RE.match(sm_canonical)
+                and sm_canonical in valid_tickers
+            ):
+                return sm_canonical, None
+            return canonical, multi_market.REASON_UNIVERSE_MISS
+        return canonical, None
 
     def _clean_tickers(self, tickers: list) -> list:
-        """Filter and clean ticker list"""
+        """Normalize, validate, and de-duplicate an LLM-extracted ticker list.
+
+        Each drop emits a structured debug log via
+        :func:`multi_market.log_drop` so operators can track drop-rate
+        buckets (unresolvable, shape, universe miss) rather than
+        discover them via silent data loss.
+        """
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
-        cleaned = []
-        for t in tickers:
-            t = resolver.normalize_symbol(str(t))
-            # Remove common false positives
-            if t in self.TICKER_FALSE_POSITIVES:
+        valid_tickers = self._get_valid_tickers()
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for raw in tickers:
+            canonical, reason = self._gate_ticker(raw, resolver, valid_tickers)
+            if reason is not None:
+                multi_market.log_drop(raw=raw, canonical=canonical, reason=reason)
                 continue
-            if self._validate_ticker(t):
-                cleaned.append(t)
-        return list(set(cleaned))  # Dedupe
+            if canonical not in seen:
+                seen.add(canonical)
+                cleaned.append(canonical)
+        return cleaned
 
     def _rate_limit(self) -> None:
         """Apply rate limiting between API calls"""

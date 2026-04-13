@@ -321,6 +321,55 @@ class TestExtractFromContentBugFix:
 
         assert set(service._clean_tickers(["NVDA", "PPI", "YOY", "OTC"])) == {"NVDA"}
 
+    def test_gate_ticker_cjk_miss_falls_back_to_us_ticker(self):
+        """Regression: dual-listed companies (HSBC, Sony) must land as
+        US tickers in a US-only universe even though the CJK alias corpus
+        maps their English names to HK/JP canonical symbols.
+
+        Before the fix: normalize_extracted_ticker("HSBC") → "0005.HK"
+        → not in US universe → REASON_UNIVERSE_MISS → ticker dropped.
+        After the fix: "0005.HK" misses → SecurityMaster retry → "HSBC"
+        → in universe → accepted with canonical "HSBC".
+        """
+        from app.services.security_master_service import security_master_resolver
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        # TICKER_FALSE_POSITIVES is a class attribute; no __init__ needed.
+
+        us_only_universe = {"HSBC", "SONY", "NVDA", "AAPL"}  # no HK/JP/TW symbols
+
+        # HSBC: CJK corpus maps "HSBC" → "0005.HK" via alias_exact.
+        canonical, reason = service._gate_ticker(
+            "HSBC", security_master_resolver, us_only_universe,
+        )
+        assert reason is None, f"HSBC should land in US universe, got reason={reason!r}"
+        assert canonical == "HSBC"
+
+        # Sony: CJK corpus maps "Sony" → "6758.T" via alias_exact;
+        # "SONY" lands via folded match → retry gives "SONY".
+        canonical, reason = service._gate_ticker(
+            "Sony", security_master_resolver, us_only_universe,
+        )
+        assert reason is None, f"Sony→SONY should land in US universe, got reason={reason!r}"
+        assert canonical == "SONY"
+
+    def test_gate_ticker_cjk_canonical_wins_in_multimarket_universe(self):
+        """In a universe that contains BOTH the HK and US forms, the CJK
+        canonical takes precedence (no fallback needed) — the Asian symbol
+        is the authoritative form for an Asian-context mention."""
+        from app.services.security_master_service import security_master_resolver
+        from app.services.theme_extraction_service import ThemeExtractionService
+
+        service = ThemeExtractionService.__new__(ThemeExtractionService)
+        multimarket_universe = {"HSBC", "0005.HK", "NVDA"}
+
+        canonical, reason = service._gate_ticker(
+            "HSBC", security_master_resolver, multimarket_universe,
+        )
+        assert reason is None
+        assert canonical == "0005.HK"  # CJK resolver wins; no retry needed
+
     @patch("app.services.theme_extraction_service.ThemeExtractionService._init_client")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_configured_model")
     @patch("app.services.theme_extraction_service.ThemeExtractionService._load_pipeline_config")
