@@ -35,8 +35,7 @@ from app.infra.query.feature_store_query import (
 )
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
-from app.services.field_capability_registry import field_capability_registry
-from app.services.growth_cadence_service import derive_growth_availability
+from app.services.growth_cadence_service import build_row_field_availability
 
 _BATCH_SIZE = 500
 
@@ -104,23 +103,6 @@ def _unpack_feature_joined_row(row) -> tuple[Any, dict[str, Any]]:
         growth_metric_basis,
     ) = row
 
-    ownership_availability = field_capability_registry.derive_ownership_sentiment_availability(
-        {
-            "institutional_ownership": institutional_ownership,
-            "insider_ownership": insider_ownership,
-            "short_interest": short_interest,
-        },
-        market,
-    )
-    growth_availability = derive_growth_availability(
-        growth_metric_basis, growth_reporting_cadence
-    )
-    merged_availability: dict[str, Any] = {
-        field: entry
-        for field, entry in {**ownership_availability, **growth_availability}.items()
-        if entry.get("status") != "available"
-    }
-
     joined = {
         "company_name": name,
         "market": market,
@@ -128,7 +110,14 @@ def _unpack_feature_joined_row(row) -> tuple[Any, dict[str, Any]]:
         "currency": currency,
         "market_cap_usd": market_cap_usd,
         "adv_usd": adv_usd,
-        "field_availability": merged_availability or None,
+        "field_availability": build_row_field_availability(
+            market=market,
+            institutional_ownership=institutional_ownership,
+            insider_ownership=insider_ownership,
+            short_interest=short_interest,
+            growth_metric_basis=growth_metric_basis,
+            growth_reporting_cadence=growth_reporting_cadence,
+        ),
         "growth_reporting_cadence": growth_reporting_cadence,
         "growth_metric_basis": growth_metric_basis,
     }

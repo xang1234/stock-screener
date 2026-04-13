@@ -24,7 +24,7 @@ class TestDeriveGrowthAvailability:
         result = derive_growth_availability(BASIS_UNAVAILABLE, CADENCE_INSUFFICIENT)
         assert set(result.keys()) == {"eps_growth_qq", "sales_growth_qq"}
         for entry in result.values():
-            assert entry["status"] == "unavailable"
+            assert entry["status"] == "unsupported"
             assert entry["reason_code"] == REASON_INSUFFICIENT_HISTORY
             assert entry["support_state"] == "unsupported"
             assert entry["cadence"] == CADENCE_INSUFFICIENT

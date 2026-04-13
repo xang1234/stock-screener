@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Chip,
   Dialog,
@@ -29,17 +29,18 @@ const SURFACED_STATUSES = new Set(['unavailable', 'unsupported', 'missing', 'com
 function FieldAvailabilityChip({ fieldAvailability, growthMetricBasis }) {
   const [open, setOpen] = useState(false);
 
-  const entries = useMemo(() => {
-    const list = [];
-    if (fieldAvailability && typeof fieldAvailability === 'object') {
-      for (const [field, entry] of Object.entries(fieldAvailability)) {
-        if (!entry || typeof entry !== 'object') continue;
-        if (!SURFACED_STATUSES.has(entry.status)) continue;
-        list.push({ field, ...entry });
-      }
+  // Recompute inline per render; fieldAvailability is small (≤5 keys in
+  // practice) and TanStack Query returns a fresh object per refetch, so a
+  // useMemo against that changing identity would bust on every render
+  // anyway — the memo overhead outweighs the saved work.
+  const entries = [];
+  if (fieldAvailability && typeof fieldAvailability === 'object') {
+    for (const [field, entry] of Object.entries(fieldAvailability)) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (!SURFACED_STATUSES.has(entry.status)) continue;
+      entries.push({ field, ...entry });
     }
-    return list;
-  }, [fieldAvailability]);
+  }
 
   const cadenceNote = growthMetricBasis === 'unavailable'
     ? 'Growth metrics are unavailable for this row (insufficient statement history).'

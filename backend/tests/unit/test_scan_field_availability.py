@@ -131,7 +131,7 @@ class TestUnpackJoinedRowFieldAvailability:
         fa = joined["field_availability"]
         assert "eps_growth_qq" in fa
         assert fa["eps_growth_qq"]["reason_code"] == REASON_INSUFFICIENT_HISTORY
-        assert fa["sales_growth_qq"]["status"] == "unavailable"
+        assert fa["sales_growth_qq"]["status"] == "unsupported"
         # Flat growth metadata passes through.
         assert joined["growth_metric_basis"] == BASIS_UNAVAILABLE
         assert joined["growth_reporting_cadence"] == CADENCE_INSUFFICIENT

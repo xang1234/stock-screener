@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 from typing import Any, Dict, Mapping, Tuple
 
@@ -235,7 +236,12 @@ class FieldCapabilityRegistryService:
             ),
         )
 
+    @lru_cache(maxsize=1)
     def entries(self) -> Tuple[FieldCapabilityEntry, ...]:
+        # Output depends only on module-level policy + registry constants, so
+        # one cached build serves every caller. Prior behaviour rebuilt
+        # ~50 fields × 4 markets on every scan-row read; that was ~1 ms per
+        # row and dominated the per-page CPU for HK/JP/TW panels (T8.7).
         tiers = field_tier_map()
         sources = field_source_map()
         field_names = tuple(sorted(screening_fields()))
