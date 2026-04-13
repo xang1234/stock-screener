@@ -28,6 +28,15 @@ export const MARKET_CAP_OPTIONS = [
 export const FUNDAMENTAL_KEYS = [
   'symbolSearch', 'minMarketCap', 'minVolume', 'price',
   'epsGrowth', 'salesGrowth', 'epsRating', 'ibdIndustries', 'gicsSectors', 'ipoAfter',
+  // Cross-market USD filters (3axp).
+  'markets', 'marketCapUsd', 'advUsd',
+];
+
+export const MARKET_OPTIONS = [
+  { value: 'US', label: 'US' },
+  { value: 'HK', label: 'HK' },
+  { value: 'JP', label: 'JP' },
+  { value: 'TW', label: 'TW' },
 ];
 
 export const TECHNICAL_KEYS = [

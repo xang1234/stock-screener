@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback, memo } from 'react';
+import { useMemo, useRef, useState, useCallback, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Table,
@@ -22,6 +22,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import RSSparkline from './RSSparkline';
 import PriceSparkline from './PriceSparkline';
 import FieldAvailabilityChip from './FieldAvailabilityChip';
+import MarketBadge from './MarketBadge';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import {
   getStageColor,
@@ -30,7 +31,13 @@ import {
   getEpsRatingColor,
   getGroupRankColor,
 } from '../../utils/colorUtils';
-import { formatLargeNumber, formatIpoAge, getIpoAgeColor } from '../../utils/formatUtils';
+import {
+  formatLargeNumber,
+  formatIpoAge,
+  getIpoAgeColor,
+  getCurrencyPrefix,
+  formatLocalCurrency,
+} from '../../utils/formatUtils';
 
 // Row height constant for virtualization
 const ROW_HEIGHT = 32;
@@ -38,9 +45,9 @@ const ROW_HEIGHT = 32;
 // Column definitions with explicit widths
 const columns = [
   { id: 'chart', label: '', sortable: false, width: 60 },
-  // Width bumped from 65→92 to accommodate the T8.7 FieldAvailabilityChip
-  // adjacent to longer suffixed symbols like "0700.HK" without overflow.
-  { id: 'symbol', label: 'Sym', sortable: true, width: 92 },
+  // Width bumped again in 3axp to fit: "0700.HK" + MarketBadge + FieldAvailabilityChip
+  // on a single line without overflow (previously 92px for T8.7's single chip).
+  { id: 'symbol', label: 'Sym', sortable: true, width: 130 },
   { id: 'rs_trend', label: 'RS Trend', sortable: true, width: 110 },
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
   { id: 'gics_sector', label: 'Sector', sortable: true, width: 80 },
@@ -69,7 +76,11 @@ const columns = [
   { id: 'stage', label: 'Stg', sortable: true, width: 40 },
   { id: 'current_price', label: 'Price', sortable: true, width: 65 },
   { id: 'volume', label: '$Vol', sortable: true, width: 60 },
-  { id: 'market_cap', label: 'MCap', sortable: true, width: 60 },
+  // MCap column header label is overridden per-render based on the USD/Local
+  // toggle; keep the underlying sort key stable at 'market_cap' so the
+  // sort-by dropdown / URL state doesn't shift when the user flips modes.
+  { id: 'market_cap', label: 'MCap', sortable: true, width: 75 },
+  { id: 'adv_usd', label: 'ADV ($)', sortable: true, width: 70 },
   { id: 'ipo_date', label: 'IPO', sortable: true, width: 50 },
   { id: 'eps_growth_qq', label: 'EPS', sortable: true, width: 50 },
   { id: 'sales_growth_qq', label: 'Sales', sortable: true, width: 50 },
@@ -94,6 +105,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
   showActions,
   showWatchlistMenu,
   chartEnabled,
+  mcapDisplay,
 }) {
   const handleRowClick = useCallback(() => {
     if (!chartEnabled) {
@@ -136,8 +148,9 @@ const VirtualTableRow = memo(function VirtualTableRow({
         </TableCell>
       )}
 
-      <TableCell sx={{ fontWeight: 600, width: 92, minWidth: 92, whiteSpace: 'nowrap' }}>
+      <TableCell sx={{ fontWeight: 600, width: 130, minWidth: 130, whiteSpace: 'nowrap' }}>
         {row.symbol}
+        <MarketBadge market={row.market} exchange={row.exchange} />
         <FieldAvailabilityChip
           fieldAvailability={row.field_availability}
           growthMetricBasis={row.growth_metric_basis}
@@ -286,15 +299,21 @@ const VirtualTableRow = memo(function VirtualTableRow({
       </TableCell>
 
       <TableCell align="right" sx={{ fontFamily: 'monospace', width: 65, minWidth: 65 }}>
-        {row.current_price ? `$${row.current_price.toFixed(2)}` : '-'}
+        {formatLocalCurrency(row.current_price, row.currency)}
       </TableCell>
 
       <TableCell align="right" sx={{ fontFamily: 'monospace', width: 60, minWidth: 60 }}>
-        {formatLargeNumber(row.volume, '$')}
+        {formatLargeNumber(row.volume, getCurrencyPrefix(row.currency))}
       </TableCell>
 
-      <TableCell align="right" sx={{ fontFamily: 'monospace', width: 60, minWidth: 60 }}>
-        {formatLargeNumber(row.market_cap, '$')}
+      <TableCell align="right" sx={{ fontFamily: 'monospace', width: 75, minWidth: 75 }}>
+        {mcapDisplay === 'usd'
+          ? formatLargeNumber(row.market_cap_usd, '$')
+          : formatLargeNumber(row.market_cap, getCurrencyPrefix(row.currency))}
+      </TableCell>
+
+      <TableCell align="right" sx={{ fontFamily: 'monospace', width: 70, minWidth: 70 }}>
+        {formatLargeNumber(row.adv_usd, '$')}
       </TableCell>
 
       <TableCell align="center" sx={{ fontFamily: 'monospace', color: getIpoAgeColor(row.ipo_date), width: 50, minWidth: 50 }}>
@@ -369,6 +388,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.rs_rating === nextProps.row.rs_rating &&
          prevProps.row.current_price === nextProps.row.current_price &&
          prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
+         prevProps.mcapDisplay === nextProps.mcapDisplay &&
          prevProps.showActions === nextProps.showActions &&
          prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
          prevProps.chartEnabled === nextProps.chartEnabled;
@@ -397,10 +417,23 @@ function ResultsTable({
   isChartEnabled,
 }) {
   const parentRef = useRef(null);
-  const visibleColumns = useMemo(
-    () => (showActions ? columns : columns.filter((column) => column.id !== 'chart')),
-    [showActions]
-  );
+  // Swap Market Cap column between USD (default) and local per 3axp. USD is
+  // the primary display for cross-market parity; local remains one click away.
+  // Kept as local component state — scan-level persistence can lift this up
+  // later if users want it to survive navigation.
+  const [mcapDisplay, setMcapDisplay] = useState('usd');
+  const visibleColumns = useMemo(() => {
+    const base = showActions ? columns : columns.filter((column) => column.id !== 'chart');
+    return base.map((column) =>
+      column.id === 'market_cap'
+        ? { ...column, label: mcapDisplay === 'usd' ? 'MCap ($)' : 'MCap (local)' }
+        : column,
+    );
+  }, [showActions, mcapDisplay]);
+
+  const toggleMcapDisplay = useCallback(() => {
+    setMcapDisplay((mode) => (mode === 'usd' ? 'local' : 'usd'));
+  }, []);
 
   const handleChangePage = useCallback((event, newPage) => {
     onPageChange(newPage + 1); // Material-UI uses 0-based pages, API uses 1-based
@@ -446,6 +479,19 @@ function ResultsTable({
 
   return (
     <Paper elevation={1}>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', px: 2, py: 0.5, borderBottom: 1, borderColor: 'divider' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+          Market Cap display:
+        </Typography>
+        <Chip
+          label={mcapDisplay === 'usd' ? 'USD' : 'Local'}
+          size="small"
+          variant="outlined"
+          onClick={toggleMcapDisplay}
+          data-testid="mcap-display-toggle"
+          sx={{ cursor: 'pointer', fontSize: 11, height: 20 }}
+        />
+      </Box>
       <TableContainer
         ref={parentRef}
         sx={{
@@ -453,7 +499,7 @@ function ResultsTable({
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2370 : 2310 }}>
+        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2493 : 2433 }}>
           <TableHead>
             <TableRow>
               {visibleColumns.map((column) => (
@@ -499,6 +545,7 @@ function ResultsTable({
                   showActions={showActions}
                   showWatchlistMenu={showWatchlistMenu}
                   chartEnabled={isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)}
+                  mcapDisplay={mcapDisplay}
                 />
               );
             })}

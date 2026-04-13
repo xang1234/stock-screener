@@ -108,9 +108,20 @@ export const buildFilterParams = (filters, options = {}) => {
   if (filters.maAlignment != null) params.ma_alignment = filters.maAlignment;
   if (filters.passesTemplate != null) params.passes_only = filters.passesTemplate;
 
-  // Volume & Market Cap
+  // Volume & Market Cap (local currency — applied at scan time)
   if (filters.minVolume != null) params.min_volume = filters.minVolume;
   if (filters.minMarketCap != null) params.min_market_cap = filters.minMarketCap;
+
+  // Cross-market USD-normalised filters (3axp). Empty range values stay
+  // omitted so a cleared filter doesn't send `min_market_cap_usd=` to the
+  // server as an invalid int.
+  if (filters.marketCapUsd?.min != null) params.min_market_cap_usd = filters.marketCapUsd.min;
+  if (filters.marketCapUsd?.max != null) params.max_market_cap_usd = filters.marketCapUsd.max;
+  if (filters.advUsd?.min != null) params.min_adv_usd = filters.advUsd.min;
+  if (filters.advUsd?.max != null) params.max_adv_usd = filters.advUsd.max;
+  if (Array.isArray(filters.markets) && filters.markets.length) {
+    params.markets = filters.markets.join(',');
+  }
 
   // Performance filters (price change %)
   if (filters.perfDay?.min != null) params.min_perf_day = filters.perfDay.min;

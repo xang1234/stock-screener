@@ -130,3 +130,37 @@ export const getScoreColor = (score) => {
   if (score >= 40) return '#ff9800';
   return '#f44336';
 };
+
+// Per-market currency-symbol map. Matches the conventions used in the rest
+// of the product (ADR ASIA-E2 + E5). Unknown / null currency falls back to
+// "$" so single-market (US) output stays unchanged.
+const CURRENCY_PREFIX_BY_CODE = Object.freeze({
+  USD: '$',
+  HKD: 'HK$',
+  JPY: '¥',
+  TWD: 'NT$',
+});
+
+/**
+ * Return the short currency-symbol prefix for a row's local currency code.
+ * @param {string|null|undefined} currencyCode - ISO 4217 code from stock_universe
+ * @returns {string} Currency symbol (e.g. '$', 'HK$', '¥', 'NT$'). '$' fallback.
+ */
+export const getCurrencyPrefix = (currencyCode) => {
+  if (!currencyCode) return '$';
+  return CURRENCY_PREFIX_BY_CODE[currencyCode] ?? '$';
+};
+
+/**
+ * Format a numeric value with the appropriate per-market currency prefix.
+ * Returns '-' for null/undefined so empty cells stay visually consistent
+ * with other "missing" cells in the results table.
+ * @param {number|null|undefined} value - Raw numeric value (local currency units)
+ * @param {string|null|undefined} currencyCode - ISO 4217 code (USD/HKD/JPY/TWD)
+ * @param {number} decimals - Decimal places (default: 2)
+ * @returns {string}
+ */
+export const formatLocalCurrency = (value, currencyCode, decimals = 2) => {
+  if (value == null) return '-';
+  return `${getCurrencyPrefix(currencyCode)}${value.toFixed(decimals)}`;
+};
