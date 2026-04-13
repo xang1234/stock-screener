@@ -63,6 +63,20 @@ class TestDetectLanguagePure:
         # No alphabetic characters → undetermined (not English).
         assert detect_language("123 456.78 !!!") == LANGUAGE_UNKNOWN
 
+    def test_pure_cyrillic_returns_unknown(self):
+        # Cyrillic alphabet (Russian) is not Latin → must not map to English.
+        # Regression for the "any alphabetic → en" fallback bug.
+        assert detect_language("Нефтяные запасы выросли квартал") == LANGUAGE_UNKNOWN
+
+    def test_pure_arabic_returns_unknown(self):
+        # Arabic script is not Latin → must not map to English.
+        assert detect_language("النفط يرتفع بشكل كبير") == LANGUAGE_UNKNOWN
+
+    def test_latin_with_diacritics_stays_english(self):
+        # Accented Latin (e.g. French financial news) should still classify
+        # as English — the diacritics are still LATIN in Unicode names.
+        assert detect_language("La Bourse de Paris a clôturé en hausse") == LANGUAGE_EN
+
     def test_deterministic_repeat(self):
         # Same input must always give the same output — pin it.
         text = "混合 English and 日本語 text with some 中文 sprinkled in."

@@ -298,7 +298,11 @@ def select_extraction_text(content_item: "ContentItem") -> ExtractionText:
     provider = meta.get("provider")
     target = meta.get("target_language") or DEFAULT_TARGET_LANGUAGE
 
-    if provider == PROVIDER_IDENTITY:
+    if (
+        provider == PROVIDER_IDENTITY
+        and meta.get("source_language") == content_item.source_language
+        and target == content_item.source_language
+    ):
         return ExtractionText(
             content_item.translated_title or content_item.title or "",
             content_item.translated_content or content_item.content or "",

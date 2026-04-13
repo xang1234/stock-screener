@@ -358,6 +358,24 @@ class TestSelectExtractionText:
         assert result.content == "there"
         assert result.language == "en"
 
+    def test_stale_identity_metadata_falls_back_to_original(self):
+        # If source_language is corrected after initial detection (e.g. a
+        # T7.2 re-detection bumps "en" → "ja"), stale PROVIDER_IDENTITY
+        # metadata must NOT be trusted — it would tag content as the old
+        # target language, poisoning downstream extraction with the wrong
+        # language hint.
+        row = _row(
+            title="Nikkei", content="Semiconductors",
+            source_language="ja",  # corrected from original "en"
+            translated_title="Nikkei", translated_content="Semiconductors",
+            translation_metadata=identity_metadata("en", "en"),  # stale
+        )
+        title, content, lang = select_extraction_text(row)
+        # Should fall back to originals tagged with the corrected source language.
+        assert title == "Nikkei"
+        assert content == "Semiconductors"
+        assert lang == "ja"  # not the stale "en"
+
 
 class TestShouldDowngradeForTranslation:
     def test_unavailable_triggers_downgrade(self):

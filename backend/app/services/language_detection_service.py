@@ -30,12 +30,13 @@ Unicode range constants don't require a bump.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ..models.theme import ContentItem
 
-POLICY_VERSION: str = "2026.04.13.1"
+POLICY_VERSION: str = "2026.04.13.2"
 
 LANGUAGE_EN: str = "en"
 LANGUAGE_JA: str = "ja"
@@ -119,6 +120,7 @@ def detect_language(text: Optional[str]) -> str:
 
     kana = 0
     cjk = 0
+    latin = 0
     letters = 0
     for ch in sample:
         if not ch.isalpha():
@@ -126,6 +128,8 @@ def detect_language(text: Optional[str]) -> str:
             # characters contribute signal.
             continue
         letters += 1
+        if "LATIN" in unicodedata.name(ch, ""):
+            latin += 1
         if _is_kana(ch):
             kana += 1
         elif _is_cjk_ideograph(ch):
@@ -137,7 +141,9 @@ def detect_language(text: Optional[str]) -> str:
         return LANGUAGE_JA
     if cjk / letters >= CJK_THRESHOLD:
         return LANGUAGE_ZH
-    return LANGUAGE_EN
+    if latin > 0:
+        return LANGUAGE_EN
+    return LANGUAGE_UNKNOWN
 
 
 def detect_and_cache_language(
