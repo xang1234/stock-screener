@@ -47,6 +47,14 @@ class TestColumnMapCoverage:
         assert field in _COLUMN_MAP, f"{field} should be in _COLUMN_MAP"
 
     @pytest.mark.parametrize("field", [
+        "market", "exchange", "currency", "market_cap_usd", "adv_usd",
+    ])
+    def test_joined_column_field_is_mapped(self, field):
+        # Joined fields (StockUniverse + StockFundamental) must be filterable
+        # and sortable; the repository always applies the matching outer joins.
+        assert field in _COLUMN_MAP, f"{field} should be in _COLUMN_MAP"
+
+    @pytest.mark.parametrize("field", [
         "vcp_score", "vcp_pivot", "vcp_detected",
         "vcp_ready_for_breakout", "ma_alignment",
     ])

@@ -139,9 +139,16 @@ def parse_scan_filters(
     # EPS Rating
     min_eps_rating: Optional[int] = Query(None, ge=0, le=99, description="Minimum EPS Rating"),
     max_eps_rating: Optional[int] = Query(None, ge=0, le=99, description="Maximum EPS Rating"),
-    # Volume & Market Cap
-    min_volume: Optional[int] = Query(None, description="Minimum volume"),
-    min_market_cap: Optional[int] = Query(None, description="Minimum market cap"),
+    # Volume & Market Cap (local currency)
+    min_volume: Optional[int] = Query(None, description="Minimum dollar volume (local currency)"),
+    min_market_cap: Optional[int] = Query(None, description="Minimum market cap (local currency)"),
+    # Volume & Market Cap (FX-normalised to USD for cross-market comparison)
+    min_market_cap_usd: Optional[int] = Query(None, description="Minimum market cap (USD)"),
+    max_market_cap_usd: Optional[int] = Query(None, description="Maximum market cap (USD)"),
+    min_adv_usd: Optional[int] = Query(None, description="Minimum average daily volume (USD)"),
+    max_adv_usd: Optional[int] = Query(None, description="Maximum average daily volume (USD)"),
+    # Market identity (comma-separated codes: US,HK,JP,TW)
+    markets: Optional[str] = Query(None, description="Market filter (comma-separated codes)"),
     # VCP
     min_vcp_score: Optional[float] = Query(None, description="Minimum VCP score"),
     max_vcp_score: Optional[float] = Query(None, description="Maximum VCP score"),
@@ -229,6 +236,8 @@ def parse_scan_filters(
     f.add_range("eps_rating", min_eps_rating, max_eps_rating)
     f.add_range("volume", min_volume, None)
     f.add_range("market_cap", min_market_cap, None)
+    f.add_range("market_cap_usd", min_market_cap_usd, max_market_cap_usd)
+    f.add_range("adv_usd", min_adv_usd, max_adv_usd)
     f.add_range("vcp_score", min_vcp_score, max_vcp_score)
     f.add_range("vcp_pivot", min_vcp_pivot, max_vcp_pivot)
     f.add_range("price_change_1d", min_perf_day, max_perf_day)
@@ -267,6 +276,11 @@ def parse_scan_filters(
         sector_list = tuple(s.strip() for s in gics_sectors.split(","))
         mode = FilterMode.EXCLUDE if gics_sectors_mode == "exclude" else FilterMode.INCLUDE
         f.add_categorical("gics_sector", sector_list, mode)
+
+    if markets:
+        market_list = tuple(m.strip().upper() for m in markets.split(",") if m.strip())
+        if market_list:
+            f.add_categorical("market", market_list)
 
     # Boolean filters
     if vcp_detected is not None:

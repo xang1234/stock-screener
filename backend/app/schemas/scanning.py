@@ -186,6 +186,16 @@ class ScanResultItem(BaseModel):
     # Multi-screener metadata
     screeners_run: Optional[List[str]] = None
 
+    # Market identity (joined from stock_universe at query time)
+    market: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+
+    # FX-normalised values (joined from stock_fundamentals at query time;
+    # ``market_cap`` and ``volume`` above remain in local currency)
+    market_cap_usd: Optional[float] = None
+    adv_usd: Optional[float] = None
+
     @classmethod
     def from_domain(
         cls,
@@ -287,6 +297,12 @@ class ScanResultItem(BaseModel):
             beta_adj_rs_12m=ef.get("beta_adj_rs_12m"),
             # Multi-screener metadata
             screeners_run=item.screeners_run,
+            # Market identity + FX-normalised values
+            market=ef.get("market"),
+            exchange=ef.get("exchange"),
+            currency=ef.get("currency"),
+            market_cap_usd=ef.get("market_cap_usd"),
+            adv_usd=ef.get("adv_usd"),
         )
 
 

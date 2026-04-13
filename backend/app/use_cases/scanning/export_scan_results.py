@@ -53,6 +53,9 @@ class ExportScanResultsResult:
 _CSV_COLUMNS: list[tuple[str, Any]] = [
     ("Symbol", lambda item: item.symbol),
     ("Company Name", lambda item: item.extended_fields.get("company_name")),
+    ("Market", lambda item: item.extended_fields.get("market")),
+    ("Exchange", lambda item: item.extended_fields.get("exchange")),
+    ("Currency", lambda item: item.extended_fields.get("currency")),
     ("Composite Score", lambda item: item.composite_score),
     ("Rating", lambda item: item.rating),
     ("Current Price", lambda item: item.current_price),
@@ -110,9 +113,12 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     # 52-week
     ("52W High Distance", lambda item: item.extended_fields.get("week_52_high_distance")),
     ("52W Low Distance", lambda item: item.extended_fields.get("week_52_low_distance")),
-    # Volume
+    # Volume / Market Cap (local currency at scan time)
     ("Volume", lambda item: item.extended_fields.get("volume")),
-    ("Market Cap", lambda item: item.extended_fields.get("market_cap")),
+    ("Market Cap (local)", lambda item: item.extended_fields.get("market_cap")),
+    # FX-normalised values for cross-market comparison
+    ("Market Cap (USD)", lambda item: item.extended_fields.get("market_cap_usd")),
+    ("ADV (USD)", lambda item: item.extended_fields.get("adv_usd")),
     ("Gap %", lambda item: item.extended_fields.get("gap_percent")),
     ("Volume Surge", lambda item: item.extended_fields.get("volume_surge")),
     # Beta

@@ -24,6 +24,44 @@ from app.models.stock_universe import StockUniverse
 logger = logging.getLogger(__name__)
 
 
+def _scan_results_query(session: Session, scan_id: str):
+    """Base query for scan results that joins market-identity + USD-normalised fields.
+
+    Every result-producing read path in this repository goes through this helper
+    so that (a) ``_COLUMN_MAP`` entries for joined columns (market, exchange,
+    market_cap_usd, adv_usd) are always resolvable during filter/sort, and
+    (b) HTTP response shaping can populate those fields without extra queries.
+    """
+    return (
+        session.query(
+            ScanResult,
+            StockUniverse.name,
+            StockUniverse.market,
+            StockUniverse.exchange,
+            StockUniverse.currency,
+            StockFundamental.market_cap_usd,
+            StockFundamental.adv_usd,
+        )
+        .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+        .outerjoin(StockFundamental, ScanResult.symbol == StockFundamental.symbol)
+        .filter(ScanResult.scan_id == scan_id)
+    )
+
+
+def _unpack_joined_row(row) -> tuple[ScanResult, dict[str, Any]]:
+    """Split a ``_scan_results_query`` row into the ORM row + joined fields."""
+    result, name, market, exchange, currency, market_cap_usd, adv_usd = row
+    joined = {
+        "company_name": name,
+        "market": market,
+        "exchange": exchange,
+        "currency": currency,
+        "market_cap_usd": market_cap_usd,
+        "adv_usd": adv_usd,
+    }
+    return result, joined
+
+
 def _map_orchestrator_result(scan_id: str, symbol: str, raw: dict) -> dict:
     """Map a raw orchestrator result dict to ScanResult column values.
 
@@ -318,30 +356,20 @@ class SqlScanResultRepository(ScanResultRepository):
         include_sparklines: bool = True,
         include_setup_payload: bool = True,
     ) -> ResultPage:
-        # Base query: LEFT JOIN stock_universe to get company names.
-        q = (
-            self._session.query(ScanResult, StockUniverse.name)
-            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
-            .filter(ScanResult.scan_id == scan_id)
-        )
-
-        # Apply domain filters → SQLAlchemy WHERE clauses.
+        q = _scan_results_query(self._session, scan_id)
         q = apply_filters(q, spec.filters)
 
-        # Apply sort + pagination (SQL or Python depending on field).
         rows, total, _python_sorted = apply_sort_and_paginate(
             q, spec.sort, spec.page,
         )
 
-        # Map ORM rows to domain objects.
         items = tuple(
             _map_row_to_domain(
-                result,
-                company_name,
-                include_sparklines,
+                *_unpack_joined_row(row),
+                include_sparklines=include_sparklines,
                 include_setup_payload=include_setup_payload,
             )
-            for result, company_name in rows
+            for row in rows
         )
 
         return ResultPage(
@@ -360,35 +388,16 @@ class SqlScanResultRepository(ScanResultRepository):
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:
         """Return filtered/sorted symbols for navigation."""
-        if scan_result_query.requires_python_sort(sort.field):
-            q = (
-                self._session.query(ScanResult)
-                .filter(ScanResult.scan_id == scan_id)
-            )
-            q = apply_filters(q, filters)
-
-            if page is None:
-                rows = apply_sort_all(q, sort)
-                symbols = tuple(row.symbol for row in rows)
-                return symbols, len(symbols)
-
-            rows, total, _ = apply_sort_and_paginate(q, sort, page)
-            symbols = tuple(row.symbol for row in rows)
-            return symbols, total
-
-        q = (
-            self._session.query(ScanResult.symbol)
-            .filter(ScanResult.scan_id == scan_id)
-        )
+        q = _scan_results_query(self._session, scan_id)
         q = apply_filters(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)
-            symbols = tuple(symbol for (symbol,) in rows)
+            symbols = tuple(row[0].symbol for row in rows)
             return symbols, len(symbols)
 
         rows, total, _ = apply_sort_and_paginate(q, sort, page)
-        symbols = tuple(symbol for (symbol,) in rows)
+        symbols = tuple(row[0].symbol for row in rows)
         return symbols, total
 
     def query_all(
@@ -399,16 +408,15 @@ class SqlScanResultRepository(ScanResultRepository):
         *,
         include_sparklines: bool = False,
     ) -> tuple[ScanResultItemDomain, ...]:
-        q = (
-            self._session.query(ScanResult, StockUniverse.name)
-            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
-            .filter(ScanResult.scan_id == scan_id)
-        )
+        q = _scan_results_query(self._session, scan_id)
         q = apply_filters(q, filters)
         rows = apply_sort_all(q, sort)
         return tuple(
-            _map_row_to_domain(result, company_name, include_sparklines)
-            for result, company_name in rows
+            _map_row_to_domain(
+                *_unpack_joined_row(row),
+                include_sparklines=include_sparklines,
+            )
+            for row in rows
         )
 
     def get_by_symbol(
@@ -420,17 +428,14 @@ class SqlScanResultRepository(ScanResultRepository):
     ) -> ScanResultItemDomain | None:
         """Return a single result by scan_id + symbol, or None."""
         row = (
-            self._session.query(ScanResult, StockUniverse.name)
-            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
-            .filter(ScanResult.scan_id == scan_id, ScanResult.symbol == symbol)
+            _scan_results_query(self._session, scan_id)
+            .filter(ScanResult.symbol == symbol)
             .first()
         )
         if row is None:
             return None
-        result, company_name = row
         return _map_row_to_domain(
-            result,
-            company_name,
+            *_unpack_joined_row(row),
             include_sparklines=True,
             include_setup_payload=include_setup_payload,
         )
@@ -439,36 +444,28 @@ class SqlScanResultRepository(ScanResultRepository):
         self, scan_id: str, ibd_industry_group: str
     ) -> tuple[ScanResultItemDomain, ...]:
         rows = (
-            self._session.query(ScanResult, StockUniverse.name)
-            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
-            .filter(
-                ScanResult.scan_id == scan_id,
-                ScanResult.ibd_industry_group == ibd_industry_group,
-            )
+            _scan_results_query(self._session, scan_id)
+            .filter(ScanResult.ibd_industry_group == ibd_industry_group)
             .order_by(ScanResult.composite_score.desc())
             .all()
         )
         return tuple(
-            _map_row_to_domain(result, company_name, include_sparklines=True)
-            for result, company_name in rows
+            _map_row_to_domain(*_unpack_joined_row(row), include_sparklines=True)
+            for row in rows
         )
 
     def get_peers_by_sector(
         self, scan_id: str, gics_sector: str
     ) -> tuple[ScanResultItemDomain, ...]:
         rows = (
-            self._session.query(ScanResult, StockUniverse.name)
-            .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
-            .filter(
-                ScanResult.scan_id == scan_id,
-                ScanResult.gics_sector == gics_sector,
-            )
+            _scan_results_query(self._session, scan_id)
+            .filter(ScanResult.gics_sector == gics_sector)
             .order_by(ScanResult.composite_score.desc())
             .all()
         )
         return tuple(
-            _map_row_to_domain(result, company_name, include_sparklines=True)
-            for result, company_name in rows
+            _map_row_to_domain(*_unpack_joined_row(row), include_sparklines=True)
+            for row in rows
         )
 
     def get_details_by_symbol(
@@ -526,16 +523,26 @@ class SqlScanResultRepository(ScanResultRepository):
 
 def _map_row_to_domain(
     result: ScanResult,
-    company_name: str | None,
+    joined: dict[str, Any],
     include_sparklines: bool,
     *,
     include_setup_payload: bool = True,
 ) -> ScanResultItemDomain:
-    """Map a ScanResult ORM row to a domain value object."""
+    """Map a ScanResult ORM row to a domain value object.
+
+    ``joined`` carries fields from the ``StockUniverse`` and
+    ``StockFundamental`` outer joins (see ``_unpack_joined_row``):
+    company_name, market, exchange, currency, market_cap_usd, adv_usd.
+    """
     details = result.details or {}
 
     extended: dict[str, Any] = {
-        "company_name": company_name,
+        "company_name": joined.get("company_name"),
+        "market": joined.get("market"),
+        "exchange": joined.get("exchange"),
+        "currency": joined.get("currency"),
+        "market_cap_usd": joined.get("market_cap_usd"),
+        "adv_usd": joined.get("adv_usd"),
         "minervini_score": result.minervini_score,
         "canslim_score": result.canslim_score,
         "ipo_score": result.ipo_score,

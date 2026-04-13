@@ -33,9 +33,47 @@ from app.infra.query.feature_store_query import (
     apply_sort_all,
     apply_sort_and_paginate,
 )
+from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 
 _BATCH_SIZE = 500
+
+
+def _feature_results_query(session: Session, run_id: int):
+    """Base feature-store query joining market-identity + USD-normalised fields.
+
+    Mirrors ``_scan_results_query`` in scan_result_repo so feature-store-backed
+    scans expose the same `market`, `exchange`, `currency`, `market_cap_usd`,
+    and `adv_usd` columns to filtering, sorting, and HTTP serialisation.
+    """
+    return (
+        session.query(
+            StockFeatureDaily,
+            StockUniverse.name,
+            StockUniverse.market,
+            StockUniverse.exchange,
+            StockUniverse.currency,
+            StockFundamental.market_cap_usd,
+            StockFundamental.adv_usd,
+        )
+        .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
+        .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
+        .filter(StockFeatureDaily.run_id == run_id)
+    )
+
+
+def _unpack_feature_joined_row(row) -> tuple[Any, dict[str, Any]]:
+    """Split a ``_feature_results_query`` row into the ORM row + joined fields."""
+    feature_row, name, market, exchange, currency, market_cap_usd, adv_usd = row
+    joined = {
+        "company_name": name,
+        "market": market,
+        "exchange": exchange,
+        "currency": currency,
+        "market_cap_usd": market_cap_usd,
+        "adv_usd": adv_usd,
+    }
+    return feature_row, joined
 
 
 def _upsert_stmt(session: Session, values: list[dict[str, Any]]):
@@ -232,25 +270,17 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        q = (
-            self._session.query(StockFeatureDaily, StockUniverse.name)
-            .outerjoin(
-                StockUniverse,
-                StockFeatureDaily.symbol == StockUniverse.symbol,
-            )
-            .filter(StockFeatureDaily.run_id == run_id)
-        )
+        q = _feature_results_query(self._session, run_id)
         q = apply_filters(q, spec.filters)
         rows, total = apply_sort_and_paginate(q, spec.sort, spec.page)
 
         items = tuple(
             _map_feature_to_scan_result(
-                row,
-                company_name,
-                include_sparklines,
+                *_unpack_feature_joined_row(row),
+                include_sparklines=include_sparklines,
                 include_setup_payload=include_setup_payload,
             )
-            for row, company_name in rows
+            for row in rows
         )
         return ResultPage(
             items=items,
@@ -346,25 +376,16 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             raise EntityNotFoundError("FeatureRun", run_id)
 
         result = (
-            self._session.query(StockFeatureDaily, StockUniverse.name)
-            .outerjoin(
-                StockUniverse,
-                StockFeatureDaily.symbol == StockUniverse.symbol,
-            )
-            .filter(
-                StockFeatureDaily.run_id == run_id,
-                StockFeatureDaily.symbol == symbol,
-            )
+            _feature_results_query(self._session, run_id)
+            .filter(StockFeatureDaily.symbol == symbol)
             .first()
         )
         if result is None:
             return None
 
-        row, company_name = result
         return _map_feature_to_scan_result(
-            row,
-            company_name,
-            include_sparklines,
+            *_unpack_feature_joined_row(result),
+            include_sparklines=include_sparklines,
             include_setup_payload=include_setup_payload,
         )
 
@@ -388,21 +409,17 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             bind_or_session=self._session,
         )
         rows = (
-            self._session.query(StockFeatureDaily, StockUniverse.name)
-            .outerjoin(
-                StockUniverse,
-                StockFeatureDaily.symbol == StockUniverse.symbol,
-            )
-            .filter(
-                StockFeatureDaily.run_id == run_id,
-                industry_col == ibd_industry_group,
-            )
+            _feature_results_query(self._session, run_id)
+            .filter(industry_col == ibd_industry_group)
             .order_by(StockFeatureDaily.composite_score.desc())
             .all()
         )
         return tuple(
-            _map_feature_to_scan_result(row, company_name, include_sparklines=False)
-            for row, company_name in rows
+            _map_feature_to_scan_result(
+                *_unpack_feature_joined_row(row),
+                include_sparklines=False,
+            )
+            for row in rows
         )
 
     def get_peers_by_sector_for_run(
@@ -425,21 +442,17 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             bind_or_session=self._session,
         )
         rows = (
-            self._session.query(StockFeatureDaily, StockUniverse.name)
-            .outerjoin(
-                StockUniverse,
-                StockFeatureDaily.symbol == StockUniverse.symbol,
-            )
-            .filter(
-                StockFeatureDaily.run_id == run_id,
-                sector_col == gics_sector,
-            )
+            _feature_results_query(self._session, run_id)
+            .filter(sector_col == gics_sector)
             .order_by(StockFeatureDaily.composite_score.desc())
             .all()
         )
         return tuple(
-            _map_feature_to_scan_result(row, company_name, include_sparklines=False)
-            for row, company_name in rows
+            _map_feature_to_scan_result(
+                *_unpack_feature_joined_row(row),
+                include_sparklines=False,
+            )
+            for row in rows
         )
 
     def query_all_as_scan_results(
@@ -459,20 +472,16 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        q = (
-            self._session.query(StockFeatureDaily, StockUniverse.name)
-            .outerjoin(
-                StockUniverse,
-                StockFeatureDaily.symbol == StockUniverse.symbol,
-            )
-            .filter(StockFeatureDaily.run_id == run_id)
-        )
+        q = _feature_results_query(self._session, run_id)
         q = apply_filters(q, filters)
         rows = apply_sort_all(q, sort)
 
         return tuple(
-            _map_feature_to_scan_result(row, company_name, include_sparklines)
-            for row, company_name in rows
+            _map_feature_to_scan_result(
+                *_unpack_feature_joined_row(row),
+                include_sparklines=include_sparklines,
+            )
+            for row in rows
         )
 
     def query_run_symbols(
@@ -486,19 +495,16 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        q = (
-            self._session.query(StockFeatureDaily.symbol)
-            .filter(StockFeatureDaily.run_id == run_id)
-        )
+        q = _feature_results_query(self._session, run_id)
         q = apply_filters(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)
-            symbols = tuple(symbol for (symbol,) in rows)
+            symbols = tuple(row[0].symbol for row in rows)
             return symbols, len(symbols)
 
         rows, total = apply_sort_and_paginate(q, sort, page)
-        symbols = tuple(symbol for (symbol,) in rows)
+        symbols = tuple(row[0].symbol for row in rows)
         return symbols, total
 
     def get_setup_payload_for_run(self, run_id: int, symbol: str) -> dict | None:
@@ -577,7 +583,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
 
 def _map_feature_to_scan_result(
     row: StockFeatureDaily,
-    company_name: str | None,
+    joined: dict[str, Any],
     include_sparklines: bool,
     *,
     include_setup_payload: bool = True,
@@ -586,19 +592,23 @@ def _map_feature_to_scan_result(
 
     Analogous to ``_map_row_to_domain`` in scan_result_repo.py, but
     extracts all fields from the details_json blob rather than from
-    dedicated SQL columns.
+    dedicated SQL columns. ``joined`` carries the StockUniverse +
+    StockFundamental outer-join columns (see ``_unpack_feature_joined_row``).
     """
     d: dict[str, Any] = row.details_json or {}
 
-    # Clamp score to 0-100 (matching legacy behavior)
     raw_score = row.composite_score or 0
     clamped_score = max(0.0, min(100.0, float(raw_score)))
 
-    # Reverse-map integer rating back to string
     rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
 
     extended: dict[str, Any] = {
-        "company_name": company_name,
+        "company_name": joined.get("company_name"),
+        "market": joined.get("market"),
+        "exchange": joined.get("exchange"),
+        "currency": joined.get("currency"),
+        "market_cap_usd": joined.get("market_cap_usd"),
+        "adv_usd": joined.get("adv_usd"),
         "minervini_score": d.get("minervini_score"),
         "canslim_score": d.get("canslim_score"),
         "ipo_score": d.get("ipo_score"),
