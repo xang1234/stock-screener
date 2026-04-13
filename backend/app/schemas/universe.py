@@ -195,6 +195,65 @@ class UniverseDefinition(BaseModel):
             return f"Test ({n} {'symbol' if n == 1 else 'symbols'}{suffix})"
 
     @classmethod
+    def from_scan_fields(
+        cls,
+        *,
+        universe_type: Optional[str],
+        universe: Optional[str] = None,
+        universe_key: Optional[str] = None,
+        universe_market: Optional[str] = None,
+        universe_exchange: Optional[str] = None,
+        universe_index: Optional[str] = None,
+        universe_symbols: Optional[List[str]] = None,
+    ) -> "UniverseDefinition":
+        """Reconstruct a UniverseDefinition from persisted scan metadata columns.
+
+        Falls back to :meth:`from_legacy` when ``universe_type`` is NULL
+        (pre-migration rows). Any reconstruction failure — unknown type,
+        unknown market/exchange/index enum value, or a Pydantic validator
+        rejection — yields an ALL definition rather than raising, because
+        callers are typically building response payloads for scans that
+        already exist and should not 500 on a malformed historical row.
+        """
+        if universe_type is None:
+            try:
+                return cls.from_legacy(universe or "all", universe_symbols)
+            except Exception:
+                return cls(type=UniverseType.ALL)
+
+        try:
+            parsed_type = UniverseType(universe_type)
+
+            resolved_market = universe_market
+            market = exchange = index = None
+            symbols: Optional[List[str]] = None
+
+            if parsed_type == UniverseType.MARKET:
+                if (
+                    resolved_market is None
+                    and isinstance(universe_key, str)
+                    and universe_key.lower().startswith("market:")
+                ):
+                    resolved_market = universe_key.split(":", 1)[1].upper()
+                market = Market(resolved_market) if resolved_market else None
+            elif parsed_type == UniverseType.EXCHANGE:
+                exchange = Exchange(universe_exchange) if universe_exchange else None
+            elif parsed_type == UniverseType.INDEX:
+                index = IndexName(universe_index) if universe_index else None
+            elif parsed_type in (UniverseType.CUSTOM, UniverseType.TEST):
+                symbols = universe_symbols
+
+            return cls(
+                type=parsed_type,
+                market=market,
+                exchange=exchange,
+                index=index,
+                symbols=symbols,
+            )
+        except Exception:
+            return cls(type=UniverseType.ALL)
+
+    @classmethod
     def from_legacy(cls, universe: str, symbols: Optional[List[str]] = None) -> "UniverseDefinition":
         """
         Parse a legacy universe string into a typed UniverseDefinition.

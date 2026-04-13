@@ -368,6 +368,83 @@ class TestFilterSpec:
         assert result.items[0].symbol == "AAPL"
 
 
+class TestJoinedColumnFilters:
+    """Verify filters on StockUniverse + StockFundamental columns work end-to-end.
+
+    Regression coverage for asia.8.3: feature_store_query._COLUMN_MAP must
+    contain entries for `market`/`market_cap_usd`/`adv_usd` and the SQL
+    queries must apply the matching outer joins, otherwise USD/market filters
+    silently drop on feature-store-backed scans.
+    """
+
+    def _seed(self, repo, session):
+        from app.domain.common.query import QuerySpec
+        from app.models.stock import StockFundamental
+        from app.models.stock_universe import StockUniverse
+
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [_make_row("0700.HK"), _make_row("AAPL"), _make_row("7203.T")],
+        )
+        session.add_all([
+            StockUniverse(symbol="0700.HK", name="Tencent", market="HK", currency="HKD"),
+            StockUniverse(symbol="AAPL", name="Apple", market="US", currency="USD"),
+            StockUniverse(symbol="7203.T", name="Toyota", market="JP", currency="JPY"),
+        ])
+        session.add_all([
+            StockFundamental(symbol="0700.HK", market_cap_usd=500_000_000_000, adv_usd=12_000_000),
+            StockFundamental(symbol="AAPL", market_cap_usd=2_700_000_000_000, adv_usd=8_000_000_000),
+            StockFundamental(symbol="7203.T", market_cap_usd=250_000_000_000, adv_usd=4_500_000),
+        ])
+        session.flush()
+        return run_id, QuerySpec
+
+    def test_markets_categorical_filter_resolves_through_joined_column(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id, QuerySpec = self._seed(repo, session)
+
+        filters = FilterSpec()
+        filters.add_categorical("market", ("HK", "JP"))
+        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+
+        result = repo.query_run_as_scan_results(run_id, spec)
+
+        symbols = {item.symbol for item in result.items}
+        assert symbols == {"0700.HK", "7203.T"}
+        assert result.total == 2
+
+    def test_market_cap_usd_range_filter_excludes_low_cap_rows(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id, QuerySpec = self._seed(repo, session)
+
+        filters = FilterSpec()
+        filters.add_range("market_cap_usd", min_value=400_000_000_000)
+        spec = QuerySpec(filters=filters, sort=SortSpec(), page=PageSpec())
+
+        result = repo.query_run_as_scan_results(run_id, spec)
+
+        symbols = {item.symbol for item in result.items}
+        assert symbols == {"0700.HK", "AAPL"}
+
+    def test_extended_fields_carry_market_identity_and_usd_values(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id, QuerySpec = self._seed(repo, session)
+        spec = QuerySpec(filters=FilterSpec(), sort=SortSpec(), page=PageSpec())
+
+        result = repo.query_run_as_scan_results(run_id, spec)
+
+        by_symbol = {item.symbol: item for item in result.items}
+        tencent = by_symbol["0700.HK"]
+        assert tencent.extended_fields["market"] == "HK"
+        assert tencent.extended_fields["currency"] == "HKD"
+        assert tencent.extended_fields["market_cap_usd"] == 500_000_000_000
+        assert tencent.extended_fields["adv_usd"] == 12_000_000
+
+
 # ---------------------------------------------------------------------------
 # TestSortOrdering
 # ---------------------------------------------------------------------------

@@ -1,9 +1,31 @@
-"""Schema tests for content language / translation columns (T7.1)."""
+"""Schema tests for content language / translation columns.
+
+Covers the ORM column shape, the Pydantic schema defaults, and the
+endpoint-mapping wire contract: GET /themes/{id}/mentions and the
+content-items list endpoint must surface ``source_language`` /
+``translated_*`` / ``translation_metadata`` to the frontend, not just
+accept them on the schema.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.models.theme import ContentItem, ThemeMention
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+# Register ORM models used by metadata.create_all.
+import app.models.theme  # noqa: F401
+import app.models.scan_result  # noqa: F401
+import app.infra.db.models.feature_store  # noqa: F401
+
+from app.models.theme import (
+    ContentItem,
+    ContentSource,
+    ThemeCluster,
+    ThemeMention,
+)
 from app.schemas.theme import (
     ContentItemWithThemesResponse,
     ThemeMentionDetailResponse,
@@ -136,6 +158,215 @@ class TestResponseSchemasExposeTranslation:
         assert dumped["translated_title"] is None
         assert dumped["translated_content"] is None
         assert dumped["translation_metadata"] is None
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-mapping regression tests — source_language / translated_* wire contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sess = sessionmaker(bind=engine)()
+    try:
+        yield sess
+    finally:
+        sess.close()
+        engine.dispose()
+
+
+class TestGetThemeMentionsPopulatesTranslationFields:
+    """``themes_queries.get_theme_mentions`` must map the language + translation
+    columns from ``ThemeMention`` / ``ContentItem`` onto the response schema,
+    otherwise the frontend language-indicator UX has nothing to render.
+    """
+
+    def test_mention_response_carries_source_language_and_translated_excerpt(
+        self, _session
+    ):
+        from app.api.v1.themes_queries import get_theme_mentions
+
+        source = ContentSource(name="Nikkei", source_type="news")
+        _session.add(source)
+        _session.flush()
+
+        content = ContentItem(
+            source_id=source.id,
+            source_type="news",
+            external_id="jp-1",
+            title="日経平均、続伸",
+            content="東京株式市場…",
+            source_language="ja",
+            translated_title="Nikkei continues to rise",
+            translated_content="Tokyo market…",
+            translation_metadata={"provider": "deepl", "confidence": 0.94},
+        )
+        _session.add(content)
+        _session.flush()
+
+        cluster = ThemeCluster(
+            name="AI infrastructure",
+            display_name="AI infrastructure",
+            canonical_key="ai_infrastructure",
+        )
+        _session.add(cluster)
+        _session.flush()
+
+        mention = ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="news",
+            raw_theme="半導体",
+            excerpt="半導体大手は増産計画を発表した。",
+            translated_raw_theme="semiconductors",
+            translated_excerpt="Major semiconductor firms announced expansion plans.",
+            translation_metadata={"provider": "deepl", "confidence": 0.92},
+            mentioned_at=datetime.now(tz=timezone.utc),
+        )
+        _session.add(mention)
+        _session.commit()
+
+        resp = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session)
+
+        assert len(resp.mentions) == 1
+        m = resp.mentions[0]
+        assert m.source_language == "ja"
+        assert m.translated_excerpt.startswith("Major semiconductor")
+        assert m.translated_raw_theme == "semiconductors"
+        assert m.translation_metadata.provider == "deepl"
+        assert m.translation_metadata.confidence == 0.92
+
+    def test_mention_falls_back_to_content_translation_metadata(self, _session):
+        # Pre-7.3 mentions rely on the ContentItem-level translation snapshot
+        # when the mention itself has no per-row metadata.
+        from app.api.v1.themes_queries import get_theme_mentions
+
+        source = ContentSource(name="Nikkei", source_type="news")
+        _session.add(source)
+        _session.flush()
+
+        content = ContentItem(
+            source_id=source.id,
+            source_type="news",
+            external_id="jp-2",
+            title="…",
+            content="…",
+            source_language="ja",
+            translation_metadata={"provider": "deepl", "confidence": 0.88},
+        )
+        _session.add(content)
+        _session.flush()
+
+        cluster = ThemeCluster(name="Rates", display_name="Rates", canonical_key="rates")
+        _session.add(cluster)
+        _session.flush()
+
+        mention = ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="news",
+            raw_theme="金利",
+            excerpt="日銀が据え置きを発表",
+            mentioned_at=datetime.now(tz=timezone.utc),
+        )
+        _session.add(mention)
+        _session.commit()
+
+        resp = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session)
+
+        m = resp.mentions[0]
+        # ThemeMention row itself has no language — falls back to ContentItem.
+        assert m.source_language == "ja"
+        assert m.translation_metadata.provider == "deepl"
+
+    def test_empty_dict_mention_metadata_does_not_fall_back_to_content(self, _session):
+        # The detection-only path (T7.2) may store {} on the mention to mean
+        # "translation not yet performed". Using `or` to fall back would
+        # silently swap that for the content-level metadata snapshot,
+        # surfacing stale provider info on the wire.
+        from app.api.v1.themes_queries import get_theme_mentions
+
+        source = ContentSource(name="Nikkei", source_type="news")
+        _session.add(source)
+        _session.flush()
+
+        content = ContentItem(
+            source_id=source.id,
+            source_type="news",
+            external_id="jp-detect-only",
+            title="…",
+            content="…",
+            source_language="ja",
+            translation_metadata={"provider": "stale-provider", "confidence": 0.55},
+        )
+        _session.add(content)
+        _session.flush()
+
+        cluster = ThemeCluster(
+            name="Detection-only", display_name="Detection-only", canonical_key="det_only"
+        )
+        _session.add(cluster)
+        _session.flush()
+
+        mention = ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="news",
+            raw_theme="円安",
+            excerpt="…",
+            translation_metadata={},  # detection-only sentinel, not None
+            mentioned_at=datetime.now(tz=timezone.utc),
+        )
+        _session.add(mention)
+        _session.commit()
+
+        m = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session).mentions[0]
+
+        # Empty dict is a real (non-None) marker — must not fall back to the
+        # ContentItem-level snapshot. TranslationMetadata round-trips empty.
+        assert m.translation_metadata is not None
+        assert m.translation_metadata.provider is None
+        assert m.translation_metadata.confidence is None
+
+    def test_english_source_leaves_translation_fields_null(self, _session):
+        from app.api.v1.themes_queries import get_theme_mentions
+
+        source = ContentSource(name="Substack", source_type="substack")
+        _session.add(source)
+        _session.flush()
+
+        content = ContentItem(
+            source_id=source.id,
+            source_type="substack",
+            external_id="en-1",
+            title="Why NVDA matters",
+            content="English content body",
+        )
+        _session.add(content)
+        _session.flush()
+
+        cluster = ThemeCluster(name="GPU supply", display_name="GPU supply", canonical_key="gpu_supply")
+        _session.add(cluster)
+        _session.flush()
+
+        mention = ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="substack",
+            raw_theme="AI infra",
+            excerpt="NVIDIA dominates accelerator shipments.",
+            mentioned_at=datetime.now(tz=timezone.utc),
+        )
+        _session.add(mention)
+        _session.commit()
+
+        m = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session).mentions[0]
+
+        assert m.source_language is None
+        assert m.translated_excerpt is None
+        assert m.translation_metadata is None
 
     def test_mention_response_serializes_translation(self):
         resp = ThemeMentionDetailResponse(

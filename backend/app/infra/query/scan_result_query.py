@@ -20,6 +20,8 @@ from app.domain.scanning.filter_spec import (
 )
 from app.infra.db.portability import is_postgres, json_number, json_text
 from app.models.scan_result import ScanResult
+from app.models.stock import StockFundamental
+from app.models.stock_universe import StockUniverse
 
 # ── Column resolution ───────────────────────────────────────────────────
 
@@ -75,6 +77,14 @@ _COLUMN_MAP: dict[str, Any] = {
     "beta_adj_rs_1m": ScanResult.beta_adj_rs_1m,
     "beta_adj_rs_3m": ScanResult.beta_adj_rs_3m,
     "beta_adj_rs_12m": ScanResult.beta_adj_rs_12m,
+    # Joined columns: scan_result_repo always applies the StockUniverse +
+    # StockFundamental outer joins, so these resolve at SQL time even though
+    # they don't live on ScanResult itself.
+    "market": StockUniverse.market,
+    "exchange": StockUniverse.exchange,
+    "currency": StockUniverse.currency,
+    "market_cap_usd": StockFundamental.market_cap_usd,
+    "adv_usd": StockFundamental.adv_usd,
 }
 
 # JSON details paths for fields stored in the details blob.

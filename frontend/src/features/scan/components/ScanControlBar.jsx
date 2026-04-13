@@ -19,31 +19,24 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import ScanProgress from '../../../components/Scan/ScanProgress';
 import { formatScanDropdownLabel } from '../../../utils/scanLabel';
-import { SCREENER_OPTIONS } from '../constants';
+import { SCREENER_OPTIONS, UNIVERSE_MARKETS, UNIVERSE_SCOPES_BY_MARKET } from '../constants';
+import { getSelectionCount } from '../universeSelection';
 
-function stockCountLabel(universe, universeStats, statsLoading, testSymbolsCount) {
-  if (universe === 'test') {
-    return `${testSymbolsCount} stocks`;
+function stockCountLabel(universeMarket, universeScope, universeStats, statsLoading) {
+  if (!universeMarket) {
+    return 'Pick a market to start';
+  }
+  if (universeMarket !== 'TEST' && !universeScope) {
+    return '...';
   }
   if (statsLoading) {
     return '...';
   }
-  if (!universeStats) {
+  const count = getSelectionCount(universeMarket, universeScope, universeStats);
+  if (count === null || count === undefined) {
     return '';
   }
-  if (universe === 'sp500') {
-    return `${universeStats.sp500 || '~500'} stocks`;
-  }
-  if (universe === 'nyse' && universeStats.by_exchange?.NYSE) {
-    return `${universeStats.by_exchange.NYSE} stocks`;
-  }
-  if (universe === 'nasdaq' && universeStats.by_exchange?.NASDAQ) {
-    return `${universeStats.by_exchange.NASDAQ} stocks`;
-  }
-  if (universe === 'amex' && universeStats.by_exchange?.AMEX) {
-    return `${universeStats.by_exchange.AMEX} stocks`;
-  }
-  return `${universeStats.active} stocks`;
+  return `${count} stocks`;
 }
 
 function toOptionalNumber(rawValue) {
@@ -54,8 +47,10 @@ export default function ScanControlBar({
   currentScanId,
   scanHistory,
   onLoadScan,
-  universe,
-  onUniverseChange,
+  universeMarket,
+  universeScope,
+  onUniverseMarketChange,
+  onUniverseScopeChange,
   universeStats,
   statsLoading,
   selectedScreeners,
@@ -74,9 +69,14 @@ export default function ScanControlBar({
   onCustomFiltersChange,
   createScanError,
   cancelScanError,
-  testSymbolsCount,
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
+  const scopeOptions = universeMarket ? UNIVERSE_SCOPES_BY_MARKET[universeMarket] ?? [] : [];
+  const needsScope = universeMarket && universeMarket !== 'TEST';
+  const startDisabled =
+    createScanPending
+    || !universeMarket
+    || (needsScope && !universeScope);
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -102,23 +102,49 @@ export default function ScanControlBar({
 
         <Box sx={{ borderLeft: 1, borderColor: 'divider', height: 32, mx: 0.5 }} />
 
-        <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel id="universe-label">Universe</InputLabel>
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel id="universe-market-label">Market</InputLabel>
           <Select
-            labelId="universe-label"
-            value={universe}
-            label="Universe"
-            onChange={(event) => onUniverseChange(event.target.value)}
+            labelId="universe-market-label"
+            value={universeMarket ?? ''}
+            label="Market"
+            onChange={(event) => onUniverseMarketChange(event.target.value || null)}
             disabled={controlsDisabled}
           >
-            <MenuItem value="test">Test (20)</MenuItem>
-            <MenuItem value="sp500">S&amp;P 500{universeStats?.by_exchange ? ` (${universeStats.sp500 || '~500'})` : ''}</MenuItem>
-            <MenuItem value="nyse">NYSE{universeStats?.by_exchange?.NYSE ? ` (${universeStats.by_exchange.NYSE})` : ''}</MenuItem>
-            <MenuItem value="nasdaq">NASDAQ{universeStats?.by_exchange?.NASDAQ ? ` (${universeStats.by_exchange.NASDAQ})` : ''}</MenuItem>
-            <MenuItem value="amex">AMEX{universeStats?.by_exchange?.AMEX ? ` (${universeStats.by_exchange.AMEX})` : ''}</MenuItem>
-            <MenuItem value="all">All{universeStats?.active ? ` (${universeStats.active})` : ''}</MenuItem>
+            {UNIVERSE_MARKETS.map((option) => {
+              const count = option.value === 'TEST'
+                ? null
+                : getSelectionCount(option.value, 'market', universeStats);
+              return (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label}{count ? ` (${count})` : ''}
+                </MenuItem>
+              );
+            })}
           </Select>
         </FormControl>
+
+        {needsScope && (
+          <FormControl size="small" sx={{ minWidth: 150 }}>
+            <InputLabel id="universe-scope-label">Universe</InputLabel>
+            <Select
+              labelId="universe-scope-label"
+              value={universeScope ?? ''}
+              label="Universe"
+              onChange={(event) => onUniverseScopeChange(event.target.value || null)}
+              disabled={controlsDisabled}
+            >
+              {scopeOptions.map((option) => {
+                const count = getSelectionCount(universeMarket, option.value, universeStats);
+                return (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}{count ? ` (${count})` : ''}
+                  </MenuItem>
+                );
+              })}
+            </Select>
+          </FormControl>
+        )}
 
         <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
           <Box sx={{ fontSize: '11px', color: 'text.secondary', mr: 0.5 }}>Strategies:</Box>
@@ -169,7 +195,7 @@ export default function ScanControlBar({
         <Box sx={{ flexGrow: 1 }} />
 
         <Box sx={{ fontSize: '11px', color: 'text.secondary' }}>
-          {stockCountLabel(universe, universeStats, statsLoading, testSymbolsCount)}
+          {stockCountLabel(universeMarket, universeScope, universeStats, statsLoading)}
         </Box>
 
         {scanStatus === 'running' ? (
@@ -189,7 +215,7 @@ export default function ScanControlBar({
             size="small"
             startIcon={createScanPending ? <CircularProgress size={14} /> : <PlayArrowIcon />}
             onClick={onStartScan}
-            disabled={createScanPending}
+            disabled={startDisabled}
           >
             Scan
           </Button>

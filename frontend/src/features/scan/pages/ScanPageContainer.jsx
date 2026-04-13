@@ -22,10 +22,13 @@ import { useStrategyProfile } from '../../../contexts/StrategyProfileContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../../../constants/scanDefaults';
 import { buildDefaultScanFilters } from '../defaultFilters';
 import { normalizeScanFilterOptions } from '../filterOptions';
-import { DEFAULT_FILTER_KEY, TEST_SYMBOLS } from '../constants';
+import { DEFAULT_FILTER_KEY } from '../constants';
 import ScanControlBar from '../components/ScanControlBar';
 import ScanResultsSection from '../components/ScanResultsSection';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
+import { buildUniverseDef, parseLegacyUniverseDefault } from '../universeSelection';
+
+const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
 
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
@@ -39,7 +42,8 @@ function ScanPage() {
   const [scanStatus, setScanStatus] = useState(null);
   const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
-  const [universe, setUniverse] = useState(DEFAULT_SCAN_DEFAULTS.universe);
+  const [universeMarket, setUniverseMarket] = useState(INITIAL_UNIVERSE_SELECTION.market);
+  const [universeScope, setUniverseScope] = useState(INITIAL_UNIVERSE_SELECTION.scope);
   const [includeVcp, setIncludeVcp] = useState(DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
   const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
   const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
@@ -67,7 +71,9 @@ function ScanPage() {
       return;
     }
 
-    setUniverse(nextDefaults.universe ?? DEFAULT_SCAN_DEFAULTS.universe);
+    const parsed = parseLegacyUniverseDefault(nextDefaults.universe ?? DEFAULT_SCAN_DEFAULTS.universe);
+    setUniverseMarket(parsed.market);
+    setUniverseScope(parsed.scope);
     setIncludeVcp(nextDefaults.criteria?.include_vcp ?? DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
     setSelectedScreeners(nextDefaults.screeners ?? DEFAULT_SCAN_DEFAULTS.screeners);
     setCompositeMethod(nextDefaults.composite_method ?? DEFAULT_SCAN_DEFAULTS.composite_method);
@@ -324,21 +330,29 @@ function ScanPage() {
   );
 
   const handleStartScan = () => {
+    const universeDef = buildUniverseDef(universeMarket, universeScope);
+    if (!universeDef) {
+      return;
+    }
     const criteria = { include_vcp: includeVcp };
     if (selectedScreeners.includes('custom')) {
       criteria.custom_filters = customFilters;
     }
-    const scanRequest = {
-      universe,
+    createScanMutation.mutate({
+      universe_def: universeDef,
       screeners: selectedScreeners,
       composite_method: compositeMethod,
       criteria,
-    };
-    if (universe === 'test') {
-      scanRequest.symbols = TEST_SYMBOLS;
-    }
-    createScanMutation.mutate(scanRequest);
+    });
   };
+
+  const handleUniverseMarketChange = useCallback((nextMarket) => {
+    if (nextMarket === universeMarket) {
+      return;
+    }
+    setUniverseMarket(nextMarket);
+    setUniverseScope(null);
+  }, [universeMarket]);
 
   const handleScreenerToggle = (screener) => {
     setSelectedScreeners((previous) => {
@@ -491,8 +505,10 @@ function ScanPage() {
         currentScanId={currentScanId}
         scanHistory={scanHistory}
         onLoadScan={handleLoadScan}
-        universe={universe}
-        onUniverseChange={setUniverse}
+        universeMarket={universeMarket}
+        universeScope={universeScope}
+        onUniverseMarketChange={handleUniverseMarketChange}
+        onUniverseScopeChange={setUniverseScope}
         universeStats={universeStats}
         statsLoading={statsLoading}
         selectedScreeners={selectedScreeners}
@@ -511,7 +527,6 @@ function ScanPage() {
         onCustomFiltersChange={setCustomFilters}
         createScanError={createScanMutation.error}
         cancelScanError={cancelScanMutation.error}
-        testSymbolsCount={TEST_SYMBOLS.length}
       />
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (

@@ -1,5 +1,8 @@
+// universe: null forces users to explicitly pick a market. Saved
+// profiles holding legacy strings ('nyse', 'market:hk', ...) are
+// migrated on mount via parseLegacyUniverseDefault.
 export const DEFAULT_SCAN_DEFAULTS = {
-  universe: 'all',
+  universe: null,
   screeners: ['minervini', 'canslim', 'ipo', 'custom', 'volume_breakthrough', 'setup_engine'],
   composite_method: 'weighted_average',
   criteria: {

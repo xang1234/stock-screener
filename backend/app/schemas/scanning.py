@@ -66,6 +66,7 @@ class ScanCreateResponse(BaseModel):
     total_stocks: int
     message: str
     feature_run_id: Optional[int] = None
+    universe_def: UniverseDefinition
 
 
 class ScanStatusResponse(BaseModel):
@@ -79,6 +80,7 @@ class ScanStatusResponse(BaseModel):
     passed_stocks: int
     started_at: datetime
     eta_seconds: Optional[int] = None
+    universe_def: UniverseDefinition
 
 
 class ScanResultItem(BaseModel):
@@ -184,6 +186,16 @@ class ScanResultItem(BaseModel):
     # Multi-screener metadata
     screeners_run: Optional[List[str]] = None
 
+    # Market identity (joined from stock_universe at query time)
+    market: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
+
+    # FX-normalised values (joined from stock_fundamentals at query time;
+    # ``market_cap`` and ``volume`` above remain in local currency)
+    market_cap_usd: Optional[float] = None
+    adv_usd: Optional[float] = None
+
     @classmethod
     def from_domain(
         cls,
@@ -285,6 +297,12 @@ class ScanResultItem(BaseModel):
             beta_adj_rs_12m=ef.get("beta_adj_rs_12m"),
             # Multi-screener metadata
             screeners_run=item.screeners_run,
+            # Market identity + FX-normalised values
+            market=ef.get("market"),
+            exchange=ef.get("exchange"),
+            currency=ef.get("currency"),
+            market_cap_usd=ef.get("market_cap_usd"),
+            adv_usd=ef.get("adv_usd"),
         )
 
 
@@ -325,12 +343,7 @@ class ScanListItem(BaseModel):
     scan_id: str
     status: str
     trigger_source: str = "manual"
-    universe: str  # Legacy label (backward compat)
-    universe_type: Optional[str] = None
-    universe_market: Optional[str] = None
-    universe_exchange: Optional[str] = None
-    universe_index: Optional[str] = None
-    universe_symbols_count: Optional[int] = None
+    universe_def: UniverseDefinition
     total_stocks: int
     passed_stocks: int
     started_at: datetime

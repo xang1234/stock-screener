@@ -52,9 +52,10 @@ def _make_scan(scan_id="scan-001", status="completed", **kwargs) -> FakeScan:
         total_stocks=100,
         passed_stocks=42,
         universe="all",
-        universe_type="exchange",
+        universe_type="all",
+        universe_key="all",
         universe_market=None,
-        universe_exchange="all",
+        universe_exchange=None,
         universe_index=None,
         universe_symbols=None,
         feature_run_id=None,
@@ -97,6 +98,39 @@ class TestListScans:
             data = resp.json()
             assert len(data["scans"]) == 2
             assert data["scans"][0]["scan_id"] == "scan-001"
+            assert data["scans"][0]["universe_def"] == {
+                "type": "all",
+                "market": None,
+                "exchange": None,
+                "index": None,
+                "symbols": None,
+                "allow_inactive_symbols": False,
+            }
+            assert "universe" not in data["scans"][0]
+            assert "universe_type" not in data["scans"][0]
+        finally:
+            app.dependency_overrides.pop(get_uow, None)
+
+    async def test_returns_typed_market_universe_def(self, client):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["scan-hk"] = _make_scan(
+            "scan-hk",
+            universe="market:hk",
+            universe_type="market",
+            universe_key="market:HK",
+            universe_market="HK",
+            started_at=datetime(2024, 1, 5),
+        )
+        scan_repo.rows = [scan_repo.scans["scan-hk"]]
+
+        uow = _FakeUoW(scans=scan_repo)
+        app.dependency_overrides[get_uow] = lambda: uow
+        try:
+            resp = await client.get("/api/v1/scans")
+            assert resp.status_code == 200
+            item = resp.json()["scans"][0]
+            assert item["universe_def"]["type"] == "market"
+            assert item["universe_def"]["market"] == "HK"
         finally:
             app.dependency_overrides.pop(get_uow, None)
 
@@ -187,6 +221,7 @@ class TestGetScanStatus:
             assert data["status"] == "completed"
             assert data["progress"] == 100.0
             assert data["completed_stocks"] == 100
+            assert data["universe_def"]["type"] == "all"
         finally:
             app.dependency_overrides.pop(get_uow, None)
 

@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
+from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
 from app.models.task_execution import TaskExecutionHistory
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeConstituent, ThemeMetrics
@@ -21,6 +22,7 @@ _TABLES = (
     FeatureRunPointer,
     StockFeatureDaily,
     StockUniverse,
+    StockFundamental,
     UserWatchlist,
     WatchlistItem,
     ThemeCluster,

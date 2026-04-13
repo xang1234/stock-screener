@@ -40,6 +40,9 @@ _CONTENT_ITEMS_CSV_HEADER = [
     "Source Name",
     "Author",
     "Processing Status",
+    "Source Language",
+    "Translated Title",
+    "Translated Content",
 ]
 
 
@@ -57,6 +60,9 @@ def _content_item_csv_row(item: ContentItemWithThemesResponse) -> list[object]:
         item.source_name or "",
         item.author or "",
         item.processing_status or "",
+        item.source_language or "",
+        item.translated_title or "",
+        item.translated_content or "",
     ]
 
 
@@ -287,6 +293,10 @@ def _fetch_content_items_with_themes(
                     if pipeline
                     else None
                 ),
+                source_language=content.source_language,
+                translated_title=content.translated_title,
+                translated_content=content.translated_content,
+                translation_metadata=content.translation_metadata,
             )
         )
 

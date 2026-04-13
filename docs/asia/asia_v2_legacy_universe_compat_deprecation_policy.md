@@ -55,6 +55,40 @@ Server logs include a structured warning containing:
 - deprecation date
 - sunset date
 
+### Legacy Compatibility Telemetry Counters
+
+Each legacy-path scan creation also increments Redis counters (DB 2) so
+operators can watch remaining legacy callers trend toward zero before
+sunset. The counter writes are best-effort and never fail the request
+path when Redis is unavailable.
+
+| Redis key | Purpose |
+|---|---|
+| `universe_compat:legacy_total` | Monotonic count of legacy-path scan creations across all buckets. |
+| `universe_compat:legacy:<value>` | Per-value count (e.g. `universe_compat:legacy:nyse`, `universe_compat:legacy:sp500`). |
+| `universe_compat:legacy_last_seen_ts` | Unix timestamp of the most recent legacy-path request. |
+
+Unknown/oversized/whitespace legacy values are bucketed under
+`universe_compat:legacy:unknown` to bound the keyspace.
+
+Diagnostic snapshot in Python:
+
+```python
+from app.services.universe_compat_metrics import get_legacy_universe_counts
+print(get_legacy_universe_counts())
+# {"total": 42, "by_value": {"all": 30, "nyse": 10, "sp500": 2}, "last_seen_ts": 1793650000}
+```
+
+### Typed-first Response Contracts (T1, 2026-04-13)
+
+`POST /api/v1/scans`, `GET /api/v1/scans`, and `GET /api/v1/scans/{id}/status`
+now return a nested `universe_def` object. The legacy flat fields
+(`universe`, `universe_type`, `universe_market`, `universe_exchange`,
+`universe_index`, `universe_symbols_count`) have been removed from the
+`ScanListItem` response shape — clients must read `universe_def.*` instead.
+Request-side legacy input (`{"universe": "nyse"}`) continues to work until
+the 2026-10-31 sunset.
+
 ## Non-Goals
 
 - No breaking change to existing clients during transition window.

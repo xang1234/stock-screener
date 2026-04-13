@@ -20,6 +20,8 @@ from app.domain.common.query import (
 )
 from app.infra.db.portability import is_postgres, json_number, json_text
 from app.infra.db.models.feature_store import StockFeatureDaily
+from app.models.stock import StockFundamental
+from app.models.stock_universe import StockUniverse
 
 # ── Column resolution ───────────────────────────────────────────────────
 
@@ -30,6 +32,14 @@ _COLUMN_MAP: dict[str, Any] = {
     "overall_rating": StockFeatureDaily.overall_rating,
     "passes_count": StockFeatureDaily.passes_count,
     "as_of_date": StockFeatureDaily.as_of_date,
+    # Joined columns: feature_store_repo applies the matching StockUniverse +
+    # StockFundamental outer joins on every read path, so these resolve at
+    # SQL time even though they don't live on StockFeatureDaily itself.
+    "market": StockUniverse.market,
+    "exchange": StockUniverse.exchange,
+    "currency": StockUniverse.currency,
+    "market_cap_usd": StockFundamental.market_cap_usd,
+    "adv_usd": StockFundamental.adv_usd,
 }
 
 # JSON details paths for fields stored in details_json.

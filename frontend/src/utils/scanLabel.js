@@ -2,30 +2,26 @@ const NYSE_TIMEZONE = 'America/New_York';
 const ISO_WITHOUT_TZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
 
 const formatUniverseLabel = (scan) => {
-  if (scan.universe_type) {
-    switch (scan.universe_type) {
-      case 'all':
-        return 'All';
-      case 'market':
-        return scan.universe_market || 'Market';
-      case 'exchange':
-        return scan.universe_exchange || 'Exchange';
-      case 'index':
-        return scan.universe_index === 'SP500' ? 'S&P500' : (scan.universe_index || 'Index');
-      case 'custom':
-        return `Custom (${scan.universe_symbols_count || '?'})`;
-      case 'test':
-        return `Test (${scan.universe_symbols_count || '?'})`;
-      default:
-        return scan.universe_type;
-    }
+  const ud = scan.universe_def;
+  if (!ud || !ud.type) {
+    return 'Unknown';
   }
-
-  const legacyUniverse = (scan.universe || '').toLowerCase();
-  if (legacyUniverse === 'custom') return 'Test';
-  if (legacyUniverse === 'sp500') return 'S&P500';
-  if (legacyUniverse === 'all' || legacyUniverse === 'all stocks') return 'All';
-  return scan.universe ? scan.universe.toUpperCase() : 'Unknown';
+  switch (ud.type) {
+    case 'all':
+      return 'All';
+    case 'market':
+      return ud.market || 'Market';
+    case 'exchange':
+      return ud.exchange || 'Exchange';
+    case 'index':
+      return ud.index === 'SP500' ? 'S&P500' : (ud.index || 'Index');
+    case 'custom':
+      return `Custom (${ud.symbols?.length ?? '?'})`;
+    case 'test':
+      return `Test (${ud.symbols?.length ?? '?'})`;
+    default:
+      return ud.type;
+  }
 };
 
 const formatScanTimestamp = (startedAt, triggerSource) => {

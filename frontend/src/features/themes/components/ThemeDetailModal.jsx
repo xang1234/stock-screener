@@ -34,6 +34,7 @@ import {
   getThemeRelationshipGraph,
   getThemeMentions,
 } from '../../../api/themes';
+import TranslatedText from '../../../components/common/TranslatedText';
 
 function getSafeExternalUrl(url) {
   if (!url) {
@@ -313,8 +314,12 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                             )}
                             </TableCell>
                             <TableCell sx={{ maxWidth: 280 }}>
-                              <Box
-                                sx={{
+                              <TranslatedText
+                                originalText={mention.excerpt}
+                                translatedText={mention.translated_excerpt}
+                                sourceLanguage={mention.source_language}
+                                translationMetadata={mention.translation_metadata}
+                                typographySx={{
                                   fontSize: '10px',
                                   color: 'text.secondary',
                                   display: '-webkit-box',
@@ -322,9 +327,7 @@ export default function ThemeDetailModal({ themeId, themeName, open, onClose, se
                                   WebkitBoxOrient: 'vertical',
                                   overflow: 'hidden',
                                 }}
-                              >
-                                {mention.excerpt || '-'}
-                              </Box>
+                              />
                             </TableCell>
                             <TableCell>
                               <Box display="flex" alignItems="center" gap={0.5}>

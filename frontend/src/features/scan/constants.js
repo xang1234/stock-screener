@@ -34,3 +34,34 @@ export const SCREENER_OPTIONS = [
   { id: 'volume_breakthrough', label: 'VolB' },
   { id: 'setup_engine', label: 'Setup' },
 ];
+
+// Geographic markets the backend supports. TEST is a developer utility
+// and deliberately excluded — it's a pseudo-market for bypassing real
+// market selection.
+export const UNIVERSE_GEOGRAPHIC_MARKETS = ['US', 'HK', 'JP', 'TW'];
+
+export const UNIVERSE_MARKETS = [
+  { value: 'US', label: 'United States' },
+  { value: 'HK', label: 'Hong Kong' },
+  { value: 'JP', label: 'Japan' },
+  { value: 'TW', label: 'Taiwan' },
+  { value: 'TEST', label: 'Test Mode' },
+];
+
+// Scope values are encoded as "kind:value" so a single Select can handle
+// exchanges, indices, and whole-market. "market" alone means every symbol
+// in the parent market. Asia index scopes omitted: index-membership data
+// is not yet available in stock_universe.
+export const UNIVERSE_SCOPES_BY_MARKET = {
+  US: [
+    { value: 'market', label: 'All US' },
+    { value: 'exchange:NYSE', label: 'NYSE' },
+    { value: 'exchange:NASDAQ', label: 'NASDAQ' },
+    { value: 'exchange:AMEX', label: 'AMEX' },
+    { value: 'index:SP500', label: 'S&P 500' },
+  ],
+  HK: [{ value: 'market', label: 'All Hong Kong' }],
+  JP: [{ value: 'market', label: 'All Japan' }],
+  TW: [{ value: 'market', label: 'All Taiwan' }],
+  TEST: [],
+};
