@@ -140,16 +140,22 @@ class TestTickerShapeRegex:
 class TestLogDrop:
     def test_known_reason_emits_debug(self, caplog):
         with caplog.at_level(logging.DEBUG, logger="app.services.multi_market_ticker_validator"):
-            log_drop(raw="junk", canonical=None, reason=REASON_EMPTY, context="test")
-        assert any("ticker_dropped" in r.message for r in caplog.records)
+            log_drop(raw="junk", canonical=None, reason=REASON_EMPTY)
+        assert any("ticker_dropped" in r.getMessage() for r in caplog.records)
         assert any("reason=empty_input" in r.getMessage() for r in caplog.records)
 
-    def test_unknown_reason_emits_warning_not_silent(self, caplog):
+    def test_unknown_reason_emits_warning_and_still_logs_debug(self, caplog):
         # Defense: a typo'd reason tag must NOT silently disappear; it
-        # should promote to warning so the caller notices and fixes it.
+        # should promote to warning so the caller notices. But the
+        # structured debug line must still be emitted so ops dashboards
+        # don't lose visibility into the mention itself.
         with caplog.at_level(logging.DEBUG, logger="app.services.multi_market_ticker_validator"):
-            log_drop(raw="x", canonical=None, reason="bogus_reason", context=None)
+            log_drop(raw="x", canonical=None, reason="bogus_reason")
         assert any(r.levelno == logging.WARNING for r in caplog.records)
+        assert any(
+            r.levelno == logging.DEBUG and "reason=bogus_reason" in r.getMessage()
+            for r in caplog.records
+        )
 
 
 class TestPolicySurface:

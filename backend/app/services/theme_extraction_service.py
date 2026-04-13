@@ -441,6 +441,30 @@ class ThemeExtractionService:
             return False
         return ticker in valid_tickers
 
+    def _gate_ticker(
+        self, raw: object, resolver, valid_tickers: set,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Apply every acceptance gate to a single raw ticker.
+
+        Returns ``(canonical, None)`` on accept and ``(canonical_or_None,
+        reason)`` on drop, where ``reason`` is a ``multi_market.REASON_*``
+        tag. The canonical field may still be populated on drop so the
+        log line carries both the raw and canonical forms.
+        """
+        result = multi_market.normalize_extracted_ticker(raw, resolver=resolver)
+        if result.canonical is None:
+            return None, result.reason
+        canonical = result.canonical
+        if canonical in self.TICKER_FALSE_POSITIVES:
+            return canonical, multi_market.REASON_FALSE_POSITIVE
+        if not multi_market.TICKER_SHAPE_RE.match(canonical):
+            return canonical, multi_market.REASON_SHAPE
+        if not valid_tickers:
+            return canonical, multi_market.REASON_UNIVERSE_EMPTY
+        if canonical not in valid_tickers:
+            return canonical, multi_market.REASON_UNIVERSE_MISS
+        return canonical, None
+
     def _clean_tickers(self, tickers: list) -> list:
         """Normalize, validate, and de-duplicate an LLM-extracted ticker list.
 
@@ -450,50 +474,14 @@ class ThemeExtractionService:
         discover them via silent data loss.
         """
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
+        valid_tickers = self._get_valid_tickers()
         seen: set[str] = set()
         cleaned: list[str] = []
         for raw in tickers:
-            result = multi_market.normalize_extracted_ticker(raw, resolver=resolver)
-            if result.canonical is None:
-                multi_market.log_drop(
-                    raw=raw, canonical=None, reason=result.reason,
-                    context="_clean_tickers.normalize",
-                )
+            canonical, reason = self._gate_ticker(raw, resolver, valid_tickers)
+            if reason is not None:
+                multi_market.log_drop(raw=raw, canonical=canonical, reason=reason)
                 continue
-
-            canonical = result.canonical
-            if canonical in self.TICKER_FALSE_POSITIVES:
-                multi_market.log_drop(
-                    raw=raw, canonical=canonical,
-                    reason=multi_market.REASON_FALSE_POSITIVE,
-                    context="_clean_tickers.false_positive",
-                )
-                continue
-
-            if not multi_market.TICKER_SHAPE_RE.match(canonical):
-                multi_market.log_drop(
-                    raw=raw, canonical=canonical,
-                    reason=multi_market.REASON_SHAPE,
-                    context="_clean_tickers.shape",
-                )
-                continue
-
-            valid_tickers = self._get_valid_tickers()
-            if not valid_tickers:
-                multi_market.log_drop(
-                    raw=raw, canonical=canonical,
-                    reason=multi_market.REASON_UNIVERSE_EMPTY,
-                    context="_clean_tickers.universe_empty",
-                )
-                continue
-            if canonical not in valid_tickers:
-                multi_market.log_drop(
-                    raw=raw, canonical=canonical,
-                    reason=multi_market.REASON_UNIVERSE_MISS,
-                    context="_clean_tickers.universe_miss",
-                )
-                continue
-
             if canonical not in seen:
                 seen.add(canonical)
                 cleaned.append(canonical)

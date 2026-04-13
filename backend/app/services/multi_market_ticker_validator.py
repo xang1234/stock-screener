@@ -127,26 +127,22 @@ def normalize_extracted_ticker(
 
 def log_drop(
     *, raw: object, canonical: Optional[str], reason: str,
-    context: Optional[str] = None,
 ) -> None:
     """Emit a structured drop-path log line.
 
     Centralized so callers can't forget the ``reason=...`` tag and so
-    the format stays stable for grep/ops dashboards.
+    the format stays stable for grep/ops dashboards. Unknown reason
+    tags emit an additional warning so typos surface loudly — but the
+    debug line is still recorded so the mention itself is traceable.
     """
     if reason not in _DROP_REASONS:
-        # Defensive: unknown reason strings would break ops dashboards
-        # that filter by the known tag set. Promote to a warning so the
-        # caller fixes it rather than silently introducing a new bucket.
         logger.warning(
-            "ticker_dropped reason=%s raw=%r canonical=%r context=%s "
-            "(unknown reason tag; expected one of %s)",
-            reason, raw, canonical, context, sorted(_DROP_REASONS),
+            "ticker_dropped: unknown reason tag %r (expected one of %s)",
+            reason, sorted(_DROP_REASONS),
         )
-        return
     logger.debug(
-        "ticker_dropped reason=%s raw=%r canonical=%r context=%s",
-        reason, raw, canonical, context,
+        "ticker_dropped reason=%s raw=%r canonical=%r",
+        reason, raw, canonical,
     )
 
 
@@ -162,7 +158,6 @@ def describe_policy() -> dict:
 
 __all__ = [
     "POLICY_VERSION",
-    "TICKER_SHAPE_RE",
     "REASON_EMPTY",
     "REASON_FALSE_POSITIVE",
     "REASON_UNRESOLVABLE",
