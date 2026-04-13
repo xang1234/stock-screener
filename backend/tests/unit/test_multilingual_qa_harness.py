@@ -87,17 +87,22 @@ class BinaryMetrics:
 
 def _score_prediction(
     predicted: Optional[str], expected: Optional[str],
-) -> tuple[int, int, int, int]:
-    """Return (TP, FP, FN, TN) contribution for a single prediction."""
-    predicted_positive = predicted is not None
-    expected_positive = expected is not None
-    if predicted_positive and expected_positive:
-        return (1, 0, 0, 0) if predicted == expected else (0, 1, 0, 0)
-    if predicted_positive and not expected_positive:
-        return (0, 1, 0, 0)
-    if not predicted_positive and expected_positive:
-        return (0, 0, 1, 0)
-    return (0, 0, 0, 1)
+) -> BinaryMetrics:
+    """One-prediction contribution as a unit :class:`BinaryMetrics`.
+
+    Returning the named dataclass (rather than a raw 4-tuple that the
+    caller has to destructure in the right order) removes a silent
+    transpose-a-position risk in :func:`_aggregate`.
+    """
+    if predicted is not None and expected is not None:
+        if predicted == expected:
+            return BinaryMetrics(1, 0, 0, 0)
+        return BinaryMetrics(0, 1, 0, 0)  # wrong canonical → FP, not TP
+    if predicted is not None:
+        return BinaryMetrics(0, 1, 0, 0)
+    if expected is not None:
+        return BinaryMetrics(0, 0, 1, 0)
+    return BinaryMetrics(0, 0, 0, 1)
 
 
 def _aggregate(
@@ -105,12 +110,25 @@ def _aggregate(
 ) -> BinaryMetrics:
     tp = fp = fn = tn = 0
     for predicted, expected in predictions:
-        dtp, dfp, dfn, dtn = _score_prediction(predicted, expected)
-        tp += dtp
-        fp += dfp
-        fn += dfn
-        tn += dtn
+        m = _score_prediction(predicted, expected)
+        tp += m.true_positive
+        fp += m.false_positive
+        fn += m.false_negative
+        tn += m.true_negative
     return BinaryMetrics(tp, fp, fn, tn)
+
+
+def _compute_metrics(corpus, predict_fn, expected_attr: str) -> BinaryMetrics:
+    """Shared accumulator: run ``predict_fn`` over ``corpus`` and aggregate.
+
+    Pulled out so the two domain gate-test pairs (alias / normalizer)
+    don't copy-paste the build-predictions-and-aggregate step.
+    """
+    predictions = [
+        (predict_fn(c), getattr(c, expected_attr))
+        for c in corpus
+    ]
+    return _aggregate(predictions)
 
 
 # ---------------------------------------------------------------------------
@@ -161,11 +179,9 @@ class TestAliasResolverGoldenSet:
         )
 
     def test_precision_meets_gate(self):
-        predictions = [
-            (_resolve_alias_for_corpus(c), c.expected_canonical)
-            for c in ALIAS_CORPUS
-        ]
-        metrics = _aggregate(predictions)
+        metrics = _compute_metrics(
+            ALIAS_CORPUS, _resolve_alias_for_corpus, "expected_canonical",
+        )
         assert metrics.precision >= GATE_MIN_PRECISION, (
             f"Alias resolver precision {metrics.precision:.3f} below "
             f"gate {GATE_MIN_PRECISION} "
@@ -173,11 +189,9 @@ class TestAliasResolverGoldenSet:
         )
 
     def test_recall_meets_gate(self):
-        predictions = [
-            (_resolve_alias_for_corpus(c), c.expected_canonical)
-            for c in ALIAS_CORPUS
-        ]
-        metrics = _aggregate(predictions)
+        metrics = _compute_metrics(
+            ALIAS_CORPUS, _resolve_alias_for_corpus, "expected_canonical",
+        )
         assert metrics.recall >= GATE_MIN_RECALL, (
             f"Alias resolver recall {metrics.recall:.3f} below "
             f"gate {GATE_MIN_RECALL} "
@@ -191,7 +205,13 @@ class TestAliasResolverGoldenSet:
 
 
 class TestLanguageDetectionGoldenSet:
-    @pytest.mark.parametrize("case", LANGUAGE_CORPUS, ids=lambda c: f"{c.tag}:{c.expected_language}")
+    @pytest.mark.parametrize(
+        "case", LANGUAGE_CORPUS,
+        # Include text excerpt so failures self-identify — without it
+        # three "positive:ja" entries collide into "positive:ja0/1/2"
+        # and the pytest id gives no clue which item drifted.
+        ids=lambda c: f"{c.tag}:{c.expected_language}:{c.text[:24]!r}",
+    )
     def test_individual_item(self, case: LanguageCase):
         predicted = detect_language(case.text)
         assert predicted == case.expected_language, (
@@ -233,11 +253,9 @@ class TestTickerNormalizerGoldenSet:
         )
 
     def test_precision_meets_gate(self):
-        predictions = [
-            (_normalize_for_corpus(c), c.expected_canonical)
-            for c in NORMALIZER_CORPUS
-        ]
-        metrics = _aggregate(predictions)
+        metrics = _compute_metrics(
+            NORMALIZER_CORPUS, _normalize_for_corpus, "expected_canonical",
+        )
         assert metrics.precision >= GATE_MIN_PRECISION, (
             f"Normalizer precision {metrics.precision:.3f} below "
             f"gate {GATE_MIN_PRECISION} "
@@ -245,11 +263,9 @@ class TestTickerNormalizerGoldenSet:
         )
 
     def test_recall_meets_gate(self):
-        predictions = [
-            (_normalize_for_corpus(c), c.expected_canonical)
-            for c in NORMALIZER_CORPUS
-        ]
-        metrics = _aggregate(predictions)
+        metrics = _compute_metrics(
+            NORMALIZER_CORPUS, _normalize_for_corpus, "expected_canonical",
+        )
         assert metrics.recall >= GATE_MIN_RECALL, (
             f"Normalizer recall {metrics.recall:.3f} below "
             f"gate {GATE_MIN_RECALL} "
