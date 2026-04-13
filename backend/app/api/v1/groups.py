@@ -27,6 +27,7 @@ from ...schemas.groups import (
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
+from ...domain.analytics.scope import AnalyticsFeature, us_only_tag
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,8 @@ async def get_current_rankings(
     return GroupRankingsResponse(
         date=ranking_date,
         total_groups=len(rankings),
-        rankings=[GroupRankResponse(**r) for r in rankings]
+        rankings=[GroupRankResponse(**r) for r in rankings],
+        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
     )
 
 
@@ -112,7 +114,8 @@ async def get_rank_movers(
     return MoversResponse(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
-        losers=[GroupRankResponse(**l) for l in movers.get('losers', [])]
+        losers=[GroupRankResponse(**loser) for loser in movers.get('losers', [])],
+        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
     )
 
 

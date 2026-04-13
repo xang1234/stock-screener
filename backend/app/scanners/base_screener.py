@@ -115,6 +115,8 @@ class StockData:
     timezone: Optional[str] = None
     local_code: Optional[str] = None
     rs_universe_performances: Optional[Dict[int | str, list[float]]] = None
+    # See app.domain.scanning.mixed_market_policy.
+    is_mixed_market: bool = False
     fetch_errors: Dict[str, str] = field(default_factory=dict)  # Any errors during fetch
 
     def has_sufficient_data(self, min_days: int = 100) -> bool:

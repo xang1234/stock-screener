@@ -30,6 +30,7 @@ from ..models.theme import (
 from ..models.app_settings import AppSetting
 from ..models.stock import StockPrice
 from ..models.scan_result import ScanResult
+from ..domain.analytics.scope import AnalyticsFeature, us_only_tag
 from .theme_lifecycle_service import apply_lifecycle_transition
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,10 @@ class ThemeDiscoveryService:
         # Calculate basket returns (equal-weight)
         basket_returns = returns_df.mean(axis=1)
 
-        # Get SPY returns for comparison
+        # Get SPY returns for comparison. Theme discovery is scoped to the
+        # US universe today (English-language content sources); see
+        # app.domain.analytics.scope. When the feature becomes market-aware,
+        # resolve the benchmark symbol via BenchmarkCacheService.
         spy_prices = self.db.query(StockPrice).filter(
             StockPrice.symbol == "SPY",
             StockPrice.date >= date_lookback.date(),
@@ -390,6 +394,7 @@ class ThemeDiscoveryService:
             "avg_internal_correlation": round(avg_correlation, 3),
             "correlation_tightness": round(correlation_tightness, 3),
             "num_constituents": len(symbols),
+            **us_only_tag(AnalyticsFeature.THEME_DISCOVERY),
         }
 
     def _empty_price_metrics(self) -> dict:
@@ -404,6 +409,7 @@ class ThemeDiscoveryService:
             "avg_internal_correlation": 0,
             "correlation_tightness": 0,
             "num_constituents": 0,
+            **us_only_tag(AnalyticsFeature.THEME_DISCOVERY),
         }
 
     def calculate_screener_metrics(self, theme_cluster_id: int) -> dict:

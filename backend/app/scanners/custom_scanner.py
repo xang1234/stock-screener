@@ -28,6 +28,16 @@ from dataclasses import dataclass
 from .base_screener import BaseStockScreener, DataRequirements, ScreenerResult, StockData
 from .screener_registry import register_screener
 from .criteria.relative_strength import RelativeStrengthCalculator
+from ..domain.scanning.mixed_market_policy import (
+    REASON_MISSING_ADV_USD,
+    REASON_MISSING_CAP_NATIVE,
+    REASON_MISSING_CAP_USD,
+    UNIT_NATIVE,
+    UNIT_SHARES,
+    UNIT_USD,
+    resolve_adv_for_filter,
+    resolve_cap_for_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +102,7 @@ class CustomScanner(BaseStockScreener):
 
         # Determine requirements based on filters
         needs_fundamentals = any([
+            filters.get("volume_min") is not None,  # mixed-market mode needs adv_usd
             filters.get("market_cap_min") is not None,
             filters.get("market_cap_max") is not None,
             filters.get("debt_to_equity_max") is not None,
@@ -159,10 +170,14 @@ class CustomScanner(BaseStockScreener):
                 logger.error(f"{symbol}: Error in price_range filter: {e}")
                 raise
 
-        # Volume filter
+        # Volume filter (USD-normalized ADV in mixed-market mode — see
+        # app.domain.scanning.mixed_market_policy).
         if filters.get("volume_min") is not None:
             try:
-                filter_results.append(self._check_volume(price_data, filters))
+                filter_results.append(self._check_volume(
+                    price_data, fundamentals, filters,
+                    mixed_market=data.is_mixed_market,
+                ))
             except Exception as e:
                 logger.error(f"{symbol}: Error in volume filter: {e}")
                 raise
@@ -188,10 +203,13 @@ class CustomScanner(BaseStockScreener):
             else:
                 logger.warning(f"{symbol}: RS rating filter enabled but no benchmark data")
 
-        # Market cap filter
+        # Market cap filter (USD-normalized in mixed-market mode — see
+        # app.domain.scanning.mixed_market_policy).
         if filters.get("market_cap_min") is not None or filters.get("market_cap_max") is not None:
             if fundamentals:
-                filter_results.append(self._check_market_cap(fundamentals, filters))
+                filter_results.append(self._check_market_cap(
+                    fundamentals, filters, mixed_market=data.is_mixed_market,
+                ))
             else:
                 logger.warning(f"{symbol}: Market cap filter enabled but no fundamentals")
 
@@ -328,21 +346,69 @@ class CustomScanner(BaseStockScreener):
             }
         )
 
-    def _check_volume(self, price_data: pd.DataFrame, filters: Dict) -> FilterResult:
-        """Check if average volume meets minimum."""
-        avg_volume = float(price_data['Volume'].tail(20).mean())
-        volume_min = filters.get("volume_min", 0)
+    def _check_volume(
+        self,
+        price_data: pd.DataFrame,
+        fundamentals: Optional[Dict],
+        filters: Dict,
+        *,
+        mixed_market: bool,
+    ) -> FilterResult:
+        """Check if average volume meets minimum.
 
-        passes = bool(avg_volume >= volume_min)
+        In mixed-market mode the threshold is interpreted as USD notional
+        and evaluated against ``adv_usd`` (populated by T5.3). In
+        single-market mode the threshold is shares, per the legacy
+        contract.
+        """
+        volume_min = float(filters.get("volume_min", 0))
+        unit = UNIT_USD if mixed_market else UNIT_SHARES
 
-        # Scaled scoring: meeting minimum = 5pts, 2x minimum = 10pts
-        if avg_volume >= volume_min * 2:
+        # Check the no-op case first: a non-positive threshold disables the
+        # filter entirely and must not reject rows with missing adv_usd.
+        if volume_min <= 0:
+            return FilterResult(
+                name="volume",
+                passes=True,
+                points=10.0,
+                max_points=10.0,
+                details={
+                    "avg_volume": None,
+                    "volume_min": volume_min,
+                    "unit": unit,
+                    "ratio": None,
+                },
+            )
+
+        native_avg_volume = float(price_data['Volume'].tail(20).mean())
+        adv = resolve_adv_for_filter(
+            fundamentals, native_avg_volume, mixed_market=mixed_market,
+        )
+
+        if adv is None:
+            return self._fail_closed(
+                name="volume",
+                max_points=10.0,
+                details={
+                    "avg_volume": None,
+                    "volume_min": volume_min,
+                    "unit": unit,
+                    "reason": REASON_MISSING_ADV_USD,
+                },
+            )
+
+        passes = bool(adv >= volume_min)
+
+        # Scoring: meeting min = 5pts, 2x min = 10pts (linear).
+        if adv >= volume_min * 2:
             points = 10.0
-        elif avg_volume >= volume_min:
-            ratio = avg_volume / volume_min
-            points = 5.0 + (ratio - 1.0) * 5.0  # Linear scale from 5 to 10
+            ratio = adv / volume_min
+        elif adv >= volume_min:
+            ratio = adv / volume_min
+            points = 5.0 + (ratio - 1.0) * 5.0
         else:
             points = 0.0
+            ratio = adv / volume_min
 
         return FilterResult(
             name="volume",
@@ -350,10 +416,11 @@ class CustomScanner(BaseStockScreener):
             points=points,
             max_points=10.0,
             details={
-                "avg_volume": int(avg_volume),
+                "avg_volume": int(adv),
                 "volume_min": volume_min,
-                "ratio": avg_volume / volume_min if volume_min > 0 else 0
-            }
+                "unit": unit,
+                "ratio": ratio,
+            },
         )
 
     def _check_rs_rating(
@@ -398,13 +465,38 @@ class CustomScanner(BaseStockScreener):
             }
         )
 
-    def _check_market_cap(self, fundamentals: Dict, filters: Dict) -> FilterResult:
-        """Check if market cap is within range."""
-        market_cap = fundamentals.get("market_cap", 0)
-        cap_min = filters.get("market_cap_min", 0)
-        cap_max = filters.get("market_cap_max", float('inf'))
+    def _check_market_cap(
+        self,
+        fundamentals: Dict,
+        filters: Dict,
+        *,
+        mixed_market: bool,
+    ) -> FilterResult:
+        """Check if market cap is within range.
 
-        passes = cap_min <= market_cap <= cap_max if market_cap else False
+        In mixed-market mode evaluates against ``market_cap_usd`` (T5.3)
+        and fails closed when missing, so thresholds are never compared
+        against mismatched currencies.
+        """
+        market_cap = resolve_cap_for_filter(fundamentals, mixed_market=mixed_market)
+        cap_min = float(filters.get("market_cap_min", 0))
+        cap_max = float(filters.get("market_cap_max", float('inf')))
+        unit = UNIT_USD if mixed_market else UNIT_NATIVE
+
+        if market_cap is None:
+            return self._fail_closed(
+                name="market_cap",
+                max_points=10.0,
+                details={
+                    "market_cap": None,
+                    "market_cap_min": cap_min,
+                    "market_cap_max": cap_max,
+                    "unit": unit,
+                    "reason": REASON_MISSING_CAP_USD if mixed_market else REASON_MISSING_CAP_NATIVE,
+                },
+            )
+
+        passes = cap_min <= market_cap <= cap_max
         points = 10.0 if passes else 0.0
 
         return FilterResult(
@@ -415,8 +507,9 @@ class CustomScanner(BaseStockScreener):
             details={
                 "market_cap": market_cap,
                 "market_cap_min": cap_min,
-                "market_cap_max": cap_max
-            }
+                "market_cap_max": cap_max,
+                "unit": unit,
+            },
         )
 
     def _check_eps_growth(self, quarterly_growth: Dict, filters: Dict) -> FilterResult:
@@ -641,6 +734,22 @@ class CustomScanner(BaseStockScreener):
         filters.pop("min_score", None)
 
         return filters
+
+    def _fail_closed(
+        self,
+        *,
+        name: str,
+        max_points: float,
+        details: Dict[str, Any],
+    ) -> FilterResult:
+        """Build a zero-point failing FilterResult (used by policy fail-closed paths)."""
+        return FilterResult(
+            name=name,
+            passes=False,
+            points=0.0,
+            max_points=max_points,
+            details=details,
+        )
 
     def _create_error_result(self, symbol: str, error_msg: str) -> ScreenerResult:
         """Create error result."""

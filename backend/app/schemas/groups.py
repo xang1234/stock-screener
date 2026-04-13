@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 from datetime import date as Date
 from typing import Optional, List
 
+from .scope import ScopedResponseMixin
+
 
 class GroupRankResponse(BaseModel):
     """Response model for a single group ranking"""
@@ -32,7 +34,7 @@ class GroupRankResponse(BaseModel):
         from_attributes = True
 
 
-class GroupRankingsResponse(BaseModel):
+class GroupRankingsResponse(ScopedResponseMixin):
     """Response model for list of group rankings"""
 
     date: str = Field(..., description="Date of rankings")
@@ -98,7 +100,7 @@ class GroupDetailResponse(BaseModel):
     stocks: List[ConstituentStock] = Field(default=[], description="Stocks in this group with metrics")
 
 
-class MoversResponse(BaseModel):
+class MoversResponse(ScopedResponseMixin):
     """Response for rank movers (gainers and losers)"""
 
     period: str = Field(..., description="Time period (1w, 1m, 3m, 6m)")

@@ -9,7 +9,7 @@
 #   make all           Full CI (gate-check + identity + backend + frontend)
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gates gate-check \
+.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gate-market-parity gates gate-check \
         frontend-lint frontend-test frontend phase2-type-gate phase2-reliability golden-update all
 
 # ── Tooling ─────────────────────────────────────────────────────────
@@ -73,8 +73,16 @@ GATE_5 = \
   tests/unit/golden/test_golden_aggregator.py \
   tests/unit/golden/test_golden_scanner.py
 
+# ── Market-Parity Gate (E6) ─────────────────────────────────────────
+# US parity and non-US correctness for the market-normalization epic.
+# Runs independently of SE gates; gate-check sweeps it in via the
+# *parity* glob.
+
+GATE_MARKET_PARITY = \
+  tests/parity/test_market_parity_e6.py
+
 # All gate files (used by gate-check)
-ALL_GATE_FILES = $(GATE_1) $(GATE_2) $(GATE_3) $(GATE_4) $(GATE_5)
+ALL_GATE_FILES = $(GATE_1) $(GATE_2) $(GATE_3) $(GATE_4) $(GATE_5) $(GATE_MARKET_PARITY)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -107,12 +115,16 @@ gate-4: ## Performance baselines
 gate-5: ## Golden regression
 	$(PYTEST) $(GATE_5) -v --tb=short
 
-gates: ## Run all 5 gates sequentially
+gate-market-parity: ## E6 US parity and non-US correctness (T6.5)
+	$(PYTEST) $(GATE_MARKET_PARITY) -v --tb=short
+
+gates: ## Run all gates sequentially (SE + market-parity)
 	$(MAKE) gate-1
 	$(MAKE) gate-2
 	$(MAKE) gate-3
 	$(MAKE) gate-4
 	$(MAKE) gate-5
+	$(MAKE) gate-market-parity
 
 gate-check: ## Verify all SE test files are assigned to a gate
 	@echo "Checking that all SE test files are assigned to a gate..."

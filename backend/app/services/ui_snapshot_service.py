@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.database import is_corruption_error
+from app.domain.analytics.scope import AnalyticsFeature, us_only_tag
 from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank
@@ -591,6 +592,13 @@ class UISnapshotService:
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
+            # Breadth is US-scoped today (see app.domain.analytics.scope);
+            # resolve the overlay symbol through the benchmark registry so
+            # this layer doesn't hard-code "SPY".
+            # Local import: wiring.bootstrap imports this module, so a
+            # top-level import would cycle.
+            from ..wiring.bootstrap import get_benchmark_cache
+            benchmark_symbol = get_benchmark_cache().get_benchmark_symbol("US")
             return {
                 "current": market_breadth_to_dict(current),
                 "summary": {
@@ -602,7 +610,12 @@ class UISnapshotService:
                 "history_90d": [market_breadth_to_dict(row) for row in history],
                 "chart_range": DEFAULT_BREADTH_RANGE,
                 "chart_data": [market_breadth_to_dict(row) for row in chart],
-                "spy_overlay": self._get_cached_price_history("SPY", "1mo"),
+                # Key retained as ``spy_overlay`` for frontend compatibility
+                # (BreadthPage.jsx, StaticBreadthPage.jsx). When breadth is
+                # generalised to multi-market, rename to ``benchmark_overlay``
+                # alongside the scope flip in mixed_market / analytics scope.
+                "spy_overlay": self._get_cached_price_history(benchmark_symbol, "1mo"),
+                **us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT),
             }
 
     def _publish_groups_bootstrap_with_db(self, db: Session) -> SnapshotResult:
@@ -629,12 +642,14 @@ class UISnapshotService:
                 date=ranking_date,
                 total_groups=len(rankings),
                 rankings=[GroupRankResponse(**row) for row in rankings],
+                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
             ).model_dump(mode="json"),
             "movers_period": DEFAULT_GROUP_PERIOD,
             "movers": MoversResponse(
                 period=movers["period"],
                 gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                 losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
             ).model_dump(mode="json"),
             "task_controls_enabled": settings.feature_tasks,
         }
