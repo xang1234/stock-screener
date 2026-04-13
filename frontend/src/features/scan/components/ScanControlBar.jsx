@@ -78,8 +78,6 @@ export default function ScanControlBar({
     || !universeMarket
     || (needsScope && !universeScope);
 
-  const marketCount = (market) => universeStats?.by_market?.[market]?.counts?.active;
-
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
       <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -114,7 +112,9 @@ export default function ScanControlBar({
             disabled={controlsDisabled}
           >
             {UNIVERSE_MARKETS.map((option) => {
-              const count = option.value === 'TEST' ? null : marketCount(option.value);
+              const count = option.value === 'TEST'
+                ? null
+                : getSelectionCount(option.value, 'market', universeStats);
               return (
                 <MenuItem key={option.value} value={option.value}>
                   {option.label}{count ? ` (${count})` : ''}

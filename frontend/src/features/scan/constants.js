@@ -35,8 +35,11 @@ export const SCREENER_OPTIONS = [
   { id: 'setup_engine', label: 'Setup' },
 ];
 
-// Two-step universe picker: pick a market first, then a scope within that market.
-// TEST is a developer utility that bypasses market selection.
+// Geographic markets the backend supports. TEST is a developer utility
+// and deliberately excluded — it's a pseudo-market for bypassing real
+// market selection.
+export const UNIVERSE_GEOGRAPHIC_MARKETS = ['US', 'HK', 'JP', 'TW'];
+
 export const UNIVERSE_MARKETS = [
   { value: 'US', label: 'United States' },
   { value: 'HK', label: 'Hong Kong' },
@@ -45,10 +48,10 @@ export const UNIVERSE_MARKETS = [
   { value: 'TEST', label: 'Test Mode' },
 ];
 
-// Scope values are encoded as "kind:value" so a single Select can handle exchanges,
-// indices, and whole-market. "market" alone means every symbol in the parent market.
-// Asia indices (HSI/NIKKEI225/TAIEX) are deferred to StockScreenClaude-7hwc — they
-// require index-membership data that doesn't exist yet.
+// Scope values are encoded as "kind:value" so a single Select can handle
+// exchanges, indices, and whole-market. "market" alone means every symbol
+// in the parent market. Asia index scopes omitted: index-membership data
+// is not yet available in stock_universe.
 export const UNIVERSE_SCOPES_BY_MARKET = {
   US: [
     { value: 'market', label: 'All US' },

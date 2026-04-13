@@ -28,6 +28,8 @@ import ScanResultsSection from '../components/ScanResultsSection';
 import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
 import { buildUniverseDef, parseLegacyUniverseDefault } from '../universeSelection';
 
+const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
+
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
   const { activeProfileDetail } = useStrategyProfile();
@@ -40,9 +42,8 @@ function ScanPage() {
   const [scanStatus, setScanStatus] = useState(null);
   const [initialBootstrapSettled, setInitialBootstrapSettled] = useState(false);
   const [bootstrappedScanId, setBootstrappedScanId] = useState(null);
-  const initialUniverseSelection = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
-  const [universeMarket, setUniverseMarket] = useState(initialUniverseSelection.market);
-  const [universeScope, setUniverseScope] = useState(initialUniverseSelection.scope);
+  const [universeMarket, setUniverseMarket] = useState(INITIAL_UNIVERSE_SELECTION.market);
+  const [universeScope, setUniverseScope] = useState(INITIAL_UNIVERSE_SELECTION.scope);
   const [includeVcp, setIncludeVcp] = useState(DEFAULT_SCAN_DEFAULTS.criteria.include_vcp);
   const [selectedScreeners, setSelectedScreeners] = useState(DEFAULT_SCAN_DEFAULTS.screeners);
   const [compositeMethod, setCompositeMethod] = useState(DEFAULT_SCAN_DEFAULTS.composite_method);
@@ -346,8 +347,12 @@ function ScanPage() {
   };
 
   const handleUniverseMarketChange = useCallback((nextMarket) => {
-    setUniverseMarket(nextMarket);
-    setUniverseScope(null);
+    setUniverseMarket((previous) => {
+      if (previous !== nextMarket) {
+        setUniverseScope(null);
+      }
+      return nextMarket;
+    });
   }, []);
 
   const handleScreenerToggle = (screener) => {

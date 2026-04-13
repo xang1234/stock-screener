@@ -1,4 +1,4 @@
-import { TEST_SYMBOLS } from './constants';
+import { TEST_SYMBOLS, UNIVERSE_GEOGRAPHIC_MARKETS } from './constants';
 
 // Build a typed universe_def payload from the two-step picker state.
 // Returns null when the selection is incomplete (caller should disable submit).
@@ -65,7 +65,7 @@ export function parseLegacyUniverseDefault(legacy) {
   }
   if (value.startsWith('market:')) {
     const market = value.slice('market:'.length).toUpperCase();
-    if (market === 'US' || market === 'HK' || market === 'JP' || market === 'TW') {
+    if (UNIVERSE_GEOGRAPHIC_MARKETS.includes(market)) {
       return { market, scope: 'market' };
     }
   }
