@@ -46,8 +46,11 @@ from typing import Dict, List, Optional, Tuple
 from .cjk_alias_data import ASIA_ALIAS_CORPUS
 # Re-use the authoritative suffix↔market tables from SecurityMaster so the
 # two modules can't silently drift when a new exchange is added. Ordering
-# of _MARKET_BY_SUFFIX is load-bearing — ``.TWO`` must precede ``.TW`` and
-# ``.T`` so ``2330.TWO`` isn't matched by ``.TW`` first.
+# of _MARKET_BY_SUFFIX is defensive: longest/most-specific suffix first.
+# With today's four entries (.HK/.TWO/.TW/.T) the final characters are
+# all distinct, so order is not strictly required — but a future addition
+# like ``.AT`` would collide with ``.T`` on endswith(), and putting it
+# first preserves correctness without special-casing.
 from .security_master_service import _MARKET_BY_SUFFIX, _SUFFIX_BY_MARKET
 
 POLICY_VERSION: str = "2026.04.13.1"
@@ -140,7 +143,14 @@ def _build_indexes() -> Tuple[
             folded_key = fold_key(alias)
             if not folded_key:
                 continue
-            folded.setdefault(folded_key, []).append((canonical, market))
+            # Dedup: two aliases for the same canonical can fold to the
+            # same key (e.g. "Sony Group" and "Sony-Group" both fold to
+            # "sonygroup"). Without this check the folded list would
+            # contain a duplicate (canonical, market) pair and
+            # _disambiguate would treat it as spurious ambiguity.
+            bucket = folded.setdefault(folded_key, [])
+            if (canonical, market) not in bucket:
+                bucket.append((canonical, market))
     return exact, folded
 
 

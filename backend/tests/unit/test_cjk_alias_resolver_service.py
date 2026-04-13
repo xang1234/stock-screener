@@ -219,6 +219,22 @@ class TestPrecedence:
         assert result.method == METHOD_ALIAS_EXACT
 
 
+class TestFoldedIndexDedup:
+    """Regression: same-canonical aliases that fold to the same key must
+    dedupe at build time, otherwise _disambiguate sees len(candidates)>1
+    and returns METHOD_NONE for what is actually an unambiguous hit."""
+
+    def test_same_canonical_folded_collision_still_resolves(self):
+        # "Tencent Holdings" and "TencentHoldings" both fold to
+        # "tencentholdings". Both map to the same canonical — the
+        # resolver must not treat this as ambiguity.
+        a = resolve_alias("Tencent Holdings")
+        b = resolve_alias("TencentHoldings")
+        assert a.method == METHOD_ALIAS_EXACT  # literal match
+        assert b.method == METHOD_ALIAS_FOLDED
+        assert a.canonical_symbol == b.canonical_symbol == "0700.HK"
+
+
 class TestDeterminism:
     """Same input must always give the same output — no caches, no clocks."""
 
