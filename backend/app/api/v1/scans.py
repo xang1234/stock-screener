@@ -69,17 +69,11 @@ async def list_scans(
 
             scan_items = []
             for scan in scans:
-                symbols_count = len(scan.universe_symbols) if scan.universe_symbols else None
                 scan_items.append(ScanListItem(
                     scan_id=scan.scan_id,
                     status=scan.status,
                     trigger_source=getattr(scan, "trigger_source", "manual") or "manual",
-                    universe=scan.universe or "unknown",
-                    universe_type=scan.universe_type,
-                    universe_market=getattr(scan, "universe_market", None),
-                    universe_exchange=scan.universe_exchange,
-                    universe_index=scan.universe_index,
-                    universe_symbols_count=symbols_count,
+                    universe_def=scan.get_universe_definition(),
                     total_stocks=scan.total_stocks or 0,
                     passed_stocks=scan.passed_stocks or 0,
                     started_at=scan.started_at,
@@ -111,6 +105,9 @@ async def create_scan(
         logger.warning(universe_resolution.deprecation_log_message())
         for key, value in universe_resolution.deprecation_headers().items():
             response.headers[key] = value
+        from ...services.universe_compat_metrics import record_legacy_universe_usage
+
+        record_legacy_universe_usage(universe_resolution.legacy_value)
     cmd = CreateScanCommand(
         universe_def=universe_def,
         universe_label=universe_def.label(),
@@ -149,6 +146,7 @@ async def create_scan(
             else f"Scan queued for {result.total_stocks} stocks"
         ),
         feature_run_id=result.feature_run_id,
+        universe_def=universe_def,
     )
 
 
@@ -255,6 +253,7 @@ async def get_scan_status(
                 passed_stocks=scan.passed_stocks or 0,
                 started_at=scan.started_at,
                 eta_seconds=eta_seconds,
+                universe_def=scan.get_universe_definition(),
             )
 
     except HTTPException:

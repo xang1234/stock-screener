@@ -86,6 +86,20 @@ class FakeScan:
     criteria: dict | None = None
     started_at: Any = None
 
+    def get_universe_definition(self):
+        """Mirror Scan.get_universe_definition() for API list/status tests."""
+        from app.schemas.universe import UniverseDefinition
+
+        return UniverseDefinition.from_scan_fields(
+            universe_type=self.universe_type,
+            universe=self.universe,
+            universe_key=self.universe_key,
+            universe_market=self.universe_market,
+            universe_exchange=self.universe_exchange,
+            universe_index=self.universe_index,
+            universe_symbols=self.universe_symbols,
+        )
+
 
 # Alias kept for backward compatibility with scanning_fakes.py consumers.
 _ScanRecord = FakeScan

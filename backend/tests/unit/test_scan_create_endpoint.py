@@ -71,13 +71,14 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
         app.dependency_overrides.pop(get_create_scan_use_case, None)
 
     assert response.status_code == 200
-    assert response.json() == {
-        "scan_id": "scan-123",
-        "status": "completed",
-        "total_stocks": 2500,
-        "message": "Scan completed instantly for 2500 stocks",
-        "feature_run_id": 17,
-    }
+    payload = response.json()
+    assert payload["scan_id"] == "scan-123"
+    assert payload["status"] == "completed"
+    assert payload["total_stocks"] == 2500
+    assert payload["message"] == "Scan completed instantly for 2500 stocks"
+    assert payload["feature_run_id"] == 17
+    # Legacy input still echoes back a typed universe_def in the response
+    assert payload["universe_def"]["type"] == "all"
     assert response.headers["deprecation"] == "true"
     assert "sunset" in response.headers
     assert response.headers["x-universe-compat-mode"] == "legacy"
@@ -116,13 +117,13 @@ async def test_create_scan_returns_queued_without_bootstrap_publish(client):
         app.dependency_overrides.pop(get_create_scan_use_case, None)
 
     assert response.status_code == 200
-    assert response.json() == {
-        "scan_id": "scan-456",
-        "status": "queued",
-        "total_stocks": 99,
-        "message": "Scan queued for 99 stocks",
-        "feature_run_id": None,
-    }
+    payload = response.json()
+    assert payload["scan_id"] == "scan-456"
+    assert payload["status"] == "queued"
+    assert payload["total_stocks"] == 99
+    assert payload["message"] == "Scan queued for 99 stocks"
+    assert payload["feature_run_id"] is None
+    assert payload["universe_def"]["type"] == "all"
     assert response.headers["deprecation"] == "true"
     assert response.headers["x-universe-legacy-value"] == "all"
     assert fake_use_case.received_uow is fake_uow
@@ -160,3 +161,78 @@ async def test_create_scan_accepts_market_universe_def(client):
     assert fake_use_case.received_cmd.universe_type == "market"
     assert fake_use_case.received_cmd.universe_market == "HK"
     assert fake_use_case.received_cmd.universe_key == "market:HK"
+    # Typed request → typed response: client round-trips what it sent
+    payload = response.json()
+    assert payload["universe_def"] == {
+        "type": "market",
+        "market": "HK",
+        "exchange": None,
+        "index": None,
+        "symbols": None,
+        "allow_inactive_symbols": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_scan_records_legacy_telemetry_counter(client):
+    """Legacy-path requests bump the compatibility counter so operators can
+    track remaining legacy callers before the sunset date."""
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-legacy-counter",
+            status="queued",
+            total_stocks=10,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.services.universe_compat_metrics.record_legacy_universe_usage"
+        ) as mock_record:
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe": "nyse"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    mock_record.assert_called_once_with("nyse")
+
+
+@pytest.mark.asyncio
+async def test_create_scan_does_not_record_counter_for_typed_requests(client):
+    """Typed universe_def requests must not bump the legacy counter."""
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-typed-no-counter",
+            status="queued",
+            total_stocks=7,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.services.universe_compat_metrics.record_legacy_universe_usage"
+        ) as mock_record:
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "all"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    mock_record.assert_not_called()

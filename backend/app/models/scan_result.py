@@ -67,66 +67,17 @@ class Scan(Base):
     completed_at = Column(DateTime(timezone=True))
 
     def get_universe_definition(self):
-        """
-        Reconstruct a UniverseDefinition from the structured DB fields.
+        """Reconstruct a UniverseDefinition from the structured DB fields."""
+        from ..schemas.universe import UniverseDefinition
 
-        Falls back to from_legacy() for pre-migration rows where
-        universe_type is NULL.
-
-        Returns:
-            UniverseDefinition instance
-        """
-        from ..schemas.universe import (
-            Exchange,
-            IndexName,
-            Market,
-            UniverseDefinition,
-            UniverseType,
-        )
-
-        if self.universe_type is None:
-            # Pre-migration row: parse from legacy string
-            try:
-                return UniverseDefinition.from_legacy(
-                    self.universe or "all",
-                    self.universe_symbols,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Could not parse legacy universe '{self.universe}' "
-                    f"for scan {self.scan_id}: {e}"
-                )
-                return UniverseDefinition(type=UniverseType.ALL)
-
-        resolved_market = self.universe_market
-        universe_type = UniverseType(self.universe_type)
-
-        market = None
-        exchange = None
-        index = None
-        symbols = None
-
-        if universe_type == UniverseType.MARKET:
-            if (
-                resolved_market is None
-                and isinstance(self.universe_key, str)
-                and self.universe_key.lower().startswith("market:")
-            ):
-                resolved_market = self.universe_key.split(":", 1)[1].upper()
-            market = Market(resolved_market) if resolved_market else None
-        elif universe_type == UniverseType.EXCHANGE:
-            exchange = Exchange(self.universe_exchange) if self.universe_exchange else None
-        elif universe_type == UniverseType.INDEX:
-            index = IndexName(self.universe_index) if self.universe_index else None
-        elif universe_type in (UniverseType.CUSTOM, UniverseType.TEST):
-            symbols = self.universe_symbols
-
-        return UniverseDefinition(
-            type=universe_type,
-            market=market,
-            exchange=exchange,
-            index=index,
-            symbols=symbols,
+        return UniverseDefinition.from_scan_fields(
+            universe_type=self.universe_type,
+            universe=self.universe,
+            universe_key=self.universe_key,
+            universe_market=self.universe_market,
+            universe_exchange=self.universe_exchange,
+            universe_index=self.universe_index,
+            universe_symbols=self.universe_symbols,
         )
 
 
