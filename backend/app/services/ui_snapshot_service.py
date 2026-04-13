@@ -642,12 +642,14 @@ class UISnapshotService:
                 date=ranking_date,
                 total_groups=len(rankings),
                 rankings=[GroupRankResponse(**row) for row in rankings],
+                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
             ).model_dump(mode="json"),
             "movers_period": DEFAULT_GROUP_PERIOD,
             "movers": MoversResponse(
                 period=movers["period"],
                 gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                 losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
             ).model_dump(mode="json"),
             "task_controls_enabled": settings.feature_tasks,
         }

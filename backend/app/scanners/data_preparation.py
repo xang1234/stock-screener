@@ -143,7 +143,7 @@ class DataPreparationLayer:
         seen_symbols: set[tuple[str, str]] = set()
 
         for item in stock_data_items:
-            market = item.market or "US"
+            market = (item.market or "").strip().upper() or "US"
             dedupe_key = (market, item.symbol)
             if dedupe_key in seen_symbols:
                 continue
@@ -201,7 +201,7 @@ class DataPreparationLayer:
         seen_market: Optional[str] = None
         mixed = False
         for item in items:
-            key = item.market or "US"
+            key = (item.market or "").strip().upper() or "US"
             item.rs_universe_performances = market_universe.get(key, {})
             if not mixed:
                 if seen_market is None:

@@ -1,9 +1,9 @@
-"""Integration tests: analytics responses carry the US-only scope tag (T6.4).
+"""Unit tests: analytics responses carry the US-only scope tag (T6.4).
 
 Drives the response-assembly code paths with in-memory stubs to confirm
 that every US-only analytics surface (groups endpoint, theme price
-metrics, breadth snapshot payload) emits a ``market_scope`` field that
-downstream consumers can observe.
+metrics) emits a ``market_scope`` field that downstream consumers can
+observe. All dependencies are synthetic; no server or database required.
 """
 from __future__ import annotations
 

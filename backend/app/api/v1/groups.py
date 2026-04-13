@@ -114,7 +114,7 @@ async def get_rank_movers(
     return MoversResponse(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
-        losers=[GroupRankResponse(**l) for l in movers.get('losers', [])],
+        losers=[GroupRankResponse(**loser) for loser in movers.get('losers', [])],
         **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
     )
 

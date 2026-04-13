@@ -102,6 +102,7 @@ class CustomScanner(BaseStockScreener):
 
         # Determine requirements based on filters
         needs_fundamentals = any([
+            filters.get("volume_min") is not None,  # mixed-market mode needs adv_usd
             filters.get("market_cap_min") is not None,
             filters.get("market_cap_max") is not None,
             filters.get("debt_to_equity_max") is not None,
@@ -360,12 +361,29 @@ class CustomScanner(BaseStockScreener):
         single-market mode the threshold is shares, per the legacy
         contract.
         """
+        volume_min = float(filters.get("volume_min", 0))
+        unit = UNIT_USD if mixed_market else UNIT_SHARES
+
+        # Check the no-op case first: a non-positive threshold disables the
+        # filter entirely and must not reject rows with missing adv_usd.
+        if volume_min <= 0:
+            return FilterResult(
+                name="volume",
+                passes=True,
+                points=10.0,
+                max_points=10.0,
+                details={
+                    "avg_volume": None,
+                    "volume_min": volume_min,
+                    "unit": unit,
+                    "ratio": None,
+                },
+            )
+
         native_avg_volume = float(price_data['Volume'].tail(20).mean())
         adv = resolve_adv_for_filter(
             fundamentals, native_avg_volume, mixed_market=mixed_market,
         )
-        volume_min = float(filters.get("volume_min", 0))
-        unit = UNIT_USD if mixed_market else UNIT_SHARES
 
         if adv is None:
             return self._fail_closed(
@@ -381,12 +399,8 @@ class CustomScanner(BaseStockScreener):
 
         passes = bool(adv >= volume_min)
 
-        # Scoring: meeting min = 5pts, 2× min = 10pts (linear). When
-        # volume_min <= 0 the filter is a no-op; award max points.
-        if volume_min <= 0:
-            points = 10.0
-            ratio = None
-        elif adv >= volume_min * 2:
+        # Scoring: meeting min = 5pts, 2x min = 10pts (linear).
+        if adv >= volume_min * 2:
             points = 10.0
             ratio = adv / volume_min
         elif adv >= volume_min:
