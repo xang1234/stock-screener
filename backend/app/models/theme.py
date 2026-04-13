@@ -83,6 +83,16 @@ class ContentItem(Base):
     processed_at = Column(DateTime(timezone=True))
     extraction_error = Column(Text)  # If extraction failed
 
+    # Multilingual support (T7.1). Original title/content above stay authoritative;
+    # translated_* are the derivative the extraction pipeline consumes when
+    # source_language != extraction_target_language. translation_metadata is a
+    # self-contained snapshot ({provider, model, source_language, target_language,
+    # confidence, translated_at}) so replay stays deterministic across config churn.
+    source_language = Column(String(8), index=True)  # BCP-47 short tag, e.g. "en", "ja", "zh-HK"
+    translated_title = Column(String(500))
+    translated_content = Column(Text)
+    translation_metadata = Column(JSON)
+
     __table_args__ = (
         UniqueConstraint("source_type", "external_id", name="uix_source_external_id"),
         Index("idx_content_unprocessed", "is_processed", "published_at"),
@@ -133,6 +143,13 @@ class ThemeMention(Base):
     # Timestamps
     mentioned_at = Column(DateTime(timezone=True), index=True)  # When content was published
     extracted_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Multilingual derivative (T7.1). raw_theme/excerpt above remain the original
+    # (in source language); translated_* preserve the target-language variant the
+    # pipeline produced. See ContentItem.translation_metadata for replay shape.
+    translated_raw_theme = Column(String(200))
+    translated_excerpt = Column(Text)
+    translation_metadata = Column(JSON)
 
     __table_args__ = (
         Index("idx_theme_mention_date", "canonical_theme", "mentioned_at"),
