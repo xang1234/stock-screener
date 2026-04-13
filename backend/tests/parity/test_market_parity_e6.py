@@ -28,6 +28,10 @@ from app.domain.analytics.scope import (
 )
 from app.domain.scanning.mixed_market_policy import (
     POLICY_VERSION as MIXED_MARKET_POLICY_VERSION,
+    REASON_MISSING_CAP_USD,
+    UNIT_NATIVE,
+    UNIT_SHARES,
+    UNIT_USD,
     is_mixed_market,
     resolve_adv_for_filter,
     resolve_cap_for_filter,
@@ -135,53 +139,39 @@ class TestUSParityAnalyticsScope:
     def test_us_markets_pass_require_scope(self, market):
         # Defensive: US variants (case, whitespace, None) must not raise.
         for feature in AnalyticsFeature:
-            require_us_scope(market, feature)  # pragma: no cover — asserting no-raise
+            require_us_scope(market, feature)
 
 
 class TestUSParityScanner:
     """Custom scanner's cap/volume filters treat US as native (legacy)."""
 
-    def _build_stock_data(self, *, fundamentals: dict, volume: int) -> StockData:
-        days = 260
-        idx = pd.date_range("2024-01-01", periods=days, freq="B")
-        closes = pd.Series([100.0] * days, index=idx)
-        price = pd.DataFrame(
-            {
-                "Open": closes, "High": closes * 1.01, "Low": closes * 0.99,
-                "Close": closes, "Volume": [volume] * days,
-            },
-            index=idx,
-        )
-        return StockData(
-            symbol="AAPL",
-            price_data=price,
-            benchmark_data=pd.DataFrame(),
-            fundamentals=fundamentals,
-            market="US",
-            is_mixed_market=False,
-        )
-
     def test_us_cap_filter_uses_market_cap(self):
         scanner = CustomScanner()
-        data = self._build_stock_data(
+        data = _build_stock_data(
+            symbol="AAPL",
+            market="US",
+            is_mixed=False,
             fundamentals={"market_cap": 2_500_000_000_000, "market_cap_usd": 2_500_000_000_000},
             volume=50_000_000,
         )
         result = scanner.scan_stock("AAPL", data, {"custom_filters": {"market_cap_min": 1_000_000_000}})
         cap = result.details["filter_results"]["market_cap"]
         assert cap["passes"] is True
-        assert cap["unit"] == "native"
+        assert cap["unit"] == UNIT_NATIVE
 
     def test_us_volume_filter_uses_shares(self):
         scanner = CustomScanner()
-        data = self._build_stock_data(
+        data = _build_stock_data(
+            symbol="AAPL",
+            market="US",
+            is_mixed=False,
             fundamentals={"adv_usd": 1},  # ignored for single-market US
             volume=50_000_000,
         )
         result = scanner.scan_stock("AAPL", data, {"custom_filters": {"volume_min": 10_000_000}})
         vol = result.details["filter_results"]["volume"]
         assert vol["passes"] is True
-        assert vol["unit"] == "shares"
+        assert vol["unit"] == UNIT_SHARES
 
 
 # ---------------------------------------------------------------------------
@@ -259,27 +249,24 @@ class TestNonUSRSUniverse:
     """T6.2: RS universe partitions by market; US and HK don't share a bucket."""
 
     def test_market_scoped_rs_universe(self):
-        # Build two StockData instances each carrying a pre-computed RS
-        # rating for their market; DataPreparationLayer partitions them
-        # into separate buckets keyed by market string.
+        # Structural partitioning: 3 US inputs and 2 HK inputs must land
+        # in separate market buckets, each with its own performance list.
+        # If the computation ever pooled markets we'd see only one key
+        # or a single merged list of length 5.
         prep = DataPreparationLayer.__new__(DataPreparationLayer)
         universe = prep._compute_market_rs_universe_performances([
-            # Three US names with distinct returns → US bucket.
-            _make_stock_with_benchmark("AAPL", market="US", stock_rets=[0.20, 0.15, 0.10], bench_rets=[0.10, 0.05, 0.00]),
-            _make_stock_with_benchmark("MSFT", market="US", stock_rets=[0.25, 0.20, 0.15], bench_rets=[0.10, 0.05, 0.00]),
-            _make_stock_with_benchmark("NVDA", market="US", stock_rets=[0.30, 0.25, 0.20], bench_rets=[0.10, 0.05, 0.00]),
-            # Two HK names with separate benchmark returns → HK bucket.
-            _make_stock_with_benchmark("0700.HK", market="HK", stock_rets=[0.15, 0.10, 0.05], bench_rets=[0.05, 0.02, -0.01]),
-            _make_stock_with_benchmark("9988.HK", market="HK", stock_rets=[0.20, 0.15, 0.10], bench_rets=[0.05, 0.02, -0.01]),
+            _make_stock_with_benchmark("AAPL", market="US"),
+            _make_stock_with_benchmark("MSFT", market="US"),
+            _make_stock_with_benchmark("NVDA", market="US"),
+            _make_stock_with_benchmark("0700.HK", market="HK"),
+            _make_stock_with_benchmark("9988.HK", market="HK"),
         ])
-        assert "US" in universe
-        assert "HK" in universe
-        # Each bucket has a ``weighted`` series plus per-period series.
-        assert "weighted" in universe["US"]
-        assert "weighted" in universe["HK"]
-        # The weighted performances differ across markets — US stocks
-        # outperformed their benchmark more than HK stocks did.
-        assert universe["US"]["weighted"] != universe["HK"]["weighted"]
+        assert set(universe.keys()) == {"US", "HK"}
+        assert "weighted" in universe["US"] and "weighted" in universe["HK"]
+        # Bucket cardinality proves partitioning without relying on
+        # numeric coincidence: US has 3 inputs, HK has 2.
+        assert len(universe["US"]["weighted"]) == 3
+        assert len(universe["HK"]["weighted"]) == 2
 
 
 class TestNonUSAnalyticsScope:
@@ -296,53 +283,35 @@ class TestNonUSAnalyticsScope:
 class TestNonUSScanner:
     """Custom scanner enforces mixed-market semantics for non-US rows."""
 
-    def _build(self, *, market: str, fundamentals: dict, volume: int, is_mixed: bool) -> StockData:
-        days = 260
-        idx = pd.date_range("2024-01-01", periods=days, freq="B")
-        closes = pd.Series([100.0] * days, index=idx)
-        price = pd.DataFrame(
-            {
-                "Open": closes, "High": closes * 1.01, "Low": closes * 0.99,
-                "Close": closes, "Volume": [volume] * days,
-            },
-            index=idx,
-        )
-        return StockData(
-            symbol="0700.HK",
-            price_data=price,
-            benchmark_data=pd.DataFrame(),
-            fundamentals=fundamentals,
-            market=market,
-            is_mixed_market=is_mixed,
-        )
-
     def test_mixed_hk_row_uses_usd_cap(self):
         scanner = CustomScanner()
-        data = self._build(
+        data = _build_stock_data(
+            symbol="0700.HK",
             market="HK",
+            is_mixed=True,
             fundamentals={"market_cap": 10_000_000_000, "market_cap_usd": 1_280_000_000},
             volume=500_000,
-            is_mixed=True,
         )
         result = scanner.scan_stock("0700.HK", data, {"custom_filters": {"market_cap_min": 1_000_000_000}})
         cap = result.details["filter_results"]["market_cap"]
         assert cap["passes"] is True
-        assert cap["unit"] == "usd"
+        assert cap["unit"] == UNIT_USD
         # Golden: the resolved cap value is market_cap_usd, not market_cap.
         assert cap["market_cap"] == 1_280_000_000
 
     def test_mixed_hk_missing_fx_fails_closed(self):
         scanner = CustomScanner()
-        data = self._build(
+        data = _build_stock_data(
+            symbol="0700.HK",
             market="HK",
+            is_mixed=True,
             fundamentals={"market_cap": 10_000_000_000, "market_cap_usd": None},
             volume=500_000,
-            is_mixed=True,
         )
         result = scanner.scan_stock("0700.HK", data, {"custom_filters": {"market_cap_min": 1}})
         cap = result.details["filter_results"]["market_cap"]
         assert cap["passes"] is False
-        assert cap["reason"] == "missing_market_cap_usd"
+        assert cap["reason"] == REASON_MISSING_CAP_USD
 
 
 # ---------------------------------------------------------------------------
@@ -361,48 +330,83 @@ class TestPolicyVersions:
 
 
 # ---------------------------------------------------------------------------
+# Wire-contract pins — ensure the constants themselves haven't been renamed.
+# ---------------------------------------------------------------------------
+
+
+class TestWireContract:
+    """Pin the raw string values behind the mixed-market constants.
+
+    The scanner-behaviour tests assert against imported constants (drift-
+    safe), but a silent rename of the constant *value* would still change
+    the JSON payload downstream. These tests catch that case so
+    frontends reading ``cap["unit"]`` aren't surprised.
+    """
+
+    def test_unit_values(self):
+        assert UNIT_USD == "usd"
+        assert UNIT_NATIVE == "native"
+        assert UNIT_SHARES == "shares"
+
+    def test_reason_values(self):
+        assert REASON_MISSING_CAP_USD == "missing_market_cap_usd"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_stock_with_benchmark(
-    symbol: str,
+def _build_stock_data(
     *,
+    symbol: str,
     market: str,
-    stock_rets: list[float],
-    bench_rets: list[float],
+    is_mixed: bool,
+    fundamentals: dict,
+    volume: int,
+    days: int = 260,
 ) -> StockData:
-    """Build StockData whose price series compounds to match ``stock_rets``.
-
-    ``stock_rets`` / ``bench_rets`` are the expected returns over the
-    three RS periods (63 / 126 / 189 trading days). The helper emits
-    step-functions of closes that produce those exact returns, so
-    ``_compute_market_rs_universe_performances`` can consume them
-    deterministically without any real price data.
-    """
-    days = 260  # enough for the 252-day yearly period used by the RS calc
+    """Build a scanner-ready StockData with a flat-close OHLCV frame."""
     idx = pd.date_range("2024-01-01", periods=days, freq="B")
-
-    # Build a monotonically increasing close series where the ratio at
-    # specific indices matches the requested returns. Use the 63/126/189/252
-    # lookbacks.
-    closes_stock = _synth_close_series(days=days, rets=stock_rets)
-    closes_bench = _synth_close_series(days=days, rets=bench_rets)
-
-    stock_df = pd.DataFrame(
+    closes = pd.Series([100.0] * days, index=idx)
+    price = pd.DataFrame(
         {
-            "Open": closes_stock, "High": closes_stock,
-            "Low": closes_stock, "Close": closes_stock,
-            "Volume": [1_000_000] * days,
+            "Open": closes, "High": closes * 1.01, "Low": closes * 0.99,
+            "Close": closes, "Volume": [volume] * days,
         },
         index=idx,
     )
+    return StockData(
+        symbol=symbol,
+        price_data=price,
+        benchmark_data=pd.DataFrame(),
+        fundamentals=fundamentals,
+        market=market,
+        is_mixed_market=is_mixed,
+    )
+
+
+def _make_stock_with_benchmark(symbol: str, *, market: str) -> StockData:
+    """Build StockData + benchmark for the RS-universe partitioning test.
+
+    Shape of the price / benchmark series is not load-bearing — the
+    partitioning test only checks that entries land in the correct
+    market bucket. The series needs enough history for the RS calc's
+    longest lookback (252 days) and some non-zero return so the weighted
+    performance is recorded.
+    """
+    days = 260
+    idx = pd.date_range("2024-01-01", periods=days, freq="B")
+    closes_stock = [100.0 * (1.0015 ** i) for i in range(days)]   # ~47% over 260 days
+    closes_bench = [100.0 * (1.0005 ** i) for i in range(days)]   # ~14% over 260 days
+    stock_df = pd.DataFrame(
+        {"Open": closes_stock, "High": closes_stock, "Low": closes_stock,
+         "Close": closes_stock, "Volume": [1_000_000] * days},
+        index=idx,
+    )
     bench_df = pd.DataFrame(
-        {
-            "Open": closes_bench, "High": closes_bench,
-            "Low": closes_bench, "Close": closes_bench,
-            "Volume": [1_000_000] * days,
-        },
+        {"Open": closes_bench, "High": closes_bench, "Low": closes_bench,
+         "Close": closes_bench, "Volume": [1_000_000] * days},
         index=idx,
     )
     return StockData(
@@ -411,12 +415,3 @@ def _make_stock_with_benchmark(
         benchmark_data=bench_df,
         market=market,
     )
-
-
-def _synth_close_series(*, days: int, rets: list[float]) -> list[float]:
-    """Generate a simple close series — the exact shape isn't load-bearing
-    for the partitioning test; what matters is that US and HK items
-    reach the US / HK buckets respectively."""
-    base = 100.0
-    growth = 1.0 + sum(rets) / max(len(rets), 1)
-    return [base * (growth ** (i / days)) for i in range(days)]
