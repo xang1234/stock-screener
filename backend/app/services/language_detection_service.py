@@ -5,8 +5,9 @@ tags used across the multilingual pipeline:
 
 - Hiragana / Katakana present  → Japanese (``ja``)
 - Han (CJK ideograph) dominant → Chinese (``zh``)
-- Otherwise                    → English (``en``)
-- Empty / non-letter input     → ``und`` (BCP-47 "undetermined")
+- Latin script fallback        → English (``en``)
+- Empty / non-Latin / non-letter input
+  → ``und`` (BCP-47 "undetermined")
 
 Kana is the load-bearing signal for Japanese: Japanese text always has
 some kana; Chinese essentially never does. Even a 2% kana proportion

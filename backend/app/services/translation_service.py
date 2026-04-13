@@ -236,7 +236,7 @@ class TranslationService:
             confidence=combined_confidence,
             translated_at=date.today(),
         )
-        content_item.translated_title = translated_title
+        content_item.translated_title = translated_title[:500]
         content_item.translated_content = translated_content
         content_item.translation_metadata = merged.to_metadata()
         return content_item.translation_metadata
@@ -399,7 +399,10 @@ def _is_cached_translation(
     if provider in (None, PROVIDER_UNAVAILABLE):
         return False
     if provider == PROVIDER_IDENTITY:
-        return True
+        return (
+            content_item.translated_title == content_item.title
+            and content_item.translated_content == content_item.content
+        )
     return (
         content_item.translated_title is not None
         and content_item.translated_content is not None

@@ -90,6 +90,25 @@ class TestIdentityPath:
         assert row.translated_title == "Nvidia posts record quarter"
         assert row.translated_content == "Revenue jumped 30%."
 
+    def test_identity_reruns_when_columns_not_backfilled(self):
+        # Legacy/corrupt rows: identity metadata was written in a previous
+        # run but the translated_* columns were never populated. The cache
+        # guard must detect the mismatch and re-run _write_identity so the
+        # row meets its own contract (translated_* == originals).
+        svc = TranslationService(_make_translator(), target_language="en")
+        row = _row(
+            title="Nvidia posts record quarter",
+            content="Revenue jumped 30%.",
+            source_language="en",
+            translated_title=None,       # not backfilled
+            translated_content=None,     # not backfilled
+            translation_metadata=identity_metadata("en", "en"),
+        )
+        meta = svc.translate_content_item(row)
+        assert meta["provider"] == PROVIDER_IDENTITY
+        assert row.translated_title == "Nvidia posts record quarter"
+        assert row.translated_content == "Revenue jumped 30%."
+
 
 class TestSuccessfulTranslation:
     def test_persists_translated_text_and_metadata(self):
@@ -103,6 +122,25 @@ class TestSuccessfulTranslation:
         assert meta["target_language"] == "en"
         assert row.translated_title.startswith("[ja->en]")
         assert row.translated_content.startswith("[ja->en]")
+
+    def test_translated_title_clamped_to_500_chars(self):
+        # MT output can expand past the DB column limit (String(500)).
+        # A flush after an un-clamped assignment would raise a DB error
+        # *after* paying for the translation — the clamp prevents that.
+        long_output = "X" * 600
+
+        def long_translator(text, src, tgt):
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return long_output, quote
+
+        svc = TranslationService(long_translator, target_language="en")
+        row = _row(title="日経平均", content="半導体が牽引。", source_language="ja")
+        svc.translate_content_item(row)
+        assert len(row.translated_title) == 500
+        assert row.translated_title == "X" * 500
 
     def test_combined_confidence_uses_weaker_signal(self):
         # Title confidence 0.9, content confidence 0.60 → merged = 0.60.
