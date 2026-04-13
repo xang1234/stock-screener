@@ -248,9 +248,19 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         sort: SortSpec,
         page: PageSpec,
     ) -> FeaturePage:
-        """Build and execute a filtered, sorted, paginated feature query."""
+        """Build and execute a filtered, sorted, paginated feature query.
+
+        Applies the StockUniverse + StockFundamental outer joins so the
+        joined-column entries in ``feature_store_query._COLUMN_MAP``
+        (market, exchange, currency, market_cap_usd, adv_usd) resolve to
+        valid SQL even though FeaturePage rows don't surface those columns.
+        Without the joins, a filter referencing them would produce broken
+        SQL or silently drop.
+        """
         q = (
             self._session.query(StockFeatureDaily)
+            .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
+            .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
             .filter(StockFeatureDaily.run_id == run_id)
         )
         q = apply_filters(q, filters)
