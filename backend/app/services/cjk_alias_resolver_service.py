@@ -44,6 +44,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .cjk_alias_data import ASIA_ALIAS_CORPUS
+# Re-use the authoritative suffix↔market tables from SecurityMaster so the
+# two modules can't silently drift when a new exchange is added. Ordering
+# of _MARKET_BY_SUFFIX is load-bearing — ``.TWO`` must precede ``.TW`` and
+# ``.T`` so ``2330.TWO`` isn't matched by ``.TW`` first.
+from .security_master_service import _MARKET_BY_SUFFIX, _SUFFIX_BY_MARKET
 
 POLICY_VERSION: str = "2026.04.13.1"
 
@@ -54,14 +59,6 @@ METHOD_ALIAS_FOLDED: str = "alias_folded"
 METHOD_NONE: str = "none"
 
 SUPPORTED_MARKETS: frozenset[str] = frozenset({"HK", "JP", "TW"})
-
-_SUFFIX_BY_MARKET: Dict[str, str] = {"HK": ".HK", "JP": ".T", "TW": ".TW"}
-_MARKET_BY_SUFFIX: Tuple[Tuple[str, str], ...] = (
-    (".HK", "HK"),
-    (".TWO", "TW"),
-    (".TW", "TW"),
-    (".T", "JP"),
-)
 
 # Exchange-local code shape by market. HK codes range 1-5 digits but
 # canonicalize to a 4-digit zero-padded form (HSBC = 0005.HK); JP/TW
@@ -155,13 +152,15 @@ _EXACT_INDEX, _FOLDED_INDEX = _build_indexes()
 # ---------------------------------------------------------------------------
 
 
-def _try_symbol_passthrough(query: str) -> Optional[AliasResolution]:
+def _try_symbol_passthrough(
+    query: str, normalized: str
+) -> Optional[AliasResolution]:
     """Input already carries a known SecurityMaster suffix."""
-    normalized = nfkc(query).upper()
+    upper = normalized.upper()
     for suffix, market in _MARKET_BY_SUFFIX:
-        if not normalized.endswith(suffix):
+        if not upper.endswith(suffix):
             continue
-        local_code = normalized[: -len(suffix)]
+        local_code = upper[: -len(suffix)]
         if market == "HK":
             if _LOCAL_CODE_RE_HK_PASSTHROUGH.match(local_code):
                 canonical = f"{int(local_code):04d}{suffix}"
@@ -180,7 +179,7 @@ def _try_symbol_passthrough(query: str) -> Optional[AliasResolution]:
 
 
 def _try_symbol_normalized(
-    query: str, hint_market: Optional[str]
+    query: str, normalized: str, hint_market: Optional[str]
 ) -> Optional[AliasResolution]:
     """Bare numeric code + market hint → canonical symbol."""
     if hint_market is None:
@@ -188,7 +187,6 @@ def _try_symbol_normalized(
     market = hint_market.strip().upper()
     if market not in SUPPORTED_MARKETS:
         return None
-    normalized = nfkc(query)
     suffix = _SUFFIX_BY_MARKET[market]
     if market == "HK":
         if not _LOCAL_CODE_RE_HK_NORMALIZED.match(normalized):
@@ -232,17 +230,16 @@ def _disambiguate(
     return None
 
 
-def _try_alias_exact(query: str) -> Optional[Tuple[str, str]]:
-    return _EXACT_INDEX.get(nfkc(query))
+def _try_alias_exact(normalized: str) -> Optional[Tuple[str, str]]:
+    return _EXACT_INDEX.get(normalized)
 
 
 def _try_alias_folded(
-    query: str, hint_market: Optional[str]
+    folded: str, hint_market: Optional[str]
 ) -> Optional[Tuple[str, str]]:
-    key = fold_key(query)
-    if not key:
+    if not folded:
         return None
-    candidates = _FOLDED_INDEX.get(key)
+    candidates = _FOLDED_INDEX.get(folded)
     if not candidates:
         return None
     return _disambiguate(candidates, hint_market)
@@ -265,51 +262,44 @@ def resolve_alias(
     ``hint_market`` is consulted for symbol normalization (bare numeric
     codes) and to disambiguate folded-alias collisions.
     """
-    if not query or not query.strip():
+    normalized = nfkc(query)
+    if not normalized:
         return AliasResolution(
-            query=query,
-            canonical_symbol=None,
-            market=None,
-            method=METHOD_NONE,
-            policy_version=POLICY_VERSION,
+            query=query, canonical_symbol=None, market=None,
+            method=METHOD_NONE, policy_version=POLICY_VERSION,
         )
 
-    passthrough = _try_symbol_passthrough(query)
+    passthrough = _try_symbol_passthrough(query, normalized)
     if passthrough is not None:
         return passthrough
 
-    normalized = _try_symbol_normalized(query, hint_market)
-    if normalized is not None:
-        return normalized
+    symbol_normalized = _try_symbol_normalized(query, normalized, hint_market)
+    if symbol_normalized is not None:
+        return symbol_normalized
 
-    exact = _try_alias_exact(query)
+    exact = _try_alias_exact(normalized)
     if exact is not None:
         canonical, market = exact
         return AliasResolution(
-            query=query,
-            canonical_symbol=canonical,
-            market=market,
-            method=METHOD_ALIAS_EXACT,
-            policy_version=POLICY_VERSION,
+            query=query, canonical_symbol=canonical, market=market,
+            method=METHOD_ALIAS_EXACT, policy_version=POLICY_VERSION,
         )
 
-    folded = _try_alias_folded(query, hint_market)
+    # Deferred: only pay for casefold + punctuation-strip when the
+    # exact-match path has missed.
+    folded = _try_alias_folded(
+        _FOLD_STRIP_RE.sub("", normalized.casefold()), hint_market,
+    )
     if folded is not None:
         canonical, market = folded
         return AliasResolution(
-            query=query,
-            canonical_symbol=canonical,
-            market=market,
-            method=METHOD_ALIAS_FOLDED,
-            policy_version=POLICY_VERSION,
+            query=query, canonical_symbol=canonical, market=market,
+            method=METHOD_ALIAS_FOLDED, policy_version=POLICY_VERSION,
         )
 
     return AliasResolution(
-        query=query,
-        canonical_symbol=None,
-        market=None,
-        method=METHOD_NONE,
-        policy_version=POLICY_VERSION,
+        query=query, canonical_symbol=None, market=None,
+        method=METHOD_NONE, policy_version=POLICY_VERSION,
     )
 
 
@@ -351,8 +341,6 @@ __all__ = [
     "METHOD_NONE",
     "SUPPORTED_MARKETS",
     "AliasResolution",
-    "nfkc",
-    "fold_key",
     "resolve_alias",
     "policy_version",
     "describe_policy",
