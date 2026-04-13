@@ -1,14 +1,14 @@
 """Translation stage with DB-column caching and confidence metadata.
 
-Part of the E7 multilingual pipeline:
+Part of the multilingual content pipeline:
 
-    content ingest → [T7.2 detect_language] → [T7.3 translate] → extract
+    content ingest → detect_language → translate → extract
 
 The translated text and a self-contained :class:`TranslationQuote`
-snapshot are persisted on :class:`ContentItem` (T7.1 columns). The
-columns ARE the cache — re-running the translate stage on the same
-row is a no-op when translation already succeeded, and a retry when
-the previous attempt recorded ``provider = "unavailable"``.
+snapshot are persisted on :class:`ContentItem`. The columns ARE the
+cache — re-running the translate stage on the same row is a no-op
+when translation already succeeded, and a retry when the previous
+attempt recorded ``provider = "unavailable"``.
 
 The translation provider is injected (no default wired) so this module
 stays import-safe and unit-testable. Real deployments wire DeepL /
@@ -17,9 +17,15 @@ Google / LLM-based translators at the composition root.
 Confidence
 ----------
 Downstream extraction / QA scoring should gate on the confidence stored
-in ``translation_metadata``; :data:`CONFIDENCE_DOWNGRADE_THRESHOLD`
-names the cutoff below which extraction rating should be downgraded
-(analogous to ``QUALITY_DOWNGRADE_THRESHOLD`` in the scoring policy).
+in ``translation_metadata``. :data:`CONFIDENCE_DOWNGRADE_THRESHOLD`
+names the cutoff below which extraction rating should be downgraded.
+
+Note on scales: this threshold is on the 0.0–1.0 MT-confidence scale,
+distinct from the 0–100 integer ``field_completeness_score`` gated by
+``QUALITY_DOWNGRADE_THRESHOLD = 60`` in ``scoring.py``. The two are
+analogous in intent (below the cutoff, trust less) but live on
+different scales because their sources differ — don't try to unify the
+numeric values.
 """
 
 from __future__ import annotations
@@ -27,7 +33,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, Tuple
 
 if TYPE_CHECKING:
     from ..models.theme import ContentItem
@@ -38,19 +44,38 @@ POLICY_VERSION: str = "2026.04.13.1"
 
 DEFAULT_TARGET_LANGUAGE: str = "en"
 
-# Below this translation confidence, callers should downgrade the
-# extraction rating (mirrors scoring.py's QUALITY_DOWNGRADE_THRESHOLD
-# convention: below the threshold, trust less).
+# Below this translation confidence (0.0-1.0 scale), callers should
+# downgrade the extraction rating.
 CONFIDENCE_DOWNGRADE_THRESHOLD: float = 0.70
 
 # Sentinel provider values used in translation_metadata when there is
 # no "real" translation to record. Callers can pattern-match on these.
-PROVIDER_IDENTITY: str = "identity"      # source language == target language
+PROVIDER_IDENTITY: str = "identity"        # source language == target language
 PROVIDER_UNAVAILABLE: str = "unavailable"  # translator failed / not configured
+PROVIDER_EMPTY: str = "empty"              # input text was empty — no round-trip made
+
+# Cap the ``reason`` field recorded in unavailable metadata so a huge
+# stack trace can't bloat a JSONB row.
+MAX_REASON_LENGTH: int = 200
 
 
-# Callable shape: (text, source_language, target_language) -> (translated_text, quote)
+# Injected translator contract (kept as a type alias, not a Protocol, to
+# match the ``RateFetcher`` convention in ``fx_service``).
+#
+#   translator(text, source_language, target_language) -> (translated_text, quote)
+#
+# Exceptions propagate out of ``translate_content_item`` which then
+# records ``unavailable`` metadata and resets translated_* to None so
+# the next invocation retries. An empty input should never reach the
+# translator — ``_translate_or_skip_empty`` short-circuits first.
 Translator = Callable[[str, str, str], Tuple[str, "TranslationQuote"]]
+
+
+class ExtractionText(NamedTuple):
+    """Result of :func:`select_extraction_text` — named for readability."""
+    title: str
+    content: str
+    language: str
 
 
 @dataclass(frozen=True)
@@ -79,34 +104,34 @@ class TranslationQuote:
             "translated_at": self.translated_at.isoformat(),
         }
 
+    @staticmethod
+    def identity_metadata(source_language: str, target_language: str) -> dict:
+        """Metadata for content already in the target language (no MT needed)."""
+        return {
+            "provider": PROVIDER_IDENTITY,
+            "source_language": source_language,
+            "target_language": target_language,
+            "model": None,
+            "confidence": 1.0,
+            "translated_at": date.today().isoformat(),
+        }
 
-def identity_metadata(source_language: str, target_language: str) -> dict:
-    """Metadata for content already in the target language (no MT needed)."""
-    return {
-        "provider": PROVIDER_IDENTITY,
-        "source_language": source_language,
-        "target_language": target_language,
-        "model": None,
-        "confidence": 1.0,  # exact copy — perfect "translation"
-        "translated_at": date.today().isoformat(),
-    }
-
-
-def unavailable_metadata(
-    source_language: str,
-    target_language: str,
-    reason: str,
-) -> dict:
-    """Metadata for a failed translation attempt — enables retry next run."""
-    return {
-        "provider": PROVIDER_UNAVAILABLE,
-        "source_language": source_language,
-        "target_language": target_language,
-        "model": None,
-        "confidence": None,
-        "translated_at": date.today().isoformat(),
-        "reason": reason[:200],  # Cap so a huge stack trace can't bloat the row
-    }
+    @staticmethod
+    def unavailable_metadata(
+        source_language: str,
+        target_language: str,
+        reason: str,
+    ) -> dict:
+        """Metadata for a failed translation attempt — enables retry next run."""
+        return {
+            "provider": PROVIDER_UNAVAILABLE,
+            "source_language": source_language,
+            "target_language": target_language,
+            "model": None,
+            "confidence": None,
+            "translated_at": date.today().isoformat(),
+            "reason": reason[:MAX_REASON_LENGTH],
+        }
 
 
 class TranslationService:
@@ -119,11 +144,10 @@ class TranslationService:
       from the same fields.
     - ``translated_title`` present and ``metadata.target_language`` ==
       requested target AND provider != ``"unavailable"`` → cached,
-      no-op. Second call returns immediately.
+      no-op.
     - ``provider == "unavailable"`` → retry. Transient failures
       shouldn't permanently mark a row as un-translatable.
-    - ``force_refresh=True`` → re-translate regardless of cache state
-      (for backfills after a policy-version bump).
+    - ``force_refresh=True`` → re-translate regardless of cache state.
 
     Atomicity: title and content are translated together. If the
     translator fails partway, both translated_* fields are reset to
@@ -153,28 +177,29 @@ class TranslationService:
         if source is None:
             raise ValueError(
                 f"ContentItem {getattr(content_item, 'id', '?')} has no "
-                f"source_language; run detect_and_cache_language (T7.2) first"
+                f"source_language; run detect_and_cache_language first"
             )
 
-        # Identity fast path: source already in target, no MT needed.
         if source == self._target_language:
             return self._write_identity(content_item, source)
 
-        # Cache hit: we've already translated this to the requested target.
-        if not force_refresh and _is_cached_translation(content_item, self._target_language):
+        if not force_refresh and _is_cached_translation(
+            content_item, self._target_language,
+        ):
             return content_item.translation_metadata
 
-        # Invoke the injected translator. Both title and content must
-        # succeed — if either raises, record unavailable and leave
-        # translated_* as None so the next retry can re-attempt.
+        # Atomic: both title and content must succeed, or neither is
+        # written. Any translator exception resets translated_* to None
+        # and records unavailable metadata so the next call retries.
+        # Empty halves skip the translator entirely (no paid round trip).
         try:
-            translated_title, title_quote = self._translator(
-                content_item.title or "", source, self._target_language,
+            translated_title, title_quote = self._translate_or_skip_empty(
+                content_item.title or "", source,
             )
-            translated_content, content_quote = self._translator(
-                content_item.content or "", source, self._target_language,
+            translated_content, content_quote = self._translate_or_skip_empty(
+                content_item.content or "", source,
             )
-        except Exception as exc:  # translator contract is provider-agnostic
+        except Exception as exc:
             logger.warning(
                 "Translation failed for ContentItem %s (%s → %s): %s",
                 getattr(content_item, "id", "?"), source, self._target_language, exc,
@@ -183,26 +208,51 @@ class TranslationService:
                 content_item, source, reason=f"{type(exc).__name__}: {exc}",
             )
 
-        # Use the weaker of the two quote confidences (QA should gate
-        # on the lower-quality half of the row).
-        combined_confidence = _min_optional(
-            title_quote.confidence, content_quote.confidence,
-        )
+        # Merge: take the weaker confidence so QA gates on the lower
+        # half of the row. Skipped halves contribute None, which
+        # ``_min_optional`` treats as "unknown" (not zero).
+        title_conf = title_quote.confidence if title_quote else None
+        content_conf = content_quote.confidence if content_quote else None
+        combined_confidence = _min_optional(title_conf, content_conf)
+
+        # Provider / model come from whichever half actually called the
+        # translator. Both skipped → explicit "empty" provider so
+        # callers can see the stage ran but had no text to translate.
+        carrier = content_quote or title_quote
+        if carrier is not None:
+            provider, model = carrier.provider, carrier.model
+        else:
+            provider, model = PROVIDER_EMPTY, None
+
         merged = TranslationQuote(
             source_language=source,
             target_language=self._target_language,
-            provider=content_quote.provider,
-            model=content_quote.model,
+            provider=provider,
+            model=model,
             confidence=combined_confidence,
-            translated_at=content_quote.translated_at,
+            translated_at=date.today(),
         )
         content_item.translated_title = translated_title
         content_item.translated_content = translated_content
         content_item.translation_metadata = merged.to_metadata()
         return content_item.translation_metadata
 
+    def _translate_or_skip_empty(
+        self, text: str, source: str,
+    ) -> Tuple[str, Optional["TranslationQuote"]]:
+        """Invoke the translator, short-circuiting on empty/whitespace input.
+
+        Returns ``(translated_text, quote_or_None)``. A ``None`` quote
+        signals "no call made" so downstream merging can ignore this
+        half. Saves a paid round-trip on rows where title or content is
+        missing — common at bulk-ingest scale.
+        """
+        if not text.strip():
+            return "", None
+        return self._translator(text, source, self._target_language)
+
     def _write_identity(self, content_item: "ContentItem", source: str) -> dict:
-        meta = identity_metadata(source, self._target_language)
+        meta = TranslationQuote.identity_metadata(source, self._target_language)
         content_item.translated_title = content_item.title
         content_item.translated_content = content_item.content
         content_item.translation_metadata = meta
@@ -211,7 +261,9 @@ class TranslationService:
     def _write_unavailable(
         self, content_item: "ContentItem", source: str, *, reason: str,
     ) -> dict:
-        meta = unavailable_metadata(source, self._target_language, reason)
+        meta = TranslationQuote.unavailable_metadata(
+            source, self._target_language, reason,
+        )
         content_item.translated_title = None
         content_item.translated_content = None
         content_item.translation_metadata = meta
@@ -223,46 +275,45 @@ class TranslationService:
 # ---------------------------------------------------------------------------
 
 
-def select_extraction_text(content_item: "ContentItem") -> Tuple[str, str, str]:
+def select_extraction_text(content_item: "ContentItem") -> ExtractionText:
     """Pick the (title, content, language) tuple for downstream extraction.
 
-    Returns the translated title/content when a usable translation is
-    available; otherwise falls back to the original. The third tuple
-    element is the language the returned text is in (the target
-    language on a translation hit, the source on a fallback). Lets the
-    extraction prompt condition on what it's actually reading.
+    Returns translated title/content when a usable translation is
+    available; otherwise falls back to the original. ``language`` is
+    the language the returned text is in (target on translation hit,
+    source on fallback), so the extraction prompt can condition on it.
     """
     meta = content_item.translation_metadata
     if meta is None:
-        return (content_item.title or "", content_item.content or "", content_item.source_language or "und")
+        return ExtractionText(
+            content_item.title or "",
+            content_item.content or "",
+            content_item.source_language or "und",
+        )
 
     provider = meta.get("provider")
     target = meta.get("target_language") or DEFAULT_TARGET_LANGUAGE
 
-    # Identity path: translated_title mirrors the original; use it so the
-    # call site doesn't need special-case branching.
     if provider == PROVIDER_IDENTITY:
-        return (
+        return ExtractionText(
             content_item.translated_title or content_item.title or "",
             content_item.translated_content or content_item.content or "",
             target,
         )
 
-    # Real translation with populated columns.
     if (
         provider not in (None, PROVIDER_UNAVAILABLE)
         and content_item.translated_title is not None
     ):
-        return (
+        return ExtractionText(
             content_item.translated_title,
             content_item.translated_content or "",
             target,
         )
 
-    # Unavailable / missing: fall back to originals so extraction can
-    # still run, flagged with the source language. Callers should check
-    # provider == "unavailable" to decide whether to downgrade confidence.
-    return (
+    # Unavailable / corrupted / missing translated columns: fall back
+    # to originals with source language tagged so callers can downgrade.
+    return ExtractionText(
         content_item.title or "",
         content_item.content or "",
         content_item.source_language or "und",
@@ -279,15 +330,10 @@ def translation_confidence(content_item: "ContentItem") -> Optional[float]:
 
 
 def should_downgrade_for_translation(content_item: "ContentItem") -> bool:
-    """True when downstream scoring should downgrade this row for low MT confidence.
-
-    Unavailable translations are treated as "below threshold" so
-    extraction rating reflects the missing-text fallback. Identity and
-    sufficiently-confident real translations pass through.
-    """
+    """True when downstream scoring should downgrade this row for low MT confidence."""
     meta = content_item.translation_metadata
     if not meta:
-        return False  # Haven't attempted translation yet — not our call
+        return False
     if meta.get("provider") == PROVIDER_UNAVAILABLE:
         return True
     confidence = translation_confidence(content_item)
@@ -312,6 +358,8 @@ def describe_policy() -> dict:
         "confidence_downgrade_threshold": CONFIDENCE_DOWNGRADE_THRESHOLD,
         "identity_provider": PROVIDER_IDENTITY,
         "unavailable_provider": PROVIDER_UNAVAILABLE,
+        "empty_provider": PROVIDER_EMPTY,
+        "max_reason_length": MAX_REASON_LENGTH,
     }
 
 
@@ -339,7 +387,7 @@ def _is_cached_translation(
 
 
 def _min_optional(a: Optional[float], b: Optional[float]) -> Optional[float]:
-    """``min`` that treats ``None`` as "unknown" — returns the defined value if one is None, else the minimum."""
+    """``min`` that treats ``None`` as "unknown", not zero."""
     if a is None:
         return b
     if b is None:
@@ -353,11 +401,12 @@ __all__ = [
     "CONFIDENCE_DOWNGRADE_THRESHOLD",
     "PROVIDER_IDENTITY",
     "PROVIDER_UNAVAILABLE",
+    "PROVIDER_EMPTY",
+    "MAX_REASON_LENGTH",
     "Translator",
     "TranslationQuote",
     "TranslationService",
-    "identity_metadata",
-    "unavailable_metadata",
+    "ExtractionText",
     "select_extraction_text",
     "translation_confidence",
     "should_downgrade_for_translation",

@@ -9,19 +9,25 @@ import pytest
 
 from app.services.translation_service import (
     CONFIDENCE_DOWNGRADE_THRESHOLD,
+    ExtractionText,
+    MAX_REASON_LENGTH,
+    POLICY_VERSION,
+    PROVIDER_EMPTY,
     PROVIDER_IDENTITY,
     PROVIDER_UNAVAILABLE,
-    POLICY_VERSION,
     TranslationQuote,
     TranslationService,
     describe_policy,
-    identity_metadata,
     policy_version,
     select_extraction_text,
     should_downgrade_for_translation,
     translation_confidence,
-    unavailable_metadata,
 )
+
+
+# Staticmethods on TranslationQuote — aliased for terser test code.
+identity_metadata = TranslationQuote.identity_metadata
+unavailable_metadata = TranslationQuote.unavailable_metadata
 
 
 def _row(
@@ -47,14 +53,12 @@ def _row(
 
 def _make_translator(
     *,
-    title_confidence: float = 0.9,
-    content_confidence: float = 0.85,
+    confidence: float = 0.9,
     provider: str = "deepl",
     model: str = "deepl-v1",
 ):
-    """Deterministic fake translator for tests."""
+    """Deterministic fake translator with a single confidence value."""
     def translator(text, source, target):
-        confidence = title_confidence if len(text) < 50 else content_confidence
         translated = f"[{source}->{target}] {text}"
         quote = TranslationQuote(
             source_language=source,
@@ -103,13 +107,18 @@ class TestSuccessfulTranslation:
     def test_combined_confidence_uses_weaker_signal(self):
         # Title confidence 0.9, content confidence 0.60 → merged = 0.60.
         # QA scoring should gate on the weaker half of the row.
-        svc = TranslationService(
-            _make_translator(title_confidence=0.9, content_confidence=0.60),
-            target_language="en",
-        )
-        row = _row(
-            title="短い", content="長めの本文" * 20, source_language="ja",
-        )
+        def translator_by_length(text, source, target):
+            # Inline: short text gets high confidence, long text gets low.
+            confidence = 0.9 if len(text) < 10 else 0.60
+            quote = TranslationQuote(
+                source_language=source, target_language=target,
+                provider="deepl", model="deepl-v1",
+                confidence=confidence, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(translator_by_length, target_language="en")
+        row = _row(title="短い", content="長めの本文" * 20, source_language="ja")
         meta = svc.translate_content_item(row)
         assert meta["confidence"] == 0.60
 
@@ -219,8 +228,47 @@ class TestFailureAtomicity:
         svc = TranslationService(huge_reason, target_language="en")
         row = _row(title="a", content="b", source_language="ja")
         meta = svc.translate_content_item(row)
-        # Reason string includes "RuntimeError: " prefix then xs, capped at 200.
-        assert len(meta["reason"]) == 200
+        # Reason string includes "RuntimeError: " prefix then xs, capped.
+        assert len(meta["reason"]) == MAX_REASON_LENGTH
+
+
+class TestEmptyInputShortCircuit:
+    """Skip paid round-trips when title or content is empty/whitespace."""
+
+    def test_empty_title_skips_translator_for_title_half(self):
+        calls = []
+
+        def counting(text, src, tgt):
+            calls.append(text)
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="", content="日経平均、続伸", source_language="ja")
+        svc.translate_content_item(row)
+        # Only content was translated — title was empty.
+        assert len(calls) == 1
+        assert calls[0] == "日経平均、続伸"
+        assert row.translated_title == ""  # preserved as empty
+        assert row.translated_content == "[日経平均、続伸]"
+
+    def test_both_empty_records_empty_provider(self):
+        """Both halves skipped → explicit PROVIDER_EMPTY, no translator call."""
+        calls = []
+
+        def counting(text, src, tgt):  # pragma: no cover — must not be called
+            calls.append(text)
+            raise AssertionError("translator should not be called on empty input")
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="", content="  ", source_language="ja")
+        meta = svc.translate_content_item(row)
+        assert calls == []
+        assert meta["provider"] == PROVIDER_EMPTY
+        assert meta["confidence"] is None
 
 
 class TestMissingSourceLanguage:
@@ -274,6 +322,16 @@ class TestSelectExtractionText:
         row = _row(title="日経", content="半導体", source_language="ja")
         title, content, lang = select_extraction_text(row)
         assert (title, content, lang) == ("日経", "半導体", "ja")
+
+    def test_returns_named_tuple_fields(self):
+        # The tuple is an ExtractionText NamedTuple — consumers that use
+        # attribute access should work (not just positional unpacking).
+        row = _row(title="hi", content="there", source_language="en")
+        result = select_extraction_text(row)
+        assert isinstance(result, ExtractionText)
+        assert result.title == "hi"
+        assert result.content == "there"
+        assert result.language == "en"
 
 
 class TestShouldDowngradeForTranslation:
@@ -330,3 +388,5 @@ class TestPolicySurface:
         assert snap["confidence_downgrade_threshold"] == 0.70
         assert snap["identity_provider"] == PROVIDER_IDENTITY
         assert snap["unavailable_provider"] == PROVIDER_UNAVAILABLE
+        assert snap["empty_provider"] == PROVIDER_EMPTY
+        assert snap["max_reason_length"] == MAX_REASON_LENGTH
