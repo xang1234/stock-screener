@@ -432,15 +432,6 @@ class ThemeExtractionService:
                         break
         return matches
 
-    def _validate_ticker(self, ticker: str) -> bool:
-        """Check whether ``ticker`` (assumed already canonical) is a tradable symbol."""
-        if not multi_market.TICKER_SHAPE_RE.match(ticker):
-            return False
-        valid_tickers = self._get_valid_tickers()
-        if not valid_tickers:
-            return False
-        return ticker in valid_tickers
-
     def _gate_ticker(
         self, raw: object, resolver, valid_tickers: set,
     ) -> tuple[Optional[str], Optional[str]]:

@@ -189,13 +189,35 @@ class TestPromptValidatorSynchronization:
     four suffixes the validator advertises."""
 
     def test_prompt_mentions_every_accepted_suffix(self):
+        # Use word-boundary regex rather than substring `in` because the
+        # suffixes are prefix-nested: ``.T`` is a substring of ``.TW``
+        # and ``.TWO``, so ``".T" in prompt`` would false-pass even if
+        # the prompt dropped the literal ``.T`` spec while keeping ``.TW``.
+        import re
         from app.services.theme_extraction_service import EXTRACTION_SYSTEM_PROMPT
         for suffix in [".HK", ".T", ".TW", ".TWO"]:
-            assert suffix in EXTRACTION_SYSTEM_PROMPT, (
-                f"Prompt must document {suffix!r} to stay in sync with validator"
+            pattern = re.compile(re.escape(suffix) + r"\b")
+            assert pattern.search(EXTRACTION_SYSTEM_PROMPT), (
+                f"Prompt must document {suffix!r} as a literal token "
+                f"(not as a prefix of a longer suffix) to stay in sync "
+                f"with the validator contract"
             )
 
     def test_prompt_still_covers_us_markets(self):
         from app.services.theme_extraction_service import EXTRACTION_SYSTEM_PROMPT
         assert "NYSE" in EXTRACTION_SYSTEM_PROMPT
         assert "NASDAQ" in EXTRACTION_SYSTEM_PROMPT
+
+    def test_synchronization_check_rejects_prefix_false_positive(self):
+        # Regression: the previous naive ``suffix in prompt`` test would
+        # pass if ``.T`` was only present as a substring of ``.TW``.
+        # This test confirms the word-boundary regex correctly fails a
+        # prompt that has ``.TW`` but no standalone ``.T``.
+        import re
+        synthetic_prompt = (
+            "Taiwan (TWSE): 4-digit code with ``.TW`` suffix, e.g. 2330.TW"
+        )
+        # Naive substring would wrongly claim .T is documented:
+        assert ".T" in synthetic_prompt  # proves the old style false-positives
+        # Word-boundary regex correctly says no:
+        assert not re.search(r"\.T\b", synthetic_prompt)
