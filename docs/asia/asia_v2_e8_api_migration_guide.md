@@ -111,7 +111,7 @@ When a client sends legacy `universe` on request, the API returns a set of depre
 Primarily a UI change; relevant to API consumers only as the _canonical_ universe-payload shape the project emits.
 
 - Frontend now emits **only** typed `universe_def` on scan creation (no more legacy `universe` strings from the bundled web app).
-- Two-step picker: Market (US/HK/JP/TW/Test) → Scope (All / Exchange / Index).
+- Two-step picker: Market/Mode (US, HK, JP, TW, or Test) → Scope (All / Exchange / Index). "Test" is a universe mode, not a `Market` enum value.
 - Universe counts in the UI are sourced from `GET /api/v1/universe/stats` → `by_market.{market}.counts.active` and `by_exchange`/`sp500` (not hard-coded), so third-party UIs should do the same to avoid drift.
 
 Asia index membership (HSI, Nikkei 225, TWSE top indices) is intentionally deferred — tracked in `StockScreenClaude-7hwc`. Until then, HK/JP/TW clients should use `{"type": "market", "market": "HK"}` (and equivalents), not attempt `index`-type universes.
@@ -128,7 +128,7 @@ Five new nullable fields on every row (`schemas/scanning.py:189-197`):
 
 | Field | Type | Source | Meaning |
 |---|---|---|---|
-| `market` | `"US" \| "HK" \| "JP" \| "TW" \| null` | `stock_universe` | Market identity |
+| `market` | `str \| null` | `stock_universe` | Market identity; in practice one of `US`/`HK`/`JP`/`TW` (see `Market` enum in `schemas/universe.py`). The response schema is plain `Optional[str]` — do **not** strict-validate against the enum on the client side. |
 | `exchange` | `str \| null` | `stock_universe` | Native exchange code |
 | `currency` | `str \| null` | `stock_universe` | Local currency (HKD, JPY, TWD, USD) |
 | `market_cap_usd` | `float \| null` | `stock_fundamentals` | FX-normalized market cap |
@@ -251,7 +251,7 @@ Watchlist endpoints (`POST /api/v1/user-watchlists/{id}/items`):
 
 ### Bulk add silently drops invalid entries
 
-`POST /api/v1/user-watchlists/{id}/items/bulk` returns only the symbols that were both format-valid and present in the active universe. Invalid/unknown entries are dropped without error — diff the request and response arrays client-side if you need a rejected-set.
+`POST /api/v1/user-watchlists/{id}/items/bulk` returns only the symbols that were format-valid, present in the active universe, **and** not already on the watchlist. Entries failing any of those checks are dropped without error — diff the request against the response client-side if you need a rejected-set, but note the dropped bucket conflates "invalid format", "unknown symbol", and "already in watchlist". There is no per-reason error channel.
 
 ### Out of scope
 
@@ -264,7 +264,7 @@ Theme-extraction LLM ticker validation (`multi_market_ticker_validator`) keeps i
 For any client integrating against scans, watchlists, or theme content:
 
 - [ ] **T1 response:** replace reads of `scan.universe` / `scan.universe_type` / `scan.universe_market` / `scan.universe_exchange` / `scan.universe_index` / `scan.universe_symbols_count` with `scan.universe_def.*`. (Already breaking as of 2026-04-13.)
-- [ ] **T1 request (by 2026-10-31):** emit `universe_def` instead of `universe` string. Verify zero traffic on `universe_compat:legacy_total` Redis counter for your client.
+- [ ] **T1 request (by 2026-10-31):** emit `universe_def` instead of `universe` string. Self-verify by grepping your outbound request bodies for a bare `"universe":` key with no adjacent `"universe_def":`. Server-side, operators will see `universe_compat:legacy_total` (global across all clients) trend toward zero — that is an ops signal, not a per-client self-check.
 - [ ] **T3:** treat `market_cap` / `volume` as local-currency; use `market_cap_usd` / `adv_usd` for cross-market comparison. Update any CSV header parsers that matched `"Market Cap"` exactly (now `"Market Cap (local)"`).
 - [ ] **T4:** when `source_language != null` and `source_language != "en"`, render the translated field with a language marker. Parse `translation_metadata` with extra-keys-tolerant validation.
 - [ ] **T5:** accept `.HK`/`.T`/`.TW`/`.TWO` suffixes in client-side symbol inputs. Handle `422` as malformed-input vs. `400`/`404` as not-found. Remove any client-side regex narrower than `^[A-Z0-9][A-Z0-9.\-]{0,19}$`.
