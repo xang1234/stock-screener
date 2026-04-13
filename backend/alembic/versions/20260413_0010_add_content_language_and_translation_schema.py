@@ -43,10 +43,14 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
+    # Partial index: only Japanese/Chinese/etc. rows are worth indexing.
+    # Pre-backfill the whole table is NULL, so an unconditional B-tree would
+    # store ~millions of NULL entries that no query will ever hit.
     op.create_index(
         "idx_content_items_source_language",
         "content_items",
         ["source_language"],
+        postgresql_where=sa.text("source_language IS NOT NULL"),
     )
 
     # --- theme_mentions: translated derivative of raw_theme / excerpt ---

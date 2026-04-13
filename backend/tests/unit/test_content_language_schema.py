@@ -1,9 +1,4 @@
-"""Unit tests for T7.1 — content language and translation schema fields.
-
-Pins the model/schema contract so the downstream multilingual stages
-(T7.2 language detection, T7.3 translation) can write to these columns
-without surprise. Schema-only bead: no ingestion service changes here.
-"""
+"""Schema tests for content language / translation columns (T7.1)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,7 +7,32 @@ from app.models.theme import ContentItem, ThemeMention
 from app.schemas.theme import (
     ContentItemWithThemesResponse,
     ThemeMentionDetailResponse,
+    TranslationMetadata,
 )
+
+
+class TestTranslationMetadataShape:
+    """Pin the typed replay-snapshot model so T7.2 / T7.3 writers agree."""
+
+    def test_all_fields_optional(self):
+        # Empty snapshot must round-trip (detection-only path in T7.2).
+        meta = TranslationMetadata()
+        dumped = meta.model_dump()
+        assert dumped == {
+            "provider": None, "model": None, "source_language": None,
+            "target_language": None, "confidence": None, "translated_at": None,
+        }
+
+    def test_extra_fields_allowed(self):
+        # Forward-compat: future T7.x may add keys without a schema bump.
+        meta = TranslationMetadata(
+            provider="deepl",
+            source_language="ja",
+            target_language="en",
+            extra_field="some future value",
+        )
+        dumped = meta.model_dump()
+        assert dumped["extra_field"] == "some future value"
 
 
 class TestContentItemTranslationFields:
