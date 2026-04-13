@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 def _scan_results_query(session: Session, scan_id: str):
     """Base query for scan results that joins market-identity + USD-normalised fields.
 
-    Every result-producing read path in this repository goes through this helper
-    so that (a) ``_COLUMN_MAP`` entries for joined columns (market, exchange,
-    market_cap_usd, adv_usd) are always resolvable during filter/sort, and
-    (b) HTTP response shaping can populate those fields without extra queries.
+    Used by every read path that needs to *materialise* result rows; the joined
+    columns (market, exchange, currency, market_cap_usd, adv_usd) are SELECTed
+    so HTTP response shaping can populate them without extra queries. Symbol-only
+    paths use ``_scan_results_symbol_query`` instead — same joins, lean SELECT.
     """
     return (
         session.query(
@@ -42,6 +42,23 @@ def _scan_results_query(session: Session, scan_id: str):
             StockFundamental.market_cap_usd,
             StockFundamental.adv_usd,
         )
+        .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
+        .outerjoin(StockFundamental, ScanResult.symbol == StockFundamental.symbol)
+        .filter(ScanResult.scan_id == scan_id)
+    )
+
+
+def _scan_results_symbol_query(session: Session, scan_id: str):
+    """Symbol-only variant of ``_scan_results_query``.
+
+    Applies the same StockUniverse + StockFundamental outer joins so filters/
+    sorts on joined columns still resolve through ``_COLUMN_MAP``, but selects
+    only ``ScanResult.symbol`` to avoid hydrating full ORM rows for symbol-list
+    endpoints. Callers that need ``ScanResult.details`` (Python-sort fields)
+    must use the row-fetching variant instead.
+    """
+    return (
+        session.query(ScanResult.symbol)
         .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
         .outerjoin(StockFundamental, ScanResult.symbol == StockFundamental.symbol)
         .filter(ScanResult.scan_id == scan_id)
@@ -388,16 +405,28 @@ class SqlScanResultRepository(ScanResultRepository):
         page: PageSpec | None = None,
     ) -> tuple[tuple[str, ...], int]:
         """Return filtered/sorted symbols for navigation."""
-        q = _scan_results_query(self._session, scan_id)
+        # Python-sort fields read ScanResult.details, so we need the full row.
+        if scan_result_query.requires_python_sort(sort.field):
+            q = _scan_results_query(self._session, scan_id)
+            q = apply_filters(q, filters)
+            if page is None:
+                rows = apply_sort_all(q, sort)
+                symbols = tuple(row[0].symbol for row in rows)
+                return symbols, len(symbols)
+            rows, total, _ = apply_sort_and_paginate(q, sort, page)
+            symbols = tuple(row[0].symbol for row in rows)
+            return symbols, total
+
+        q = _scan_results_symbol_query(self._session, scan_id)
         q = apply_filters(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)
-            symbols = tuple(row[0].symbol for row in rows)
+            symbols = tuple(symbol for (symbol,) in rows)
             return symbols, len(symbols)
 
         rows, total, _ = apply_sort_and_paginate(q, sort, page)
-        symbols = tuple(row[0].symbol for row in rows)
+        symbols = tuple(symbol for (symbol,) in rows)
         return symbols, total
 
     def query_all(

@@ -44,7 +44,8 @@ def _feature_results_query(session: Session, run_id: int):
 
     Mirrors ``_scan_results_query`` in scan_result_repo so feature-store-backed
     scans expose the same `market`, `exchange`, `currency`, `market_cap_usd`,
-    and `adv_usd` columns to filtering, sorting, and HTTP serialisation.
+    and `adv_usd` columns to filtering, sorting, and HTTP serialisation. The
+    symbol-only variant is ``_feature_results_symbol_query``.
     """
     return (
         session.query(
@@ -56,6 +57,17 @@ def _feature_results_query(session: Session, run_id: int):
             StockFundamental.market_cap_usd,
             StockFundamental.adv_usd,
         )
+        .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
+        .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
+        .filter(StockFeatureDaily.run_id == run_id)
+    )
+
+
+def _feature_results_symbol_query(session: Session, run_id: int):
+    """Symbol-only variant of ``_feature_results_query`` (see analogous helper
+    in scan_result_repo for rationale)."""
+    return (
+        session.query(StockFeatureDaily.symbol)
         .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
         .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
         .filter(StockFeatureDaily.run_id == run_id)
@@ -495,16 +507,16 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         if run is None:
             raise EntityNotFoundError("FeatureRun", run_id)
 
-        q = _feature_results_query(self._session, run_id)
+        q = _feature_results_symbol_query(self._session, run_id)
         q = apply_filters(q, filters)
 
         if page is None:
             rows = apply_sort_all(q, sort)
-            symbols = tuple(row[0].symbol for row in rows)
+            symbols = tuple(symbol for (symbol,) in rows)
             return symbols, len(symbols)
 
         rows, total = apply_sort_and_paginate(q, sort, page)
-        symbols = tuple(row[0].symbol for row in rows)
+        symbols = tuple(symbol for (symbol,) in rows)
         return symbols, total
 
     def get_setup_payload_for_run(self, run_id: int, symbol: str) -> dict | None:

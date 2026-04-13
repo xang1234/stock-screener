@@ -126,105 +126,79 @@ class TestScanResultItemMapping:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-class TestScanFilterParamsUSDPlumbing:
-    async def _setup(self):
-        scan_repo = FakeScanRepository()
-        scan = _scan()
-        scan_repo.scans["scan-1"] = scan
-        scan_repo.rows = [scan]
-        result_repo = FakeScanResultRepository(items=[make_domain_item("0700.HK")])
-        uow = _FakeUoW(scans=scan_repo, scan_results=result_repo)
-        app.dependency_overrides[get_uow] = lambda: uow
-        return result_repo
-
-    async def _teardown(self):
+@pytest_asyncio.fixture
+async def wired_repo():
+    scan_repo = FakeScanRepository()
+    scan = _scan()
+    scan_repo.scans["scan-1"] = scan
+    scan_repo.rows = [scan]
+    result_repo = FakeScanResultRepository(items=[make_domain_item("0700.HK")])
+    uow = _FakeUoW(scans=scan_repo, scan_results=result_repo)
+    app.dependency_overrides[get_uow] = lambda: uow
+    try:
+        yield result_repo
+    finally:
         app.dependency_overrides.pop(get_uow, None)
 
-    async def test_market_cap_usd_min_and_max_become_range_filter(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get(
-                "/api/v1/scans/scan-1/results",
-                params={"min_market_cap_usd": 1_000_000_000, "max_market_cap_usd": 50_000_000_000},
-            )
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            ranges = {rf.field: rf for rf in spec.filters.range_filters}
-            assert "market_cap_usd" in ranges
-            assert ranges["market_cap_usd"].min_value == 1_000_000_000
-            assert ranges["market_cap_usd"].max_value == 50_000_000_000
-        finally:
-            await self._teardown()
 
-    async def test_adv_usd_min_and_max_become_range_filter(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get(
-                "/api/v1/scans/scan-1/results",
-                params={"min_adv_usd": 2_500_000, "max_adv_usd": 100_000_000},
-            )
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            ranges = {rf.field: rf for rf in spec.filters.range_filters}
-            assert "adv_usd" in ranges
-            assert ranges["adv_usd"].min_value == 2_500_000
-            assert ranges["adv_usd"].max_value == 100_000_000
-        finally:
-            await self._teardown()
+@pytest.mark.asyncio
+class TestScanFilterParamsUSDPlumbing:
+    async def test_market_cap_usd_min_and_max_become_range_filter(self, client, wired_repo):
+        resp = await client.get(
+            "/api/v1/scans/scan-1/results",
+            params={"min_market_cap_usd": 1_000_000_000, "max_market_cap_usd": 50_000_000_000},
+        )
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        assert ranges["market_cap_usd"].min_value == 1_000_000_000
+        assert ranges["market_cap_usd"].max_value == 50_000_000_000
 
-    async def test_legacy_local_currency_filter_still_works(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get(
-                "/api/v1/scans/scan-1/results",
-                params={"min_market_cap": 2_000_000_000},
-            )
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            ranges = {rf.field: rf for rf in spec.filters.range_filters}
-            assert "market_cap" in ranges
-            assert ranges["market_cap"].min_value == 2_000_000_000
-        finally:
-            await self._teardown()
+    async def test_adv_usd_min_and_max_become_range_filter(self, client, wired_repo):
+        resp = await client.get(
+            "/api/v1/scans/scan-1/results",
+            params={"min_adv_usd": 2_500_000, "max_adv_usd": 100_000_000},
+        )
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        assert ranges["adv_usd"].min_value == 2_500_000
+        assert ranges["adv_usd"].max_value == 100_000_000
 
-    async def test_markets_param_becomes_categorical_filter_uppercased(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get(
-                "/api/v1/scans/scan-1/results",
-                params={"markets": "us,hk,JP"},
-            )
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            cats = {cf.field: cf for cf in spec.filters.categorical_filters}
-            assert "market" in cats
-            assert cats["market"].values == ("US", "HK", "JP")
-        finally:
-            await self._teardown()
+    async def test_legacy_local_currency_filter_still_works(self, client, wired_repo):
+        resp = await client.get(
+            "/api/v1/scans/scan-1/results",
+            params={"min_market_cap": 2_000_000_000},
+        )
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        ranges = {rf.field: rf for rf in spec.filters.range_filters}
+        assert ranges["market_cap"].min_value == 2_000_000_000
 
-    async def test_markets_param_ignores_blank_entries(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get(
-                "/api/v1/scans/scan-1/results",
-                params={"markets": " us , , hk "},
-            )
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            cats = {cf.field: cf for cf in spec.filters.categorical_filters}
-            assert cats["market"].values == ("US", "HK")
-        finally:
-            await self._teardown()
+    async def test_markets_param_becomes_categorical_filter_uppercased(self, client, wired_repo):
+        resp = await client.get(
+            "/api/v1/scans/scan-1/results",
+            params={"markets": "us,hk,JP"},
+        )
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        cats = {cf.field: cf for cf in spec.filters.categorical_filters}
+        assert cats["market"].values == ("US", "HK", "JP")
 
-    async def test_no_usd_filters_means_no_usd_range_added(self, client):
-        result_repo = await self._setup()
-        try:
-            resp = await client.get("/api/v1/scans/scan-1/results")
-            assert resp.status_code == 200
-            spec = result_repo.last_query_args["spec"]
-            fields = {rf.field for rf in spec.filters.range_filters}
-            assert "market_cap_usd" not in fields
-            assert "adv_usd" not in fields
-        finally:
-            await self._teardown()
+    async def test_markets_param_ignores_blank_entries(self, client, wired_repo):
+        resp = await client.get(
+            "/api/v1/scans/scan-1/results",
+            params={"markets": " us , , hk "},
+        )
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        cats = {cf.field: cf for cf in spec.filters.categorical_filters}
+        assert cats["market"].values == ("US", "HK")
+
+    async def test_no_usd_filters_means_no_usd_range_added(self, client, wired_repo):
+        resp = await client.get("/api/v1/scans/scan-1/results")
+        assert resp.status_code == 200
+        spec = wired_repo.last_query_args["spec"]
+        fields = {rf.field for rf in spec.filters.range_filters}
+        assert "market_cap_usd" not in fields
+        assert "adv_usd" not in fields
