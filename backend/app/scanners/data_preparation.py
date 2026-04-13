@@ -189,27 +189,44 @@ class DataPreparationLayer:
 
         return normalized
 
-    def _attach_market_rs_universe_performances(
+    def _detect_and_set_mixed_market_flag(
         self,
         results: dict[str, StockData],
     ) -> None:
-        items = list(results.values())
-        market_universe = self._compute_market_rs_universe_performances(items)
-        # Single pass: attach per-market RS universe while detecting whether
-        # the scan spans >1 market. The mixed-market flag must be identical
-        # across all items (stable policy — see mixed_market_policy).
+        """Set ``is_mixed_market`` on every item based on the scan universe.
+
+        Called unconditionally for every bulk scan so that cap/volume
+        filters in the custom scanner can apply USD normalization even
+        when ``needs_benchmark`` is False (i.e. no RS filter is enabled).
+        """
         seen_market: Optional[str] = None
         mixed = False
-        for item in items:
+        for item in results.values():
             key = (item.market or "").strip().upper() or "US"
-            item.rs_universe_performances = market_universe.get(key, {})
             if not mixed:
                 if seen_market is None:
                     seen_market = key
                 elif key != seen_market:
                     mixed = True
-        for item in items:
+        for item in results.values():
             item.is_mixed_market = mixed
+
+    def _attach_market_rs_universe_performances(
+        self,
+        results: dict[str, StockData],
+    ) -> None:
+        """Attach per-market RS universe performance lists and set mixed-market flag.
+
+        Requires benchmark data on each item (only meaningful when
+        ``needs_benchmark`` is True). ``_detect_and_set_mixed_market_flag``
+        must already have been called so the flag is correct regardless of
+        whether this method runs.
+        """
+        items = list(results.values())
+        market_universe = self._compute_market_rs_universe_performances(items)
+        for item in items:
+            key = (item.market or "").strip().upper() or "US"
+            item.rs_universe_performances = market_universe.get(key, {})
 
     def _is_transient(self, exc: Exception) -> bool:
         """Classify whether an exception is transient (worth retrying)."""
@@ -616,6 +633,10 @@ class DataPreparationLayer:
 
         logger.info(f"Bulk data preparation completed for {len(results)} symbols")
 
+        if results:
+            # Always detect mixed-market so cap/volume filters use USD columns
+            # even when no RS filter is requested (needs_benchmark=False).
+            self._detect_and_set_mixed_market_flag(results)
         if requirements.needs_benchmark and results:
             self._attach_market_rs_universe_performances(results)
 

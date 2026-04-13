@@ -106,9 +106,9 @@ class TestUSParityMixedMarketPolicy:
         assert adv == pytest.approx(1_000_000)
 
     def test_scanner_us_only_marks_not_mixed(self):
-        # DataPreparationLayer._attach_market_rs_universe_performances
-        # on a pure-US result set must leave every item with
-        # is_mixed_market=False (pre-E6 contract).
+        # _detect_and_set_mixed_market_flag runs unconditionally (even
+        # when needs_benchmark=False) and must mark pure-US scans as
+        # is_mixed_market=False (pre-E6 parity contract).
         prep = DataPreparationLayer.__new__(DataPreparationLayer)
         results = {
             s: StockData(
@@ -119,7 +119,7 @@ class TestUSParityMixedMarketPolicy:
             )
             for s in ("AAPL", "MSFT", "NVDA")
         }
-        prep._attach_market_rs_universe_performances(results)
+        prep._detect_and_set_mixed_market_flag(results)
         assert all(item.is_mixed_market is False for item in results.values())
 
 
@@ -241,7 +241,7 @@ class TestNonUSMixedMarketPolicy:
                 market="HK",
             ),
         }
-        prep._attach_market_rs_universe_performances(results)
+        prep._detect_and_set_mixed_market_flag(results)
         assert all(item.is_mixed_market is True for item in results.values())
 
 

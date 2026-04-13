@@ -164,8 +164,8 @@ class TestDataPreparationSetsFlag:
                 market="HK",
             ),
         }
-        # The RS computation short-circuits on empty price data; just exercise the flag path.
-        prep._attach_market_rs_universe_performances(results)
+        # Flag is set by _detect_and_set_mixed_market_flag (called unconditionally).
+        prep._detect_and_set_mixed_market_flag(results)
         assert results["AAPL"].is_mixed_market is True
         assert results["0700.HK"].is_mixed_market is True
 
@@ -187,6 +187,6 @@ class TestDataPreparationSetsFlag:
                 market=None,  # legacy — treated as US
             ),
         }
-        prep._attach_market_rs_universe_performances(results)
+        prep._detect_and_set_mixed_market_flag(results)
         assert results["AAPL"].is_mixed_market is False
         assert results["MSFT"].is_mixed_market is False
