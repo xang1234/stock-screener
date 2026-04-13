@@ -21,6 +21,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import RSSparkline from './RSSparkline';
 import PriceSparkline from './PriceSparkline';
+import FieldAvailabilityChip from './FieldAvailabilityChip';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import {
   getStageColor,
@@ -133,8 +134,12 @@ const VirtualTableRow = memo(function VirtualTableRow({
         </TableCell>
       )}
 
-      <TableCell sx={{ fontWeight: 600, width: 65, minWidth: 65 }}>
+      <TableCell sx={{ fontWeight: 600, width: 65, minWidth: 65, whiteSpace: 'nowrap' }}>
         {row.symbol}
+        <FieldAvailabilityChip
+          fieldAvailability={row.field_availability}
+          growthMetricBasis={row.growth_metric_basis}
+        />
       </TableCell>
 
       <TableCell align="center" sx={{ p: '4px', width: 110, minWidth: 110 }}>

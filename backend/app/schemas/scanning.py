@@ -5,7 +5,7 @@ paginated results, filter options, and score explanations.
 """
 
 from datetime import datetime
-from typing import Any, List, Optional, Self
+from typing import Any, Dict, List, Optional, Self
 
 from pydantic import BaseModel, Field
 
@@ -196,6 +196,15 @@ class ScanResultItem(BaseModel):
     market_cap_usd: Optional[float] = None
     adv_usd: Optional[float] = None
 
+    # Data-availability transparency (T7, E8). ``field_availability`` merges
+    # ownership/sentiment graceful-degrade (T5.6) and growth-cadence fallback
+    # (T5.7) so a single dict carries every "why is this null" signal per row.
+    # Only non-available fields get entries — an empty/None value means
+    # "nothing to surface".
+    field_availability: Optional[Dict[str, Dict[str, Any]]] = None
+    growth_reporting_cadence: Optional[str] = None
+    growth_metric_basis: Optional[str] = None
+
     @classmethod
     def from_domain(
         cls,
@@ -303,6 +312,10 @@ class ScanResultItem(BaseModel):
             currency=ef.get("currency"),
             market_cap_usd=ef.get("market_cap_usd"),
             adv_usd=ef.get("adv_usd"),
+            # Data-availability transparency (T8.7)
+            field_availability=ef.get("field_availability"),
+            growth_reporting_cadence=ef.get("growth_reporting_cadence"),
+            growth_metric_basis=ef.get("growth_metric_basis"),
         )
 
 

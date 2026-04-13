@@ -3,7 +3,7 @@
 - Date: 2026-04-14
 - Scope: `StockScreenClaude-asia.8` (E8 API and Frontend Multi-Market Productization)
 - Audience: external API consumers + internal rollout reviewers (`StockScreenClaude-asia.11.*`)
-- Covers: T1 (typed `universe_def`), T2 (frontend selector), T3 (market/USD fields), T4 (translation metadata), T5 (suffixed-ticker symbol format)
+- Covers: T1 (typed `universe_def`), T2 (frontend selector), T3 (market/USD fields), T4 (translation metadata), T5 (suffixed-ticker symbol format), T7 (data-availability transparency)
 - Cross-references: [Legacy universe compat + deprecation policy](./asia_v2_legacy_universe_compat_deprecation_policy.md), [Flag matrix + rollback runbook](./asia_v2_flag_matrix_and_rollback_runbook.md)
 
 ## Goal
@@ -28,7 +28,7 @@ All E8 changes share a single sunset date (2026-10-31) to keep the client integr
 |---|---|---|
 | **Hard break (already shipped)** | Response fields removed; consumers must migrate before next deploy or UI breaks. | T1 `ScanListItem` response shape |
 | **Soft break (validation tightened)** | Previously-tolerated malformed input now returns `422` instead of reaching provider/DB. | T5 stock detail + watchlist endpoints |
-| **Additive** | New nullable response fields and new optional query params; old integrations keep working with `null`/defaults. | T3 scan result fields + USD filters, T4 translation metadata, T1 request-side `universe_def` |
+| **Additive** | New nullable response fields and new optional query params; old integrations keep working with `null`/defaults. | T3 scan result fields + USD filters, T4 translation metadata, T1 request-side `universe_def`, T7 availability metadata |
 
 ---
 
@@ -259,6 +259,68 @@ Theme-extraction LLM ticker validation (`multi_market_ticker_validator`) keeps i
 
 ---
 
+## T7 — Data-Availability Transparency on Scan Rows
+
+**Status: shipped 2026-04-14 (`StockScreenClaude-asia.8.7`).**
+
+Additive nullable fields on `ScanResultItem` that tell a client *why* a value is `null` or whether it was computed from a fallback path, so cross-market comparisons can be qualified rather than silently misinterpreted.
+
+### Additive response fields on `ScanResultItem`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `field_availability` | `dict[field_name, {status, reason_code, support_state, cadence?}] \| null` | Merged dict of ownership/sentiment (T5.6) and growth-cadence (T5.7) availability entries. Only non-available fields appear; empty/null means "nothing to surface". |
+| `growth_reporting_cadence` | `str \| null` | One of `quarterly`, `semiannual`, `annual`, `unknown`, `insufficient_history`. |
+| `growth_metric_basis` | `str \| null` | One of `quarterly_qoq`, `comparable_period_yoy`, `unavailable`. Tells clients whether `eps_growth_qq` / `sales_growth_qq` are genuine QoQ or a comparable-period-YoY fallback. |
+
+### Status values and reason codes
+
+`status` is one of: `available`, `unavailable`, `unsupported`, `missing`, `computed`. `reason_code` carries the verbose internal identifier from `app/services/field_capability_registry.py` + `app/services/growth_cadence_service.py`:
+
+| Reason code | When it fires |
+|---|---|
+| `unsupported_market_policy_excludes_canonical_provider` | Field's canonical provider isn't in the market's policy chain (e.g. finviz for HK). |
+| `unsupported_non_us_ownership_sentiment_data_unavailable` | Provider is in the chain but data is absent for the market (HK/JP/TW ownership gaps). |
+| `missing_supported_field_value` | Provider chain supports it, data just absent for this row. |
+| `insufficient_history` | Growth fields; fundamentals statement history too short to compute either QoQ or comparable YoY. |
+| `comparable_period_yoy_fallback` | `eps_growth_qq` / `sales_growth_qq` carry comparable-period YoY values for markets where QoQ isn't the primary cadence. Status is `computed`, not `unavailable`. |
+
+### Example — HK row with ownership gaps and semi-annual cadence
+
+```json
+{
+  "symbol": "0700.HK",
+  "eps_growth_qq": 12.4,
+  "growth_reporting_cadence": "semiannual",
+  "growth_metric_basis": "comparable_period_yoy",
+  "field_availability": {
+    "institutional_ownership": {
+      "status": "unsupported",
+      "reason_code": "unsupported_market_policy_excludes_canonical_provider",
+      "support_state": "unsupported"
+    },
+    "eps_growth_qq": {
+      "status": "computed",
+      "reason_code": "comparable_period_yoy_fallback",
+      "support_state": "computed",
+      "cadence": "semiannual"
+    }
+  }
+}
+```
+
+### CSV export columns
+
+Export adds three columns: `Growth Metric Basis`, `Growth Reporting Cadence`, and `Unavailable Fields` (pipe-delimited `field:reason_code` pairs; empty for rows with nothing to surface).
+
+### Client action
+
+- Read internal reason codes as stable opaque strings; do **not** parse them as English. The verbose naming is intentional — stability over brevity.
+- When `field_availability[X].status === "computed"` (not "unavailable"), the corresponding value is present and usable but was synthesized from a fallback — surface that to users rather than treating it as a clean supported value.
+- Don't validate `field_availability[X]` against a strict schema; entries may grow fields (the `cadence` key, for example, was added in this bead). Treat as extra-keys-allowed.
+
+---
+
 ## Client Adoption Checklist
 
 For any client integrating against scans, watchlists, or theme content:
@@ -268,12 +330,13 @@ For any client integrating against scans, watchlists, or theme content:
 - [ ] **T3:** treat `market_cap` / `volume` as local-currency; use `market_cap_usd` / `adv_usd` for cross-market comparison. Update any CSV header parsers that matched `"Market Cap"` exactly (now `"Market Cap (local)"`).
 - [ ] **T4:** when `source_language != null` and `source_language != "en"`, render the translated field with a language marker. Parse `translation_metadata` with extra-keys-tolerant validation.
 - [ ] **T5:** accept `.HK`/`.T`/`.TW`/`.TWO` suffixes in client-side symbol inputs. Handle `422` as malformed-input vs. `400`/`404` as not-found. Remove any client-side regex narrower than `^[A-Z0-9][A-Z0-9.\-]{0,19}$`.
+- [ ] **T7:** if rendering non-US rows, surface `field_availability` entries so users can distinguish "unsupported" (policy-excluded) from "missing" (row-specific) from "computed" (fallback path). Don't infer "unavailable" just from a `null` cell — check `field_availability[field]` first. Spreadsheet downstream: parse the `Unavailable Fields` CSV column (pipe-delimited) if rendering warnings in Excel.
 
 ## Rollout Cross-References
 
 - Per-market UI/API exposure is gated by `asia_ui_exposure_<market>_enabled` — when a market's flag is off, its universe options are absent from selectors and API responses omit that market's metadata. See [flag matrix + rollback runbook §Flag Taxonomy](./asia_v2_flag_matrix_and_rollback_runbook.md#flag-taxonomy).
 - Dress-rehearsal gates that must pass before re-enabling: `StockScreenClaude-asia.11.*` — pass/fail criteria are formalised in [ASIA v2 Objective Launch-Gate Charter](./asia_v2_launch_gate_charter.md). This guide provides the client-migration evidence those gates consume.
-- Unsupported-field transparency surfaces (client-facing reason codes when data absent): tracked in `StockScreenClaude-asia.8.7`.
+- Unsupported-field transparency surfaces (client-facing reason codes when data absent): **shipped** in `StockScreenClaude-asia.8.7` — see T7 above.
 
 ## Changelog
 
@@ -285,3 +348,4 @@ For any client integrating against scans, watchlists, or theme content:
 | 2026-04-13 | T4 shipped: translation metadata on content + mention responses | `StockScreenClaude-asia.8.4` |
 | 2026-04-14 | T5 shipped: uniform symbol-format validation across stock + watchlist endpoints | `StockScreenClaude-asia.8.5` |
 | 2026-04-14 | This guide published | `StockScreenClaude-asia.8.6` |
+| 2026-04-14 | T7 shipped: `field_availability` + growth-cadence metadata on scan rows; CSV transparency columns; UI chip | `StockScreenClaude-asia.8.7` |

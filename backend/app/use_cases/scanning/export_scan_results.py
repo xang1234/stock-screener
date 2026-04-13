@@ -130,7 +130,29 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     # Other
     ("IPO Date", lambda item: item.extended_fields.get("ipo_date")),
     ("Screeners Run", lambda item: item.screeners_run),
+    # Data-availability transparency (T8.7)
+    ("Growth Metric Basis", lambda item: item.extended_fields.get("growth_metric_basis")),
+    ("Growth Reporting Cadence", lambda item: item.extended_fields.get("growth_reporting_cadence")),
+    ("Unavailable Fields", lambda item: _format_unavailable_fields(item.extended_fields.get("field_availability"))),
 ]
+
+
+def _format_unavailable_fields(field_availability: Any) -> str:
+    """Render the field_availability dict as ``field:reason_code`` pipe-list.
+
+    Scan responses carry the full dict, but spreadsheet users need a flat
+    scannable column. Skip when empty so US rows (no transparency entries)
+    don't get a noisy literal "None".
+    """
+    if not isinstance(field_availability, dict) or not field_availability:
+        return ""
+    pairs = []
+    for field, entry in sorted(field_availability.items()):
+        if not isinstance(entry, dict):
+            continue
+        reason = entry.get("reason_code") or entry.get("status") or ""
+        pairs.append(f"{field}:{reason}" if reason else field)
+    return " | ".join(pairs)
 
 
 # ---------------------------------------------------------------------------

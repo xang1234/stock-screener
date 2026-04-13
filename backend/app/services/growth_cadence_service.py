@@ -199,3 +199,59 @@ def compute_cadence_aware_growth(
     # them. Comparable-period values remain available via *_yy fields.
     result["growth_metric_basis"] = BASIS_UNAVAILABLE
     return result
+
+
+REASON_INSUFFICIENT_HISTORY = "insufficient_history"
+REASON_COMPARABLE_YOY_FALLBACK = "comparable_period_yoy_fallback"
+
+_GROWTH_FIELDS_AFFECTED_BY_CADENCE: Tuple[str, ...] = (
+    "eps_growth_qq",
+    "sales_growth_qq",
+)
+
+
+def derive_growth_availability(
+    growth_metric_basis: Optional[str],
+    growth_reporting_cadence: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Emit ``field_availability`` entries for growth fields based on cadence state.
+
+    Mirrors :func:`field_capability_registry.derive_ownership_sentiment_availability`
+    but for growth metrics, so a single merged ``field_availability`` dict on the
+    scan-result response can carry both concerns.
+
+    Rules:
+        - ``BASIS_UNAVAILABLE``: QoQ growth fields are unavailable; reason is
+          ``insufficient_history`` (the only way we land here is either a
+          too-short statement history or a market whose cadence isn't QoQ
+          and isn't in the comparable-period primary set).
+        - ``BASIS_COMPARABLE_YOY``: the QoQ fields carry a comparable-period
+          YoY fallback, not genuine QoQ. Flag ``computed`` so clients can
+          surface the synthesis (e.g. show a "computed" chip).
+        - ``BASIS_QOQ`` / ``None``: empty dict — normal case needs no entry.
+
+    Only emits entries for non-available states to keep the response dict
+    compact; callers merging with the ownership helper should filter that
+    output similarly so a "no entries" dict means "nothing to surface".
+    """
+    if growth_metric_basis == BASIS_UNAVAILABLE:
+        return {
+            field: {
+                "status": "unavailable",
+                "reason_code": REASON_INSUFFICIENT_HISTORY,
+                "support_state": "unsupported",
+                "cadence": growth_reporting_cadence,
+            }
+            for field in _GROWTH_FIELDS_AFFECTED_BY_CADENCE
+        }
+    if growth_metric_basis == BASIS_COMPARABLE_YOY:
+        return {
+            field: {
+                "status": "computed",
+                "reason_code": REASON_COMPARABLE_YOY_FALLBACK,
+                "support_state": "computed",
+                "cadence": growth_reporting_cadence,
+            }
+            for field in _GROWTH_FIELDS_AFFECTED_BY_CADENCE
+        }
+    return {}
