@@ -43,3 +43,29 @@ def test_get_universe_definition_uses_type_specific_fields_only():
     assert universe_def.exchange == Exchange.NASDAQ
     assert universe_def.market is None
     assert universe_def.symbols is None
+
+
+def test_get_universe_definition_falls_back_on_malformed_row():
+    # Historical row where the market column is null and the key doesn't
+    # carry the market either — Pydantic would reject MARKET + market=None,
+    # so reconstruction must yield ALL rather than raise.
+    scan = Scan(
+        universe_type=UniverseType.MARKET.value,
+        universe_key="stale-legacy-key",
+        universe_market=None,
+    )
+
+    universe_def = scan.get_universe_definition()
+
+    assert universe_def.type == UniverseType.ALL
+
+
+def test_get_universe_definition_falls_back_on_unknown_enum_value():
+    scan = Scan(
+        universe_type=UniverseType.EXCHANGE.value,
+        universe_exchange="LSE",  # not in Exchange enum
+    )
+
+    universe_def = scan.get_universe_definition()
+
+    assert universe_def.type == UniverseType.ALL

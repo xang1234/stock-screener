@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from .redis_pool import get_redis_client
 
@@ -61,11 +61,12 @@ def record_legacy_universe_usage(legacy_value: Optional[str]) -> None:
         logger.debug("Failed to record legacy universe telemetry: %s", exc)
 
 
-def get_legacy_universe_counts() -> dict[str, int]:
+def get_legacy_universe_counts() -> dict[str, Any]:
     """Return a snapshot of legacy-path counters for diagnostics/tests.
 
-    Keys: "total" and "by_value" (dict of bucket -> count). Returns empty
-    dict when Redis is unavailable.
+    Keys: ``total`` (int), ``by_value`` (dict[bucket, int]), and
+    ``last_seen_ts`` (int unix timestamp or None). Returns an empty dict
+    when Redis is unavailable.
     """
     client = get_redis_client()
     if client is None:
