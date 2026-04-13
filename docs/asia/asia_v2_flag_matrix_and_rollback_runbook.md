@@ -137,3 +137,4 @@ When reconciliation safety is suspect:
 - `StockScreenClaude-asia.10.3` should embed this rollback order in incident runbooks.
 - `StockScreenClaude-asia.11.*` gate runner should assert these flags and expected states.
 - `StockScreenClaude-asia.8.*` should consume `asia_ui_exposure_<market>_enabled` semantics.
+- External API consumers and internal rollout reviewers should use the [E8 API / Client Migration Guide](./asia_v2_e8_api_migration_guide.md) for per-task breakage tiers, before/after payloads, and the 2026-10-31 sunset.
