@@ -347,13 +347,12 @@ function ScanPage() {
   };
 
   const handleUniverseMarketChange = useCallback((nextMarket) => {
-    setUniverseMarket((previous) => {
-      if (previous !== nextMarket) {
-        setUniverseScope(null);
-      }
-      return nextMarket;
-    });
-  }, []);
+    if (nextMarket === universeMarket) {
+      return;
+    }
+    setUniverseMarket(nextMarket);
+    setUniverseScope(null);
+  }, [universeMarket]);
 
   const handleScreenerToggle = (screener) => {
     setSelectedScreeners((previous) => {
