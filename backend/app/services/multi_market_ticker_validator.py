@@ -101,8 +101,13 @@ def normalize_extracted_ticker(
     For anything the CJK resolver returns ``METHOD_NONE`` on (plain US
     tickers, unknown company names), we fall back to the SecurityMaster
     normalizer — which just uppercases and strips a leading ``$``.
-    That preserves the existing US behaviour so US-only deployments
-    don't regress.
+
+    **Dual-listed company caveat**: English company names that appear
+    in both the CJK alias corpus and the US universe (e.g. "HSBC",
+    "Sony") will be mapped to their Asian canonical by this function.
+    Callers that have access to the active universe should implement the
+    retry fallback in :meth:`~ThemeExtractionService._gate_ticker` to
+    recover the US ticker on a universe miss.
     """
     if not isinstance(raw, str):
         return NormalizedTicker(raw=str(raw), canonical=None, reason=REASON_EMPTY)

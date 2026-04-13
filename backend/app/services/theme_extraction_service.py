@@ -453,6 +453,21 @@ class ThemeExtractionService:
         if not valid_tickers:
             return canonical, multi_market.REASON_UNIVERSE_EMPTY
         if canonical not in valid_tickers:
+            # The CJK resolver may have mapped an English company name to an
+            # Asian canonical (e.g. "HSBC" → "0005.HK"). If that canonical
+            # misses the active universe, retry with SecurityMaster-only
+            # normalization so dual-listed tickers that also trade under the
+            # same name in the US (e.g. NYSE: HSBC) still land correctly in
+            # US-only deployments, preserving the documented US-parity contract.
+            sm_canonical = resolver.normalize_symbol(str(raw))
+            if (
+                sm_canonical
+                and sm_canonical != canonical
+                and sm_canonical not in self.TICKER_FALSE_POSITIVES
+                and multi_market.TICKER_SHAPE_RE.match(sm_canonical)
+                and sm_canonical in valid_tickers
+            ):
+                return sm_canonical, None
             return canonical, multi_market.REASON_UNIVERSE_MISS
         return canonical, None
 
