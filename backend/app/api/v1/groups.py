@@ -69,13 +69,11 @@ async def get_current_rankings(
     # Get the date from the first ranking
     ranking_date = rankings[0]['date'] if rankings else None
 
-    scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
     return GroupRankingsResponse(
         date=ranking_date,
         total_groups=len(rankings),
         rankings=[GroupRankResponse(**r) for r in rankings],
-        market_scope=scope["market_scope"],
-        scope_reason=scope.get("scope_reason"),
+        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
     )
 
 
@@ -113,13 +111,11 @@ async def get_rank_movers(
             detail=f"No mover data available for period '{period}'"
         )
 
-    scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
     return MoversResponse(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
         losers=[GroupRankResponse(**l) for l in movers.get('losers', [])],
-        market_scope=scope["market_scope"],
-        scope_reason=scope.get("scope_reason"),
+        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
     )
 
 

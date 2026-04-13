@@ -595,6 +595,8 @@ class UISnapshotService:
             # Breadth is US-scoped today (see app.domain.analytics.scope);
             # resolve the overlay symbol through the benchmark registry so
             # this layer doesn't hard-code "SPY".
+            # Local import: wiring.bootstrap imports this module, so a
+            # top-level import would cycle.
             from ..wiring.bootstrap import get_benchmark_cache
             benchmark_symbol = get_benchmark_cache().get_benchmark_symbol("US")
             return {
@@ -608,6 +610,10 @@ class UISnapshotService:
                 "history_90d": [market_breadth_to_dict(row) for row in history],
                 "chart_range": DEFAULT_BREADTH_RANGE,
                 "chart_data": [market_breadth_to_dict(row) for row in chart],
+                # Key retained as ``spy_overlay`` for frontend compatibility
+                # (BreadthPage.jsx, StaticBreadthPage.jsx). When breadth is
+                # generalised to multi-market, rename to ``benchmark_overlay``
+                # alongside the scope flip in mixed_market / analytics scope.
                 "spy_overlay": self._get_cached_price_history(benchmark_symbol, "1mo"),
                 **us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT),
             }

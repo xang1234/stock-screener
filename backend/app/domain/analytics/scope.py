@@ -71,15 +71,26 @@ class UnsupportedMarketError(ValueError):
     """Raised when a caller passes a non-US market to a US-only analytics feature."""
 
 
-def us_only_tag(feature: AnalyticsFeature) -> dict[str, str]:
-    """Return a stable ``market_scope`` tag to embed in analytics responses.
+def policy_version() -> str:
+    """Accessor for the active policy version.
 
-    Keys are stable; values evolve with ``POLICY_VERSION``. Consumers
-    (frontend badges, log scrapers) should treat the presence of
+    Mirrors ``provider_routing_policy.policy_version()`` and
+    ``mixed_market_policy.policy_version()`` so downstream consumers can
+    import a consistent symbol from any policy module.
+    """
+    return POLICY_VERSION
+
+
+def us_only_tag(feature: AnalyticsFeature) -> dict[str, str]:
+    """Return the ``{market_scope, scope_reason}`` tag to embed in analytics responses.
+
+    Callers spread this dict into their response payload. The returned
+    keys are stable; values evolve with ``POLICY_VERSION`` (exposed
+    separately via :func:`policy_version`). Consumers should treat
     ``market_scope == "US"`` as the feature's current scope.
     """
+    tag = {"market_scope": _US_MARKET}
     reason = _US_ONLY_FEATURES.get(feature)
-    tag = {"market_scope": _US_MARKET, "policy_version": POLICY_VERSION}
     if reason is not None:
         tag["scope_reason"] = reason
     return tag
@@ -91,12 +102,19 @@ def require_us_scope(
 ) -> None:
     """Guard that rejects non-US markets for currently US-only analytics features.
 
-    ``None``/empty/whitespace is treated as the US default (preserves
-    legacy call sites that never pass a market). Anything else raises
-    :class:`UnsupportedMarketError` with a descriptive reason.
+    ``None`` / empty / whitespace is treated as the US default (preserves
+    legacy call sites that never pass a market). Non-string inputs and
+    any other market raise :class:`UnsupportedMarketError` with a
+    descriptive reason.
     """
     if market is None:
         return
+    if not isinstance(market, str):
+        # Match provider_routing_policy.normalize_market's defensive shape:
+        # a non-string market is not US, so reject loudly.
+        raise UnsupportedMarketError(
+            f"{feature.value}: non-string market {market!r} (type {type(market).__name__}) not supported"
+        )
     canonical = market.strip().upper()
     if canonical == "" or canonical == _US_MARKET:
         return
@@ -121,6 +139,7 @@ __all__ = [
     "POLICY_VERSION",
     "AnalyticsFeature",
     "UnsupportedMarketError",
+    "policy_version",
     "us_only_tag",
     "require_us_scope",
     "describe_policy",

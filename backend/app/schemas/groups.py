@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 from datetime import date as Date
 from typing import Optional, List
 
+from ..schemas.scope import ScopedResponseMixin
+
 
 class GroupRankResponse(BaseModel):
     """Response model for a single group ranking"""
@@ -32,20 +34,12 @@ class GroupRankResponse(BaseModel):
         from_attributes = True
 
 
-class GroupRankingsResponse(BaseModel):
+class GroupRankingsResponse(ScopedResponseMixin):
     """Response model for list of group rankings"""
 
     date: str = Field(..., description="Date of rankings")
     total_groups: int = Field(..., description="Total number of ranked groups")
     rankings: List[GroupRankResponse] = Field(..., description="List of group rankings")
-    market_scope: Optional[str] = Field(
-        default=None,
-        description="Market scope for these rankings (e.g. 'US'). See analytics scope policy.",
-    )
-    scope_reason: Optional[str] = Field(
-        default=None,
-        description="Why this scope applies (e.g. 'IBD taxonomy is US-specific').",
-    )
 
 
 class HistoricalDataPoint(BaseModel):
@@ -106,20 +100,12 @@ class GroupDetailResponse(BaseModel):
     stocks: List[ConstituentStock] = Field(default=[], description="Stocks in this group with metrics")
 
 
-class MoversResponse(BaseModel):
+class MoversResponse(ScopedResponseMixin):
     """Response for rank movers (gainers and losers)"""
 
     period: str = Field(..., description="Time period (1w, 1m, 3m, 6m)")
     gainers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank improvements")
     losers: List[GroupRankResponse] = Field(..., description="Groups with biggest rank declines")
-    market_scope: Optional[str] = Field(
-        default=None,
-        description="Market scope for these movers (e.g. 'US'). See analytics scope policy.",
-    )
-    scope_reason: Optional[str] = Field(
-        default=None,
-        description="Why this scope applies.",
-    )
 
 
 class CalculationRequest(BaseModel):

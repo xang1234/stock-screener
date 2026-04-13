@@ -8,17 +8,28 @@ from app.domain.analytics.scope import (
     AnalyticsFeature,
     UnsupportedMarketError,
     describe_policy,
+    policy_version,
     require_us_scope,
     us_only_tag,
 )
+
+
+class TestPolicyVersion:
+    def test_accessor_returns_constant(self):
+        # Parity with provider_routing_policy.policy_version() and
+        # mixed_market_policy.policy_version().
+        assert policy_version() == POLICY_VERSION
 
 
 class TestUsOnlyTag:
     def test_tag_shape_is_stable(self):
         tag = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
         assert tag["market_scope"] == "US"
-        assert tag["policy_version"] == POLICY_VERSION
         assert "S&P" in tag["scope_reason"] or "US" in tag["scope_reason"]
+        # policy_version is exposed via policy_version(), not inside the
+        # tag dict — keeps the tag spreadable into Pydantic models without
+        # rejected-field errors.
+        assert "policy_version" not in tag
 
     def test_each_feature_has_its_own_reason(self):
         themes = us_only_tag(AnalyticsFeature.THEME_DISCOVERY)
@@ -53,6 +64,14 @@ class TestRequireUsScope:
         # operators can find the call site from logs.
         assert feature.value in str(exc.value)
         assert market in str(exc.value)
+
+    def test_non_string_market_raises_loudly(self):
+        # Defensive: a non-string market (e.g. accidental int from an ORM
+        # integer column) should not crash with AttributeError — that
+        # would masquerade as a bug elsewhere.
+        with pytest.raises(UnsupportedMarketError) as exc:
+            require_us_scope(123, AnalyticsFeature.IBD_GROUP_RANK)  # type: ignore[arg-type]
+        assert "non-string" in str(exc.value)
 
 
 class TestDescribePolicy:
