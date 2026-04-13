@@ -42,11 +42,19 @@ import {
 // Row height constant for virtualization
 const ROW_HEIGHT = 32;
 
+// MCap column display modes. USD is the default per 3axp: cross-market
+// parity is the common case; local is one click away. Kept as constants
+// (rather than bare strings) so callers grep-reliably and typos fail fast.
+const MCAP_DISPLAY = Object.freeze({
+  USD: 'usd',
+  LOCAL: 'local',
+});
+
 // Column definitions with explicit widths
 const columns = [
   { id: 'chart', label: '', sortable: false, width: 60 },
-  // Width bumped again in 3axp to fit: "0700.HK" + MarketBadge + FieldAvailabilityChip
-  // on a single line without overflow (previously 92px for T8.7's single chip).
+  // Width fits "0700.HK" + MarketBadge + FieldAvailabilityChip on a single
+  // line without overflow (nowrap guards the rest).
   { id: 'symbol', label: 'Sym', sortable: true, width: 130 },
   { id: 'rs_trend', label: 'RS Trend', sortable: true, width: 110 },
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
@@ -307,7 +315,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
       </TableCell>
 
       <TableCell align="right" sx={{ fontFamily: 'monospace', width: 75, minWidth: 75 }}>
-        {mcapDisplay === 'usd'
+        {mcapDisplay === MCAP_DISPLAY.USD
           ? formatLargeNumber(row.market_cap_usd, '$')
           : formatLargeNumber(row.market_cap, getCurrencyPrefix(row.currency))}
       </TableCell>
@@ -417,22 +425,22 @@ function ResultsTable({
   isChartEnabled,
 }) {
   const parentRef = useRef(null);
-  // Swap Market Cap column between USD (default) and local per 3axp. USD is
-  // the primary display for cross-market parity; local remains one click away.
-  // Kept as local component state — scan-level persistence can lift this up
-  // later if users want it to survive navigation.
-  const [mcapDisplay, setMcapDisplay] = useState('usd');
+  // MCap column display mode — kept as local state; scan-level persistence
+  // can lift this up later if users want it to survive navigation.
+  const [mcapDisplay, setMcapDisplay] = useState(MCAP_DISPLAY.USD);
   const visibleColumns = useMemo(() => {
     const base = showActions ? columns : columns.filter((column) => column.id !== 'chart');
     return base.map((column) =>
       column.id === 'market_cap'
-        ? { ...column, label: mcapDisplay === 'usd' ? 'MCap ($)' : 'MCap (local)' }
+        ? { ...column, label: mcapDisplay === MCAP_DISPLAY.USD ? 'MCap ($)' : 'MCap (local)' }
         : column,
     );
   }, [showActions, mcapDisplay]);
 
   const toggleMcapDisplay = useCallback(() => {
-    setMcapDisplay((mode) => (mode === 'usd' ? 'local' : 'usd'));
+    setMcapDisplay((mode) =>
+      mode === MCAP_DISPLAY.USD ? MCAP_DISPLAY.LOCAL : MCAP_DISPLAY.USD,
+    );
   }, []);
 
   const handleChangePage = useCallback((event, newPage) => {
@@ -484,7 +492,7 @@ function ResultsTable({
           Market Cap display:
         </Typography>
         <Chip
-          label={mcapDisplay === 'usd' ? 'USD' : 'Local'}
+          label={mcapDisplay === MCAP_DISPLAY.USD ? 'USD' : 'Local'}
           size="small"
           variant="outlined"
           onClick={toggleMcapDisplay}

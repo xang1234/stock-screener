@@ -6,8 +6,6 @@ export const buildDefaultScanFilters = () => ({
   gicsSectors: { values: [], mode: 'include' },
   minVolume: null,
   minMarketCap: null,
-  // Cross-market (USD-normalised) fundamentals filters. Backend-side counterparts
-  // ship in scan_filter_params.py: min/max_market_cap_usd, min/max_adv_usd, markets.
   marketCapUsd: { min: null, max: null },
   advUsd: { min: null, max: null },
   markets: [],
