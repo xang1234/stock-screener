@@ -181,6 +181,10 @@ class TranslationService:
             )
 
         if source == self._target_language:
+            if not force_refresh and _is_cached_translation(
+                content_item, self._target_language,
+            ):
+                return content_item.translation_metadata
             return self._write_identity(content_item, source)
 
         if not force_refresh and _is_cached_translation(
@@ -303,11 +307,13 @@ def select_extraction_text(content_item: "ContentItem") -> ExtractionText:
 
     if (
         provider not in (None, PROVIDER_UNAVAILABLE)
+        and meta.get("source_language") == content_item.source_language
         and content_item.translated_title is not None
+        and content_item.translated_content is not None
     ):
         return ExtractionText(
             content_item.translated_title,
-            content_item.translated_content or "",
+            content_item.translated_content,
             target,
         )
 
@@ -372,18 +378,28 @@ def _is_cached_translation(
     content_item: "ContentItem",
     target_language: str,
 ) -> bool:
-    """A previous successful translation to the same target is present."""
+    """A previous successful translation to the same (source, target) pair is present.
+
+    Validates both target and source language so a later source-language
+    correction (e.g. T7.2 re-detection after a policy bump) triggers a
+    fresh translation rather than reusing a stale one.
+    """
     meta = content_item.translation_metadata
     if not meta:
         return False
     if meta.get("target_language") != target_language:
+        return False
+    if meta.get("source_language") != content_item.source_language:
         return False
     provider = meta.get("provider")
     if provider in (None, PROVIDER_UNAVAILABLE):
         return False
     if provider == PROVIDER_IDENTITY:
         return True
-    return content_item.translated_title is not None
+    return (
+        content_item.translated_title is not None
+        and content_item.translated_content is not None
+    )
 
 
 def _min_optional(a: Optional[float], b: Optional[float]) -> Optional[float]:

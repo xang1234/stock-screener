@@ -190,6 +190,31 @@ class TestIdempotency:
         svc.translate_content_item(row, force_refresh=True)
         assert row.translated_title == "v3[日経]"  # calls 3 and 4 ran
 
+    def test_source_language_change_invalidates_cache(self):
+        """Correcting source_language after a policy bump must trigger re-translation."""
+        calls = []
+
+        def counting(text, src, tgt):
+            calls.append((src, tgt))
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="恒生指數", content="科技股", source_language="zh")
+        svc.translate_content_item(row)
+        assert row.translation_metadata["source_language"] == "zh"
+
+        # Simulate a T7.2 re-detection that corrects the source language.
+        row.source_language = "ja"
+        prev_calls = len(calls)
+        svc.translate_content_item(row)
+        # Cache had source_language="zh" but row now has "ja" → must re-translate.
+        assert len(calls) > prev_calls
+        assert row.translation_metadata["source_language"] == "ja"
+
     def test_different_target_language_retranslates(self):
         svc_en = TranslationService(_make_translator(), target_language="en")
         svc_ja = TranslationService(_make_translator(), target_language="ja")

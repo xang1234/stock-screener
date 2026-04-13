@@ -35,8 +35,13 @@ class TestDetectLanguagePure:
         assert detect_language("日経平均は続伸、半導体が牽引した。") == LANGUAGE_JA
 
     def test_japanese_katakana_only(self):
-        # Katakana alone is still unambiguously Japanese.
+        # Full-width Katakana is still unambiguously Japanese.
         assert detect_language("ソニー・グループ") == LANGUAGE_JA
+
+    def test_japanese_halfwidth_katakana(self):
+        # Halfwidth Katakana (U+FF66-U+FF9D) appears in scraped
+        # Japanese feeds. Previously missed — regression test for the fix.
+        assert detect_language("ｿﾆｰ・ｸﾞﾙｰﾌﾟ") == LANGUAGE_JA
 
     def test_chinese_traditional(self):
         # No kana, all Han — Traditional Chinese (HK/TW bucket).

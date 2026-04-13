@@ -17,6 +17,7 @@ from sqlalchemy import (
     inspect,
     text,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from ..database import Base
@@ -97,7 +98,7 @@ class ContentItem(Base):
     source_language = Column(String(8))  # BCP-47 short tag, e.g. "en", "ja", "zh-HK"
     translated_title = Column(String(500))
     translated_content = Column(Text)
-    translation_metadata = Column(JSON)
+    translation_metadata = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
 
     __table_args__ = (
         UniqueConstraint("source_type", "external_id", name="uix_source_external_id"),
@@ -163,7 +164,7 @@ class ThemeMention(Base):
     # cheaper content-level MT), so the mention keeps its own replay snapshot.
     translated_raw_theme = Column(String(200))
     translated_excerpt = Column(Text)
-    translation_metadata = Column(JSON)
+    translation_metadata = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
 
     __table_args__ = (
         Index("idx_theme_mention_date", "canonical_theme", "mentioned_at"),

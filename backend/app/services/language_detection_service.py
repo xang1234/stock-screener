@@ -60,9 +60,14 @@ DETECTION_SAMPLE_LIMIT: int = 4096
 
 def _is_kana(ch: str) -> bool:
     cp = ord(ch)
-    # Hiragana: U+3040 – U+309F; Katakana: U+30A0 – U+30FF;
-    # Katakana phonetic extensions: U+31F0 – U+31FF.
-    return 0x3040 <= cp <= 0x30FF or 0x31F0 <= cp <= 0x31FF
+    # Hiragana: U+3040 - U+309F; Katakana: U+30A0 - U+30FF;
+    # Katakana phonetic extensions: U+31F0 - U+31FF;
+    # Halfwidth Katakana: U+FF66 - U+FF9D (common in scraped Japanese feeds).
+    return (
+        0x3040 <= cp <= 0x30FF
+        or 0x31F0 <= cp <= 0x31FF
+        or 0xFF66 <= cp <= 0xFF9D
+    )
 
 
 def _is_cjk_ideograph(ch: str) -> bool:
@@ -75,6 +80,16 @@ def _is_cjk_ideograph(ch: str) -> bool:
     )
 
 
+def _truncate_utf8(text: str, byte_limit: int) -> str:
+    """Truncate ``text`` so its UTF-8 encoding fits within ``byte_limit`` bytes.
+
+    CJK characters encode to 3 bytes each; a naive character-slice would
+    allow up to 3× the intended byte budget. ``errors="ignore"`` discards
+    the partial codepoint at the truncation boundary rather than raising.
+    """
+    return text.encode("utf-8")[:byte_limit].decode("utf-8", errors="ignore")
+
+
 def build_detection_text(
     title: Optional[str], content: Optional[str]
 ) -> str:
@@ -82,11 +97,11 @@ def build_detection_text(
 
     Handles None and missing parts uniformly so both ingestion (dict
     payloads) and the ORM-aware wrapper produce the same input for the
-    detector. The returned string is already truncated to
-    :data:`DETECTION_SAMPLE_LIMIT` — callers don't need a second cap.
+    detector. The returned string fits within :data:`DETECTION_SAMPLE_LIMIT`
+    *bytes* (UTF-8) — callers don't need a second cap.
     """
     joined = " ".join(p for p in (title, content) if p)
-    return joined[:DETECTION_SAMPLE_LIMIT]
+    return _truncate_utf8(joined, DETECTION_SAMPLE_LIMIT)
 
 
 def detect_language(text: Optional[str]) -> str:
@@ -98,8 +113,9 @@ def detect_language(text: Optional[str]) -> str:
     if not text:
         return LANGUAGE_UNKNOWN
 
-    # Only scan up to the sample limit — stable ratios emerge quickly.
-    sample = text[:DETECTION_SAMPLE_LIMIT]
+    # Only scan up to the sample limit (in bytes) — stable ratios emerge
+    # quickly, and byte-based truncation prevents 3× budget overage for CJK.
+    sample = _truncate_utf8(text, DETECTION_SAMPLE_LIMIT)
 
     kana = 0
     cjk = 0
