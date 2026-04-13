@@ -14,8 +14,9 @@ Give API clients a single, dated, copy-pasteable reference for every E8 contract
 
 | Milestone | Date |
 |---|---|
-| E8 contract changes announced | **2026-04-14** |
-| Legacy `universe` request string sunset (shared with [legacy compat policy](./asia_v2_legacy_universe_compat_deprecation_policy.md)) | **2026-10-31** |
+| Legacy `universe` deprecation first announced (see [deprecation policy](./asia_v2_legacy_universe_compat_deprecation_policy.md#deprecation-timeline)) | 2026-04-11 |
+| This migration guide published | 2026-04-14 |
+| Legacy `universe` request string sunset (shared with [legacy compat policy](./asia_v2_legacy_universe_compat_deprecation_policy.md#deprecation-timeline)) | **2026-10-31** |
 | `ScanListItem` flat universe fields sunset (**already removed** from responses as of T1 merge, 2026-04-13) | shipped |
 | Earliest date the API may remove legacy `universe` request parsing | 2026-10-31 |
 
@@ -99,7 +100,7 @@ Client action: read `scan.universe_def.{type,market,exchange,index,symbols}` ins
 
 ### Legacy-path observability
 
-When a client sends legacy `universe` on request, the API returns deprecation headers and increments Redis telemetry (`universe_compat:legacy_total`, per-value buckets, `universe_compat:legacy_last_seen_ts`). Operators can watch these trend to zero before sunset. See [deprecation policy §Legacy-Path Observability](./asia_v2_legacy_universe_compat_deprecation_policy.md#legacy-path-observability).
+When a client sends legacy `universe` on request, the API returns a set of deprecation headers (`Deprecation`, `Sunset`, `X-Universe-Compat-Mode`, plus migration-hint headers) and increments Redis telemetry counters so operators can watch legacy-caller volume trend to zero before sunset. For the full header list and counter-key names, see [deprecation policy §Legacy-Path Observability](./asia_v2_legacy_universe_compat_deprecation_policy.md#legacy-path-observability).
 
 ---
 
@@ -270,8 +271,8 @@ For any client integrating against scans, watchlists, or theme content:
 
 ## Rollout Cross-References
 
-- Feature-flag gating for per-market UI/API exposure: see [flag matrix + rollback runbook §Flag Taxonomy](./asia_v2_flag_matrix_and_rollback_runbook.md#flag-taxonomy).
-- Dress-rehearsal gates that must pass before re-enabling: `StockScreenClaude-asia.11.*` (references this guide for client-migration evidence).
+- Per-market UI/API exposure is gated by `asia_ui_exposure_<market>_enabled` — when a market's flag is off, its universe options are absent from selectors and API responses omit that market's metadata. See [flag matrix + rollback runbook §Flag Taxonomy](./asia_v2_flag_matrix_and_rollback_runbook.md#flag-taxonomy).
+- Dress-rehearsal gates that must pass before re-enabling: `StockScreenClaude-asia.11.*` — pass/fail criteria are formalised in [ASIA v2 Objective Launch-Gate Charter](./asia_v2_launch_gate_charter.md). This guide provides the client-migration evidence those gates consume.
 - Unsupported-field transparency surfaces (client-facing reason codes when data absent): tracked in `StockScreenClaude-asia.8.7`.
 
 ## Changelog
