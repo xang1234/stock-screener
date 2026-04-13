@@ -485,13 +485,14 @@ class UISnapshotService:
             if selected_scan is None:
                 return payload
 
+            selected_universe_def = selected_scan.get_universe_definition()
             payload["selected_scan"] = next(
                 (item for item in recent_scans["scans"] if item["scan_id"] == selected_scan.scan_id),
                 ScanListItem(
                     scan_id=selected_scan.scan_id,
                     status=selected_scan.status,
                     trigger_source=getattr(selected_scan, "trigger_source", "manual") or "manual",
-                    universe_def=selected_scan.get_universe_definition(),
+                    universe_def=selected_universe_def,
                     total_stocks=selected_scan.total_stocks or 0,
                     passed_stocks=selected_scan.passed_stocks or 0,
                     started_at=selected_scan.started_at,
@@ -524,7 +525,7 @@ class UISnapshotService:
                 passed_stocks=selected_scan.passed_stocks or 0,
                 started_at=selected_scan.started_at,
                 eta_seconds=None,
-                universe_def=selected_scan.get_universe_definition(),
+                universe_def=selected_universe_def,
             ).model_dump(mode="json")
 
             if selected_scan.status not in {"completed", "cancelled"}:

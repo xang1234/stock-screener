@@ -77,7 +77,6 @@ async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
     assert payload["total_stocks"] == 2500
     assert payload["message"] == "Scan completed instantly for 2500 stocks"
     assert payload["feature_run_id"] == 17
-    # Legacy input still echoes back a typed universe_def in the response
     assert payload["universe_def"]["type"] == "all"
     assert response.headers["deprecation"] == "true"
     assert "sunset" in response.headers
@@ -161,7 +160,6 @@ async def test_create_scan_accepts_market_universe_def(client):
     assert fake_use_case.received_cmd.universe_type == "market"
     assert fake_use_case.received_cmd.universe_market == "HK"
     assert fake_use_case.received_cmd.universe_key == "market:HK"
-    # Typed request → typed response: client round-trips what it sent
     payload = response.json()
     assert payload["universe_def"] == {
         "type": "market",

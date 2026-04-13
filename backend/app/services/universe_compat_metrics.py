@@ -33,7 +33,7 @@ def _safe_sanitize(legacy_value: Optional[str]) -> str:
     cleaned = legacy_value.strip().lower()
     if not cleaned or len(cleaned) > 32:
         return "unknown"
-    if any(c.isspace() or c in "\r\n\t" for c in cleaned):
+    if any(c.isspace() for c in cleaned):
         return "unknown"
     return cleaned
 

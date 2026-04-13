@@ -98,7 +98,6 @@ class TestListScans:
             data = resp.json()
             assert len(data["scans"]) == 2
             assert data["scans"][0]["scan_id"] == "scan-001"
-            # Typed universe_def replaces flat universe fields
             assert data["scans"][0]["universe_def"] == {
                 "type": "all",
                 "market": None,
@@ -107,7 +106,6 @@ class TestListScans:
                 "symbols": None,
                 "allow_inactive_symbols": False,
             }
-            # Legacy flat fields are no longer emitted
             assert "universe" not in data["scans"][0]
             assert "universe_type" not in data["scans"][0]
         finally:
@@ -223,7 +221,6 @@ class TestGetScanStatus:
             assert data["status"] == "completed"
             assert data["progress"] == 100.0
             assert data["completed_stocks"] == 100
-            # Status surface now exposes typed universe_def for client interpretation
             assert data["universe_def"]["type"] == "all"
         finally:
             app.dependency_overrides.pop(get_uow, None)
