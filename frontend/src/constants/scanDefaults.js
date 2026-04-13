@@ -1,5 +1,8 @@
+// universe: null forces users to explicitly pick a market in the two-step
+// selector (asia.8.2). Saved profiles with legacy strings like 'nyse' are
+// migrated to (market, scope) via parseLegacyUniverseDefault on mount.
 export const DEFAULT_SCAN_DEFAULTS = {
-  universe: 'all',
+  universe: null,
   screeners: ['minervini', 'canslim', 'ipo', 'custom', 'volume_breakthrough', 'setup_engine'],
   composite_method: 'weighted_average',
   criteria: {
