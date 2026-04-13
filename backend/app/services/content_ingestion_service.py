@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..models.theme import ContentSource, ContentItem, ContentItemPipelineState
 from ..config import settings
-from .language_detection_service import detect_language
+from .language_detection_service import build_detection_text, detect_language
 from .theme_pipeline_state_service import normalize_pipelines
 
 logger = logging.getLogger(__name__)
@@ -337,10 +337,10 @@ class ContentIngestionService:
             ).first()
 
             if not existing:
-                # Deterministic language detection at ingest (T7.2) — rule-
-                # first, cached on the row. See language_detection_service.
-                detection_text = " ".join(
-                    p for p in (item_data.get("title"), item_data.get("content")) if p
+                # Deterministic language detection at ingest — rule-first,
+                # cached on the row. See language_detection_service.
+                detection_text = build_detection_text(
+                    item_data.get("title"), item_data.get("content")
                 )
                 content_item = ContentItem(
                     source_id=source_id,

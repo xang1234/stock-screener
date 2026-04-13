@@ -6,12 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.language_detection_service import (
+    CJK_THRESHOLD,
+    DETECTION_SAMPLE_LIMIT,
+    KANA_THRESHOLD,
     LANGUAGE_EN,
     LANGUAGE_JA,
     LANGUAGE_UNKNOWN,
     LANGUAGE_ZH,
     POLICY_VERSION,
     SUPPORTED_LANGUAGES,
+    build_detection_text,
     describe_policy,
     detect_and_cache_language,
     detect_language,
@@ -136,8 +140,50 @@ class TestPolicySurface:
     def test_policy_version_accessor(self):
         assert policy_version() == POLICY_VERSION
 
-    def test_describe_policy_shape(self):
+    def test_describe_policy_pins_exact_thresholds(self):
+        # Pin exact values — a drift here must be deliberate and must
+        # bump POLICY_VERSION. Shape-only assertions would miss a silent
+        # tuning change.
         snap = describe_policy()
         assert snap["policy_version"] == POLICY_VERSION
         assert set(snap["supported_languages"]) == SUPPORTED_LANGUAGES
-        assert 0 < snap["kana_threshold"] < snap["cjk_threshold"] < 1
+        assert snap["kana_threshold"] == 0.02
+        assert snap["cjk_threshold"] == 0.20
+        assert snap["detection_sample_limit"] == 4096
+
+    def test_exported_constants_match_snapshot(self):
+        # The describe_policy dict is built from the module constants —
+        # verify the public constants agree so callers importing either
+        # see the same values.
+        assert KANA_THRESHOLD == 0.02
+        assert CJK_THRESHOLD == 0.20
+        assert DETECTION_SAMPLE_LIMIT == 4096
+
+
+class TestBuildDetectionText:
+    def test_combines_title_and_content(self):
+        assert build_detection_text("Title", "Body") == "Title Body"
+
+    def test_drops_none_parts(self):
+        assert build_detection_text(None, "only content") == "only content"
+        assert build_detection_text("only title", None) == "only title"
+        assert build_detection_text(None, None) == ""
+
+    def test_caps_to_sample_limit(self):
+        long_body = "x" * (DETECTION_SAMPLE_LIMIT * 2)
+        result = build_detection_text("t", long_body)
+        assert len(result) == DETECTION_SAMPLE_LIMIT
+
+
+class TestDetectionSampleLimit:
+    """Long-article prefix-cap regression (Agent-3 efficiency finding)."""
+
+    def test_long_english_body_stays_english(self):
+        # 30 KB of English — should not degrade behaviour.
+        text = "The quarterly earnings report indicates strong growth. " * 500
+        assert detect_language(text) == LANGUAGE_EN
+
+    def test_long_japanese_body_stays_japanese(self):
+        # Content far longer than the cap: first 4 KB is still obviously ja.
+        text = ("日経平均は続伸し、半導体株が牽引した。" * 1000)
+        assert detect_language(text) == LANGUAGE_JA
