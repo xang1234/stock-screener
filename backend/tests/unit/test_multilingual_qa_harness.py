@@ -156,6 +156,17 @@ class TestCorpusContract:
         assert any(c.tag == "adversarial" for c in LANGUAGE_CORPUS)
         assert any(c.tag == "adversarial" for c in NORMALIZER_CORPUS)
 
+    def test_corpora_include_positive_cases(self):
+        # Tripwire: a corpus of only adversarial/negative cases would
+        # make _aggregate produce TP=FP=0 → precision returns 1.0 by
+        # the zero-positive convention, spuriously passing the
+        # precision gate while actually exercising only the rejection
+        # path. Guarantee both classes are represented so gate math
+        # reflects real behaviour.
+        assert any(c.tag == "positive" for c in ALIAS_CORPUS)
+        assert any(c.tag == "positive" for c in LANGUAGE_CORPUS)
+        assert any(c.tag == "positive" for c in NORMALIZER_CORPUS)
+
 
 # ---------------------------------------------------------------------------
 # Alias resolver golden set
