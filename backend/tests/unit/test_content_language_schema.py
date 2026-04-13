@@ -1,9 +1,10 @@
-"""Schema tests for content language / translation columns (T7.1).
+"""Schema tests for content language / translation columns.
 
-Also covers endpoint-mapping regressions for asia.8.4 — the
-GET /themes/{id}/mentions and the content-items list endpoint must now
-surface `source_language` / `translated_*` / `translation_metadata`
-fields on the wire, not just accept them on the schema.
+Covers the ORM column shape, the Pydantic schema defaults, and the
+endpoint-mapping wire contract: GET /themes/{id}/mentions and the
+content-items list endpoint must surface ``source_language`` /
+``translated_*`` / ``translation_metadata`` to the frontend, not just
+accept them on the schema.
 """
 from __future__ import annotations
 
@@ -160,7 +161,7 @@ class TestResponseSchemasExposeTranslation:
 
 
 # ---------------------------------------------------------------------------
-# Endpoint-mapping regression tests (asia.8.4)
+# Endpoint-mapping regression tests — source_language / translated_* wire contract
 # ---------------------------------------------------------------------------
 
 
@@ -279,6 +280,55 @@ class TestGetThemeMentionsPopulatesTranslationFields:
         # ThemeMention row itself has no language — falls back to ContentItem.
         assert m.source_language == "ja"
         assert m.translation_metadata.provider == "deepl"
+
+    def test_empty_dict_mention_metadata_does_not_fall_back_to_content(self, _session):
+        # The detection-only path (T7.2) may store {} on the mention to mean
+        # "translation not yet performed". Using `or` to fall back would
+        # silently swap that for the content-level metadata snapshot,
+        # surfacing stale provider info on the wire.
+        from app.api.v1.themes_queries import get_theme_mentions
+
+        source = ContentSource(name="Nikkei", source_type="news")
+        _session.add(source)
+        _session.flush()
+
+        content = ContentItem(
+            source_id=source.id,
+            source_type="news",
+            external_id="jp-detect-only",
+            title="…",
+            content="…",
+            source_language="ja",
+            translation_metadata={"provider": "stale-provider", "confidence": 0.55},
+        )
+        _session.add(content)
+        _session.flush()
+
+        cluster = ThemeCluster(
+            name="Detection-only", display_name="Detection-only", canonical_key="det_only"
+        )
+        _session.add(cluster)
+        _session.flush()
+
+        mention = ThemeMention(
+            theme_cluster_id=cluster.id,
+            content_item_id=content.id,
+            source_type="news",
+            raw_theme="円安",
+            excerpt="…",
+            translation_metadata={},  # detection-only sentinel, not None
+            mentioned_at=datetime.now(tz=timezone.utc),
+        )
+        _session.add(mention)
+        _session.commit()
+
+        m = get_theme_mentions(theme_id=cluster.id, limit=50, db=_session).mentions[0]
+
+        # Empty dict is a real (non-None) marker — must not fall back to the
+        # ContentItem-level snapshot. TranslationMetadata round-trips empty.
+        assert m.translation_metadata is not None
+        assert m.translation_metadata.provider is None
+        assert m.translation_metadata.confidence is None
 
     def test_english_source_leaves_translation_fields_null(self, _session):
         from app.api.v1.themes_queries import get_theme_mentions

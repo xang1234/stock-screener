@@ -20,8 +20,18 @@ describe('TranslatedText', () => {
     );
 
     expect(screen.getByText(/NVIDIA dominates/)).toBeInTheDocument();
-    // English source should not show a language chip at all.
     expect(screen.queryByText('EN')).toBeNull();
+  });
+
+  it('suppresses chip for BCP-47 English region tags (en-US, EN-GB)', () => {
+    // External translation providers may emit region-suffixed tags.
+    const { rerender } = render(
+      <TranslatedText originalText="Hello" sourceLanguage="en-US" />
+    );
+    expect(screen.queryByText('EN-US')).toBeNull();
+
+    rerender(<TranslatedText originalText="Hello" sourceLanguage="EN-GB" />);
+    expect(screen.queryByText('EN-GB')).toBeNull();
   });
 
   it('shows translated text and language chip when source is non-English', () => {

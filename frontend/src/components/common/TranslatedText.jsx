@@ -3,6 +3,8 @@ import { Box, Chip, Collapse, IconButton, Tooltip, Typography } from '@mui/mater
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
+import { formatConfidence } from '../../utils/formatUtils';
+
 function hasTranslation(translatedText, originalText) {
   if (!translatedText || !originalText) return false;
   return translatedText.trim() !== originalText.trim();
@@ -12,14 +14,10 @@ function displayLanguageCode(sourceLanguage) {
   if (!sourceLanguage) return null;
   const trimmed = sourceLanguage.trim();
   if (!trimmed) return null;
-  if (trimmed.toLowerCase() === 'en') return null;
+  // BCP-47 primary-subtag check so 'en', 'EN-US', and 'en-GB' all suppress
+  // the chip — external translation providers may emit region tags.
+  if (trimmed.split('-')[0].toLowerCase() === 'en') return null;
   return trimmed.toUpperCase();
-}
-
-function formatConfidence(confidence) {
-  if (confidence === null || confidence === undefined) return null;
-  const pct = Math.round(confidence * 100);
-  return `${pct}%`;
 }
 
 function confidenceChipColor(confidence) {

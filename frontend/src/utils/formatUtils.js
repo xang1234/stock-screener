@@ -84,6 +84,18 @@ export const formatPercent = (value, decimals = 1) => {
 };
 
 /**
+ * Format a 0..1 confidence value as a percentage string ("92%").
+ * Returns null (not '-') so callers can omit the badge entirely when
+ * confidence is unavailable.
+ * @param {number|null|undefined} confidence
+ * @returns {string|null}
+ */
+export const formatConfidence = (confidence) => {
+  if (confidence === null || confidence === undefined) return null;
+  return `${Math.round(confidence * 100)}%`;
+};
+
+/**
  * Format a ratio value
  * @param {number|null} value - Ratio value
  * @param {number} decimals - Decimal places (default: 2)

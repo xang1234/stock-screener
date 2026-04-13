@@ -543,7 +543,15 @@ def get_theme_mentions(
                 source_language=content.source_language,
                 translated_excerpt=mention.translated_excerpt,
                 translated_raw_theme=mention.translated_raw_theme,
-                translation_metadata=mention.translation_metadata or content.translation_metadata,
+                # Explicit None check: the detection-only path (T7.2) may
+                # write {} on the mention to signal "translation not yet
+                # done", and Python's `or` would silently swap that for
+                # stale content-level metadata.
+                translation_metadata=(
+                    mention.translation_metadata
+                    if mention.translation_metadata is not None
+                    else content.translation_metadata
+                ),
             )
             for mention, content in mentions
         ],
