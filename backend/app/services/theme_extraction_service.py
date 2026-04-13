@@ -34,6 +34,7 @@ from .errors import ProviderQuotaServiceError, ProviderRateLimitServiceError
 from .llm import LLMService, LLMError, LLMQuotaExceededError, LLMRateLimitError
 from .llm.config import is_model_supported_for_use_case
 from .security_master_service import SecurityMasterResolver, security_master_resolver
+from . import multi_market_ticker_validator as multi_market
 from .theme_embedding_service import ThemeEmbeddingEngine, ThemeEmbeddingRepository
 from .theme_identity_normalization import UNKNOWN_THEME_KEY, canonical_theme_key, display_theme_name
 from .theme_lifecycle_service import set_initial_lifecycle_defaults
@@ -92,10 +93,18 @@ Your task is to identify:
    Examples: "AI infrastructure", "GLP-1 weight loss drugs", "nuclear energy renaissance",
    "defense drones", "quantum computing", "nearshoring/reshoring", "datacenter power demand"
 
-2. STOCK TICKERS - US-listed stock symbols mentioned or clearly implied
-   - Only include actual tradeable US stock tickers (NYSE, NASDAQ)
-   - Convert company names to tickers when confident (e.g., "Nvidia" -> "NVDA")
-   - Do NOT include ETFs, indices, or non-US stocks unless they're ADRs
+2. STOCK TICKERS - Publicly listed stock symbols mentioned or clearly implied
+   Supported markets and canonical symbol forms:
+   - US (NYSE, NASDAQ): plain ticker, e.g. NVDA, AAPL, AMZN
+   - Hong Kong (HKEX): 4-digit zero-padded code with ``.HK`` suffix, e.g. 0700.HK, 0005.HK
+   - Japan (TSE): 4-digit code with ``.T`` suffix, e.g. 6758.T, 9984.T
+   - Taiwan (TWSE): 4-digit code with ``.TW`` suffix (use ``.TWO`` for TPEx), e.g. 2330.TW
+   Rules:
+   - Convert company names to canonical symbols ONLY when the mapping is unambiguous
+     (e.g., "Nvidia" -> NVDA; "Tencent" -> 0700.HK; "ソニー" -> 6758.T; "台積電" -> 2330.TW)
+   - Leave ambiguous or unknown company references as company names in the excerpt, not in the tickers list
+   - Do NOT include ETFs or indices unless they are the actual subject of the theme
+   - Do NOT fabricate or guess tickers - only include symbols clearly identified in the text
 
 3. SENTIMENT - The author's view on each theme (bullish, bearish, neutral)
 
@@ -138,7 +147,7 @@ Content:
 
 Return a JSON array of theme mentions. Each mention should have:
 - theme: string (the market theme/narrative)
-- tickers: array of strings (US stock tickers related to this theme in this content)
+- tickers: array of strings (canonical stock symbols related to this theme — US tickers, or suffixed forms for Hong Kong (``.HK``), Japan (``.T``), Taiwan (``.TW``/``.TWO``))
 - sentiment: string ("bullish", "bearish", or "neutral")
 - confidence: float (0.0 to 1.0)
 - excerpt: string (relevant quote from content, max 200 chars)
@@ -240,9 +249,6 @@ class ThemeExtractionService:
         self._init_client()
         self._load_reprocessing_config()
         self.theme_policy_overrides = self._load_theme_policy_overrides()
-
-        # Known ticker patterns for validation
-        self.ticker_pattern = re.compile(r"^[A-Z0-9][A-Z0-9\.\-]{0,11}$")
 
         # Cache of valid tickers (loaded from universe)
         self._valid_tickers: Optional[set] = None
@@ -427,32 +433,71 @@ class ThemeExtractionService:
         return matches
 
     def _validate_ticker(self, ticker: str) -> bool:
-        """Check if ticker is valid"""
-        resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
-        normalized_ticker = resolver.normalize_symbol(ticker)
-        if not self.ticker_pattern.match(normalized_ticker):
+        """Check whether ``ticker`` (assumed already canonical) is a tradable symbol."""
+        if not multi_market.TICKER_SHAPE_RE.match(ticker):
             return False
-
         valid_tickers = self._get_valid_tickers()
         if not valid_tickers:
             return False
-        if normalized_ticker not in valid_tickers:
-            return False
-
-        return True
+        return ticker in valid_tickers
 
     def _clean_tickers(self, tickers: list) -> list:
-        """Filter and clean ticker list"""
+        """Normalize, validate, and de-duplicate an LLM-extracted ticker list.
+
+        Each drop emits a structured debug log via
+        :func:`multi_market.log_drop` so operators can track drop-rate
+        buckets (unresolvable, shape, universe miss) rather than
+        discover them via silent data loss.
+        """
         resolver = getattr(self, "_security_master", None) or SecurityMasterResolver()
-        cleaned = []
-        for t in tickers:
-            t = resolver.normalize_symbol(str(t))
-            # Remove common false positives
-            if t in self.TICKER_FALSE_POSITIVES:
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for raw in tickers:
+            result = multi_market.normalize_extracted_ticker(raw, resolver=resolver)
+            if result.canonical is None:
+                multi_market.log_drop(
+                    raw=raw, canonical=None, reason=result.reason,
+                    context="_clean_tickers.normalize",
+                )
                 continue
-            if self._validate_ticker(t):
-                cleaned.append(t)
-        return list(set(cleaned))  # Dedupe
+
+            canonical = result.canonical
+            if canonical in self.TICKER_FALSE_POSITIVES:
+                multi_market.log_drop(
+                    raw=raw, canonical=canonical,
+                    reason=multi_market.REASON_FALSE_POSITIVE,
+                    context="_clean_tickers.false_positive",
+                )
+                continue
+
+            if not multi_market.TICKER_SHAPE_RE.match(canonical):
+                multi_market.log_drop(
+                    raw=raw, canonical=canonical,
+                    reason=multi_market.REASON_SHAPE,
+                    context="_clean_tickers.shape",
+                )
+                continue
+
+            valid_tickers = self._get_valid_tickers()
+            if not valid_tickers:
+                multi_market.log_drop(
+                    raw=raw, canonical=canonical,
+                    reason=multi_market.REASON_UNIVERSE_EMPTY,
+                    context="_clean_tickers.universe_empty",
+                )
+                continue
+            if canonical not in valid_tickers:
+                multi_market.log_drop(
+                    raw=raw, canonical=canonical,
+                    reason=multi_market.REASON_UNIVERSE_MISS,
+                    context="_clean_tickers.universe_miss",
+                )
+                continue
+
+            if canonical not in seen:
+                seen.add(canonical)
+                cleaned.append(canonical)
+        return cleaned
 
     def _rate_limit(self) -> None:
         """Apply rate limiting between API calls"""
