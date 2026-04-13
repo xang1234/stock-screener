@@ -15,7 +15,9 @@ from sqlalchemy import (
     JSON,
     event,
     inspect,
+    text,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from ..database import Base
@@ -83,9 +85,29 @@ class ContentItem(Base):
     processed_at = Column(DateTime(timezone=True))
     extraction_error = Column(Text)  # If extraction failed
 
+    # Multilingual support (T7.1). Original title/content above stay authoritative;
+    # translated_* are the derivative the extraction pipeline consumes when
+    # source_language != extraction_target_language. translation_metadata is a
+    # self-contained snapshot mirroring the FXQuote.to_metadata() pattern in
+    # app.services.fx_service — T7.3 should introduce an equivalent dataclass
+    # so replay stays deterministic across config churn.
+    # TODO(T7.2): replace raw String(8) with a LanguageCode constants module +
+    # BCP-47 validator (cf. provider_routing_policy.MARKET_US / normalize_market).
+    # Index lives in __table_args__ (partial, see migration 20260413_0010) —
+    # NOT ``index=True`` so autogen doesn't clobber the WHERE predicate.
+    source_language = Column(String(8))  # BCP-47 short tag, e.g. "en", "ja", "zh-HK"
+    translated_title = Column(String(500))
+    translated_content = Column(Text)
+    translation_metadata = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
+
     __table_args__ = (
         UniqueConstraint("source_type", "external_id", name="uix_source_external_id"),
         Index("idx_content_unprocessed", "is_processed", "published_at"),
+        Index(
+            "idx_content_items_source_language",
+            "source_language",
+            postgresql_where=text("source_language IS NOT NULL"),
+        ),
     )
 
 
@@ -133,6 +155,16 @@ class ThemeMention(Base):
     # Timestamps
     mentioned_at = Column(DateTime(timezone=True), index=True)  # When content was published
     extracted_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Multilingual derivative (T7.1). raw_theme/excerpt above remain the original
+    # (in source language); translated_* preserve the target-language variant the
+    # pipeline produced. translation_metadata is *not* redundant with the parent
+    # ContentItem.translation_metadata: the short excerpt / raw_theme may be
+    # re-translated independently (e.g. higher-quality LLM rephrase vs the
+    # cheaper content-level MT), so the mention keeps its own replay snapshot.
+    translated_raw_theme = Column(String(200))
+    translated_excerpt = Column(Text)
+    translation_metadata = Column(JSON().with_variant(postgresql.JSONB(), "postgresql"))
 
     __table_args__ = (
         Index("idx_theme_mention_date", "canonical_theme", "mentioned_at"),

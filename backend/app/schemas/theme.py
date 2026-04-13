@@ -5,6 +5,26 @@ from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
+class TranslationMetadata(BaseModel):
+    """Replay snapshot for content / mention translations (T7.1).
+
+    All fields optional so (a) legacy rows that skipped translation can
+    round-trip as an empty object and (b) partial snapshots from the
+    detection-only path (T7.2) can omit translation-provider fields.
+    Model config allows extra keys so future T7.x metadata additions
+    don't require a schema bump.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    source_language: Optional[str] = None
+    target_language: Optional[str] = None
+    confidence: Optional[float] = None
+    translated_at: Optional[str] = None
+
+
 def _decode_json_field(value, expected_type):
     if value is None or isinstance(value, expected_type):
         return value
@@ -366,6 +386,14 @@ class ThemeMentionDetailResponse(BaseModel):
     tickers: list[str]
     source_type: str
     source_name: Optional[str]
+    # Multilingual audit trail (T7.1). Translated variants of the source
+    # excerpt / raw theme text, populated when extraction ran against a
+    # translated derivative (see ContentItem.translation_metadata for
+    # provider/model/language snapshot).
+    source_language: Optional[str] = None
+    translated_excerpt: Optional[str] = None
+    translated_raw_theme: Optional[str] = None
+    translation_metadata: Optional[TranslationMetadata] = None
 
     class Config:
         from_attributes = True
@@ -933,6 +961,13 @@ class ContentItemWithThemesResponse(BaseModel):
     primary_sentiment: Optional[str] = None
     tickers: list[str] = []
     processing_status: Optional[str] = None
+    # Multilingual audit trail (T7.1). Original title/content above remain
+    # authoritative; these fields expose the translated derivative when
+    # the extraction pipeline worked on a non-native language.
+    source_language: Optional[str] = None
+    translated_title: Optional[str] = None
+    translated_content: Optional[str] = None
+    translation_metadata: Optional[TranslationMetadata] = None
 
 
 class ContentItemsListResponse(BaseModel):

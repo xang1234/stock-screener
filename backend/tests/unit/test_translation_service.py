@@ -1,0 +1,473 @@
+"""Unit tests for the translation stage (T7.3)."""
+from __future__ import annotations
+
+from datetime import date
+from types import SimpleNamespace
+from typing import Optional
+
+import pytest
+
+from app.services.translation_service import (
+    CONFIDENCE_DOWNGRADE_THRESHOLD,
+    ExtractionText,
+    MAX_REASON_LENGTH,
+    POLICY_VERSION,
+    PROVIDER_EMPTY,
+    PROVIDER_IDENTITY,
+    PROVIDER_UNAVAILABLE,
+    TranslationQuote,
+    TranslationService,
+    describe_policy,
+    policy_version,
+    select_extraction_text,
+    should_downgrade_for_translation,
+    translation_confidence,
+)
+
+
+# Staticmethods on TranslationQuote — aliased for terser test code.
+identity_metadata = TranslationQuote.identity_metadata
+unavailable_metadata = TranslationQuote.unavailable_metadata
+
+
+def _row(
+    *,
+    id: int = 1,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+    source_language: Optional[str] = None,
+    translated_title: Optional[str] = None,
+    translated_content: Optional[str] = None,
+    translation_metadata: Optional[dict] = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=id,
+        title=title,
+        content=content,
+        source_language=source_language,
+        translated_title=translated_title,
+        translated_content=translated_content,
+        translation_metadata=translation_metadata,
+    )
+
+
+def _make_translator(
+    *,
+    confidence: float = 0.9,
+    provider: str = "deepl",
+    model: str = "deepl-v1",
+):
+    """Deterministic fake translator with a single confidence value."""
+    def translator(text, source, target):
+        translated = f"[{source}->{target}] {text}"
+        quote = TranslationQuote(
+            source_language=source,
+            target_language=target,
+            provider=provider,
+            model=model,
+            confidence=confidence,
+            translated_at=date.today(),
+        )
+        return translated, quote
+    return translator
+
+
+class TestIdentityPath:
+    """English source == English target: mark as identity, copy originals."""
+
+    def test_identity_copies_originals(self):
+        svc = TranslationService(_make_translator(), target_language="en")
+        row = _row(
+            title="Nvidia posts record quarter",
+            content="Revenue jumped 30%.",
+            source_language="en",
+        )
+        meta = svc.translate_content_item(row)
+        assert meta["provider"] == PROVIDER_IDENTITY
+        assert meta["source_language"] == "en"
+        assert meta["target_language"] == "en"
+        assert meta["confidence"] == 1.0
+        assert row.translated_title == "Nvidia posts record quarter"
+        assert row.translated_content == "Revenue jumped 30%."
+
+    def test_identity_reruns_when_columns_not_backfilled(self):
+        # Legacy/corrupt rows: identity metadata was written in a previous
+        # run but the translated_* columns were never populated. The cache
+        # guard must detect the mismatch and re-run _write_identity so the
+        # row meets its own contract (translated_* == originals).
+        svc = TranslationService(_make_translator(), target_language="en")
+        row = _row(
+            title="Nvidia posts record quarter",
+            content="Revenue jumped 30%.",
+            source_language="en",
+            translated_title=None,       # not backfilled
+            translated_content=None,     # not backfilled
+            translation_metadata=identity_metadata("en", "en"),
+        )
+        meta = svc.translate_content_item(row)
+        assert meta["provider"] == PROVIDER_IDENTITY
+        assert row.translated_title == "Nvidia posts record quarter"
+        assert row.translated_content == "Revenue jumped 30%."
+
+
+class TestSuccessfulTranslation:
+    def test_persists_translated_text_and_metadata(self):
+        svc = TranslationService(_make_translator(), target_language="en")
+        row = _row(
+            title="日経平均", content="半導体が牽引。", source_language="ja",
+        )
+        meta = svc.translate_content_item(row)
+        assert meta["provider"] == "deepl"
+        assert meta["source_language"] == "ja"
+        assert meta["target_language"] == "en"
+        assert row.translated_title.startswith("[ja->en]")
+        assert row.translated_content.startswith("[ja->en]")
+
+    def test_translated_title_clamped_to_500_chars(self):
+        # MT output can expand past the DB column limit (String(500)).
+        # A flush after an un-clamped assignment would raise a DB error
+        # *after* paying for the translation — the clamp prevents that.
+        long_output = "X" * 600
+
+        def long_translator(text, src, tgt):
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return long_output, quote
+
+        svc = TranslationService(long_translator, target_language="en")
+        row = _row(title="日経平均", content="半導体が牽引。", source_language="ja")
+        svc.translate_content_item(row)
+        assert len(row.translated_title) == 500
+        assert row.translated_title == "X" * 500
+
+    def test_combined_confidence_uses_weaker_signal(self):
+        # Title confidence 0.9, content confidence 0.60 → merged = 0.60.
+        # QA scoring should gate on the weaker half of the row.
+        def translator_by_length(text, source, target):
+            # Inline: short text gets high confidence, long text gets low.
+            confidence = 0.9 if len(text) < 10 else 0.60
+            quote = TranslationQuote(
+                source_language=source, target_language=target,
+                provider="deepl", model="deepl-v1",
+                confidence=confidence, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(translator_by_length, target_language="en")
+        row = _row(title="短い", content="長めの本文" * 20, source_language="ja")
+        meta = svc.translate_content_item(row)
+        assert meta["confidence"] == 0.60
+
+
+class TestIdempotency:
+    """Bead acceptance: retries must not duplicate successful translation work."""
+
+    def test_second_call_after_success_is_noop(self):
+        calls = []
+
+        def counting_translator(text, src, tgt):
+            calls.append((text, src, tgt))
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.95, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(counting_translator, target_language="en")
+        row = _row(title="日経", content="半導体", source_language="ja")
+        svc.translate_content_item(row)
+        first_call_count = len(calls)
+
+        # Second call on the same row must skip translation entirely.
+        svc.translate_content_item(row)
+        assert len(calls) == first_call_count
+
+    def test_unavailable_retries_on_next_call(self):
+        """Transient failures must not permanently mark the row un-translatable."""
+        fail_count = {"n": 0}
+
+        def flaky_translator(text, src, tgt):
+            if fail_count["n"] == 0:
+                fail_count["n"] += 1
+                raise RuntimeError("transient")
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(flaky_translator, target_language="en")
+        row = _row(title="日経", content="半導体", source_language="ja")
+
+        svc.translate_content_item(row)
+        assert row.translation_metadata["provider"] == PROVIDER_UNAVAILABLE
+        assert row.translated_title is None
+
+        svc.translate_content_item(row)  # retry
+        assert row.translation_metadata["provider"] == "deepl"
+        assert row.translated_title == "[日経]"
+
+    def test_force_refresh_overrides_cache(self):
+        calls = []
+
+        def counting_translator(text, src, tgt):
+            calls.append(text)
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"v{len(calls)}[{text}]", quote
+
+        svc = TranslationService(counting_translator, target_language="en")
+        row = _row(title="日経", content="半導体", source_language="ja")
+        svc.translate_content_item(row)
+        assert row.translated_title == "v1[日経]"
+
+        svc.translate_content_item(row, force_refresh=True)
+        assert row.translated_title == "v3[日経]"  # calls 3 and 4 ran
+
+    def test_source_language_change_invalidates_cache(self):
+        """Correcting source_language after a policy bump must trigger re-translation."""
+        calls = []
+
+        def counting(text, src, tgt):
+            calls.append((src, tgt))
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="恒生指數", content="科技股", source_language="zh")
+        svc.translate_content_item(row)
+        assert row.translation_metadata["source_language"] == "zh"
+
+        # Simulate a T7.2 re-detection that corrects the source language.
+        row.source_language = "ja"
+        prev_calls = len(calls)
+        svc.translate_content_item(row)
+        # Cache had source_language="zh" but row now has "ja" → must re-translate.
+        assert len(calls) > prev_calls
+        assert row.translation_metadata["source_language"] == "ja"
+
+    def test_different_target_language_retranslates(self):
+        svc_en = TranslationService(_make_translator(), target_language="en")
+        svc_ja = TranslationService(_make_translator(), target_language="ja")
+        row = _row(title="恒生指數", content="科技股領漲", source_language="zh")
+
+        svc_en.translate_content_item(row)
+        assert row.translation_metadata["target_language"] == "en"
+
+        # Asking for ja now must re-translate (different target).
+        svc_ja.translate_content_item(row)
+        assert row.translation_metadata["target_language"] == "ja"
+        assert row.translated_title.startswith("[zh->ja]")
+
+
+class TestFailureAtomicity:
+    def test_translator_exception_writes_unavailable_and_clears_translated(self):
+        def failing(text, src, tgt):
+            raise ConnectionError("upstream down")
+
+        svc = TranslationService(failing, target_language="en")
+        # Pre-seed translated fields to prove they get cleared.
+        row = _row(
+            title="日経", content="半導体", source_language="ja",
+            translated_title="stale", translated_content="stale",
+        )
+        meta = svc.translate_content_item(row)
+        assert meta["provider"] == PROVIDER_UNAVAILABLE
+        assert "upstream down" in meta["reason"]
+        assert row.translated_title is None
+        assert row.translated_content is None
+
+    def test_unavailable_reason_is_truncated(self):
+        def huge_reason(text, src, tgt):
+            raise RuntimeError("x" * 1000)
+
+        svc = TranslationService(huge_reason, target_language="en")
+        row = _row(title="a", content="b", source_language="ja")
+        meta = svc.translate_content_item(row)
+        # Reason string includes "RuntimeError: " prefix then xs, capped.
+        assert len(meta["reason"]) == MAX_REASON_LENGTH
+
+
+class TestEmptyInputShortCircuit:
+    """Skip paid round-trips when title or content is empty/whitespace."""
+
+    def test_empty_title_skips_translator_for_title_half(self):
+        calls = []
+
+        def counting(text, src, tgt):
+            calls.append(text)
+            quote = TranslationQuote(
+                source_language=src, target_language=tgt, provider="deepl",
+                model="v1", confidence=0.9, translated_at=date.today(),
+            )
+            return f"[{text}]", quote
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="", content="日経平均、続伸", source_language="ja")
+        svc.translate_content_item(row)
+        # Only content was translated — title was empty.
+        assert len(calls) == 1
+        assert calls[0] == "日経平均、続伸"
+        assert row.translated_title == ""  # preserved as empty
+        assert row.translated_content == "[日経平均、続伸]"
+
+    def test_both_empty_records_empty_provider(self):
+        """Both halves skipped → explicit PROVIDER_EMPTY, no translator call."""
+        calls = []
+
+        def counting(text, src, tgt):  # pragma: no cover — must not be called
+            calls.append(text)
+            raise AssertionError("translator should not be called on empty input")
+
+        svc = TranslationService(counting, target_language="en")
+        row = _row(title="", content="  ", source_language="ja")
+        meta = svc.translate_content_item(row)
+        assert calls == []
+        assert meta["provider"] == PROVIDER_EMPTY
+        assert meta["confidence"] is None
+
+
+class TestMissingSourceLanguage:
+    def test_raises_when_language_not_detected(self):
+        svc = TranslationService(_make_translator())
+        row = _row(title="未知", content="未知", source_language=None)
+        with pytest.raises(ValueError, match="detect_and_cache_language"):
+            svc.translate_content_item(row)
+
+
+class TestSelectExtractionText:
+    def test_prefers_translated_when_available(self):
+        row = _row(
+            title="日経", content="半導体",
+            source_language="ja",
+            translated_title="Nikkei", translated_content="Semiconductors",
+            translation_metadata={
+                "provider": "deepl", "source_language": "ja",
+                "target_language": "en", "confidence": 0.9,
+            },
+        )
+        title, content, lang = select_extraction_text(row)
+        assert title == "Nikkei"
+        assert content == "Semiconductors"
+        assert lang == "en"
+
+    def test_identity_returns_target_language(self):
+        row = _row(
+            title="Hello", content="World",
+            source_language="en",
+            translated_title="Hello", translated_content="World",
+            translation_metadata=identity_metadata("en", "en"),
+        )
+        title, content, lang = select_extraction_text(row)
+        assert title == "Hello"
+        assert lang == "en"
+
+    def test_unavailable_falls_back_to_original(self):
+        row = _row(
+            title="日経", content="半導体",
+            source_language="ja",
+            translated_title=None, translated_content=None,
+            translation_metadata=unavailable_metadata("ja", "en", "network"),
+        )
+        title, content, lang = select_extraction_text(row)
+        assert title == "日経"
+        assert content == "半導体"
+        assert lang == "ja"  # flags the caller that this is un-translated original
+
+    def test_no_metadata_returns_original(self):
+        row = _row(title="日経", content="半導体", source_language="ja")
+        title, content, lang = select_extraction_text(row)
+        assert (title, content, lang) == ("日経", "半導体", "ja")
+
+    def test_returns_named_tuple_fields(self):
+        # The tuple is an ExtractionText NamedTuple — consumers that use
+        # attribute access should work (not just positional unpacking).
+        row = _row(title="hi", content="there", source_language="en")
+        result = select_extraction_text(row)
+        assert isinstance(result, ExtractionText)
+        assert result.title == "hi"
+        assert result.content == "there"
+        assert result.language == "en"
+
+    def test_stale_identity_metadata_falls_back_to_original(self):
+        # If source_language is corrected after initial detection (e.g. a
+        # T7.2 re-detection bumps "en" → "ja"), stale PROVIDER_IDENTITY
+        # metadata must NOT be trusted — it would tag content as the old
+        # target language, poisoning downstream extraction with the wrong
+        # language hint.
+        row = _row(
+            title="Nikkei", content="Semiconductors",
+            source_language="ja",  # corrected from original "en"
+            translated_title="Nikkei", translated_content="Semiconductors",
+            translation_metadata=identity_metadata("en", "en"),  # stale
+        )
+        title, content, lang = select_extraction_text(row)
+        # Should fall back to originals tagged with the corrected source language.
+        assert title == "Nikkei"
+        assert content == "Semiconductors"
+        assert lang == "ja"  # not the stale "en"
+
+
+class TestShouldDowngradeForTranslation:
+    def test_unavailable_triggers_downgrade(self):
+        row = _row(translation_metadata=unavailable_metadata("ja", "en", "boom"))
+        assert should_downgrade_for_translation(row) is True
+
+    def test_high_confidence_does_not_downgrade(self):
+        row = _row(translation_metadata={
+            "provider": "deepl", "source_language": "ja", "target_language": "en",
+            "confidence": 0.95,
+        })
+        assert should_downgrade_for_translation(row) is False
+
+    def test_below_threshold_downgrades(self):
+        row = _row(translation_metadata={
+            "provider": "deepl", "source_language": "ja", "target_language": "en",
+            "confidence": CONFIDENCE_DOWNGRADE_THRESHOLD - 0.05,
+        })
+        assert should_downgrade_for_translation(row) is True
+
+    def test_identity_never_downgrades(self):
+        row = _row(translation_metadata=identity_metadata("en", "en"))
+        assert should_downgrade_for_translation(row) is False
+
+    def test_no_metadata_returns_false(self):
+        # Not-yet-translated is not this function's call; the extraction
+        # pipeline is expected to have run translation first.
+        row = _row()
+        assert should_downgrade_for_translation(row) is False
+
+
+class TestTranslationConfidence:
+    def test_returns_float(self):
+        row = _row(translation_metadata={"confidence": 0.8})
+        assert translation_confidence(row) == 0.8
+
+    def test_handles_none_and_missing(self):
+        assert translation_confidence(_row()) is None
+        assert translation_confidence(_row(translation_metadata={})) is None
+        assert translation_confidence(
+            _row(translation_metadata={"confidence": None})
+        ) is None
+
+
+class TestPolicySurface:
+    def test_version_accessor(self):
+        assert policy_version() == POLICY_VERSION
+
+    def test_describe_policy_pins_threshold(self):
+        snap = describe_policy()
+        assert snap["policy_version"] == POLICY_VERSION
+        assert snap["default_target_language"] == "en"
+        assert snap["confidence_downgrade_threshold"] == 0.70
+        assert snap["identity_provider"] == PROVIDER_IDENTITY
+        assert snap["unavailable_provider"] == PROVIDER_UNAVAILABLE
+        assert snap["empty_provider"] == PROVIDER_EMPTY
+        assert snap["max_reason_length"] == MAX_REASON_LENGTH
