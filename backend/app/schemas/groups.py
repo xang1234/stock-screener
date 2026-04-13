@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from datetime import date as Date
 from typing import Optional, List
 
-from ..schemas.scope import ScopedResponseMixin
+from .scope import ScopedResponseMixin
 
 
 class GroupRankResponse(BaseModel):
