@@ -2,8 +2,8 @@
 
 One canonical regex for validating stock symbols across watchlist CRUD,
 search, stock detail endpoints, and CSV imports. Matches the DB schema
-width (``VARCHAR(20)``) established by the asia.2.1.2 symbol-width
-migration, so a format-valid symbol is always persistable.
+width of ``stock_universe.symbol`` (``VARCHAR(20)``), so a format-valid
+symbol is always persistable.
 
 Accepts US-shape tokens (``NVDA``, ``GOOGL``) alongside the suffixed
 non-US forms supported today: ``.HK`` (Hong Kong), ``.T`` (Tokyo),
@@ -26,9 +26,9 @@ from typing import Final
 # up to 19 characters (total max 20, matches stock_universe.symbol VARCHAR(20)).
 SYMBOL_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
 
-# Known exchange suffixes. Order-independent; extension points for future
-# markets (e.g. '.KS' for KRX) should land here + in the asia.4 ingestion
-# adapters + in the market/exchange enums in schemas/universe.py.
+# Known exchange suffixes. Extending to a new market (e.g. '.KS' for KRX)
+# requires adding entries here, in the market-ingestion adapters, and in
+# the Market/Exchange enums in schemas/universe.py.
 SUPPORTED_SUFFIXES: Final[tuple[str, ...]] = (".HK", ".T", ".TW", ".TWO")
 
 _MAX_SYMBOL_LEN: Final[int] = 20

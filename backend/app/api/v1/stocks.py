@@ -598,8 +598,6 @@ async def get_chart_data(
     - Minervini/VCP data
     - Growth metrics
     """
-    symbol = symbol.upper()
-
     with uow:
         latest_run = uow.feature_runs.get_latest_published()
         if latest_run is None:
@@ -629,7 +627,6 @@ async def get_stock_decision_dashboard(
 ):
     """Get a normalized stock decision workspace payload."""
 
-    symbol = symbol.upper()
     resolved_profile = profile_service.get_profile(profile or DEFAULT_PROFILE)
     degraded_reasons: list[str] = []
 

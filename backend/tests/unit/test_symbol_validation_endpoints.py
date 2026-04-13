@@ -22,9 +22,8 @@ import app.models.theme  # noqa: F401
 import app.models.scan_result  # noqa: F401
 import app.infra.db.models.feature_store  # noqa: F401
 
-from app.api.v1 import stocks as stocks_router_module
-from app.api.v1 import user_watchlists as user_watchlists_router_module
 from app.database import get_db
+# Router registration is handled transitively by importing app.main below.
 from app.main import app as fastapi_app
 from app.models.stock_universe import StockUniverse
 from app.models.user_watchlist import UserWatchlist

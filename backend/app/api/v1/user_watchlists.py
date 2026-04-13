@@ -417,14 +417,17 @@ async def bulk_add_items(
     existing_symbols = {item.symbol for item in existing_items}
 
     # Gather every format-valid candidate, then batch-verify against the
-    # active universe in a single query to avoid N+1 lookups.
+    # active universe in a single query to avoid N+1 lookups. Insertion
+    # order is preserved (parallel list) so the downstream position
+    # assignment matches caller intent.
     candidates: list[str] = []
+    seen: set[str] = set()
     for raw in bulk_data.symbols:
         normalized = normalize_symbol(raw)
-        if normalized is None or normalized in existing_symbols:
+        if normalized is None or normalized in existing_symbols or normalized in seen:
             continue
-        if normalized not in candidates:
-            candidates.append(normalized)
+        seen.add(normalized)
+        candidates.append(normalized)
 
     known_rows = (
         db.query(StockUniverse.symbol)
