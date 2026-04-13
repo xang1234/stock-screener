@@ -38,7 +38,9 @@ const ROW_HEIGHT = 32;
 // Column definitions with explicit widths
 const columns = [
   { id: 'chart', label: '', sortable: false, width: 60 },
-  { id: 'symbol', label: 'Sym', sortable: true, width: 65 },
+  // Width bumped from 65→92 to accommodate the T8.7 FieldAvailabilityChip
+  // adjacent to longer suffixed symbols like "0700.HK" without overflow.
+  { id: 'symbol', label: 'Sym', sortable: true, width: 92 },
   { id: 'rs_trend', label: 'RS Trend', sortable: true, width: 110 },
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
   { id: 'gics_sector', label: 'Sector', sortable: true, width: 80 },
@@ -134,7 +136,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
         </TableCell>
       )}
 
-      <TableCell sx={{ fontWeight: 600, width: 65, minWidth: 65, whiteSpace: 'nowrap' }}>
+      <TableCell sx={{ fontWeight: 600, width: 92, minWidth: 92, whiteSpace: 'nowrap' }}>
         {row.symbol}
         <FieldAvailabilityChip
           fieldAvailability={row.field_availability}

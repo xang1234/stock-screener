@@ -297,7 +297,8 @@ Additive nullable fields on `ScanResultItem` that tell a client *why* a value is
     "institutional_ownership": {
       "status": "unsupported",
       "reason_code": "unsupported_market_policy_excludes_canonical_provider",
-      "support_state": "unsupported"
+      "support_state": "unsupported",
+      "canonical_provider": "finviz"
     },
     "eps_growth_qq": {
       "status": "computed",
@@ -311,7 +312,11 @@ Additive nullable fields on `ScanResultItem` that tell a client *why* a value is
 
 ### CSV export columns
 
-Export adds three columns: `Growth Metric Basis`, `Growth Reporting Cadence`, and `Unavailable Fields` (pipe-delimited `field:reason_code` pairs; empty for rows with nothing to surface).
+Export adds three columns:
+
+- `Growth Metric Basis`
+- `Growth Reporting Cadence`
+- `Field Availability Notes` — pipe-delimited `field:status:reason_code` triples (e.g. `institutional_ownership:unsupported:unsupported_market_policy_excludes_canonical_provider | eps_growth_qq:computed:comparable_period_yoy_fallback`). Emits both `unavailable` and `computed` entries so spreadsheet users can distinguish a missing value from a fallback-synthesized one. Empty string for rows with nothing to surface.
 
 ### Client action
 
@@ -330,7 +335,7 @@ For any client integrating against scans, watchlists, or theme content:
 - [ ] **T3:** treat `market_cap` / `volume` as local-currency; use `market_cap_usd` / `adv_usd` for cross-market comparison. Update any CSV header parsers that matched `"Market Cap"` exactly (now `"Market Cap (local)"`).
 - [ ] **T4:** when `source_language != null` and `source_language != "en"`, render the translated field with a language marker. Parse `translation_metadata` with extra-keys-tolerant validation.
 - [ ] **T5:** accept `.HK`/`.T`/`.TW`/`.TWO` suffixes in client-side symbol inputs. Handle `422` as malformed-input vs. `400`/`404` as not-found. Remove any client-side regex narrower than `^[A-Z0-9][A-Z0-9.\-]{0,19}$`.
-- [ ] **T7:** if rendering non-US rows, surface `field_availability` entries so users can distinguish "unsupported" (policy-excluded) from "missing" (row-specific) from "computed" (fallback path). Don't infer "unavailable" just from a `null` cell — check `field_availability[field]` first. Spreadsheet downstream: parse the `Unavailable Fields` CSV column (pipe-delimited) if rendering warnings in Excel.
+- [ ] **T7:** if rendering non-US rows, surface `field_availability` entries so users can distinguish "unsupported" (policy-excluded) from "missing" (row-specific) from "computed" (fallback path). Don't infer "unavailable" just from a `null` cell — check `field_availability[field]` first. Spreadsheet downstream: parse the `Field Availability Notes` CSV column (pipe-delimited `field:status:reason`) if rendering warnings in Excel.
 
 ## Rollout Cross-References
 
