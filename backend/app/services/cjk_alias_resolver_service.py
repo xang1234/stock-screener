@@ -168,6 +168,8 @@ def _try_symbol_passthrough(
     """Input already carries a known SecurityMaster suffix."""
     upper = normalized.upper()
     for suffix, market in _MARKET_BY_SUFFIX:
+        if market not in SUPPORTED_MARKETS:
+            continue
         if not upper.endswith(suffix):
             continue
         local_code = upper[: -len(suffix)]
@@ -179,7 +181,7 @@ def _try_symbol_passthrough(
                     method=METHOD_SYMBOL_PASSTHROUGH,
                     policy_version=POLICY_VERSION,
                 )
-        elif _LOCAL_CODE_RE_JP_TW.match(local_code):
+        elif market in {"JP", "TW"} and _LOCAL_CODE_RE_JP_TW.match(local_code):
             return AliasResolution(
                 query=query, canonical_symbol=f"{local_code}{suffix}",
                 market=market, method=METHOD_SYMBOL_PASSTHROUGH,
@@ -343,15 +345,15 @@ def describe_policy() -> dict:
 
 
 __all__ = [
-    "POLICY_VERSION",
-    "METHOD_SYMBOL_PASSTHROUGH",
-    "METHOD_SYMBOL_NORMALIZED",
+    "AliasResolution",
     "METHOD_ALIAS_EXACT",
     "METHOD_ALIAS_FOLDED",
     "METHOD_NONE",
+    "METHOD_SYMBOL_NORMALIZED",
+    "METHOD_SYMBOL_PASSTHROUGH",
+    "POLICY_VERSION",
     "SUPPORTED_MARKETS",
-    "AliasResolution",
-    "resolve_alias",
-    "policy_version",
     "describe_policy",
+    "policy_version",
+    "resolve_alias",
 ]

@@ -51,7 +51,7 @@ POSITIVE_CORPUS = [
     ("6758",    "JP", "6758.T",  "JP", METHOD_SYMBOL_NORMALIZED),
     ("2330",    "TW", "2330.TW", "TW", METHOD_SYMBOL_NORMALIZED),
     # Fullwidth digits are NFKC-normalized to ASCII.
-    ("６７５８", "JP", "6758.T",  "JP", METHOD_SYMBOL_NORMALIZED),
+    ("６７５８", "JP", "6758.T",  "JP", METHOD_SYMBOL_NORMALIZED),  # noqa: RUF001
 
     # --- Alias exact: NFKC-literal match ------------------------------
     ("Tencent",       None, "0700.HK", "HK", METHOD_ALIAS_EXACT),
@@ -98,7 +98,7 @@ class TestNormalizationPrimitives:
         assert nfkc("ｿﾆｰ") == "ソニー"
 
     def test_nfkc_folds_fullwidth_digits(self):
-        assert nfkc("６７５８") == "6758"
+        assert nfkc("６７５８") == "6758"  # noqa: RUF001
 
     def test_nfkc_preserves_han(self):
         # NFKC is script-preserving for CJK Unified Ideographs.
