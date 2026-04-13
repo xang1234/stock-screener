@@ -15,6 +15,7 @@ from sqlalchemy import (
     JSON,
     event,
     inspect,
+    text,
 )
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -91,7 +92,9 @@ class ContentItem(Base):
     # so replay stays deterministic across config churn.
     # TODO(T7.2): replace raw String(8) with a LanguageCode constants module +
     # BCP-47 validator (cf. provider_routing_policy.MARKET_US / normalize_market).
-    source_language = Column(String(8), index=True)  # BCP-47 short tag, e.g. "en", "ja", "zh-HK"
+    # Index lives in __table_args__ (partial, see migration 20260413_0010) —
+    # NOT ``index=True`` so autogen doesn't clobber the WHERE predicate.
+    source_language = Column(String(8))  # BCP-47 short tag, e.g. "en", "ja", "zh-HK"
     translated_title = Column(String(500))
     translated_content = Column(Text)
     translation_metadata = Column(JSON)
@@ -99,6 +102,11 @@ class ContentItem(Base):
     __table_args__ = (
         UniqueConstraint("source_type", "external_id", name="uix_source_external_id"),
         Index("idx_content_unprocessed", "is_processed", "published_at"),
+        Index(
+            "idx_content_items_source_language",
+            "source_language",
+            postgresql_where=text("source_language IS NOT NULL"),
+        ),
     )
 
 
