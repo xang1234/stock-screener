@@ -73,12 +73,41 @@ class Settings(BaseSettings):
     # Admin API key (required for config endpoints)
     admin_api_key: str = ""
 
-    # Rate Limiting
-    yfinance_rate_limit: int = 1  # requests per second
+    # Rate Limiting (global aggregate budgets — divided per market by RateBudgetPolicy)
+    yfinance_rate_limit: int = 1  # requests per second (aggregate across all markets)
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
     yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
+
+    # Per-market rate budget overrides. Each value is in requests-per-second
+    # for that market specifically. None means "use universe-weighted division
+    # of the global aggregate" (sensible default). Set explicit values when
+    # empirical measurements show the auto-computed split is wrong for a
+    # particular market.
+    yfinance_rate_limit_us: float | None = None
+    yfinance_rate_limit_hk: float | None = None
+    yfinance_rate_limit_jp: float | None = None
+    yfinance_rate_limit_tw: float | None = None
+    finviz_rate_limit_us: float | None = None
+    finviz_rate_limit_hk: float | None = None
+    finviz_rate_limit_jp: float | None = None
+    finviz_rate_limit_tw: float | None = None
+
+    # Per-market batch sizes for yfinance bulk downloads. Smaller batches for
+    # non-US markets reduce the blast radius of any single batch hitting
+    # provider hiccups. Defaults shipped via RateBudgetPolicy._DEFAULT_BATCH_SIZE.
+    yfinance_batch_size_us: int | None = None
+    yfinance_batch_size_hk: int | None = None
+    yfinance_batch_size_jp: int | None = None
+    yfinance_batch_size_tw: int | None = None
+
+    # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
+    # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
+    yfinance_backoff_max_s_us: int | None = None
+    yfinance_backoff_max_s_hk: int | None = None
+    yfinance_backoff_max_s_jp: int | None = None
+    yfinance_backoff_max_s_tw: int | None = None
 
     # Scanning
     default_universe: str = "all"

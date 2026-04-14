@@ -365,6 +365,14 @@ if settings.cache_warmup_enabled:
             ),
         },
 
+        # Weekly refresh of per-market universe weights for RateBudgetPolicy.
+        # Runs Sunday 0:30 AM ET — early in the weekly window so subsequent
+        # weekly refreshes use freshly-computed budget splits.
+        'weekly-rate-budget-weights-refresh': {
+            'task': 'app.tasks.cache_tasks.refresh_universe_weights',
+            'schedule': crontab(hour=0, minute=30, day_of_week=0),
+        },
+
         # Monthly cleanup of old price data (keep 5 years)
         # Runs 1st of each month at 1 AM ET
         # Low priority - prevents unbounded database growth over time

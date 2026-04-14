@@ -109,7 +109,7 @@ def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
 
     module.safe_rollback.assert_called_once_with(fake_db)
     fake_price_cache.save_warmup_metadata.assert_called_once()
-    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed", market=None)
     fake_db.close.assert_called_once()
 
 
@@ -143,7 +143,7 @@ def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkey
 
     assert result["status"] == "completed"
     assert result["message"] == "No active symbols found in universe"
-    fake_price_cache.save_warmup_metadata.assert_called_once_with("completed", 0, 0)
+    fake_price_cache.save_warmup_metadata.assert_called_once_with("completed", 0, 0, market=None)
     fake_db.close.assert_called_once()
 
 
@@ -223,7 +223,7 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
 
     module.safe_rollback.assert_called_once_with(fake_db)
     fake_price_cache.save_warmup_metadata.assert_called_once()
-    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed", market=None)
     fake_db.close.assert_called_once()
 
 def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
@@ -267,7 +267,7 @@ def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
 
     module.safe_rollback.assert_called_once_with(fake_db)
     fake_price_cache.save_warmup_metadata.assert_called_once()
-    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed")
+    fake_price_cache.complete_warmup_heartbeat.assert_called_once_with("failed", market=None)
     fake_db.close.assert_called_once()
 
 

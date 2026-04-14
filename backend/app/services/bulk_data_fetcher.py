@@ -413,14 +413,25 @@ class BulkDataFetcher:
         symbols: List[str],
         period: str = '2y',
         start_batch_size: Optional[int] = None,
+        market: Optional[str] = None,
     ) -> Dict[str, Dict]:
-        """
-        Fetch prices for many symbols using adaptive ``yf.download()`` batches.
+        """Fetch prices for many symbols using adaptive ``yf.download()`` batches.
 
         Background jobs should call this method instead of any per-symbol Yahoo path.
+
+        When ``market`` is supplied, per-market rate budget keys
+        (``yfinance:hk`` / ``yfinance:batch:hk``) and per-market batch sizes
+        from RateBudgetPolicy take effect, so cross-market refreshes don't
+        starve each other of provider tokens.
         """
         if not symbols:
             return {}
+
+        # Per-market initial batch size from RateBudgetPolicy when caller
+        # didn't pass an explicit ``start_batch_size``.
+        if start_batch_size is None and market is not None:
+            from .rate_budget_policy import get_rate_budget_policy
+            start_batch_size = get_rate_budget_policy().get_batch_size("yfinance", market)
 
         batch_size = max(
             self.MIN_PRICE_BATCH_SIZE,
@@ -459,10 +470,15 @@ class BulkDataFetcher:
                     success_streak = 0
 
             if batch_start + len(batch_symbols) < len(symbols):
-                self._rate_limiter.wait(
-                    "yfinance:batch",
-                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
-                )
+                # Per-market batch interval when market is supplied; falls
+                # back to the legacy global key for shared/unmarked calls.
+                if market is not None:
+                    self._rate_limiter.wait_for_market("yfinance:batch", market)
+                else:
+                    self._rate_limiter.wait(
+                        "yfinance:batch",
+                        min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                    )
             batch_start += len(batch_symbols)
 
         return combined_results
@@ -557,6 +573,7 @@ class BulkDataFetcher:
         delay_between_batches: float = 2.0,
         delay_per_ticker: float = 1.5,
         market_by_symbol: Optional[Dict[str, str]] = None,
+        market: Optional[str] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols efficiently.
@@ -579,7 +596,26 @@ class BulkDataFetcher:
         if not symbols:
             return {}
 
-        logger.info(f"Fetching fundamentals for {len(symbols)} symbols (batch_size={batch_size}, delay={delay_per_ticker}s/ticker)")
+        # Per-market batch sizing + backoff. Without market
+        # the legacy global behavior preserves; with market, RateBudgetPolicy
+        # takes over.
+        backoff_base_s = 60
+        backoff_max_s = 480
+        backoff_factor = 2.0
+        if market is not None:
+            from .rate_budget_policy import get_rate_budget_policy
+            _policy = get_rate_budget_policy()
+            batch_size = _policy.get_batch_size("yfinance", market)
+            _bp = _policy.get_backoff_params("yfinance", market)
+            backoff_base_s = _bp["base_s"]
+            backoff_max_s = _bp["max_s"]
+            backoff_factor = _bp["factor"]
+
+        logger.info(
+            f"Fetching fundamentals for {len(symbols)} symbols "
+            f"(market={market or 'shared'}, batch_size={batch_size}, "
+            f"delay={delay_per_ticker}s/ticker)"
+        )
 
         all_results = {}
         total_batches = (len(symbols) + batch_size - 1) // batch_size
@@ -626,10 +662,16 @@ class BulkDataFetcher:
                         all_results[symbol] = {'has_error': True, 'error': str(e)}
                         if any(ind in error_str for ind in ("rate", "429", "too many", "limit", "throttl")):
                             batch_rate_limit_failures += 1
+                            if market is not None:
+                                from .rate_budget_policy import get_rate_budget_policy
+                                get_rate_budget_policy().record_429("yfinance", market)
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
-                        self._rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
+                        if market is not None:
+                            self._rate_limiter.wait_for_market("yfinance", market)
+                        else:
+                            self._rate_limiter.wait("yfinance", min_interval_s=delay_per_ticker)
 
             except Exception as e:
                 logger.error(f"Batch error: {e}")
@@ -640,17 +682,23 @@ class BulkDataFetcher:
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0
             if batch_failure_rate > 0.5:
                 consecutive_backoffs += 1
-                backoff_time = min(60 * (2 ** (consecutive_backoffs - 1)), 480)  # 60, 120, 240, 480 max
+                backoff_time = min(
+                    backoff_base_s * (backoff_factor ** (consecutive_backoffs - 1)),
+                    backoff_max_s,
+                )
                 logger.warning(
                     f"Rate limited: {batch_rate_limit_failures}/{len(batch_symbols)} symbols in batch {batch_num + 1}. "
-                    f"Backing off {backoff_time}s before next batch."
+                    f"Backing off {backoff_time}s before next batch (market={market or 'shared'})."
                 )
                 time.sleep(backoff_time)
             else:
                 consecutive_backoffs = 0  # Reset on successful batch
                 # Normal rate limit between batches
                 if batch_num < total_batches - 1:
-                    self._rate_limiter.wait("yfinance:batch", min_interval_s=delay_between_batches)
+                    if market is not None:
+                        self._rate_limiter.wait_for_market("yfinance:batch", market)
+                    else:
+                        self._rate_limiter.wait("yfinance:batch", min_interval_s=delay_between_batches)
 
         success_count = len([r for r in all_results.values() if not r.get('has_error', False)])
         logger.info(f"Batch fundamentals complete: {success_count}/{len(symbols)} successful")

@@ -44,6 +44,18 @@ def normalize_market(market: Optional[str]) -> str:
     return upper
 
 
+def market_suffix(market: Optional[str]) -> str:
+    """Return the canonical suffix used in per-market keys: e.g. ``hk`` or ``shared``.
+
+    Used by queue names (``data_fetch_hk``), Redis lock keys
+    (``data_fetch_job_lock:hk``), heartbeat keys (``cache:warmup:heartbeat:hk``),
+    and rate-budget keys (``yfinance:hk``). Centralized here so the suffix
+    convention stays in one place.
+    """
+    normalized = normalize_market(market)
+    return "shared" if normalized == SHARED_SENTINEL else normalized.lower()
+
+
 def queue_for_market(market: Optional[str], base: str = DATA_FETCH_BASE) -> str:
     """Return the queue name for a given market.
 
@@ -51,10 +63,7 @@ def queue_for_market(market: Optional[str], base: str = DATA_FETCH_BASE) -> str:
     queue_for_market(None)      -> "data_fetch_shared"
     queue_for_market("US", base="user_scans") -> "user_scans_us"
     """
-    normalized = normalize_market(market)
-    if normalized == SHARED_SENTINEL:
-        return f"{base}_shared"
-    return f"{base}_{normalized.lower()}"
+    return f"{base}_{market_suffix(market)}"
 
 
 def data_fetch_queue_for_market(market: Optional[str]) -> str:
@@ -80,12 +89,12 @@ def log_extra(market: Optional[str]) -> dict:
     """Structured-log extra dict carrying the market label.
 
     Use with `logger.info("...", extra=log_extra(market))`. Downstream log
-    formatters and the future observability pipeline (bead 9.2 / epic 10) can
-    key off `market` without parsing log bodies.
+    formatters and the observability pipeline can key off `market` without
+    parsing log bodies.
     """
-    return {"market": normalize_market(market).lower()}
+    return {"market": market_suffix(market)}
 
 
 def market_tag(market: Optional[str]) -> str:
     """Human-readable tag for log banners, e.g. '[market=hk]' or '[market=shared]'."""
-    return f"[market={normalize_market(market).lower()}]"
+    return f"[market={market_suffix(market)}]"
