@@ -170,7 +170,8 @@ class RedisRateLimiter:
         Block until rate limit allows the call. Returns actual time waited.
 
         Args:
-            key: Rate limit key (e.g., "yfinance", "finviz", "yfinance:batch")
+            key: Rate limit key (e.g., "yfinance", "finviz", "yfinance:batch",
+                or per-market like "yfinance:hk" — see RateBudgetPolicy)
             min_interval_s: Minimum seconds between calls for this key
             timeout_s: Maximum seconds to wait before raising RateLimitTimeoutError
 
@@ -209,3 +210,26 @@ class RedisRateLimiter:
 
         logger.debug(f"Rate limit: key={key} waited=0.000s backend={backend}")
         return 0.0
+
+    def wait_for_market(
+        self,
+        provider: str,
+        market: Optional[str],
+        timeout_s: float = 120.0,
+    ) -> float:
+        """Per-market convenience wrapper.
+
+        Resolves the provider×market interval via RateBudgetPolicy, calls
+        the underlying ``wait()``, and records throttle telemetry when the
+        call actually slept. This is the preferred API for new code; raw
+        ``wait()`` remains for shared/legacy keys.
+        """
+        from .rate_budget_policy import get_rate_budget_policy
+
+        policy = get_rate_budget_policy()
+        key = policy.provider_key(provider, market)
+        interval = policy.get_rate_interval(provider, market)
+        waited = self.wait(key, min_interval_s=interval, timeout_s=timeout_s)
+        if waited > 0:
+            policy.record_throttle_wait(provider, market, waited)
+        return waited

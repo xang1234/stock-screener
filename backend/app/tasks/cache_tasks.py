@@ -35,11 +35,21 @@ _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
 )
 
 
-def _active_benchmark_markets(db) -> List[str]:
-    """Return distinct active markets that have configured benchmarks."""
+def _active_benchmark_markets(db, scope_market: Optional[str] = None) -> List[str]:
+    """Return distinct active markets that have configured benchmarks.
+
+    When ``scope_market`` is supplied, only that market's benchmark is
+    returned. Prevents 4× redundant benchmark warmups when 4 per-market
+    beat entries call warm_spy_cache in parallel. Unknown scopes fall
+    back to US (safe default that keeps legacy SPY consumers working).
+    """
     from ..models.stock_universe import StockUniverse
 
     supported = set(benchmark_registry.supported_markets())
+    if scope_market is not None:
+        scoped = scope_market.upper()
+        return [scoped] if scoped in supported else ["US"]
+
     rows = (
         db.query(
             StockUniverse.market,
@@ -104,26 +114,47 @@ def allow_smart_refresh_time_window_bypass():
         _SMART_REFRESH_TIME_WINDOW_BYPASS.reset(token)
 
 
-@celery_app.task(name='app.tasks.cache_tasks.warm_spy_cache')
-def warm_spy_cache():
+@celery_app.task(name='app.tasks.cache_tasks.refresh_universe_weights')
+def refresh_universe_weights():
+    """Recompute per-market universe weights for the rate-budget policy.
+
+    Runs weekly via Beat (Sunday). The RateBudgetPolicy in-process cache has
+    a 14-day stale fallback, but recomputing weekly keeps weights tracking
+    universe-size shifts (new index memberships, delistings) before that
+    fallback kicks in.
     """
-    Warm benchmark cache for active markets.
+    try:
+        from ..services.rate_budget_policy import get_rate_budget_policy
+        policy = get_rate_budget_policy()
+        policy.invalidate_weights_cache()
+        weights = policy._universe_weights(force_refresh=True)
+        logger.info("Refreshed rate-budget universe weights: %s", weights)
+        return {"status": "ok", "weights": weights}
+    except Exception as exc:
+        logger.warning("refresh_universe_weights failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
 
-    This task is typically run after market close to ensure
-    the next day's scans have fresh benchmark data cached.
 
-    Returns:
-        Dict with task results
+@celery_app.task(name='app.tasks.cache_tasks.warm_spy_cache')
+def warm_spy_cache(market: Optional[str] = None):
+    """Warm benchmark cache for active markets.
+
+    Args:
+        market: Optional market scope (US/HK/JP/TW). When supplied, only
+            that market's benchmark is warmed — prevents 4× redundant work
+            when called by per-market weekly_full_refresh tasks running in
+            parallel. When None, warms benchmarks for all active markets
+            (legacy behavior).
     """
     logger.info("=" * 60)
-    logger.info("TASK: Warming Market Benchmark Cache")
+    logger.info("TASK: Warming Market Benchmark Cache (scope=%s)", market or "all")
     logger.info(f"Market status: {format_market_status()}")
     logger.info("=" * 60)
 
     db = SessionLocal()
     try:
         cache_manager = CacheManager()
-        markets = _active_benchmark_markets(db)
+        markets = _active_benchmark_markets(db, scope_market=market)
         logger.info(f"Warming benchmark cache for markets: {markets}")
 
         # Warm both 1y and 2y periods for each active market
@@ -319,9 +350,10 @@ def weekly_full_refresh(self, market: str | None = None):
         orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
         logger.info("✓ Cleaned up %d orphaned cache entries", orphan_count, extra=_log_extra)
 
-        # 2. Warm benchmark cache for active markets
+        # 2. Warm benchmark cache (scoped to this market to avoid 4× redundant
+        # work when 4 per-market refreshes run in parallel).
         logger.info("\n[2/4] Re-warming market benchmark cache...", extra=_log_extra)
-        benchmark_results = warm_spy_cache()
+        benchmark_results = warm_spy_cache(market=market)
 
         # 3. Get all active symbols ordered by market cap (market-filtered)
         logger.info(
@@ -337,7 +369,7 @@ def weekly_full_refresh(self, market: str | None = None):
 
         if not symbols:
             logger.warning("No active symbols found in universe")
-            price_cache.save_warmup_metadata("completed", 0, 0)
+            price_cache.save_warmup_metadata("completed", 0, 0, market=market)
             return {
                 'orphans_cleaned': orphan_count,
                 'benchmark': benchmark_results,
@@ -350,7 +382,7 @@ def weekly_full_refresh(self, market: str | None = None):
         total = len(symbols)
 
         # Write initial heartbeat before batch loop
-        price_cache.update_warmup_heartbeat(0, total, 0.0)
+        price_cache.update_warmup_heartbeat(0, total, 0.0, market=market)
 
         # 4. Batch fetch all symbols (inline, no child task)
         logger.info(f"\n[4/4] Fetching {total} symbols...")
@@ -418,7 +450,7 @@ def weekly_full_refresh(self, market: str | None = None):
                 'current': progress, 'total': total, 'percent': percent,
                 'refreshed': refreshed, 'failed': failed
             })
-            price_cache.update_warmup_heartbeat(progress, total, percent)
+            price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
 
             # Extend lock TTL to prevent expiry during long runs (capped at 2h)
             lock.extend_lock(task_id, 300)
@@ -433,8 +465,8 @@ def weekly_full_refresh(self, market: str | None = None):
         # Save final metadata
         success_rate = refreshed / total if total > 0 else 0
         status = "completed" if success_rate >= 0.95 else "partial"
-        price_cache.save_warmup_metadata(status, refreshed, total)
-        price_cache.complete_warmup_heartbeat("completed")
+        price_cache.save_warmup_metadata(status, refreshed, total, market=market)
+        price_cache.complete_warmup_heartbeat("completed", market=market)
 
         logger.info("=" * 80)
         logger.info(f"✓ Weekly full refresh completed:")
@@ -464,13 +496,14 @@ def weekly_full_refresh(self, market: str | None = None):
             refreshed,
             locals().get("total", 0),
             "Soft time limit exceeded",
+            market=market,
         )
-        price_cache.complete_warmup_heartbeat("failed")
+        price_cache.complete_warmup_heartbeat("failed", market=market)
         raise
     except Exception as e:
         logger.error(f"Error in weekly_full_refresh task: {e}", exc_info=True)
-        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e))
-        price_cache.complete_warmup_heartbeat("failed")
+        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
+        price_cache.complete_warmup_heartbeat("failed", market=market)
         return {
             'error': str(e),
             'completed_at': datetime.now().isoformat()
@@ -1223,7 +1256,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
         )
     )
     # Time-window guard only applies to the legacy US-only scheduling path
-    # (market is None). Per-market beat entries (bead 9.1) fire at local-market
+    # (market is None). Per-market beat entries fire at local-market
     # hours in ET (e.g. HK at 4:30 AM ET, TW at 1:00 AM ET) which fall outside
     # the legacy US window, so skip the guard when market is explicit.
     if mode == "full" and not is_manual and market is None:
@@ -1264,9 +1297,11 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     failed_symbols = []
 
     try:
-        # Step 1: Always warm market benchmarks first (required for RS calculations)
+        # Step 1: Always warm market benchmarks first (required for RS
+        # calculations). Scoped to caller's market to avoid redundant work
+        # across parallel per-market refreshes.
         logger.info("[1/3] Warming market benchmarks...")
-        benchmark_result = warm_spy_cache()
+        benchmark_result = warm_spy_cache(market=market)
         if benchmark_result.get('error'):
             logger.error(f"Benchmark warmup failed: {benchmark_result.get('error')}")
 
@@ -1307,7 +1342,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
                 if mode == "auto" else
                 "No active symbols found in universe"
             )
-            price_cache.save_warmup_metadata("completed", 0, 0)
+            price_cache.save_warmup_metadata("completed", 0, 0, market=market)
             return {
                 "status": "completed",
                 "refreshed": 0,
@@ -1322,7 +1357,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
 
         # Write initial heartbeat before batch loop to prevent false "stuck" detection.
         # Without this, the health endpoint sees lock held + no heartbeat = stuck.
-        price_cache.update_warmup_heartbeat(0, total, 0.0)
+        price_cache.update_warmup_heartbeat(0, total, 0.0, market=market)
 
         # Step 3: Batch fetch with progress tracking
         logger.info(f"[3/3] Fetching {total} symbols...")
@@ -1403,7 +1438,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
             )
 
             # Update heartbeat for stuck detection
-            price_cache.update_warmup_heartbeat(progress, total, percent)
+            price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
 
             # Extend lock TTL to prevent expiry during long-running tasks
             task_id = self.request.id or 'unknown'
@@ -1421,8 +1456,8 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
         # Save final warmup metadata (treat >95% success as "completed")
         success_rate = refreshed / total if total > 0 else 0
         status = "completed" if success_rate >= 0.95 else "partial"
-        price_cache.save_warmup_metadata(status, refreshed, total)
-        price_cache.complete_warmup_heartbeat("completed")
+        price_cache.save_warmup_metadata(status, refreshed, total, market=market)
+        price_cache.complete_warmup_heartbeat("completed", market=market)
 
         logger.info("=" * 80)
         logger.info(f"✓ Smart refresh completed ({mode} mode):")
@@ -1451,14 +1486,15 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
             refreshed,
             locals().get("total", 0),
             "Soft time limit exceeded",
+            market=market,
         )
-        price_cache.complete_warmup_heartbeat("failed")
+        price_cache.complete_warmup_heartbeat("failed", market=market)
         raise
     except Exception as e:
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
         # Save partial progress
-        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e))
-        price_cache.complete_warmup_heartbeat("failed")
+        price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
+        price_cache.complete_warmup_heartbeat("failed", market=market)
         return {
             "status": "failed",
             "error": str(e),

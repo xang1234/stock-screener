@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
     redis = None
 
 from ..config import settings
-from .market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS, normalize_market
+from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,7 @@ LOCK_KEY = "data_fetch_job_lock"
 
 def _lock_key_for_market(market: Optional[str]) -> str:
     """Return the Redis lock key for a given market, or :shared for None."""
-    normalized = normalize_market(market)
-    suffix = "shared" if normalized == SHARED_SENTINEL else normalized.lower()
-    return f"{LOCK_KEY}:{suffix}"
+    return f"{LOCK_KEY}:{market_suffix(market)}"
 
 
 def all_market_lock_keys() -> list[str]:
@@ -241,15 +239,20 @@ class DataFetchLock:
         Get info about the current running task including progress for the given market scope.
 
         Enhanced version of get_current_holder that includes heartbeat data.
+        Per-market heartbeat key: the `market` arg scopes both lock-holder
+        lookup and heartbeat read to the same market.
         """
         holder = self.get_current_holder(market=market)
         if not holder or 'task_name' not in holder:
             return None
 
-        # Try to get heartbeat/progress info
+        # Per-market heartbeat key via the public constructor on the store.
         try:
             from ..services.price_cache_service import WARMUP_HEARTBEAT_KEY
-            heartbeat_json = self.redis.get(WARMUP_HEARTBEAT_KEY)
+            from ..services.cache.price_cache_warmup import scoped_heartbeat_key
+
+            heartbeat_key = scoped_heartbeat_key(WARMUP_HEARTBEAT_KEY, market)
+            heartbeat_json = self.redis.get(heartbeat_key)
             if heartbeat_json:
                 import json
                 heartbeat = json.loads(heartbeat_json)

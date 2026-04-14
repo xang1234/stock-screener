@@ -77,7 +77,7 @@ def test_warm_spy_cache_returns_error_when_any_market_warm_fails(monkeypatch):
 
     monkeypatch.setattr(cache_tasks, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(cache_tasks, "CacheManager", lambda: _FakeCacheManager())
-    monkeypatch.setattr(cache_tasks, "_active_benchmark_markets", lambda _db: ["HK", "US"])
+    monkeypatch.setattr(cache_tasks, "_active_benchmark_markets", lambda _db, scope_market=None: ["HK", "US"])
     monkeypatch.setattr(cache_tasks, "format_market_status", lambda: "closed")
 
     result = cache_tasks.warm_spy_cache()

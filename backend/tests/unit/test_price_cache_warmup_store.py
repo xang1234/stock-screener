@@ -61,7 +61,9 @@ def test_complete_warmup_heartbeat_preserves_progress_fields():
 
     store.complete_warmup_heartbeat("completed")
 
-    assert redis_client.last_set_key == "cache:warmup:heartbeat"
+    # Bead asia.9.2: heartbeat key is now per-market scoped; with no market
+    # explicitly passed, the key is suffixed with ":shared".
+    assert redis_client.last_set_key == "cache:warmup:heartbeat:shared"
     assert redis_client.last_set_ttl == 3600
     saved_payload = json.loads(redis_client.last_set_value)
     assert saved_payload["status"] == "completed"
