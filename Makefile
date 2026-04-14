@@ -9,8 +9,9 @@
 #   make all           Full CI (gate-check + identity + backend + frontend)
 # ═══════════════════════════════════════════════════════════════════
 
-.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gate-market-parity gates gate-check \
-        frontend-lint frontend-test frontend phase2-type-gate phase2-reliability golden-update all
+.PHONY: help gate-identity gate-1 gate-2 gate-3 gate-4 gate-5 gate-6-load gate-market-parity \
+        gates gate-check frontend-lint frontend-test frontend phase2-type-gate phase2-reliability \
+        golden-update load-baseline-update all
 
 # ── Tooling ─────────────────────────────────────────────────────────
 
@@ -114,6 +115,12 @@ gate-4: ## Performance baselines
 
 gate-5: ## Golden regression
 	$(PYTEST) $(GATE_5) -v --tb=short
+
+gate-6-load: ## Per-market load/soak harness (E9.3) — requires Redis; not gated per-PR
+	$(PYTEST) tests/load/ -v --tb=short -m load
+
+load-baseline-update: ## Regenerate the committed load baseline (use sparingly, intentionally)
+	LOAD_TEST_UPDATE_BASELINE=1 $(PYTEST) tests/load/ -v --tb=short -m load
 
 gate-market-parity: ## E6 US parity and non-US correctness (T6.5)
 	$(PYTEST) $(GATE_MARKET_PARITY) -v --tb=short
