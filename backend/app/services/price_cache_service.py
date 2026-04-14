@@ -796,10 +796,10 @@ class PriceCacheService:
                     "last_warmup": None
                 }
 
-            # Check if a refresh task is currently running
+            # Check if a refresh task is currently running across all market scopes.
             from ..wiring.bootstrap import get_data_fetch_lock
             lock = get_data_fetch_lock()
-            current_holder = lock.get_current_holder()
+            current_holder = lock.get_any_current_holder()
 
             if current_holder and current_holder.get('task_name'):
                 # Lock is held — check heartbeat to determine state
@@ -812,7 +812,7 @@ class PriceCacheService:
                         f"Task heartbeat is terminal ({hb_info['status']}), "
                         f"force-releasing stale lock"
                     )
-                    lock.force_release()
+                    lock.force_release_all()
                     # Fall through to SPY freshness check below
 
                 elif hb_info and hb_info.get('status') == 'running':

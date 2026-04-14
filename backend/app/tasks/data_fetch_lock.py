@@ -277,6 +277,81 @@ class DataFetchLock:
         # Also include legacy unsuffixed key defensively.
         return self.redis.exists(LOCK_KEY) > 0
 
+    def get_any_current_holder(self) -> Optional[Dict[str, Any]]:
+        """Return holder info from the first market lock that is held.
+
+        Used by status/health API endpoints that need to report ANY active
+        data-fetch task across all market scopes, without knowing which
+        market is currently active. The legacy unsuffixed key is also checked
+        for backward-compat.
+        """
+        for key in all_market_lock_keys():
+            current = self.redis.get(key)
+            if not current:
+                continue
+            try:
+                parts = current.decode().split(':')
+                if len(parts) >= 3:
+                    return {
+                        'task_name': parts[0],
+                        'task_id': parts[1],
+                        'started_at': ':'.join(parts[2:]),
+                        'ttl_seconds': self.redis.ttl(key),
+                        'lock_key': key,
+                    }
+            except Exception:
+                return {'raw': current.decode(), 'lock_key': key}
+        return None
+
+    def get_any_current_task(self) -> Optional[Dict[str, Any]]:
+        """Return the current task (with heartbeat) from any held market lock.
+
+        Companion to ``get_any_current_holder``, augmented with heartbeat
+        progress data from the matching market-scoped heartbeat key.
+        """
+        holder = self.get_any_current_holder()
+        if not holder or 'task_name' not in holder:
+            return None
+
+        try:
+            from ..services.price_cache_service import WARMUP_HEARTBEAT_KEY
+            from ..services.cache.price_cache_warmup import scoped_heartbeat_key
+            # Derive market from the lock key: "data_fetch_job_lock:hk" → "hk"
+            lock_key = holder.get('lock_key', '')
+            suffix = lock_key.rsplit(':', 1)[-1]
+            market_str = None if suffix in ('shared', '') else suffix
+            heartbeat_key = scoped_heartbeat_key(WARMUP_HEARTBEAT_KEY, market_str)
+            heartbeat_json = self.redis.get(heartbeat_key)
+            if heartbeat_json:
+                import json
+                heartbeat = json.loads(heartbeat_json)
+                holder['current'] = heartbeat.get('current')
+                holder['total'] = heartbeat.get('total')
+                holder['progress'] = heartbeat.get('percent')
+                holder['last_heartbeat'] = heartbeat.get('updated_at')
+        except Exception as e:
+            logger.debug("Could not get heartbeat in get_any_current_task: %s", e)
+
+        return holder
+
+    def force_release_all(self) -> int:
+        """Force-release ALL market and shared lock keys.
+
+        Used by admin force-release endpoints to unstick any market lock
+        regardless of which market is currently held. Returns the number of
+        keys deleted.
+        """
+        count = 0
+        for key in all_market_lock_keys():
+            if self.redis.delete(key):
+                count += 1
+                logger.warning("Data fetch lock force released (key=%s)", key)
+        # Also clear legacy unsuffixed key.
+        if self.redis.delete(LOCK_KEY):
+            count += 1
+            logger.warning("Legacy data fetch lock force released (key=%s)", LOCK_KEY)
+        return count
+
     def extend_lock(
         self,
         task_id: str,

@@ -374,7 +374,7 @@ async def test_warm_all_returns_already_running_when_refresh_active(client, monk
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
-    mock_lock.get_current_task.return_value = {
+    mock_lock.get_any_current_task.return_value = {
         "task_id": "running-123",
         "task_name": "smart_refresh_cache",
     }
@@ -402,7 +402,7 @@ async def test_warm_all_queues_full_smart_refresh_when_idle(client, monkeypatch)
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
-    mock_lock.get_current_task.return_value = None
+    mock_lock.get_any_current_task.return_value = None
     monkeypatch.setattr(module, "get_data_fetch_lock", lambda: mock_lock)
 
     apply_async = MagicMock(return_value=SimpleNamespace(id="queued-123"))
@@ -428,7 +428,7 @@ async def test_refresh_endpoint_queues_requested_mode(client, monkeypatch):
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     mock_lock = MagicMock()
-    mock_lock.get_current_task.return_value = None
+    mock_lock.get_any_current_task.return_value = None
     monkeypatch.setattr(module, "get_data_fetch_lock", lambda: mock_lock)
 
     apply_async = MagicMock(return_value=SimpleNamespace(id="queued-auto"))
