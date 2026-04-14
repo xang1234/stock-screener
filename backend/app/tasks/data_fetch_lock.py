@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 try:
     import redis  # type: ignore
@@ -133,6 +133,26 @@ class DataFetchLock:
         self.lock_timeout = getattr(settings, 'data_fetch_lock_timeout', 7200)
         self._release_script = self.redis.register_script(_RELEASE_LUA)
         self._extend_script = self.redis.register_script(_EXTEND_LUA)
+
+    @contextmanager
+    def external_hold(
+        self,
+        task_name: str,
+        task_id: str,
+        market: Optional[str] = None,
+    ) -> Iterator[bool]:
+        """Acquire the per-market lock for the duration of the context.
+
+        Releases on exit if (and only if) the acquire actually took the lock.
+        Used by chaos/integration tests that need to simulate a stuck task
+        holding a market's lock while other code runs.
+        """
+        acquired, _ = self.acquire(task_name, task_id, market=market)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self.release(task_id, market=market)
 
     def acquire(
         self,

@@ -1,5 +1,5 @@
 {
-  "git_sha": "cb391a48",
+  "git_sha": "417a7328",
   "markets": [
     {
       "market": "US",
@@ -9,7 +9,7 @@
       "rate_limit_429s": 0,
       "symbols_processed": 200,
       "transient_failures": 0,
-      "wall_clock_s": 0.643,
+      "wall_clock_s": 0.477,
       "yfinance_calls": 4
     },
     {
@@ -20,7 +20,7 @@
       "rate_limit_429s": 0,
       "symbols_processed": 100,
       "transient_failures": 25,
-      "wall_clock_s": 0.61,
+      "wall_clock_s": 0.405,
       "yfinance_calls": 4
     },
     {
@@ -31,7 +31,7 @@
       "rate_limit_429s": 1,
       "symbols_processed": 100,
       "transient_failures": 0,
-      "wall_clock_s": 0.621,
+      "wall_clock_s": 0.442,
       "yfinance_calls": 5
     },
     {
@@ -42,15 +42,15 @@
       "rate_limit_429s": 1,
       "symbols_processed": 80,
       "transient_failures": 25,
-      "wall_clock_s": 0.597,
+      "wall_clock_s": 0.369,
       "yfinance_calls": 5
     }
   ],
-  "run_id": "1c0f4396-a573-4a9e-85ce-233621a1f5a5",
+  "run_id": "b31ee5ea-90a4-48ce-80ea-2a85af2e771b",
   "scenario": "parallel_per_market_weekly_refresh",
   "schema_version": 1,
   "seed": 42,
-  "timestamp_utc": "2026-04-14T16:06:38.893207+00:00",
+  "timestamp_utc": "2026-04-14T16:30:28.256982+00:00",
   "universe_size_per_market": {
     "HK": 100,
     "JP": 100,
