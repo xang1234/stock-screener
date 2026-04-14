@@ -50,8 +50,9 @@ export const UNIVERSE_MARKETS = [
 
 // Scope values are encoded as "kind:value" so a single Select can handle
 // exchanges, indices, and whole-market. "market" alone means every symbol
-// in the parent market. Asia index scopes omitted: index-membership data
-// is not yet available in stock_universe.
+// in the parent market. Asia index scopes (HSI/NIKKEI225/TAIEX) resolve
+// via stock_universe_index_membership — an unseeded index will still show
+// here but return zero symbols when scanned.
 export const UNIVERSE_SCOPES_BY_MARKET = {
   US: [
     { value: 'market', label: 'All US' },
@@ -60,8 +61,17 @@ export const UNIVERSE_SCOPES_BY_MARKET = {
     { value: 'exchange:AMEX', label: 'AMEX' },
     { value: 'index:SP500', label: 'S&P 500' },
   ],
-  HK: [{ value: 'market', label: 'All Hong Kong' }],
-  JP: [{ value: 'market', label: 'All Japan' }],
-  TW: [{ value: 'market', label: 'All Taiwan' }],
+  HK: [
+    { value: 'market', label: 'All Hong Kong' },
+    { value: 'index:HSI', label: 'Hang Seng Index (HSI)' },
+  ],
+  JP: [
+    { value: 'market', label: 'All Japan' },
+    { value: 'index:NIKKEI225', label: 'Nikkei 225' },
+  ],
+  TW: [
+    { value: 'market', label: 'All Taiwan' },
+    { value: 'index:TAIEX', label: 'TAIEX 50' },
+  ],
   TEST: [],
 };
