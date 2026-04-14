@@ -155,13 +155,49 @@ services:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q celery -n general@%h
 
-  celery-datafetch:
+  # Shared data-fetch worker: market-agnostic tasks + safety-net route.
+  celery-datafetch-shared:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch -n datafetch@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_shared -n datafetch-shared@%h
 
-  celery-userscans:
+  # Per-market data-fetch workers (bead StockScreenClaude-asia.9.1).
+  # One worker per market, concurrency=1, each holding its own Redis lock key.
+  celery-datafetch-us:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans -n userscans@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_us -n datafetch-us@%h
+
+  celery-datafetch-hk:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_hk -n datafetch-hk@%h
+
+  celery-datafetch-jp:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_jp -n datafetch-jp@%h
+
+  celery-datafetch-tw:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_tw -n datafetch-tw@%h
+
+  # User scans — shared safety-net + per-market isolation.
+  celery-userscans-shared:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_shared -n userscans-shared@%h
+
+  celery-userscans-us:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_us -n userscans-us@%h
+
+  celery-userscans-hk:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_hk -n userscans-hk@%h
+
+  celery-userscans-jp:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_jp -n userscans-jp@%h
+
+  celery-userscans-tw:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_tw -n userscans-tw@%h
 
   celery-beat:
     build: *backend-build

@@ -88,7 +88,12 @@ def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
     max_retries=2,
 )
 @serialized_data_fetch('calculate_daily_group_rankings')
-def calculate_daily_group_rankings(self, calculation_date: str = None, force_cache_only: bool = False):
+def calculate_daily_group_rankings(
+    self,
+    calculation_date: str = None,
+    force_cache_only: bool = False,
+    market: str | None = None,
+):
     """
     Calculate and store daily IBD industry group rankings.
 
@@ -101,8 +106,19 @@ def calculate_daily_group_rankings(self, calculation_date: str = None, force_cac
     Returns:
         Dict with calculation results
     """
+    from .market_queues import market_tag, log_extra
+    _log_extra = log_extra(market)
     logger.info("=" * 60)
-    logger.info("TASK: Calculate Daily IBD Group Rankings")
+    logger.info(
+        "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
+    )
+    # Group-rank service aggregates across markets; `market` is a routing/log
+    # label here. Deep per-market scoping moves with 9.2.
+    if market is not None:
+        logger.debug(
+            "Group-rank market-scoping is label-only; service aggregates all markets.",
+            extra=_log_extra,
+        )
     today_et = get_eastern_now().date()
 
     # Parse date

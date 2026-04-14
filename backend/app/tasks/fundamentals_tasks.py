@@ -86,7 +86,7 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     max_retries=2,
 )
 @serialized_data_fetch('refresh_all_fundamentals')
-def refresh_all_fundamentals(self):
+def refresh_all_fundamentals(self, market: str | None = None):
     """
     Weekly task to refresh fundamental data for all stocks in universe.
 
@@ -104,9 +104,11 @@ def refresh_all_fundamentals(self):
             'timestamp': str
         }
     """
+    from .market_queues import market_tag, log_extra, normalize_market
+    _log_extra = log_extra(market)
     logger.info("=" * 60)
-    logger.info("TASK: Weekly Fundamental Data Refresh")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("TASK: Weekly Fundamental Data Refresh %s", market_tag(market), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 60)
 
     db = SessionLocal()
@@ -115,7 +117,10 @@ def refresh_all_fundamentals(self):
 
     try:
         if settings.provider_snapshot_cutover_enabled:
-            logger.info("Provider snapshot cutover enabled - using snapshot publish pipeline")
+            logger.info(
+                "Provider snapshot cutover enabled - using snapshot publish pipeline",
+                extra=_log_extra,
+            )
             result = _run_snapshot_pipeline(db, publish=True)
             duration = time.time() - start_time
             response = {
@@ -128,13 +133,14 @@ def refresh_all_fundamentals(self):
                 response["eps_rating_task_id"] = eps_task.id
             return response
 
-        # Get all active stocks from universe
-        universe_stocks = db.query(StockUniverse).filter(
-            StockUniverse.is_active == True
-        ).all()
+        # Get all active stocks from universe (market-filtered when scoped)
+        _uni_q = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+        if market is not None:
+            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
+        universe_stocks = _uni_q.all()
 
         if not universe_stocks:
-            logger.warning("No active stocks found in universe")
+            logger.warning("No active stocks found in universe", extra=_log_extra)
             return {
                 'error': 'No active stocks found',
                 'timestamp': datetime.now().isoformat()
@@ -543,7 +549,8 @@ def get_cache_stats(symbols: Optional[List[str]] = None):
 def refresh_all_fundamentals_hybrid(
     self,
     include_finviz: bool = True,
-    yfinance_batch_size: int = 50
+    yfinance_batch_size: int = 50,
+    market: str | None = None,
 ):
     """
     HYBRID fundamental refresh - optimized for speed.
@@ -562,11 +569,16 @@ def refresh_all_fundamentals_hybrid(
     Returns:
         Dict with refresh statistics
     """
+    from .market_queues import market_tag, log_extra, normalize_market
+    _log_extra = log_extra(market)
     logger.info("=" * 60)
-    logger.info("TASK: Hybrid Fundamental Data Refresh (Optimized)")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Include finviz: {include_finviz}")
-    logger.info(f"yfinance batch size: {yfinance_batch_size}")
+    logger.info(
+        "TASK: Hybrid Fundamental Data Refresh (Optimized) %s", market_tag(market),
+        extra=_log_extra,
+    )
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
+    logger.info("Include finviz: %s", include_finviz, extra=_log_extra)
+    logger.info("yfinance batch size: %s", yfinance_batch_size, extra=_log_extra)
     logger.info("=" * 60)
 
     db = SessionLocal()
@@ -594,13 +606,14 @@ def refresh_all_fundamentals_hybrid(
                 response["eps_rating_task_id"] = eps_task.id
             return response
 
-        # Get all active stocks from universe
-        universe_stocks = db.query(StockUniverse).filter(
-            StockUniverse.is_active == True
-        ).all()
+        # Get all active stocks from universe (market-filtered when scoped)
+        _uni_q = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+        if market is not None:
+            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
+        universe_stocks = _uni_q.all()
 
         if not universe_stocks:
-            logger.warning("No active stocks found in universe")
+            logger.warning("No active stocks found in universe", extra=_log_extra)
             return {
                 'error': 'No active stocks found',
                 'timestamp': datetime.now().isoformat()

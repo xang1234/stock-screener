@@ -247,7 +247,7 @@ def warm_top_symbols(symbols: Optional[List[str]] = None, count: Optional[int] =
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.daily_cache_warmup')
 @serialized_data_fetch('daily_cache_warmup')
-def daily_cache_warmup(self):
+def daily_cache_warmup(self, market: str | None = None):
     """
     Compatibility wrapper for the daily full smart refresh.
 
@@ -259,8 +259,11 @@ def daily_cache_warmup(self):
     Returns:
         Dict with refresh results
     """
-    logger.info("Delegating daily_cache_warmup to smart_refresh_cache(mode='full')")
-    return smart_refresh_cache(self, mode="full")
+    logger.info(
+        "Delegating daily_cache_warmup to smart_refresh_cache(mode='full', market=%r)",
+        market,
+    )
+    return smart_refresh_cache(self, mode="full", market=market)
 
 
 @celery_app.task(
@@ -269,7 +272,7 @@ def daily_cache_warmup(self):
     soft_time_limit=14400,
 )
 @serialized_data_fetch('weekly_full_refresh')
-def weekly_full_refresh(self):
+def weekly_full_refresh(self, market: str | None = None):
     """
     Weekly full cache refresh.
 
@@ -287,11 +290,13 @@ def weekly_full_refresh(self):
     import time
     from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
+    from .market_queues import market_tag, log_extra, normalize_market
 
+    _log_extra = log_extra(market)
     price_cache = get_price_cache()
     logger.info("=" * 80)
-    logger.info("TASK: Weekly Full Cache Refresh")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("TASK: Weekly Full Cache Refresh %s", market_tag(market), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 80)
 
     db = SessionLocal()
@@ -305,25 +310,29 @@ def weekly_full_refresh(self):
         bulk_fetcher = BulkDataFetcher()
 
         # 1. Clean up orphaned cache keys (symbols no longer in active universe)
-        logger.info("\n[1/4] Cleaning up orphaned cache entries...")
-        active_symbols = set(
-            r.symbol for r in db.query(StockUniverse.symbol)
-            .filter(StockUniverse.is_active == True).all()
-        )
+        #    Scoped to this market so we don't accidentally purge another market's keys.
+        logger.info("\n[1/4] Cleaning up orphaned cache entries...", extra=_log_extra)
+        _active_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+        if market is not None:
+            _active_q = _active_q.filter(StockUniverse.market == normalize_market(market))
+        active_symbols = set(r.symbol for r in _active_q.all())
         orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
-        logger.info(f"✓ Cleaned up {orphan_count} orphaned cache entries")
+        logger.info("✓ Cleaned up %d orphaned cache entries", orphan_count, extra=_log_extra)
 
         # 2. Warm benchmark cache for active markets
-        logger.info("\n[2/4] Re-warming market benchmark cache...")
+        logger.info("\n[2/4] Re-warming market benchmark cache...", extra=_log_extra)
         benchmark_results = warm_spy_cache()
 
-        # 3. Get all active symbols ordered by market cap
-        logger.info(f"\n[3/4] Preparing full universe refresh ({len(active_symbols)} symbols)...")
+        # 3. Get all active symbols ordered by market cap (market-filtered)
+        logger.info(
+            "\n[3/4] Preparing full universe refresh (%d symbols)...",
+            len(active_symbols), extra=_log_extra,
+        )
+        _sym_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+        if market is not None:
+            _sym_q = _sym_q.filter(StockUniverse.market == normalize_market(market))
         symbols = [
-            r.symbol for r in db.query(StockUniverse.symbol)
-            .filter(StockUniverse.is_active == True)
-            .order_by(StockUniverse.market_cap.desc().nullslast())
-            .all()
+            r.symbol for r in _sym_q.order_by(StockUniverse.market_cap.desc().nullslast()).all()
         ]
 
         if not symbols:
@@ -1118,7 +1127,7 @@ def force_refresh_stale_intraday(self, symbols: Optional[List[str]] = None):
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.auto_refresh_after_close')
 @serialized_data_fetch('auto_refresh_after_close')
-def auto_refresh_after_close(self):
+def auto_refresh_after_close(self, market: str | None = None):
     """
     Automatic post-close refresh of stale intraday data.
 
@@ -1165,7 +1174,7 @@ def auto_refresh_after_close(self):
     soft_time_limit=14400,
 )
 @serialized_data_fetch('smart_refresh_cache')
-def smart_refresh_cache(self, mode: str = "auto"):
+def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     """
     Smart cache refresh with market cap prioritization.
 
@@ -1190,11 +1199,17 @@ def smart_refresh_cache(self, mode: str = "auto"):
     from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..models.stock_universe import StockUniverse
+    from .market_queues import market_tag, log_extra, normalize_market
 
+    _market_label = normalize_market(market).lower()
+    _log_extra = log_extra(market)
     logger.info("=" * 80)
-    logger.info(f"TASK: Smart Cache Refresh (mode={mode})")
-    logger.info(f"Market status: {format_market_status()}")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(
+        "TASK: Smart Cache Refresh %s (mode=%s)", market_tag(market), mode,
+        extra=_log_extra,
+    )
+    logger.info("Market status: %s", format_market_status(), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 80)
 
     # Time-window guard: reject Beat-scheduled full mode outside expected windows.
@@ -1207,7 +1222,11 @@ def smart_refresh_cache(self, mode: str = "auto"):
             and self.request.headers.get('origin') == 'manual'
         )
     )
-    if mode == "full" and not is_manual:
+    # Time-window guard only applies to the legacy US-only scheduling path
+    # (market is None). Per-market beat entries (bead 9.1) fire at local-market
+    # hours in ET (e.g. HK at 4:30 AM ET, TW at 1:00 AM ET) which fall outside
+    # the legacy US window, so skip the guard when market is explicit.
+    if mode == "full" and not is_manual and market is None:
         now_et = get_eastern_now()
         weekday = now_et.weekday()  # 0=Mon, 6=Sun
         hour = now_et.hour
@@ -1254,24 +1273,26 @@ def smart_refresh_cache(self, mode: str = "auto"):
         # Step 2: Get symbols to refresh, ordered by market cap
         logger.info(f"[2/3] Determining symbols to refresh (mode={mode})...")
 
+        # Build universe query, optionally filtered by market.
+        _uni_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+        if market is not None:
+            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
+        _uni_q = _uni_q.order_by(StockUniverse.market_cap.desc().nullslast())
+
         if mode == "full":
-            # Full refresh: ALL active symbols, ordered by market cap DESC
-            symbols = [
-                r.symbol for r in db.query(StockUniverse.symbol)
-                .filter(StockUniverse.is_active == True)
-                .order_by(StockUniverse.market_cap.desc().nullslast())
-                .all()
-            ]
-            logger.info(f"Full refresh: {len(symbols)} symbols (market cap order)")
+            # Full refresh: ALL active symbols for the market, ordered by market cap DESC
+            symbols = [r.symbol for r in _uni_q.all()]
+            logger.info(
+                "Full refresh: %d symbols (market cap order) %s",
+                len(symbols), market_tag(market), extra=_log_extra,
+            )
         else:
-            # Auto mode: Full universe, skip recently-refreshed symbols
-            symbols = [
-                r.symbol for r in db.query(StockUniverse.symbol)
-                .filter(StockUniverse.is_active == True)
-                .order_by(StockUniverse.market_cap.desc().nullslast())
-                .all()
-            ]
-            logger.info(f"Auto refresh: {len(symbols)} active symbols (full universe, market cap order)")
+            # Auto mode: Full universe for market, skip recently-refreshed symbols
+            symbols = [r.symbol for r in _uni_q.all()]
+            logger.info(
+                "Auto refresh: %d active symbols (full universe, market cap order) %s",
+                len(symbols), market_tag(market), extra=_log_extra,
+            )
 
             # Filter out symbols refreshed within skip window
             original_count = len(symbols)
