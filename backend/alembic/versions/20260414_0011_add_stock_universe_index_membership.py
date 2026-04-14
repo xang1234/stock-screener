@@ -47,13 +47,14 @@ def upgrade() -> None:
             name="uq_universe_index_membership_symbol_index",
         ),
     )
-    # Two indexes cover every query shape:
-    #   - standalone ``symbol`` for the resolver's membership subquery
-    #     (IN (SELECT symbol FROM … WHERE index_name = ?))
-    #   - composite ``(index_name, symbol)`` for filter-by-index lookups;
-    #     its leftmost-prefix also serves any "which indices contain X?"
-    #     query on index_name alone — no need for a standalone index_name
-    #     B-tree.
+    # Two indexes cover every query shape today:
+    #   - standalone ``symbol`` serves "which indices contain this symbol?"
+    #     (filter on symbol alone — not the leftmost of the composite).
+    #   - composite ``(index_name, symbol)`` serves the dominant hot path,
+    #     "list constituents of index X" (``WHERE index_name = ?``), via
+    #     its leftmost prefix, and also answers "is symbol Y in index X?".
+    #     No standalone index_name index needed because the composite's
+    #     leftmost prefix already covers it.
     op.create_index(
         "ix_stock_universe_index_membership_symbol",
         "stock_universe_index_membership",
