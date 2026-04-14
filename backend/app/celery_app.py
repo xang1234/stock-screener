@@ -90,7 +90,12 @@ def _log_timezone(sender, **kwargs):
 
 @worker_ready.connect
 def _clear_stale_data_fetch_lock(sender, **kwargs):
-    """Clear stale data fetch lock when the datafetch worker starts.
+    """Clear stale per-market data fetch lock when the matching worker starts.
+
+    Worker hostnames follow the pattern ``datafetch-<market>@host`` or
+    ``datafetch-shared@host``. On startup each worker clears only its own
+    market's lock (plus the legacy unsuffixed key for the shared worker),
+    so a restart of the US worker can never clobber a live HK task.
 
     When containers restart, Python finally blocks don't execute,
     leaving the Redis lock key with its 2-hour TTL. This blocks all
@@ -98,27 +103,54 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
     """
     try:
         _ensure_worker_runtime_services()
-        # Only clear for the datafetch worker — the general worker must
-        # NOT clear a lock that the datafetch worker may legitimately hold.
-        # Runtime services are still initialized for all worker pools.
         hostname = getattr(sender, 'hostname', '') or ''
         if not hostname.startswith('datafetch'):
             return
 
         from .wiring.bootstrap import get_data_fetch_lock
+        from .tasks.market_queues import SUPPORTED_MARKETS, normalize_market
+
+        # Parse "datafetch-hk@host" -> market="HK"; "datafetch-shared@host" -> None
+        prefix = hostname.split('@', 1)[0]  # e.g. "datafetch-hk"
+        parts = prefix.split('-', 1)
+        worker_market: str | None = None
+        if len(parts) == 2:
+            suffix = parts[1].upper()
+            if suffix in SUPPORTED_MARKETS:
+                worker_market = suffix
+            elif suffix == "SHARED":
+                worker_market = None
+            else:
+                # Unknown suffix — treat as shared to be safe (legacy "datafetch" name).
+                worker_market = None
+        else:
+            # Legacy "datafetch" worker name (no suffix) -> shared scope.
+            worker_market = None
 
         lock = get_data_fetch_lock()
-        holder = lock.get_current_holder()
+        holder = lock.get_current_holder(market=worker_market)
         if holder:
             _logger.warning(
                 "Clearing stale data fetch lock on worker startup "
-                "(was held by %s, task_id=%s)",
+                "(market=%s, was held by %s, task_id=%s)",
+                normalize_market(worker_market).lower(),
                 holder.get('task_name', 'unknown'),
                 holder.get('task_id', 'unknown'),
             )
-            lock.force_release()
+            lock.force_release(market=worker_market)
         else:
-            _logger.info("No stale data fetch lock found on startup")
+            _logger.info(
+                "No stale data fetch lock found on startup (market=%s)",
+                normalize_market(worker_market).lower(),
+            )
+
+        # Also clear the unsuffixed legacy key on the shared worker only,
+        # so old pre-9.1 deployments upgrading in place don't leave it stuck.
+        if worker_market is None:
+            from .tasks.data_fetch_lock import LOCK_KEY as _LEGACY_LOCK_KEY
+            if lock.redis.exists(_LEGACY_LOCK_KEY) > 0:
+                lock.redis.delete(_LEGACY_LOCK_KEY)
+                _logger.warning("Cleared legacy unsuffixed %s key on startup", _LEGACY_LOCK_KEY)
     except Exception as e:
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
 
@@ -159,150 +191,169 @@ def _graceful_db_shutdown(sender=None, **kwargs):
         _logger.warning("Worker shutdown DB cleanup failed (non-fatal): %s", e)
 
 
-# Task routing: route background tasks to dedicated queues
-# Run workers with: celery -A app.celery_app worker -Q celery,data_fetch,user_scans -c 1
+# Task routing: route background tasks to dedicated per-market queues.
+#
+# Market-scoped tasks (refresh/cache/fundamentals/breadth/group_rank/universe/feature_store/scan)
+# MUST be enqueued with an explicit `queue=` in apply_async/.options(queue=...)/beat options,
+# because the queue depends on the runtime `market` kwarg. Static task_routes below only
+# provide a safety-net default that lands on the shared queue — picking up any task enqueued
+# without explicit routing, so nothing gets lost.
+#
+# Run one worker per market queue (see start_celery.sh / docker-compose.yml):
+#   datafetch-us     -Q data_fetch_us
+#   datafetch-hk     -Q data_fetch_hk
+#   datafetch-jp     -Q data_fetch_jp
+#   datafetch-tw     -Q data_fetch_tw
+#   datafetch-shared -Q data_fetch_shared    (legacy + market-agnostic)
+#   userscans-{us,hk,jp,tw,shared} -Q user_scans_*
+from .tasks.market_queues import (
+    SHARED_DATA_FETCH_QUEUE,
+    SHARED_USER_SCANS_QUEUE,
+    data_fetch_queue_for_market as _dfq,
+)
+
+_MARKET_SCOPED_DATA_FETCH_TASKS = (
+    'app.tasks.cache_tasks.prewarm_all_active_symbols',
+    'app.tasks.cache_tasks.weekly_full_refresh',
+    'app.tasks.cache_tasks.warm_spy_cache',
+    'app.tasks.cache_tasks.warm_top_symbols',
+    'app.tasks.cache_tasks.force_refresh_stale_intraday',
+    'app.tasks.cache_tasks.smart_refresh_cache',
+    'app.tasks.cache_tasks.daily_cache_warmup',
+    'app.tasks.cache_tasks.auto_refresh_after_close',
+    'app.tasks.breadth_tasks.calculate_daily_breadth',
+    'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
+    'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+    'app.tasks.group_rank_tasks.gapfill_group_rankings',
+    'app.tasks.group_rank_tasks.backfill_group_rankings',
+    'app.tasks.group_rank_tasks.backfill_group_rankings_1year',
+    'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
+    'app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid',
+    'app.tasks.fundamentals_tasks.refresh_symbol_fundamentals',
+    'app.tasks.fundamentals_tasks.populate_initial_cache',
+    'app.tasks.fundamentals_tasks.refresh_fundamentals_yfinance_only',
+    'app.tasks.fundamentals_tasks.refresh_symbols_hybrid',
+    'app.tasks.universe_tasks.refresh_stock_universe',
+    'app.tasks.universe_tasks.refresh_sp500_membership',
+    'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
+)
+
+# Default route = shared queue. Beat entries and .apply_async() callers override
+# this with the market-specific queue via `options={'queue': ...}` / `queue=`.
 celery_app.conf.task_routes = {
-    # Actively scheduled cache tasks (yfinance)
-    'app.tasks.cache_tasks.prewarm_all_active_symbols': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.weekly_full_refresh': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.warm_spy_cache': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.warm_top_symbols': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.force_refresh_stale_intraday': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.smart_refresh_cache': {'queue': 'data_fetch'},
-    # Breadth tasks (yfinance on cache miss)
-    'app.tasks.breadth_tasks.calculate_daily_breadth': {'queue': 'data_fetch'},
-    'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill': {'queue': 'data_fetch'},
-    # Group rank tasks (yfinance on cache miss)
-    'app.tasks.group_rank_tasks.calculate_daily_group_rankings': {'queue': 'data_fetch'},
-    'app.tasks.group_rank_tasks.gapfill_group_rankings': {'queue': 'data_fetch'},
-    'app.tasks.group_rank_tasks.backfill_group_rankings': {'queue': 'data_fetch'},
-    'app.tasks.group_rank_tasks.backfill_group_rankings_1year': {'queue': 'data_fetch'},
-    # Fundamentals tasks (finviz + yfinance)
-    'app.tasks.fundamentals_tasks.refresh_all_fundamentals': {'queue': 'data_fetch'},
-    'app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid': {'queue': 'data_fetch'},
-    'app.tasks.fundamentals_tasks.refresh_symbol_fundamentals': {'queue': 'data_fetch'},
-    'app.tasks.fundamentals_tasks.populate_initial_cache': {'queue': 'data_fetch'},
-    'app.tasks.fundamentals_tasks.refresh_fundamentals_yfinance_only': {'queue': 'data_fetch'},
-    'app.tasks.fundamentals_tasks.refresh_symbols_hybrid': {'queue': 'data_fetch'},
-    # User-initiated scan tasks (isolated from maintenance queue)
-    'app.tasks.scan_tasks.run_bulk_scan': {'queue': 'user_scans'},
-    # Universe tasks (finviz)
-    'app.tasks.universe_tasks.refresh_stock_universe': {'queue': 'data_fetch'},
-    'app.tasks.universe_tasks.refresh_sp500_membership': {'queue': 'data_fetch'},
-    # Feature store tasks (multi-screener scan)
-    'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot': {'queue': 'data_fetch'},
-    # Legacy/manual-only routes retained for API/manual invocation.
-    'app.tasks.cache_tasks.daily_cache_warmup': {'queue': 'data_fetch'},
-    'app.tasks.cache_tasks.auto_refresh_after_close': {'queue': 'data_fetch'},
+    task_name: {'queue': SHARED_DATA_FETCH_QUEUE}
+    for task_name in _MARKET_SCOPED_DATA_FETCH_TASKS
+}
+
+# User scans: same default-to-shared pattern; API layer sets queue explicitly per market.
+celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
+    'queue': SHARED_USER_SCANS_QUEUE
 }
 
 # Optional: Configure result expiration
 celery_app.conf.result_expires = 86400  # Results expire after 24 hours
 
 # Celery Beat Schedule - Periodic Tasks
-# All data-fetching tasks route to 'data_fetch' queue for serialization
+# Data-fetching tasks fan out per market: one beat entry per enabled market,
+# each routed to that market's dedicated queue (e.g. data_fetch_hk) with
+# kwargs={"market": "HK"}. This lets markets run in parallel (e.g. US refresh
+# and HK refresh simultaneously) since each has its own worker and Redis
+# lock key. See tasks/market_queues.py for the queue topology.
 if settings.cache_warmup_enabled:
-    celery_app.conf.beat_schedule = {
-        # Daily smart cache refresh after market close
-        # Uses smart_refresh_cache which has correct rate limiting,
-        # exponential backoff on 429s, market-cap-prioritized ordering,
-        # and heartbeat monitoring for stuck detection.
-        'daily-smart-refresh': {
+    _enabled_markets = settings.enabled_markets_list
+    beat_schedule: dict = {}
+
+    for _market in _enabled_markets:
+        _warm_h, _warm_m = settings.cache_warm_schedule_for(_market)
+        _qname = _dfq(_market)
+        _m_lower = _market.lower()
+
+        # Daily smart cache refresh after local market close.
+        beat_schedule[f'daily-smart-refresh-{_m_lower}'] = {
             'task': 'app.tasks.cache_tasks.smart_refresh_cache',
             'schedule': crontab(
-                hour=settings.cache_warm_hour,
-                minute=settings.cache_warm_minute,
+                hour=_warm_h,
+                minute=_warm_m,
                 day_of_week='1-5'  # Monday-Friday only
             ),
-            'options': {'queue': 'data_fetch'},
-            'kwargs': {'mode': 'full'},
-        },
+            'options': {'queue': _qname},
+            'kwargs': {'mode': 'full', 'market': _market},
+        }
 
-        # Weekly full refresh (Sunday morning)
-        'weekly-full-refresh': {
-            'task': 'app.tasks.cache_tasks.weekly_full_refresh',
-            'schedule': crontab(
-                hour=settings.cache_weekly_hour,
-                minute=0,
-                day_of_week=settings.cache_weekly_day
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
-
-        # Post-market data_fetch pipeline note:
-        # smart_refresh_cache, breadth, group rankings, and feature snapshot all
-        # share the serialized data_fetch queue. The +5/+10/+15 minute offsets
-        # below are minimum eligible times only, not guaranteed execution
-        # times. In practice these tasks execute FIFO behind the cache warmup
-        # and usually do not start until that queue backlog clears.
-        #
-        # Daily breadth calculation with automatic gap-fill.
-        'daily-breadth-calculation': {
+        # Daily breadth calculation with automatic gap-fill (close +5m).
+        _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
+        beat_schedule[f'daily-breadth-calculation-{_m_lower}'] = {
             'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-            'schedule': crontab(
-                hour=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 5)[0],
-                minute=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 5)[1],
-                day_of_week='1-5'  # Monday-Friday only
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
+            'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
+            'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
 
-        # Weekly fundamental refresh (Saturday morning - avoids Friday warmup collision)
-        'weekly-fundamental-refresh': {
-            'task': 'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
-            'schedule': crontab(
-                hour=settings.fundamental_refresh_hour,  # 8 AM ET
-                minute=0,
-                day_of_week=settings.fundamental_refresh_day  # Saturday = 6
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
-
-        # Daily IBD group ranking calculation (queued after cache warmup via serialized queue)
-        'daily-group-ranking-calculation': {
+        # Daily IBD group ranking calculation (close +10m).
+        _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
+        beat_schedule[f'daily-group-ranking-calculation-{_m_lower}'] = {
             'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
-            'schedule': crontab(
-                hour=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 10)[0],
-                minute=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 10)[1],
-                day_of_week='1-5'  # Monday-Friday only
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
+            'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
+            'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
 
-        # Weekly stock universe refresh (Sunday 3 AM ET - after weekly-full-refresh)
-        # Adds new stocks, deactivates removed stocks, updates metadata
-        'weekly-universe-refresh': {
-            'task': 'app.tasks.universe_tasks.refresh_stock_universe',
-            'schedule': crontab(
-                hour=3,  # 3 AM ET
-                minute=0,
-                day_of_week=0  # Sunday
-            ),
-            'options': {'queue': 'data_fetch'}
-        },
-
-        # Daily feature snapshot (queued after group rankings via serialized queue)
-        'daily-feature-snapshot': {
+        # Daily feature snapshot (close +15m).
+        _fh, _fm = _offset_schedule(_warm_h, _warm_m, 15)
+        beat_schedule[f'daily-feature-snapshot-{_m_lower}'] = {
             'task': 'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
-            'schedule': crontab(
-                hour=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 15)[0],
-                minute=_offset_schedule(settings.cache_warm_hour, settings.cache_warm_minute, 15)[1],
-                day_of_week='1-5',
-            ),
-            'options': {'queue': 'data_fetch'},
+            'schedule': crontab(hour=_fh, minute=_fm, day_of_week='1-5'),
+            'options': {'queue': _qname},
             'kwargs': {
                 'screener_names': _default_scan_profile['screeners'],
                 'criteria': _default_scan_profile['criteria'],
                 'composite_method': _default_scan_profile['composite_method'],
                 'universe_name': _default_scan_profile['universe'],
+                'market': _market,
             },
-        },
+        }
 
-        # NOTE: auto-refresh-after-close (4:45 PM) was removed to eliminate
-        # daily schedule overlap. The 5:30 PM daily-smart-refresh already does
-        # a full refresh that supersedes the stale-intraday refresh. The task
-        # function remains available for manual invocation via the API.
+        # Weekly full refresh (market-local, Sunday morning).
+        beat_schedule[f'weekly-full-refresh-{_m_lower}'] = {
+            'task': 'app.tasks.cache_tasks.weekly_full_refresh',
+            'schedule': crontab(
+                hour=settings.cache_weekly_hour,
+                minute=0,
+                day_of_week=settings.cache_weekly_day,
+            ),
+            'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
 
+        # Weekly fundamental refresh (Saturday morning) — per market.
+        beat_schedule[f'weekly-fundamental-refresh-{_m_lower}'] = {
+            'task': 'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
+            'schedule': crontab(
+                hour=settings.fundamental_refresh_hour,
+                minute=0,
+                day_of_week=settings.fundamental_refresh_day,
+            ),
+            'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
+
+        # Weekly stock universe refresh (Sunday 3 AM ET) — per market.
+        beat_schedule[f'weekly-universe-refresh-{_m_lower}'] = {
+            'task': 'app.tasks.universe_tasks.refresh_stock_universe',
+            'schedule': crontab(hour=3, minute=0, day_of_week=0),
+            'options': {'queue': _qname},
+            'kwargs': {'market': _market},
+        }
+
+    # --- Market-agnostic / shared beat entries below ---
+    # These tasks are not market-scoped (theme discovery, cleanup jobs, etc.)
+    # so they run on the shared data_fetch queue with shared lock scope.
+    #
+    # NOTE: auto-refresh-after-close (4:45 PM) was removed to eliminate
+    # daily schedule overlap. The per-market daily-smart-refresh entries above
+    # already do a full refresh that supersedes the stale-intraday refresh.
+    # The task function remains available for manual invocation via the API.
+    _shared_entries = {
         # Weekly cleanup of orphaned scans (cancelled, stale running/queued).
         # Runs Sunday at 1:45 AM ET, before weekly-full-refresh at 2:00 AM.
         'weekly-orphaned-scan-cleanup': {
@@ -312,6 +363,14 @@ if settings.cache_warmup_enabled:
                 minute=45,
                 day_of_week=0  # Sunday
             ),
+        },
+
+        # Weekly refresh of per-market universe weights for RateBudgetPolicy.
+        # Runs Sunday 0:30 AM ET — early in the weekly window so subsequent
+        # weekly refreshes use freshly-computed budget splits.
+        'weekly-rate-budget-weights-refresh': {
+            'task': 'app.tasks.cache_tasks.refresh_universe_weights',
+            'schedule': crontab(hour=0, minute=30, day_of_week=0),
         },
 
         # Monthly cleanup of old price data (keep 5 years)
@@ -444,6 +503,10 @@ if settings.cache_warmup_enabled:
             ),
         },
     }
+
+    # Merge shared entries into the fanned-out schedule and install.
+    beat_schedule.update(_shared_entries)
+    celery_app.conf.beat_schedule = beat_schedule
 
 if __name__ == '__main__':
     celery_app.start()

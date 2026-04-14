@@ -796,10 +796,10 @@ class PriceCacheService:
                     "last_warmup": None
                 }
 
-            # Check if a refresh task is currently running
+            # Check if a refresh task is currently running across all market scopes.
             from ..wiring.bootstrap import get_data_fetch_lock
             lock = get_data_fetch_lock()
-            current_holder = lock.get_current_holder()
+            current_holder = lock.get_any_current_holder()
 
             if current_holder and current_holder.get('task_name'):
                 # Lock is held — check heartbeat to determine state
@@ -812,7 +812,7 @@ class PriceCacheService:
                         f"Task heartbeat is terminal ({hb_info['status']}), "
                         f"force-releasing stale lock"
                     )
-                    lock.force_release()
+                    lock.force_release_all()
                     # Fall through to SPY freshness check below
 
                 elif hb_info and hb_info.get('status') == 'running':
@@ -886,9 +886,10 @@ class PriceCacheService:
                             completed_at = datetime.fromisoformat(warmup_meta['completed_at'])
                             started_at = datetime.fromisoformat(started_at_str)
                             if completed_at > started_at:
-                                # Task completed but lock is stale — release and fall through
+                                # Task completed but lock is stale — release and fall through.
+                                # Use force_release_all() to clear whichever market key is held.
                                 logger.info("Warmup completed after lock acquired, releasing stale lock")
-                                lock.force_release()
+                                lock.force_release_all()
                                 # Fall through to SPY freshness check below
                             else:
                                 # Old completion, task truly stuck
@@ -1073,80 +1074,58 @@ class PriceCacheService:
         """
         return self._warmup_store.get_warmup_metadata()
 
-    def get_warmup_metadata(self) -> Optional[Dict]:
+    def get_warmup_metadata(self, market: Optional[str] = None) -> Optional[Dict]:
         """Public wrapper for last warmup metadata used by downstream scheduled tasks."""
-        return self._warmup_store.get_warmup_metadata()
+        return self._warmup_store.get_warmup_metadata(market=market)
 
-    def save_warmup_metadata(self, status: str, count: int, total: int, error: str = None) -> None:
-        """
-        Save warmup operation metadata.
+    def save_warmup_metadata(
+        self,
+        status: str,
+        count: int,
+        total: int,
+        error: str = None,
+        market: Optional[str] = None,
+    ) -> None:
+        """Save warmup operation metadata, scoped per market."""
+        self._warmup_store.save_warmup_metadata(
+            status=status, count=count, total=total, error=error, market=market,
+        )
 
-        Args:
-            status: "completed", "partial", or "failed"
-            count: Number of symbols successfully processed
-            total: Total number of symbols attempted
-            error: Error message if failed
-        """
-        self._warmup_store.save_warmup_metadata(status=status, count=count, total=total, error=error)
+    def update_warmup_heartbeat(
+        self,
+        current: int,
+        total: int,
+        percent: float = None,
+        market: Optional[str] = None,
+    ) -> None:
+        """Update heartbeat during warmup, scoped per market."""
+        self._warmup_store.update_warmup_heartbeat(
+            current=current, total=total, percent=percent, market=market,
+        )
 
-    def update_warmup_heartbeat(self, current: int, total: int, percent: float = None) -> None:
-        """
-        Update heartbeat during warmup operation.
+    def _get_heartbeat_info(self, market: Optional[str] = None) -> Optional[Dict]:
+        """Get heartbeat info including status and age."""
+        return self._warmup_store.get_heartbeat_info(market=market)
 
-        Called periodically to indicate task is still making progress.
-        Used for stuck detection.
+    def _get_minutes_since_heartbeat(self, market: Optional[str] = None) -> Optional[float]:
+        """Get minutes since last heartbeat update for the given market scope."""
+        return self._warmup_store.get_minutes_since_heartbeat(market=market)
 
-        Args:
-            current: Current symbol index
-            total: Total symbols to process
-            percent: Optional percentage complete
-        """
-        self._warmup_store.update_warmup_heartbeat(current=current, total=total, percent=percent)
+    def _get_task_progress(self, market: Optional[str] = None) -> Dict:
+        """Get current task progress from heartbeat for the given market scope."""
+        return self._warmup_store.get_task_progress(market=market)
 
-    def _get_heartbeat_info(self) -> Optional[Dict]:
-        """
-        Get heartbeat info including status and age.
+    def clear_warmup_heartbeat(self, market: Optional[str] = None) -> None:
+        """Clear the warmup heartbeat for the given market scope."""
+        self._warmup_store.clear_warmup_heartbeat(market=market)
 
-        Returns:
-            Dict with 'minutes' (float), 'status' (str), and raw heartbeat data,
-            or None if no heartbeat found.
-        """
-        return self._warmup_store.get_heartbeat_info()
-
-    def _get_minutes_since_heartbeat(self) -> Optional[float]:
-        """
-        Get minutes since last heartbeat update.
-        Backward-compatible wrapper around _get_heartbeat_info().
-
-        Returns:
-            Minutes since last heartbeat, or None if no heartbeat found
-        """
-        return self._warmup_store.get_minutes_since_heartbeat()
-
-    def _get_task_progress(self) -> Dict:
-        """
-        Get current task progress from heartbeat.
-
-        Returns:
-            Dict with current, total, percent or empty dict
-        """
-        return self._warmup_store.get_task_progress()
-
-    def clear_warmup_heartbeat(self) -> None:
-        """Clear the warmup heartbeat. Kept for backward compatibility."""
-        self._warmup_store.clear_warmup_heartbeat()
-
-    def complete_warmup_heartbeat(self, status: str = "completed") -> None:
-        """
-        Write terminal heartbeat state instead of deleting.
-
-        This prevents the race condition where the health endpoint polls
-        between heartbeat deletion and lock release, falsely inferring "stuck".
-
-        Args:
-            status: Terminal status - "completed" or "failed"
-        """
-        self._warmup_store.complete_warmup_heartbeat(status=status)
+    def complete_warmup_heartbeat(
+        self,
+        status: str = "completed",
+        market: Optional[str] = None,
+    ) -> None:
+        """Write terminal heartbeat state instead of deleting (per market)."""
+        self._warmup_store.complete_warmup_heartbeat(status=status, market=market)
 
     def clear_fetch_metadata(self, symbol: str) -> None:
         """

@@ -73,12 +73,41 @@ class Settings(BaseSettings):
     # Admin API key (required for config endpoints)
     admin_api_key: str = ""
 
-    # Rate Limiting
-    yfinance_rate_limit: int = 1  # requests per second
+    # Rate Limiting (global aggregate budgets — divided per market by RateBudgetPolicy)
+    yfinance_rate_limit: int = 1  # requests per second (aggregate across all markets)
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
     yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
+
+    # Per-market rate budget overrides. Each value is in requests-per-second
+    # for that market specifically. None means "use universe-weighted division
+    # of the global aggregate" (sensible default). Set explicit values when
+    # empirical measurements show the auto-computed split is wrong for a
+    # particular market.
+    yfinance_rate_limit_us: float | None = None
+    yfinance_rate_limit_hk: float | None = None
+    yfinance_rate_limit_jp: float | None = None
+    yfinance_rate_limit_tw: float | None = None
+    finviz_rate_limit_us: float | None = None
+    finviz_rate_limit_hk: float | None = None
+    finviz_rate_limit_jp: float | None = None
+    finviz_rate_limit_tw: float | None = None
+
+    # Per-market batch sizes for yfinance bulk downloads. Smaller batches for
+    # non-US markets reduce the blast radius of any single batch hitting
+    # provider hiccups. Defaults shipped via RateBudgetPolicy._DEFAULT_BATCH_SIZE.
+    yfinance_batch_size_us: int | None = None
+    yfinance_batch_size_hk: int | None = None
+    yfinance_batch_size_jp: int | None = None
+    yfinance_batch_size_tw: int | None = None
+
+    # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
+    # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
+    yfinance_backoff_max_s_us: int | None = None
+    yfinance_backoff_max_s_hk: int | None = None
+    yfinance_backoff_max_s_jp: int | None = None
+    yfinance_backoff_max_s_tw: int | None = None
 
     # Scanning
     default_universe: str = "all"
@@ -127,11 +156,27 @@ class Settings(BaseSettings):
 
     # Cache Warming Schedule (Celery Beat)
     cache_warm_after_close: bool = True  # Warm cache after market close
-    cache_warm_hour: int = 17  # 5 PM ET (after market close)
+    cache_warm_hour: int = 17  # 5 PM ET (after market close) — US default, also legacy fallback
     cache_warm_minute: int = 30
     cache_weekly_refresh: bool = True  # Full refresh weekly
     cache_weekly_day: int = 0  # Sunday = 0
     cache_weekly_hour: int = 2  # 2 AM ET
+
+    # Per-market cache warmup schedule (all in the celery_timezone, default ET).
+    # HK close 16:00 HKT -> 04:00 ET; JP close 15:00 JST -> 02:00 ET;
+    # TW close 13:30 CST -> 00:30 ET. +30-60min buffer after close.
+    cache_warm_hour_us: int = 17
+    cache_warm_minute_us: int = 30
+    cache_warm_hour_hk: int = 4
+    cache_warm_minute_hk: int = 30
+    cache_warm_hour_jp: int = 2
+    cache_warm_minute_jp: int = 30
+    cache_warm_hour_tw: int = 1
+    cache_warm_minute_tw: int = 0
+
+    # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
+    # entirely (beat schedule skips it; its worker can be stopped).
+    enabled_markets: str = "US,HK,JP,TW"  # comma-separated
 
     # Fundamental Data Caching
     fundamental_cache_enabled: bool = True  # Enable fundamental data caching
@@ -200,6 +245,24 @@ class Settings(BaseSettings):
             raise ValueError(f"cache_warm_minute must be 0-59, got {v}")
         return v
 
+    @field_validator(
+        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
+    )
+    @classmethod
+    def validate_per_market_hour(cls, v: int) -> int:
+        if not 0 <= v <= 23:
+            raise ValueError(f"per-market cache_warm_hour must be 0-23, got {v}")
+        return v
+
+    @field_validator(
+        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
+    )
+    @classmethod
+    def validate_per_market_minute(cls, v: int) -> int:
+        if not 0 <= v <= 59:
+            raise ValueError(f"per-market cache_warm_minute must be 0-59, got {v}")
+        return v
+
     @field_validator('celery_timezone')
     @classmethod
     def validate_celery_timezone(cls, v: str) -> str:
@@ -247,6 +310,38 @@ class Settings(BaseSettings):
         if self.groq_api_key:
             return [self.groq_api_key]
         return []
+
+    @property
+    def enabled_markets_list(self) -> List[str]:
+        """Parse comma-separated enabled markets into a canonical upper-case list.
+
+        Invalid markets are dropped with a warning so a typo in env config can't
+        take down the whole worker fleet.
+        """
+        from ..tasks.market_queues import SUPPORTED_MARKETS  # local import to avoid cycle
+        raw = [m.strip().upper() for m in (self.enabled_markets or "").split(",") if m.strip()]
+        valid = [m for m in raw if m in SUPPORTED_MARKETS]
+        dropped = [m for m in raw if m not in SUPPORTED_MARKETS]
+        if dropped:
+            logger.warning(
+                "Dropping unsupported markets from ENABLED_MARKETS: %s. Supported: %s",
+                dropped,
+                SUPPORTED_MARKETS,
+            )
+        return valid or list(SUPPORTED_MARKETS)
+
+    def cache_warm_schedule_for(self, market: str) -> tuple[int, int]:
+        """Return (hour, minute) cron tuple for a given market's cache warmup."""
+        m = market.upper()
+        mapping = {
+            "US": (self.cache_warm_hour_us, self.cache_warm_minute_us),
+            "HK": (self.cache_warm_hour_hk, self.cache_warm_minute_hk),
+            "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
+            "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
+        }
+        if m not in mapping:
+            raise ValueError(f"No cache warm schedule for market {market!r}")
+        return mapping[m]
 
     @property
     def zai_api_keys_list(self) -> List[str]:

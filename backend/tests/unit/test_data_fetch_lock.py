@@ -11,9 +11,16 @@ from celery.exceptions import Retry, SoftTimeLimitExceeded
 from app.tasks.data_fetch_lock import (
     DataFetchLock,
     LOCK_KEY,
+    _lock_key_for_market,
+    all_market_lock_keys,
     disable_serialized_data_fetch_lock,
     serialized_data_fetch,
 )
+
+# After bead 9.1 the no-market default path routes to the shared key, not the
+# legacy unsuffixed LOCK_KEY. Legacy LOCK_KEY is retained only for startup
+# cleanup of pre-9.1 stale locks.
+SHARED_LOCK_KEY = _lock_key_for_market(None)  # "data_fetch_job_lock:shared"
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +74,7 @@ class TestAcquire:
         assert result == (True, False)
         mock_redis.set.assert_called_once()
         args, kwargs = mock_redis.set.call_args
-        assert args[0] == LOCK_KEY
+        assert args[0] == SHARED_LOCK_KEY
         assert "test_task:task-123:" in args[1]
         assert kwargs == {"nx": True, "ex": 7200}
 
@@ -80,7 +87,7 @@ class TestAcquire:
 
         args, kwargs = mock_redis.set.call_args
         assert kwargs["nx"] is True
-        assert args[0] == LOCK_KEY
+        assert args[0] == SHARED_LOCK_KEY
         assert "my_task:id-abc:" in args[1]
 
     def test_acquire_blocked(self):
@@ -132,7 +139,7 @@ class TestRelease:
 
         assert result is True
         mock_release_script.assert_called_once_with(
-            keys=[LOCK_KEY], args=[":task-123:"]
+            keys=[SHARED_LOCK_KEY], args=[":task-123:"]
         )
 
     def test_release_wrong_owner(self):
@@ -157,7 +164,7 @@ class TestExtendLock:
 
         assert result is True
         mock_extend_script.assert_called_once_with(
-            keys=[LOCK_KEY], args=[":task-123:", 1200, 7200]
+            keys=[SHARED_LOCK_KEY], args=[":task-123:", 1200, 7200]
         )
 
     def test_extend_lock_custom_max_ttl(self):
@@ -169,7 +176,7 @@ class TestExtendLock:
 
         assert result is True
         mock_extend_script.assert_called_once_with(
-            keys=[LOCK_KEY], args=[":task-123:", 300, 3600]
+            keys=[SHARED_LOCK_KEY], args=[":task-123:", 300, 3600]
         )
 
     def test_extend_lock_wrong_owner(self):
@@ -649,3 +656,146 @@ class TestWorkerProcessInit:
 
         mock_engine_dispose.assert_called_once()
         mock_ensure_runtime.assert_called_once_with(force_rebuild=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-market lock tests (bead StockScreenClaude-asia.9.1)
+# ---------------------------------------------------------------------------
+
+class TestPerMarketLockKeys:
+    """Each market gets its own Redis key so cross-market refreshes can run in parallel."""
+
+    def test_lock_key_per_market(self):
+        assert _lock_key_for_market("US") == "data_fetch_job_lock:us"
+        assert _lock_key_for_market("HK") == "data_fetch_job_lock:hk"
+        assert _lock_key_for_market("JP") == "data_fetch_job_lock:jp"
+        assert _lock_key_for_market("TW") == "data_fetch_job_lock:tw"
+
+    def test_lock_key_for_none_is_shared(self):
+        assert _lock_key_for_market(None) == "data_fetch_job_lock:shared"
+
+    def test_lock_key_normalizes_case(self):
+        assert _lock_key_for_market("hk") == "data_fetch_job_lock:hk"
+        assert _lock_key_for_market(" JP ") == "data_fetch_job_lock:jp"
+
+    def test_all_market_lock_keys_covers_markets_and_shared(self):
+        keys = all_market_lock_keys()
+        for m in ("us", "hk", "jp", "tw"):
+            assert f"data_fetch_job_lock:{m}" in keys
+        assert "data_fetch_job_lock:shared" in keys
+
+
+class TestAcquirePerMarket:
+    """Per-market acquire uses the market-specific Redis key."""
+
+    def test_acquire_us_uses_us_key(self):
+        lock, mock_redis, _, _ = _make_lock(lock_value=None)
+        mock_redis.set.return_value = True
+
+        lock.acquire("smart_refresh_cache", "task-us", market="US")
+
+        args, kwargs = mock_redis.set.call_args
+        assert args[0] == "data_fetch_job_lock:us"
+        assert "smart_refresh_cache:task-us:" in args[1]
+
+    def test_acquire_hk_uses_hk_key(self):
+        lock, mock_redis, _, _ = _make_lock(lock_value=None)
+        mock_redis.set.return_value = True
+
+        lock.acquire("smart_refresh_cache", "task-hk", market="HK")
+
+        args, _ = mock_redis.set.call_args
+        assert args[0] == "data_fetch_job_lock:hk"
+
+    def test_acquire_unknown_market_rejected(self):
+        lock, _, _, _ = _make_lock(lock_value=None)
+        with pytest.raises(ValueError):
+            lock.acquire("smart_refresh_cache", "task-id", market="CN")
+
+
+class TestReleasePerMarket:
+    def test_release_targets_market_key(self):
+        lock, _, mock_release_script, _ = _make_lock()
+        mock_release_script.return_value = 1
+
+        lock.release("task-hk", market="HK")
+
+        mock_release_script.assert_called_once_with(
+            keys=["data_fetch_job_lock:hk"], args=[":task-hk:"]
+        )
+
+
+class TestExtendPerMarket:
+    def test_extend_targets_market_key(self):
+        lock, _, _, mock_extend_script = _make_lock()
+        mock_extend_script.return_value = 3600
+
+        lock.extend_lock("task-jp", additional_seconds=300, market="JP")
+
+        mock_extend_script.assert_called_once_with(
+            keys=["data_fetch_job_lock:jp"], args=[":task-jp:", 300, 7200]
+        )
+
+
+class TestDecoratorPassesMarket:
+    """Decorator pulls `market` from task kwargs and threads it to the lock."""
+
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_passes_market_to_acquire(self, mock_settings, mock_get_lock):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_lock.lock_timeout = 7200
+        mock_get_lock.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func(market=None):
+            return "ok"
+
+        my_func(market="HK")
+
+        args, kwargs = mock_lock.acquire.call_args
+        assert kwargs.get("market") == "HK"
+        mock_lock.release.assert_called_once()
+        release_kwargs = mock_lock.release.call_args.kwargs
+        assert release_kwargs.get("market") == "HK"
+
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_decorator_defaults_to_shared_when_no_market(self, mock_settings, mock_get_lock):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_lock.lock_timeout = 7200
+        mock_get_lock.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func():
+            return "ok"
+
+        my_func()
+
+        args, kwargs = mock_lock.acquire.call_args
+        # Market arg should be None (→ shared) since the task has no market kwarg.
+        assert kwargs.get("market") is None
+
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    @patch("app.tasks.data_fetch_lock.settings")
+    def test_lock_contention_payload_includes_market(self, mock_settings, mock_get_lock):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (False, False)
+        mock_lock.get_current_holder.return_value = {
+            'task_name': 'other', 'task_id': 'other-id',
+        }
+        mock_lock.get_current_task.return_value = {
+            'task_name': 'other', 'task_id': 'other-id',
+        }
+        mock_get_lock.return_value = mock_lock
+
+        @serialized_data_fetch("test_task")
+        def my_func(market=None):
+            return "ran"
+
+        result = my_func(market="JP")
+
+        assert result["status"] == "already_running"
+        assert result["market"] == "jp"

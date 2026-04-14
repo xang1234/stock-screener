@@ -309,6 +309,7 @@ def build_daily_snapshot(
     composite_method: str | None = None,
     skip_if_published: bool = True,
     static_daily_mode: bool = False,
+    market: str | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -349,6 +350,13 @@ def build_daily_snapshot(
         else composite_method
     )
     correlation_id = self.request.id
+
+    # `market` is a routing/log label here; real per-market scoping comes
+    # from `universe_name` via universe_resolver.
+    from app.tasks.market_queues import log_extra
+    _log_extra = log_extra(market)
+    if market is not None:
+        logger.debug("build_daily_snapshot market label=%s", market, extra=_log_extra)
 
     logger.info(
         "┌─── build_daily_snapshot ───────────────────┐\n"

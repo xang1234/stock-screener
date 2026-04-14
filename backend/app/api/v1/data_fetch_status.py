@@ -26,10 +26,12 @@ async def get_data_fetch_status():
         - current_task: Info about the running task (task_name, task_id, started_at, ttl_seconds)
     """
     lock = get_data_fetch_lock()
-    holder = lock.get_current_holder()
+    # Use any-market checks so per-market Beat tasks are visible, not just
+    # the legacy shared key (which no scheduled task writes to after 9.1).
+    holder = lock.get_any_current_holder()
 
     return DataFetchStatusResponse(
-        is_running=lock.is_locked(),
+        is_running=lock.is_any_locked(),
         current_task=holder
     )
 
@@ -49,24 +51,24 @@ async def force_release_lock():
     """
     lock = get_data_fetch_lock()
 
-    # Check if lock exists
-    if not lock.is_locked():
+    # Check across all market scopes (not just :shared).
+    if not lock.is_any_locked():
         return ForceReleaseLockResponse(
             success=False,
             message="No lock to release - no data-fetch task is currently running"
         )
 
     # Get current holder info before releasing
-    holder = lock.get_current_holder()
+    holder = lock.get_any_current_holder()
     task_name = holder.get('task_name', 'unknown') if holder else 'unknown'
 
-    # Force release
-    success = lock.force_release()
+    # Force-release all market lock keys (one per active market that might be held).
+    count = lock.force_release_all()
 
-    if success:
+    if count > 0:
         return ForceReleaseLockResponse(
             success=True,
-            message=f"Lock force-released. Previous holder: {task_name}"
+            message=f"Lock force-released ({count} key(s)). Previous holder: {task_name}"
         )
     else:
         return ForceReleaseLockResponse(

@@ -41,9 +41,12 @@ router = APIRouter(prefix="/cache", tags=["cache"])
 
 
 def _get_running_refresh_response() -> SmartRefreshResponse | None:
-    """Return the active refresh task when a data-fetch job is already running."""
+    """Return the active refresh task when a data-fetch job is already running.
+
+    Checks across all market lock keys so per-market Beat tasks are visible.
+    """
     lock = get_data_fetch_lock()
-    running = lock.get_current_task()
+    running = lock.get_any_current_task()
     if not running:
         return None
 
@@ -472,7 +475,9 @@ async def force_cancel_refresh():
     """
     try:
         lock = get_data_fetch_lock()
-        running = lock.get_current_task()
+        # Check across all market lock keys — per-market Beat tasks use
+        # per-market keys and would be invisible to get_current_task().
+        running = lock.get_any_current_task()
 
         if not running:
             return {
@@ -480,9 +485,14 @@ async def force_cancel_refresh():
                 "message": "No task is currently running"
             }
 
-        # Check if task is actually stuck
+        # Check if task is actually stuck. Derive market from lock key for
+        # the market-scoped heartbeat lookup.
+        lock_key = running.get('lock_key', '')
+        suffix = lock_key.rsplit(':', 1)[-1]
+        market_str = None if suffix in ('shared', '') else suffix
+
         price_cache = get_price_cache()
-        minutes = price_cache._get_minutes_since_heartbeat()
+        minutes = price_cache._get_minutes_since_heartbeat(market=market_str)
 
         if minutes is not None and minutes < 30:
             return {
@@ -493,11 +503,11 @@ async def force_cancel_refresh():
             }
         # minutes is None (heartbeat expired) or > 30 — allow cancel
 
-        # Force release the lock
-        lock.force_release()
+        # Force-release all market lock keys (safe even if only one is held).
+        lock.force_release_all()
 
-        # Clear heartbeat
-        price_cache.clear_warmup_heartbeat()
+        # Clear heartbeat for the active market scope.
+        price_cache.clear_warmup_heartbeat(market=market_str)
 
         return {
             "status": "cancelled",
