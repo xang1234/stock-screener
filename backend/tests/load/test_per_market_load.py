@@ -23,20 +23,17 @@ from __future__ import annotations
 
 import os
 import subprocess
-import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
-from unittest.mock import patch
+from typing import List
 
 import pytest
 
-from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.rate_budget_policy import get_rate_budget_policy
 from app.tasks.market_queues import SUPPORTED_MARKETS
 
+from .harness import no_sleep, read_429_counter, run_parallel_refresh
 from .measurement import (
     LoadRunSnapshot,
     MarketMetrics,
@@ -46,18 +43,6 @@ from .measurement import (
     write_snapshot,
 )
 from .yfinance_simulator import build_multi_market_simulator
-
-
-def _no_sleep(_seconds: float) -> None:
-    """Drop-in for ``time.sleep`` that doesn't actually wait.
-
-    Patched into ``BulkDataFetcher`` and the simulator so the load harness
-    measures *logical* pipeline behavior (call counts, lock contention,
-    backoff branch coverage) rather than literal wall-clock waits. The
-    fetcher's backoff path can ask for 60-480s sleeps; honoring those
-    would make the test useless for CI.
-    """
-    return None
 
 
 pytestmark = pytest.mark.load
@@ -75,76 +60,7 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _run_one_market(
-    market: str,
-    symbols: List[str],
-    sampler: ResourceSampler,
-) -> tuple[str, float, int, int]:
-    """Run a single market's refresh workload using the real fetcher path.
-
-    The yfinance module is already patched globally to a thread-safe
-    multi-market simulator before this function is called, so all 4 markets
-    run concurrently against the same patched module without race conditions.
-    Returns (market, wall_clock_s, symbols_processed, transient_failures).
-    """
-    fetcher = BulkDataFetcher()
-
-    start = time.monotonic()
-    sampler.sample()
-
-    try:
-        results = fetcher.fetch_prices_in_batches(
-            symbols,
-            period="2y",
-            market=market,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"fetch_prices_in_batches({market}) crashed: {exc}") from exc
-
-    sampler.sample()
-    wall_clock_s = time.monotonic() - start
-    transient_failures = sum(
-        1 for v in results.values() if isinstance(v, dict) and v.get("has_error")
-    )
-    return (market, wall_clock_s, len(results), transient_failures)
-
-
-def _make_simulator_module(simulator):
-    """Wrap a simulator in a module-shaped namespace with ``.download``.
-
-    Used to monkey-patch ``app.services.bulk_data_fetcher.yf``. The
-    ``Tickers`` attribute raises explicitly if any future code path
-    accidentally pulls fundamentals through the load harness — silent
-    AttributeError or NoneType-not-callable would be much harder to
-    diagnose than a typed message.
-    """
-    def _tickers_unsupported(*args, **kwargs):
-        raise NotImplementedError(
-            "yf.Tickers is not supported by the load harness simulator. "
-            "Add a fundamentals scenario before exercising this path."
-        )
-
-    class _Mod:
-        download = staticmethod(simulator.download)
-        Tickers = staticmethod(_tickers_unsupported)
-    return _Mod
-
-
-def _read_429_counter(market: str) -> int:
-    """Read the per-market×provider 429 counter populated by RateBudgetPolicy.
-
-    Delegates key construction to ``RateBudgetPolicy.counter_key_429`` so the
-    harness stays in sync with the policy's write side automatically.
-    """
-    try:
-        from app.services.redis_pool import get_redis_client
-        client = get_redis_client()
-        if client is None:
-            return 0
-        val = client.get(get_rate_budget_policy().counter_key_429("yfinance", market))
-        return int(val) if val else 0
-    except Exception:
-        return 0
+# Shared parallel-runner + simulator wiring lives in ``harness.py``.
 
 
 @pytest.mark.load
@@ -182,42 +98,18 @@ def test_parallel_per_market_weekly_refresh(
     policy = get_rate_budget_policy()
     policy.invalidate_weights_cache()
 
-    multi_sim = build_multi_market_simulator(seed=simulator_seed, sleep_fn=_no_sleep)
+    multi_sim = build_multi_market_simulator(seed=simulator_seed, sleep_fn=no_sleep)
     sampler = ResourceSampler(interval_s=0.5)
-    market_results: List[tuple[str, float, int, int]] = []
 
-    # Patch yf module ONCE (thread-safe via MultiMarketSimulator) and patch
-    # time.sleep across bulk_data_fetcher + rate_limiter so adaptive backoffs
-    # (60-480s) and inter-batch waits don't make the harness multi-minute.
-    # Per-batch latency is recorded in each sub-simulator; tail-latency
-    # reflects requested sleep, not actual wait.
-    from app.services import bulk_data_fetcher as bdf_module
-    from app.services import rate_limiter as rl_module
-
-    yf_mod = _make_simulator_module(multi_sim)
-    with sampler, \
-            patch.object(bdf_module, "yf", yf_mod), \
-            patch.object(bdf_module.time, "sleep", _no_sleep), \
-            patch.object(rl_module.time, "sleep", _no_sleep):
-        with ThreadPoolExecutor(max_workers=len(SUPPORTED_MARKETS)) as pool:
-            futures = {
-                pool.submit(
-                    _run_one_market,
-                    market,
-                    synthetic_universe[market],
-                    sampler,
-                ): market
-                for market in SUPPORTED_MARKETS
-            }
-            for future in as_completed(futures):
-                market_results.append(future.result())
+    with sampler:
+        market_results = run_parallel_refresh(multi_sim, synthetic_universe, sampler)
 
     # Build per-market metrics by joining run results with simulator stats.
     sim_stats = multi_sim.stats
     market_metrics: List[MarketMetrics] = []
     for market, wall_s, symbols_processed, transient_failures in market_results:
         stats = sim_stats[market]
-        counter_429 = _read_429_counter(market)
+        counter_429 = read_429_counter(market)
         market_metrics.append(MarketMetrics(
             market=market,
             wall_clock_s=round(wall_s, 3),

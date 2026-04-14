@@ -186,6 +186,19 @@ class MultiMarketSimulator:
     def __init__(self, sub_simulators: Dict[str, YFinanceSimulator]):
         self._sims = sub_simulators
 
+    def set_profile(self, market: str, profile: SimulatorProfile) -> None:
+        """Replace the per-market profile at runtime.
+
+        Used by fault-injection helpers (bead 9.4) to swap a victim market's
+        latency/429/failure distribution mid-test without reaching into the
+        sub-simulator's private state.
+        """
+        if market not in self._sims:
+            raise KeyError(
+                f"Unknown market {market!r}; known: {sorted(self._sims)}"
+            )
+        self._sims[market].profile = profile
+
     def _market_for_symbol(self, symbol: str) -> Optional[str]:
         if not symbol.startswith(self.SYMBOL_PREFIX):
             return None

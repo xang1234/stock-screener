@@ -98,6 +98,52 @@ Defined in `conftest.py:SYNTHETIC_UNIVERSE_SIZES`. The numbers are
 proportional to real production universe sizes but small enough that the
 harness completes in seconds rather than minutes.
 
+## Fault Isolation (bead asia.9.4)
+
+Beyond performance regression detection, the harness includes chaos-lite
+fault-injection tests that validate the operational guarantee 9.1 + 9.2
+were designed to deliver: **a failure in one market is contained to that
+market**.
+
+### How it works
+
+`fault_injection.py` exposes three helpers that mutate a single market's
+behavior, then `test_failure_isolation.py` runs the parallel 4-market
+refresh and asserts the **non-affected** markets behave identically to the
+healthy baseline (`per_market_load.json`).
+
+For each non-affected market, the chaos tests assert:
+
+1. Symbol processing count matches the healthy baseline (no incomplete refresh).
+2. Transient-failure count matches the healthy baseline (no failures leak from victim).
+3. Per-market `ratelimit:429:yfinance:<market>` Redis counter is 0 (rate-key isolation).
+4. `yfinance_calls` matches the healthy baseline exactly (deterministic batch behavior unchanged).
+
+All four assertions are CI-gated. The affected (victim) market is allowed
+to fail or partially succeed — only the requirement that the harness itself
+doesn't crash is enforced for the victim.
+
+### Fault scenarios → isolation mechanism mapping
+
+| Test | Fault injected | Isolation mechanism validated |
+|---|---|---|
+| `test_provider_exhaustion_isolation` | Victim returns 100% yfinance 429s | Per-market `yfinance:<market>` rate-limit keys (9.2) |
+| `test_provider_hard_failure_isolation` | Victim raises non-429 exception every call | `BulkDataFetcher` shared-state safety + per-market batch loops |
+| `test_lock_stuck_isolation` | Victim's `data_fetch_job_lock:<market>` held externally | Per-market lock keys (9.1) |
+
+### Run
+
+```bash
+make gate-7-chaos
+
+# Or directly
+pytest backend/tests/load/test_failure_isolation.py -v -m load
+```
+
+The chaos tests share `tests/load/`'s simulator, harness, and Redis-reset
+fixture with `gate-6-load`. They can be run independently or as part of the
+nightly load+chaos suite.
+
 ## Why this isn't gated per-PR
 
 Load tests are inherently slower and more side-effect-heavy than unit tests
