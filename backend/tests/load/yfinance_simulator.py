@@ -11,6 +11,7 @@ yfinance — used for occasional out-of-band evidence-pack runs.
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -118,8 +119,8 @@ class YFinanceSimulator:
             "calls": self._call_count,
             "rate_limited": self._429_count,
             "p50_latency_s": sorted_lat[n // 2] if n else 0.0,
-            "p95_latency_s": sorted_lat[int(n * 0.95)] if n else 0.0,
-            "p99_latency_s": sorted_lat[min(int(n * 0.99), n - 1)] if n else 0.0,
+            "p95_latency_s": sorted_lat[min(math.ceil(n * 0.95) - 1, n - 1)] if n else 0.0,
+            "p99_latency_s": sorted_lat[min(math.ceil(n * 0.99) - 1, n - 1)] if n else 0.0,
         }
 
 

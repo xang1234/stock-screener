@@ -24,10 +24,10 @@ import pytest
 # per market, enough to exercise backoff/throttle paths without making the
 # test slow.
 SYNTHETIC_UNIVERSE_SIZES: Dict[str, int] = {
-    "US": 200,   # 4 batches × 50
-    "HK": 100,   # 4 batches × 25
-    "JP": 100,   # 4 batches × 25
-    "TW": 80,    # 4 batches × 20
+    "US": 200,   # 4 batches x 50
+    "HK": 100,   # 4 batches x 25
+    "JP": 100,   # 4 batches x 25
+    "TW": 80,    # 4 batches x 20
 }
 
 
@@ -72,16 +72,17 @@ def synthetic_universe() -> Dict[str, List[str]]:
 
 @pytest.fixture
 def reset_redis_state(redis_required):
-    """Clear rate-limiter, lock, heartbeat, and 429-counter keys before/after.
+    """Clear load-harness-owned Redis keys before/after each run.
 
     Ensures back-to-back load runs don't pollute each other's measurements.
-    Only deletes keys with prefixes the harness owns — never touches arbitrary
-    application keys.
+    Cleanup is scoped to the exact per-market suffixes (us/hk/jp/tw) used by
+    the synthetic universe so it never touches unrelated keys on a shared Redis
+    instance (e.g., a staging server running live workers).
 
     Cleanup spans both Redis DBs the rate-budget plumbing uses:
-    - DB 0 (``settings.redis_db``): per-market lock keys.
-    - DB 2 (``settings.cache_redis_db``): rate-limiter keys, 429 counters,
-      warmup heartbeat — all routed through the shared ``redis_pool`` client.
+    - DB 0 (``settings.redis_db``): exact per-market lock keys.
+    - DB 2 (``settings.cache_redis_db``): ratelimit/429/throttle/warmup keys
+      scoped to each load-test market suffix.
     Uses pipelined ``UNLINK`` (lazy delete) to avoid a per-key DEL round-trip.
     """
     import redis
@@ -95,21 +96,27 @@ def reset_redis_state(redis_required):
         host=settings.redis_host, port=settings.redis_port, db=settings.redis_db,
     )
 
-    prefix_to_clients = {
-        "ratelimit:": [cache_client],          # RedisRateLimiter + counters
-        "data_fetch_job_lock": [lock_client],  # Per-market + legacy lock keys
-        "cache:warmup:": [cache_client],       # Heartbeat + metadata keys
-    }
+    # Restrict cleanup to the exact market suffixes the load harness uses so we
+    # never wipe unrelated state on a shared Redis instance (e.g., a staging
+    # server where the same DB is used by live workers).
+    _LOAD_MARKET_SUFFIXES = [m.lower() for m in SYNTHETIC_UNIVERSE_SIZES]
 
     def _clear():
-        for prefix, clients in prefix_to_clients.items():
-            for c in clients:
-                if c is None:
-                    continue
-                pipe = c.pipeline()
-                for key in c.scan_iter(match=f"{prefix}*"):
-                    pipe.unlink(key)
-                pipe.execute()
+        if cache_client is None:
+            return
+        pipe_cache = cache_client.pipeline()
+        pipe_lock = lock_client.pipeline()
+        for suffix in _LOAD_MARKET_SUFFIXES:
+            # Exact lock key per market (DB 0).
+            pipe_lock.unlink(f"data_fetch_job_lock:{suffix}")
+            # Rate-limiter + 429 + throttle keys scoped to this market (DB 2).
+            for key in cache_client.scan_iter(match=f"ratelimit:*:{suffix}*"):
+                pipe_cache.unlink(key)
+            # Warmup heartbeat key scoped to this market (DB 2).
+            for key in cache_client.scan_iter(match=f"cache:warmup:*:{suffix}*"):
+                pipe_cache.unlink(key)
+        pipe_cache.execute()
+        pipe_lock.execute()
 
     _clear()
     yield
