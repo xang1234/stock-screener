@@ -1893,6 +1893,7 @@ class StockUniverseService:
         sector: Optional[str] = None,
         min_market_cap: Optional[float] = None,
         sp500_only: bool = False,
+        index_name: Optional[str] = None,
         limit: Optional[int] = None
     ) -> List[str]:
         """
@@ -1904,19 +1905,36 @@ class StockUniverseService:
             exchange: Optional exchange filter (NYSE, NASDAQ, AMEX)
             sector: Optional sector filter
             min_market_cap: Optional minimum market cap filter
-            sp500_only: If True, only return S&P 500 stocks
+            sp500_only: If True, only return S&P 500 stocks (legacy path;
+                equivalent to ``index_name="SP500"``)
+            index_name: Optional index membership filter. ``"SP500"`` maps to
+                the legacy ``is_sp500`` column; any other value resolves via
+                ``stock_universe_index_membership``. Empty / unknown indices
+                return no rows (fail-closed so an unseeded index doesn't leak
+                a whole-market scan).
             limit: Optional limit on number of symbols
 
         Returns:
             List of symbol strings
         """
         try:
+            from ..models.stock_universe import StockUniverseIndexMembership
+
             query = db.query(StockUniverse.symbol).filter(
                 StockUniverse.active_filter()
             )
 
+            resolved_index = index_name.upper() if index_name else None
             if sp500_only:
+                resolved_index = "SP500"
+
+            if resolved_index == "SP500":
                 query = query.filter(StockUniverse.is_sp500 == True)
+            elif resolved_index:
+                membership_symbols = db.query(
+                    StockUniverseIndexMembership.symbol
+                ).filter(StockUniverseIndexMembership.index_name == resolved_index)
+                query = query.filter(StockUniverse.symbol.in_(membership_symbols))
 
             if market:
                 normalized_market = market.upper()
@@ -1955,12 +1973,12 @@ class StockUniverseService:
             symbols = [row[0] for row in query.all()]
 
             logger.info(
-                "Retrieved %d active symbols (market=%s, exchange=%s, sector=%s, sp500_only=%s)",
+                "Retrieved %d active symbols (market=%s, exchange=%s, sector=%s, index=%s)",
                 len(symbols),
                 market,
                 exchange,
                 sector,
-                sp500_only,
+                resolved_index,
             )
             return symbols
 

@@ -109,7 +109,7 @@ class TestResolveSymbols:
 
         assert result == ["AAPL", "MSFT"]
         mock_service.return_value.get_active_symbols.assert_called_once_with(
-            mock_db, market=None, exchange=None, sp500_only=True, limit=None
+            mock_db, market=None, exchange=None, index_name="SP500", limit=None
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")

@@ -100,8 +100,15 @@ def resolve_symbols(
         )
 
     elif t == UniverseType.INDEX:
+        # Dispatch by the requested index name. SP500 keeps using the
+        # legacy ``is_sp500`` column; HSI/NIKKEI225/TAIEX resolve via
+        # ``stock_universe_index_membership``.
         return get_stock_universe_service().get_active_symbols(
-            db, market=None, exchange=None, sp500_only=True, limit=limit
+            db,
+            market=None,
+            exchange=None,
+            index_name=universe_def.index.value,
+            limit=limit,
         )
 
     elif t in (UniverseType.CUSTOM, UniverseType.TEST):
