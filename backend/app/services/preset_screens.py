@@ -44,6 +44,14 @@ RANGE_FILTER_TO_FIELD: dict[str, str] = {
     "week52LowDistance": "week_52_low_distance",
     "beta": "beta",
     "betaAdjRs": "beta_adj_rs",
+    "pctDay": "pct_day",
+    "pctWeek": "pct_week",
+    "pctMonth": "pct_month",
+}
+
+SCALAR_FILTER_TO_FIELD: dict[str, str] = {
+    "minVolume": "volume",
+    "minMarketCap": "market_cap",
 }
 
 BOOLEAN_FILTER_TO_FIELD: dict[str, str] = {
@@ -230,6 +238,60 @@ PRESET_SCREENS: list[dict] = [
         "sort_by": "ipo_score",
         "sort_order": "desc",
     },
+    # -- Tier 3: Super Scanners (Market-Metrics inspired) --
+    {
+        "id": "gainers_4pct",
+        "name": "4% Daily Gainers",
+        "short_name": "4% Gainers",
+        "description": "Stocks advancing 4%+ intraday — quick broad-market momentum scan",
+        "tier": 3,
+        "filters": {
+            "perfDay": {"min": 4, "max": None},
+        },
+        "sort_by": "price_change_1d",
+        "sort_order": "desc",
+    },
+    {
+        "id": "movers_9m",
+        "name": "9M Movers",
+        "short_name": "9M Movers",
+        "description": "Heavy-volume movers: $100M+ dollar volume with 1.25x+ relative volume surge",
+        "tier": 3,
+        "filters": {
+            # minVolume is dollar volume (avg_volume * price), not share count.
+            # 9M-shares proxy ≈ $100M dollar-volume floor (liquid large-caps).
+            "minVolume": 100_000_000,
+            "volumeSurge": {"min": 1.25, "max": None},
+        },
+        "sort_by": "price_change_1d",
+        "sort_order": "desc",
+    },
+    {
+        "id": "movers_20_weekly",
+        "name": "20% Weekly Movers",
+        "short_name": "20% Weekly",
+        "description": "Stocks up 20%+ over the past 5 sessions",
+        "tier": 3,
+        "filters": {
+            "perfWeek": {"min": 20, "max": None},
+        },
+        "sort_by": "perf_week",
+        "sort_order": "desc",
+    },
+    {
+        "id": "club_97",
+        "name": "97 Club",
+        "short_name": "97 Club",
+        "description": "Top 3% percentile movers across day/week/month horizons simultaneously",
+        "tier": 3,
+        "filters": {
+            "pctDay": {"min": 97, "max": None},
+            "pctWeek": {"min": 97, "max": None},
+            "pctMonth": {"min": 97, "max": None},
+        },
+        "sort_by": "price_change_1d",
+        "sort_order": "desc",
+    },
 ]
 
 
@@ -246,6 +308,13 @@ def _matches_preset_filters(row: dict, filters: dict) -> bool:
         # Stage filter (integer equality)
         if key == "stage":
             if row.get("stage") != value:
+                return False
+            continue
+
+        if key in SCALAR_FILTER_TO_FIELD:
+            field = SCALAR_FILTER_TO_FIELD[key]
+            row_val = row.get(field)
+            if row_val is None or row_val < value:
                 return False
             continue
 

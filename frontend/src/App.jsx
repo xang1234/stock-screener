@@ -76,6 +76,9 @@ const getDesignTokens = (mode) => ({
       paper: mode === 'light' ? '#ffffff' : '#141419',
     },
   },
+  shape: {
+    borderRadius: 10,
+  },
   typography: {
     fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     fontSize: 13,
@@ -162,7 +165,6 @@ const getDesignTokens = (mode) => ({
         sizeSmall: {
           height: 18,
           fontSize: '10px',
-          borderRadius: 3,
         },
         labelSmall: {
           padding: '0 6px',

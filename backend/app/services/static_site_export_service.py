@@ -292,6 +292,7 @@ class StaticSiteExportService:
 
         chunk_refs: list[dict[str, Any]] = []
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
+        self._annotate_percentile_ranks(serialized_rows)
         default_filtered_rows = self._apply_static_default_filters(serialized_rows)
         for index in range(0, len(serialized_rows), SCAN_CHUNK_SIZE):
             chunk_rows = serialized_rows[index:index + SCAN_CHUNK_SIZE]
@@ -662,6 +663,39 @@ class StaticSiteExportService:
             }
         )
         return item
+
+    @staticmethod
+    def _annotate_percentile_ranks(rows: list[dict[str, Any]]) -> None:
+        """Add pct_day/pct_week/pct_month (0-100) to each row in-place."""
+        if not rows:
+            return
+        for src_field, dst_field in (
+            ("price_change_1d", "pct_day"),
+            ("perf_week", "pct_week"),
+            ("perf_month", "pct_month"),
+        ):
+            ranked = sorted(
+                (
+                    (i, row[src_field])
+                    for i, row in enumerate(rows)
+                    if row.get(src_field) is not None
+                ),
+                key=lambda pair: pair[1],
+            )
+            total = len(ranked)
+            for row in rows:
+                row[dst_field] = None
+            pos = 0
+            while pos < total:
+                end = pos
+                value = ranked[pos][1]
+                while end + 1 < total and ranked[end + 1][1] == value:
+                    end += 1
+                percentile = round(((end + 1) / total) * 100, 2)
+                for idx in range(pos, end + 1):
+                    row_idx, _ = ranked[idx]
+                    rows[row_idx][dst_field] = percentile
+                pos = end + 1
 
     @staticmethod
     def _apply_static_default_filters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

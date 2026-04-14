@@ -34,30 +34,6 @@ const formatNumber = (value, digits = 0) => {
   });
 };
 
-function SummaryCard({ label, value, helper }) {
-  return (
-    <Paper elevation={0} sx={{ p: 1, height: '100%', border: '1px solid', borderColor: 'divider' }}>
-      <Typography
-        variant="caption"
-        sx={{ fontSize: '10px', letterSpacing: '0.5px', textTransform: 'uppercase', color: 'text.disabled' }}
-      >
-        {label}
-      </Typography>
-      <Typography
-        variant="body2"
-        sx={{ mt: 0.25, fontFamily: 'monospace', fontSize: '12px', fontWeight: 500, color: 'text.secondary' }}
-      >
-        {value}
-      </Typography>
-      {helper ? (
-        <Typography variant="caption" sx={{ mt: 0.25, fontSize: '10px', color: 'text.disabled', display: 'block' }}>
-          {helper}
-        </Typography>
-      ) : null}
-    </Paper>
-  );
-}
-
 function StaticHomePage() {
   const manifestQuery = useStaticManifest();
   const homeQuery = useQuery({
@@ -109,68 +85,80 @@ function StaticHomePage() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
-        Daily Market Snapshot
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
-        Generated {home.generated_at}. Data as of {home.as_of_date}.
-      </Typography>
-
-      <Grid container spacing={1} sx={{ mb: 2 }}>
-        <Grid item xs={12} md={2}>
-          <SummaryCard
-            label="Feature Snapshot"
-            value={freshness.scan_as_of_date || '-'}
-            helper={`Run ${freshness.scan_run_id ?? '-'}`}
-          />
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <SummaryCard
-            label="Breadth Date"
-            value={freshness.breadth_latest_date || '-'}
-          />
-        </Grid>
-        <Grid item xs={12} md={2}>
-          <SummaryCard
-            label="Group Rankings"
-            value={freshness.groups_latest_date || '-'}
-          />
-        </Grid>
-      </Grid>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          columnGap: 2,
+          rowGap: 0.5,
+          mb: 2,
+        }}
+      >
+        <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px' }}>
+          Daily Market Snapshot
+        </Typography>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontFamily: 'monospace', fontSize: '11px' }}
+        >
+          {`Snapshot ${freshness.scan_as_of_date || '-'} · Breadth ${freshness.breadth_latest_date || '-'} · Groups ${freshness.groups_latest_date || '-'}`}
+        </Typography>
+      </Box>
 
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        {(home.key_markets || []).map((item) => (
-          <Grid item xs={6} sm={4} md={2.4} key={item.symbol}>
-            <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '13px' }}>
-                {item.symbol}
-              </Typography>
-              <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '10px' }}>
-                {item.display_name}
-              </Typography>
-              <Typography variant="body1" sx={{ mt: 0.5, fontFamily: 'monospace', fontWeight: 600 }}>
-                {item.latest_close != null ? `$${formatNumber(item.latest_close, 2)}` : '-'}
-              </Typography>
-              <Box display="flex" alignItems="center" sx={{ mt: 0.5 }}>
-                {item.change_1d > 0 && <TrendingUpIcon sx={{ fontSize: 14, mr: 0.25, color: 'success.main' }} />}
-                {item.change_1d < 0 && <TrendingDownIcon sx={{ fontSize: 14, mr: 0.25, color: 'error.main' }} />}
-                <Typography
-                  variant="body2"
-                  sx={{
-                    color: item.change_1d > 0 ? 'success.main' : item.change_1d < 0 ? 'error.main' : 'text.secondary',
-                    fontFamily: 'monospace',
-                    fontWeight: 600,
-                    fontSize: '12px',
-                  }}
-                >
-                  {item.change_1d != null
-                    ? `${item.change_1d > 0 ? '+' : ''}${formatNumber(item.change_1d, 2)}%`
-                    : '-'}
+        {(home.key_markets || []).map((item) => {
+          const closes = (item.history || []).map((h) => h.close).filter((c) => c != null);
+          const trend = closes.length >= 2
+            ? (closes[closes.length - 1] > closes[0] ? 1 : closes[closes.length - 1] < closes[0] ? -1 : 0)
+            : 0;
+          return (
+            <Grid item xs={6} sm={4} md={2.4} key={item.symbol}>
+              <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '13px' }}>
+                  {item.symbol}
                 </Typography>
-              </Box>
-            </Paper>
-          </Grid>
-        ))}
+                <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '10px' }}>
+                  {item.display_name}
+                </Typography>
+                <Typography variant="body1" sx={{ mt: 0.5, fontFamily: 'monospace', fontWeight: 600 }}>
+                  {item.latest_close != null ? `$${formatNumber(item.latest_close, 2)}` : '-'}
+                </Typography>
+                <Box display="flex" alignItems="center" sx={{ mt: 0.5 }}>
+                  {item.change_1d > 0 && <TrendingUpIcon sx={{ fontSize: 14, mr: 0.25, color: 'success.main' }} />}
+                  {item.change_1d < 0 && <TrendingDownIcon sx={{ fontSize: 14, mr: 0.25, color: 'error.main' }} />}
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: item.change_1d > 0 ? 'success.main' : item.change_1d < 0 ? 'error.main' : 'text.secondary',
+                      fontFamily: 'monospace',
+                      fontWeight: 600,
+                      fontSize: '12px',
+                    }}
+                  >
+                    {item.change_1d != null
+                      ? `${item.change_1d > 0 ? '+' : ''}${formatNumber(item.change_1d, 2)}%`
+                      : '-'}
+                  </Typography>
+                </Box>
+                {closes.length > 1 ? (
+                  <Box sx={{ mt: 0.75 }}>
+                    <PriceSparkline
+                      data={closes}
+                      trend={trend}
+                      change1d={null}
+                      width="100%"
+                      height={36}
+                      showChange={false}
+                    />
+                  </Box>
+                ) : null}
+              </Paper>
+            </Grid>
+          );
+        })}
       </Grid>
 
       <Paper elevation={0} sx={{ p: 1.5, mb: 2, border: '1px solid', borderColor: 'divider' }}>

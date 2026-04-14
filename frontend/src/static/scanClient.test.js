@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyScanFilterDefaults,
@@ -68,6 +68,16 @@ const rows = [
 ];
 
 describe('static scan client', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Fix "today" to 2024-01-15 UTC so IPO boundary tests are deterministic.
+    vi.setSystemTime(new Date(Date.UTC(2024, 0, 15)));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('filters rows with the exported read-only criteria set', () => {
     const filters = buildDefaultScanFilters();
     filters.symbolSearch = 'nv';
@@ -116,6 +126,47 @@ describe('static scan client', () => {
     const filtered = filterStaticScanRows(rows, filters);
 
     expect(filtered.map((row) => row.symbol)).toEqual(['MSFT', 'SNOW']);
+  });
+
+  it('resolves IPO date presets to a cutoff (not raw string comparison)', () => {
+    // Frozen clock: 2024-01-15 UTC. Derived cutoffs:
+    //   1y  → 2023-01-15   5y → 2019-01-15   6m → 2023-07-15
+    const testRows = [
+      { ...rows[0], symbol: 'OLD', ipo_date: '1999-01-22' },
+      { ...rows[0], symbol: 'NEW', ipo_date: '2023-07-15' },
+    ];
+
+    const filtersOneY = buildDefaultScanFilters();
+    filtersOneY.ipoAfter = '1y';
+    expect(filterStaticScanRows(testRows, filtersOneY).map((r) => r.symbol)).toEqual(['NEW']);
+
+    const filtersFiveY = buildDefaultScanFilters();
+    filtersFiveY.ipoAfter = '5y';
+    expect(filterStaticScanRows(testRows, filtersFiveY).map((r) => r.symbol)).toEqual(['NEW']);
+
+    const filtersSixM = buildDefaultScanFilters();
+    filtersSixM.ipoAfter = '6m';
+    expect(filterStaticScanRows(testRows, filtersSixM).map((r) => r.symbol)).not.toContain('OLD');
+  });
+
+  it('filters by EPS Rating, Market Cap, and RS 12M ranges', () => {
+    const testRows = [
+      { symbol: 'A', eps_rating: 85, market_cap: 5_000_000_000, rs_rating_12m: 90 },
+      { symbol: 'B', eps_rating: 45, market_cap: 500_000_000, rs_rating_12m: 55 },
+      { symbol: 'C', eps_rating: null, market_cap: null, rs_rating_12m: null },
+    ];
+
+    const f1 = buildDefaultScanFilters();
+    f1.epsRating = { min: 70, max: null };
+    expect(filterStaticScanRows(testRows, f1).map((r) => r.symbol)).toEqual(['A']);
+
+    const f2 = buildDefaultScanFilters();
+    f2.minMarketCap = 1_000_000_000;
+    expect(filterStaticScanRows(testRows, f2).map((r) => r.symbol)).toEqual(['A']);
+
+    const f3 = buildDefaultScanFilters();
+    f3.rs12m = { min: 80, max: null };
+    expect(filterStaticScanRows(testRows, f3).map((r) => r.symbol)).toEqual(['A']);
   });
 
   it('sorts and paginates rows in-browser without any backend assistance', () => {
