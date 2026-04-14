@@ -127,11 +127,27 @@ class Settings(BaseSettings):
 
     # Cache Warming Schedule (Celery Beat)
     cache_warm_after_close: bool = True  # Warm cache after market close
-    cache_warm_hour: int = 17  # 5 PM ET (after market close)
+    cache_warm_hour: int = 17  # 5 PM ET (after market close) — US default, also legacy fallback
     cache_warm_minute: int = 30
     cache_weekly_refresh: bool = True  # Full refresh weekly
     cache_weekly_day: int = 0  # Sunday = 0
     cache_weekly_hour: int = 2  # 2 AM ET
+
+    # Per-market cache warmup schedule (all in the celery_timezone, default ET).
+    # HK close 16:00 HKT -> 04:00 ET; JP close 15:00 JST -> 02:00 ET;
+    # TW close 13:30 CST -> 00:30 ET. +30-60min buffer after close.
+    cache_warm_hour_us: int = 17
+    cache_warm_minute_us: int = 30
+    cache_warm_hour_hk: int = 4
+    cache_warm_minute_hk: int = 30
+    cache_warm_hour_jp: int = 2
+    cache_warm_minute_jp: int = 30
+    cache_warm_hour_tw: int = 1
+    cache_warm_minute_tw: int = 0
+
+    # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
+    # entirely (beat schedule skips it; its worker can be stopped).
+    enabled_markets: str = "US,HK,JP,TW"  # comma-separated
 
     # Fundamental Data Caching
     fundamental_cache_enabled: bool = True  # Enable fundamental data caching
@@ -200,6 +216,24 @@ class Settings(BaseSettings):
             raise ValueError(f"cache_warm_minute must be 0-59, got {v}")
         return v
 
+    @field_validator(
+        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
+    )
+    @classmethod
+    def validate_per_market_hour(cls, v: int) -> int:
+        if not 0 <= v <= 23:
+            raise ValueError(f"per-market cache_warm_hour must be 0-23, got {v}")
+        return v
+
+    @field_validator(
+        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
+    )
+    @classmethod
+    def validate_per_market_minute(cls, v: int) -> int:
+        if not 0 <= v <= 59:
+            raise ValueError(f"per-market cache_warm_minute must be 0-59, got {v}")
+        return v
+
     @field_validator('celery_timezone')
     @classmethod
     def validate_celery_timezone(cls, v: str) -> str:
@@ -247,6 +281,38 @@ class Settings(BaseSettings):
         if self.groq_api_key:
             return [self.groq_api_key]
         return []
+
+    @property
+    def enabled_markets_list(self) -> List[str]:
+        """Parse comma-separated enabled markets into a canonical upper-case list.
+
+        Invalid markets are dropped with a warning so a typo in env config can't
+        take down the whole worker fleet.
+        """
+        from ..tasks.market_queues import SUPPORTED_MARKETS  # local import to avoid cycle
+        raw = [m.strip().upper() for m in (self.enabled_markets or "").split(",") if m.strip()]
+        valid = [m for m in raw if m in SUPPORTED_MARKETS]
+        dropped = [m for m in raw if m not in SUPPORTED_MARKETS]
+        if dropped:
+            logger.warning(
+                "Dropping unsupported markets from ENABLED_MARKETS: %s. Supported: %s",
+                dropped,
+                SUPPORTED_MARKETS,
+            )
+        return valid or list(SUPPORTED_MARKETS)
+
+    def cache_warm_schedule_for(self, market: str) -> tuple[int, int]:
+        """Return (hour, minute) cron tuple for a given market's cache warmup."""
+        m = market.upper()
+        mapping = {
+            "US": (self.cache_warm_hour_us, self.cache_warm_minute_us),
+            "HK": (self.cache_warm_hour_hk, self.cache_warm_minute_hk),
+            "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
+            "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
+        }
+        if m not in mapping:
+            raise ValueError(f"No cache warm schedule for market {market!r}")
+        return mapping[m]
 
     @property
     def zai_api_keys_list(self) -> List[str]:

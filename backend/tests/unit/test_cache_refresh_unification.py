@@ -65,7 +65,9 @@ def test_daily_cache_warmup_delegates_to_smart_refresh(monkeypatch):
     assert result == delegated_result
     delegated.assert_called_once()
     assert delegated.call_args.args[0].name == module.daily_cache_warmup.name
-    assert delegated.call_args.kwargs == {"mode": "full"}
+    # After bead 9.1 daily_cache_warmup accepts a `market` kwarg and forwards it
+    # to smart_refresh_cache (None → shared scope by default).
+    assert delegated.call_args.kwargs == {"mode": "full", "market": None}
 
 
 def test_celery_schedule_moves_orphan_cleanup_and_keeps_legacy_manual_routes():
@@ -143,6 +145,44 @@ def test_smart_refresh_cache_allows_in_process_bypass_outside_time_window(monkey
     assert result["message"] == "No active symbols found in universe"
     fake_price_cache.save_warmup_metadata.assert_called_once_with("completed", 0, 0)
     fake_db.close.assert_called_once()
+
+
+def test_smart_refresh_cache_non_us_market_skips_time_window_guard(monkeypatch):
+    """Per-market beat entries (HK/JP/TW) fire at local-market hours in ET (e.g.
+    HK at 4:30 AM ET). The legacy US-only time-window guard would reject them
+    as catchup storms. Bead 9.1: when market is explicit, skip the guard."""
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
+    fake_query.filter.return_value.order_by.return_value.all.return_value = []
+    fake_db.query.return_value = fake_query
+    fake_price_cache = MagicMock()
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    # Simulate HK's schedule firing at 4:30 AM ET Tuesday — outside the US window.
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=4, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+
+    result = module.smart_refresh_cache.run.__wrapped__(
+        module.smart_refresh_cache, "full", market="HK"
+    )
+
+    # Should NOT be rejected with 'Outside refresh window'.
+    assert result.get("skipped") is not True or "Outside refresh window" not in result.get("reason", "")
 
 
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):

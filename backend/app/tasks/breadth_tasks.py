@@ -128,7 +128,12 @@ def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth')
 @serialized_data_fetch('calculate_daily_breadth')
-def calculate_daily_breadth(self, calculation_date: str = None, force_cache_only: bool = False):
+def calculate_daily_breadth(
+    self,
+    calculation_date: str = None,
+    force_cache_only: bool = False,
+    market: str | None = None,
+):
     """
     Calculate and store daily market breadth indicators.
 
@@ -438,7 +443,11 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
     max_retries=2,
 )
 @serialized_data_fetch('calculate_daily_breadth_with_gapfill')
-def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
+def calculate_daily_breadth_with_gapfill(
+    self,
+    max_gap_days: int = None,
+    market: str | None = None,
+):
     """
     Calculate daily breadth with automatic gap detection and filling.
 
@@ -458,9 +467,21 @@ def calculate_daily_breadth_with_gapfill(self, max_gap_days: int = None):
             'timestamp': str
         }
     """
+    from .market_queues import market_tag, log_extra
+    _log_extra = log_extra(market)
     logger.info("=" * 60)
-    logger.info("TASK: Calculate Daily Market Breadth (with Gap-Fill)")
+    logger.info(
+        "TASK: Calculate Daily Market Breadth (with Gap-Fill) %s", market_tag(market),
+        extra=_log_extra,
+    )
     logger.info("=" * 60)
+    # Breadth calculator aggregates across markets; the `market` kwarg is a
+    # routing/log label here. Deep per-market scoping moves with 9.2.
+    if market is not None:
+        logger.debug(
+            "Breadth market-scoping is label-only; calculator aggregates all markets.",
+            extra=_log_extra,
+        )
 
     # Use config value if not specified
     if max_gap_days is None:

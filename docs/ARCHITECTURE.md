@@ -76,15 +76,19 @@ The scan orchestrator (`scanners/scan_orchestrator.py`) coordinates all screener
 
 ## Celery Task Queues
 
-Three-queue architecture to separate concerns and prevent rate limit violations:
+Market-partitioned queue architecture (bead `StockScreenClaude-asia.9.1`) that separates concerns, prevents rate-limit violations, and enables cross-market parallelism:
 
 | Queue | Workers | Purpose |
 |-------|---------|---------|
 | `celery` | 4 (local), 2 (Docker) | General compute tasks |
-| `data_fetch` | 1 | External API calls (serialized to respect rate limits) |
-| `user_scans` | 2 | User-triggered scan tasks |
+| `data_fetch_{us,hk,jp,tw}` | 1 per market | Per-market external API calls (serialized within a market) |
+| `data_fetch_shared` | 1 | Market-agnostic tasks (theme discovery, orphan cleanup) + safety-net default route |
+| `user_scans_{us,hk,jp,tw}` | 2 per market | Per-market user-triggered scans |
+| `user_scans_shared` | 2 | Market-agnostic scans + safety-net route |
 
-All external API tasks route to `data_fetch` to prevent rate limit violations. Celery Beat handles scheduled tasks (daily refresh, breadth calculation, theme discovery).
+Each market has its own Redis lock key (`data_fetch_job_lock:{market}`), so a US refresh can run in parallel with an HK refresh without either blocking the other. Rate-limit protection inside a market still holds via the per-market worker's concurrency=1. Per-market rate budgets and adaptive backoff land in bead 9.2.
+
+Celery Beat fans out each data-fetch task into one entry per enabled market, routing to the matching queue with `kwargs={"market": "..."}`. Market-scoped task implementations filter the `StockUniverse.market` column to scope their work. See `backend/app/tasks/market_queues.py` for the topology helpers and `backend/app/celery_app.py` for the fan-out.
 
 ## Redis Caching Strategy
 

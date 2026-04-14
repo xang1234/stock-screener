@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_stock_universe')
 @serialized_data_fetch('refresh_stock_universe')
-def refresh_stock_universe(self, exchange_filter: str = None):
+def refresh_stock_universe(self, exchange_filter: str = None, market: str | None = None):
     """
     Weekly task to refresh stock universe from finviz.
 
@@ -31,16 +31,42 @@ def refresh_stock_universe(self, exchange_filter: str = None):
 
     Args:
         exchange_filter: Optional filter to only refresh specific exchange
+        market: Optional market code (US/HK/JP/TW) for per-market routing and
+            logging. The actual per-market universe refresh logic lives in the
+            market-specific ingestion services (e.g. ingest_hk_universe_csv);
+            this task's `market` kwarg currently acts as a log label and queue
+            router. When market is non-US, refresh is skipped so we don't
+            accidentally run the US finviz path against an HK market context.
 
     Returns:
         Dict with refresh statistics
     """
+    from .market_queues import market_tag, log_extra, normalize_market
+    _log_extra = log_extra(market)
+    _market = normalize_market(market) if market is not None else None
     logger.info("=" * 60)
-    logger.info("TASK: Stock Universe Refresh")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("TASK: Stock Universe Refresh %s", market_tag(market), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     if exchange_filter:
-        logger.info(f"Exchange filter: {exchange_filter}")
+        logger.info("Exchange filter: %s", exchange_filter, extra=_log_extra)
     logger.info("=" * 60)
+
+    # Non-US universe refreshes use dedicated CSV/provider-specific ingestion
+    # tasks (see ingest_hk_universe_csv). Skip the finviz path for non-US
+    # markets so a per-market beat entry doesn't accidentally hit finviz for HK.
+    if _market is not None and _market != "US":
+        logger.info(
+            "Skipping finviz universe refresh for non-US market %s; use the "
+            "market-specific ingestion task instead.",
+            _market,
+            extra=_log_extra,
+        )
+        return {
+            'status': 'skipped',
+            'reason': f'finviz universe refresh does not apply to market {_market}',
+            'market': _market,
+            'timestamp': datetime.now().isoformat(),
+        }
 
     db = SessionLocal()
     try:
