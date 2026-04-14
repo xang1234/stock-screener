@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 # Register ORM models referenced by create_all.
@@ -31,7 +32,11 @@ from app.models.user_watchlist import UserWatchlist
 
 @pytest.fixture
 def _sqlite_session():
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     sess = sessionmaker(bind=engine)()
     try:

@@ -1942,9 +1942,18 @@ class StockUniverseService:
                         resolved_index,
                         sorted(known_indices),
                     )
+                    return []
                 membership_symbols = db.query(
                     StockUniverseIndexMembership.symbol
                 ).filter(StockUniverseIndexMembership.index_name == resolved_index)
+                membership_count = membership_symbols.count()
+                if membership_count == 0:
+                    logger.warning(
+                        "get_active_symbols: index_name=%s is a known index but has "
+                        "no seeded membership rows — did you forget to run the seed "
+                        "script? Returning [].",
+                        resolved_index,
+                    )
                 query = query.filter(StockUniverse.symbol.in_(membership_symbols))
 
             if market:

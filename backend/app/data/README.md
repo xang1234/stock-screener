@@ -25,7 +25,7 @@ Before production use:
 
 Every constituent CSV uses the same two-column shape:
 
-```
+```csv
 symbol,name
 0700.HK,Tencent Holdings
 0005.HK,HSBC Holdings
@@ -38,8 +38,11 @@ symbol,name
   `stock_universe.name` when the symbol is ingested separately; the seed
   script ignores it but keeps the column so operators can review the CSV
   without pulling up the DB.
-- CSV row order is preserved. For TAIEX-50 this matters — rows are listed
-  top-down by index weight.
+- CSV row order is informational. The seed script walks rows in file order but
+  the `stock_universe_index_membership` table has no ordinal column, so
+  downstream queries do not preserve CSV order. For TAIEX-50 the rows are
+  listed top-down by index weight as a human reference, but scans return
+  results sorted by market-cap, not constituent weight.
 
 ## Refresh workflow (quarterly)
 

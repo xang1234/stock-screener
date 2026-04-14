@@ -72,11 +72,20 @@ def seed_from_csv(
                 f"CSV {csv_path} missing required 'symbol' header; "
                 f"got headers={reader.fieldnames}"
             )
+        # Track seen symbols so that duplicate CSV rows are not double-counted
+        # in dry-run mode. Without this guard a real run collapses duplicates
+        # to ``unchanged`` (session sees the first INSERT) but a dry-run cannot
+        # flush, so both occurrences land in ``added``.
+        seen_symbols: set[str] = set()
         for row in reader:
             symbol = normalize_symbol(row.get("symbol"))
             if symbol is None:
                 counts.skipped += 1
                 continue
+            if symbol in seen_symbols:
+                counts.unchanged += 1
+                continue
+            seen_symbols.add(symbol)
 
             existing = (
                 session.query(StockUniverseIndexMembership)

@@ -208,6 +208,7 @@ def compute_cadence_aware_growth(
 
 
 REASON_INSUFFICIENT_HISTORY = "insufficient_history"
+REASON_MARKET_POLICY_EXCLUDES_QOQ = "unsupported_market_policy_excludes_qoq"
 REASON_COMPARABLE_YOY_FALLBACK = "comparable_period_yoy_fallback"
 
 _GROWTH_FIELDS_AFFECTED_BY_CADENCE: Tuple[str, ...] = (
@@ -241,10 +242,22 @@ def derive_growth_availability(
     output similarly so a "no entries" dict means "nothing to surface".
     """
     if growth_metric_basis == BASIS_UNAVAILABLE:
+        # BASIS_UNAVAILABLE covers two distinct root causes that the cadence
+        # already encodes:
+        #   CADENCE_INSUFFICIENT → too few statement periods in history.
+        #   Any other cadence  → the market's reporting pattern isn't QoQ
+        #     and isn't in the comparable-period-primary set (market policy).
+        # Surface the correct reason so clients can distinguish "wait for more
+        # earnings" from "this market never has QoQ".
+        reason_code = (
+            REASON_INSUFFICIENT_HISTORY
+            if growth_reporting_cadence == CADENCE_INSUFFICIENT
+            else REASON_MARKET_POLICY_EXCLUDES_QOQ
+        )
         return {
             field: {
                 "status": SUPPORT_STATE_UNSUPPORTED,
-                "reason_code": REASON_INSUFFICIENT_HISTORY,
+                "reason_code": reason_code,
                 "support_state": SUPPORT_STATE_UNSUPPORTED,
                 "cadence": growth_reporting_cadence,
             }

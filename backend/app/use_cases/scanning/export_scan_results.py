@@ -153,12 +153,12 @@ def _format_field_availability_notes(field_availability: Any) -> str:
     if not isinstance(field_availability, dict) or not field_availability:
         return ""
     pairs = []
-    for field, entry in sorted(field_availability.items()):
+    for field_name, entry in sorted(field_availability.items()):
         if not isinstance(entry, dict):
             continue
         status = entry.get("status") or ""
         reason = entry.get("reason_code") or ""
-        segments = [field]
+        segments = [field_name]
         if status:
             segments.append(status)
         if reason:

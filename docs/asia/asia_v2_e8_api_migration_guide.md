@@ -114,13 +114,13 @@ Primarily a UI change; relevant to API consumers only as the _canonical_ univers
 - Two-step picker: Market/Mode (US, HK, JP, TW, or Test) → Scope (All / Exchange / Index). "Test" is a universe mode, not a `Market` enum value.
 - Universe counts in the UI are sourced from `GET /api/v1/universe/stats` → `by_market.{market}.counts.active` and `by_exchange`/`sp500` (not hard-coded), so third-party UIs should do the same to avoid drift.
 
-Asia index membership (HSI, Nikkei 225, TWSE top indices) is intentionally deferred — tracked in `StockScreenClaude-7hwc`. Until then, HK/JP/TW clients should use `{"type": "market", "market": "HK"}` (and equivalents), not attempt `index`-type universes.
+Asia index scopes (HSI, Nikkei 225, TAIEX-50) are now **available** as of `StockScreenClaude-7hwc` + `StockScreenClaude-mnpo` (shipped with this PR). HK/JP/TW clients may use `{"type": "index", "index": "HSI"}`, `{"type": "index", "index": "NIKKEI225"}`, or `{"type": "index", "index": "TAIEX"}`. Constituent data is seeded from `backend/app/data/` (seed-v1 partial snapshots — see that directory's README before production use). The `All Hong Kong / All Japan / All Taiwan` market scopes remain available as an alternative that covers the full active universe for a market.
 
 ---
 
 ## T3 — Market Badges, Currency Context, and USD Filters
 
-**Status: shipped 2026-04-13 (`StockScreenClaude-asia.8.3`). Backend plumbing only — frontend UI tracked in `StockScreenClaude-3axp`.**
+**Status: backend plumbing shipped 2026-04-13 (`StockScreenClaude-asia.8.3`); frontend UI shipped 2026-04-14 (`StockScreenClaude-3axp`).**
 
 ### Additive response fields on `ScanResultItem`
 

@@ -148,7 +148,7 @@ const CURRENCY_PREFIX_BY_CODE = Object.freeze({
  */
 export const getCurrencyPrefix = (currencyCode) => {
   if (!currencyCode) return '$';
-  return CURRENCY_PREFIX_BY_CODE[currencyCode] ?? '$';
+  return CURRENCY_PREFIX_BY_CODE[String(currencyCode).toUpperCase()] ?? '$';
 };
 
 /**

@@ -70,8 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    if not args.csv.exists():
-        print(f"ERROR: CSV not found: {args.csv}", file=sys.stderr)
+    if not args.csv.exists() or not args.csv.is_file():
+        print(f"ERROR: CSV not found or is not a file: {args.csv}", file=sys.stderr)
         return 2
 
     initialize_process_runtime_services()
