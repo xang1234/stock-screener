@@ -1,4 +1,4 @@
-"""Add stock_universe_index_membership table (T8/7hwc).
+"""Add stock_universe_index_membership table.
 
 Asia indices (HSI, Nikkei 225, TAIEX) route through a dedicated membership
 table instead of adding boolean columns per index. SP500 keeps using
@@ -24,7 +24,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "stock_universe_index_membership",
-        sa.Column("id", sa.Integer(), primary_key=True, index=True),
+        sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("symbol", sa.String(length=20), nullable=False),
         sa.Column("index_name", sa.String(length=32), nullable=False),
         sa.Column("as_of_date", sa.String(length=10), nullable=True),
@@ -47,15 +47,17 @@ def upgrade() -> None:
             name="uq_universe_index_membership_symbol_index",
         ),
     )
+    # Two indexes cover every query shape:
+    #   - standalone ``symbol`` for the resolver's membership subquery
+    #     (IN (SELECT symbol FROM … WHERE index_name = ?))
+    #   - composite ``(index_name, symbol)`` for filter-by-index lookups;
+    #     its leftmost-prefix also serves any "which indices contain X?"
+    #     query on index_name alone — no need for a standalone index_name
+    #     B-tree.
     op.create_index(
         "ix_stock_universe_index_membership_symbol",
         "stock_universe_index_membership",
         ["symbol"],
-    )
-    op.create_index(
-        "ix_stock_universe_index_membership_index_name",
-        "stock_universe_index_membership",
-        ["index_name"],
     )
     op.create_index(
         "idx_universe_index_membership_index_symbol",
@@ -67,10 +69,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(
         "idx_universe_index_membership_index_symbol",
-        table_name="stock_universe_index_membership",
-    )
-    op.drop_index(
-        "ix_stock_universe_index_membership_index_name",
         table_name="stock_universe_index_membership",
     )
     op.drop_index(

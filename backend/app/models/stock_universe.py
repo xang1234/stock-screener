@@ -105,9 +105,9 @@ class StockUniverseIndexMembership(Base):
 
     __tablename__ = "stock_universe_index_membership"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
-    index_name = Column(String(32), nullable=False, index=True)
+    index_name = Column(String(32), nullable=False)
     as_of_date = Column(String(10), nullable=True)
     source = Column(String(64), nullable=False, default="manual")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -1,7 +1,7 @@
-"""T8 / 7hwc — get_active_symbols routes per-index to the right filter.
+"""``get_active_symbols`` routes per-index to the right filter.
 
 SP500 uses the legacy ``is_sp500`` column; HSI/NIKKEI225/TAIEX resolve via
-the new ``stock_universe_index_membership`` table. Unknown / unseeded index
+the ``stock_universe_index_membership`` table. Unknown / unseeded index
 names return an empty list (fail-closed so callers don't accidentally scan
 a whole market when membership data hasn't landed yet).
 """

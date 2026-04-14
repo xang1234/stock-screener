@@ -1,8 +1,9 @@
-"""T8 / 7hwc — resolver dispatch for HSI / NIKKEI225 / TAIEX.
+"""Resolver dispatch for HSI / NIKKEI225 / TAIEX.
 
-Verifies the INDEX branch of ``resolve_symbols`` routes per-index instead
-of the pre-7hwc hardcoded ``sp500_only=True``. Service-layer membership
-lookup is covered in ``test_stock_universe_service_index_membership.py``.
+Verifies the INDEX branch of ``resolve_symbols`` routes per-index rather
+than hardcoding SP500 lookup for every index request. Service-layer
+membership lookup is covered in
+``test_stock_universe_service_index_membership.py``.
 """
 
 from __future__ import annotations

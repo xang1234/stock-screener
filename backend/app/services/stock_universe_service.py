@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..models.stock_universe import (
     StockUniverse,
+    StockUniverseIndexMembership,
     StockUniverseReconciliationRun,
     StockUniverseStatusEvent,
     UNIVERSE_STATUS_ACTIVE,
@@ -26,6 +27,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..schemas.universe import IndexName
 from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
 from .jp_universe_ingestion_adapter import jp_universe_ingestion_adapter
@@ -1918,19 +1920,28 @@ class StockUniverseService:
             List of symbol strings
         """
         try:
-            from ..models.stock_universe import StockUniverseIndexMembership
-
             query = db.query(StockUniverse.symbol).filter(
                 StockUniverse.active_filter()
             )
 
             resolved_index = index_name.upper() if index_name else None
             if sp500_only:
-                resolved_index = "SP500"
+                resolved_index = IndexName.SP500.value
 
-            if resolved_index == "SP500":
+            if resolved_index == IndexName.SP500.value:
                 query = query.filter(StockUniverse.is_sp500 == True)
             elif resolved_index:
+                known_indices = {entry.value for entry in IndexName}
+                if resolved_index not in known_indices:
+                    # Typo or a future index not yet in the enum. Fail-closed
+                    # (return []) but surface the miss as a warning so ops
+                    # can't mistake an unseeded index for an empty market.
+                    logger.warning(
+                        "get_active_symbols called with unknown index_name=%s; "
+                        "returning [] (known: %s)",
+                        resolved_index,
+                        sorted(known_indices),
+                    )
                 membership_symbols = db.query(
                     StockUniverseIndexMembership.symbol
                 ).filter(StockUniverseIndexMembership.index_name == resolved_index)
