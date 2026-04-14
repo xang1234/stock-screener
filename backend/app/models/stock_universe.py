@@ -93,6 +93,38 @@ class StockUniverseStatusEvent(Base):
     )
 
 
+class StockUniverseIndexMembership(Base):
+    """Per-index constituent membership for non-SP500 indices.
+
+    SP500 keeps using ``StockUniverse.is_sp500`` for backward compatibility;
+    HSI / NIKKEI225 / TAIEX route through this table so new indices can
+    land without a schema change. ``as_of_date`` captures the constituent
+    snapshot so a quarterly rebalance replaces rows rather than leaving
+    dangling memberships.
+    """
+
+    __tablename__ = "stock_universe_index_membership"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    index_name = Column(String(32), nullable=False)
+    as_of_date = Column(String(10), nullable=True)
+    source = Column(String(64), nullable=False, default="manual")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "index_name", name="uq_universe_index_membership_symbol_index"),
+        Index("idx_universe_index_membership_index_symbol", "index_name", "symbol"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<StockUniverseIndexMembership(symbol='{self.symbol}', "
+            f"index='{self.index_name}', as_of='{self.as_of_date}')>"
+        )
+
+
 class StockUniverseReconciliationRun(Base):
     """Immutable reconciliation artifact metadata per market snapshot."""
 

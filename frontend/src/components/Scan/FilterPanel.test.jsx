@@ -212,7 +212,7 @@ describe('FilterPanel', () => {
 
       const user = userEvent.setup();
 
-      const marketCapContainer = screen.getByText('Mkt Cap').closest('[class*="MuiGrid-item"]');
+      const marketCapContainer = screen.getByText('Mkt Cap (local)').closest('[class*="MuiGrid-item"]');
       const marketCapSelect = within(marketCapContainer).getByRole('combobox');
       await user.click(marketCapSelect);
       await user.click(await screen.findByRole('option', { name: '>$1B' }));
@@ -221,7 +221,7 @@ describe('FilterPanel', () => {
         expect.objectContaining({ minMarketCap: 1000000000 })
       );
 
-      const volumeContainer = screen.getByText('Dollar Vol').closest('[class*="MuiGrid-item"]');
+      const volumeContainer = screen.getByText('Dollar Vol (local)').closest('[class*="MuiGrid-item"]');
       const volumeSelect = within(volumeContainer).getByRole('combobox');
       await user.click(volumeSelect);
       await user.click(await screen.findByRole('option', { name: '>$100M' }));

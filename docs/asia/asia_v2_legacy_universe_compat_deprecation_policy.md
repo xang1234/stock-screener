@@ -79,6 +79,10 @@ print(get_legacy_universe_counts())
 # {"total": 42, "by_value": {"all": 30, "nyse": 10, "sp500": 2}, "last_seen_ts": 1793650000}
 ```
 
+### Related Migration Guidance
+
+For the full E8 (API and Frontend Multi-Market Productization) migration reference covering T1–T5 breakage tiers, before/after payloads, and the client adoption checklist, see the [E8 API / Client Migration Guide](./asia_v2_e8_api_migration_guide.md).
+
 ### Typed-first Response Contracts (T1, 2026-04-13)
 
 `POST /api/v1/scans`, `GET /api/v1/scans`, and `GET /api/v1/scans/{id}/status`

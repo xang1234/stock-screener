@@ -35,6 +35,7 @@ from app.infra.query.feature_store_query import (
 )
 from app.models.stock import StockFundamental
 from app.models.stock_universe import StockUniverse
+from app.services.growth_cadence_service import build_row_field_availability
 
 _BATCH_SIZE = 500
 
@@ -56,6 +57,11 @@ def _feature_results_query(session: Session, run_id: int):
             StockUniverse.currency,
             StockFundamental.market_cap_usd,
             StockFundamental.adv_usd,
+            StockFundamental.institutional_ownership,
+            StockFundamental.insider_ownership,
+            StockFundamental.short_interest,
+            StockFundamental.growth_reporting_cadence,
+            StockFundamental.growth_metric_basis,
         )
         .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
         .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
@@ -75,8 +81,28 @@ def _feature_results_symbol_query(session: Session, run_id: int):
 
 
 def _unpack_feature_joined_row(row) -> tuple[Any, dict[str, Any]]:
-    """Split a ``_feature_results_query`` row into the ORM row + joined fields."""
-    feature_row, name, market, exchange, currency, market_cap_usd, adv_usd = row
+    """Split a ``_feature_results_query`` row into the ORM row + joined fields.
+
+    Computes the merged ``field_availability`` dict (ownership/sentiment +
+    growth-cadence fallback) analogously to ``_unpack_joined_row`` in
+    scan_result_repo, so feature-store-backed and legacy-table scans expose
+    the same transparency signal.
+    """
+    (
+        feature_row,
+        name,
+        market,
+        exchange,
+        currency,
+        market_cap_usd,
+        adv_usd,
+        institutional_ownership,
+        insider_ownership,
+        short_interest,
+        growth_reporting_cadence,
+        growth_metric_basis,
+    ) = row
+
     joined = {
         "company_name": name,
         "market": market,
@@ -84,6 +110,16 @@ def _unpack_feature_joined_row(row) -> tuple[Any, dict[str, Any]]:
         "currency": currency,
         "market_cap_usd": market_cap_usd,
         "adv_usd": adv_usd,
+        "field_availability": build_row_field_availability(
+            market=market,
+            institutional_ownership=institutional_ownership,
+            insider_ownership=insider_ownership,
+            short_interest=short_interest,
+            growth_metric_basis=growth_metric_basis,
+            growth_reporting_cadence=growth_reporting_cadence,
+        ),
+        "growth_reporting_cadence": growth_reporting_cadence,
+        "growth_metric_basis": growth_metric_basis,
     }
     return feature_row, joined
 
@@ -631,6 +667,9 @@ def _map_feature_to_scan_result(
         "currency": joined.get("currency"),
         "market_cap_usd": joined.get("market_cap_usd"),
         "adv_usd": joined.get("adv_usd"),
+        "field_availability": joined.get("field_availability"),
+        "growth_reporting_cadence": joined.get("growth_reporting_cadence"),
+        "growth_metric_basis": joined.get("growth_metric_basis"),
         "minervini_score": d.get("minervini_score"),
         "canslim_score": d.get("canslim_score"),
         "ipo_score": d.get("ipo_score"),

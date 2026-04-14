@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..models.stock_universe import (
     StockUniverse,
+    StockUniverseIndexMembership,
     StockUniverseReconciliationRun,
     StockUniverseStatusEvent,
     UNIVERSE_STATUS_ACTIVE,
@@ -26,6 +27,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..schemas.universe import IndexName
 from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
 from .jp_universe_ingestion_adapter import jp_universe_ingestion_adapter
@@ -1893,6 +1895,7 @@ class StockUniverseService:
         sector: Optional[str] = None,
         min_market_cap: Optional[float] = None,
         sp500_only: bool = False,
+        index_name: Optional[str] = None,
         limit: Optional[int] = None
     ) -> List[str]:
         """
@@ -1904,7 +1907,13 @@ class StockUniverseService:
             exchange: Optional exchange filter (NYSE, NASDAQ, AMEX)
             sector: Optional sector filter
             min_market_cap: Optional minimum market cap filter
-            sp500_only: If True, only return S&P 500 stocks
+            sp500_only: If True, only return S&P 500 stocks (legacy path;
+                equivalent to ``index_name="SP500"``)
+            index_name: Optional index membership filter. ``"SP500"`` maps to
+                the legacy ``is_sp500`` column; any other value resolves via
+                ``stock_universe_index_membership``. Empty / unknown indices
+                return no rows (fail-closed so an unseeded index doesn't leak
+                a whole-market scan).
             limit: Optional limit on number of symbols
 
         Returns:
@@ -1915,8 +1924,37 @@ class StockUniverseService:
                 StockUniverse.active_filter()
             )
 
+            resolved_index = index_name.upper() if index_name else None
             if sp500_only:
+                resolved_index = IndexName.SP500.value
+
+            if resolved_index == IndexName.SP500.value:
                 query = query.filter(StockUniverse.is_sp500 == True)
+            elif resolved_index:
+                known_indices = {entry.value for entry in IndexName}
+                if resolved_index not in known_indices:
+                    # Typo or a future index not yet in the enum. Fail-closed
+                    # (return []) but surface the miss as a warning so ops
+                    # can't mistake an unseeded index for an empty market.
+                    logger.warning(
+                        "get_active_symbols called with unknown index_name=%s; "
+                        "returning [] (known: %s)",
+                        resolved_index,
+                        sorted(known_indices),
+                    )
+                    return []
+                membership_symbols = db.query(
+                    StockUniverseIndexMembership.symbol
+                ).filter(StockUniverseIndexMembership.index_name == resolved_index)
+                membership_count = membership_symbols.count()
+                if membership_count == 0:
+                    logger.warning(
+                        "get_active_symbols: index_name=%s is a known index but has "
+                        "no seeded membership rows — did you forget to run the seed "
+                        "script? Returning [].",
+                        resolved_index,
+                    )
+                query = query.filter(StockUniverse.symbol.in_(membership_symbols))
 
             if market:
                 normalized_market = market.upper()
@@ -1955,12 +1993,12 @@ class StockUniverseService:
             symbols = [row[0] for row in query.all()]
 
             logger.info(
-                "Retrieved %d active symbols (market=%s, exchange=%s, sector=%s, sp500_only=%s)",
+                "Retrieved %d active symbols (market=%s, exchange=%s, sector=%s, index=%s)",
                 len(symbols),
                 market,
                 exchange,
                 sector,
-                sp500_only,
+                resolved_index,
             )
             return symbols
 

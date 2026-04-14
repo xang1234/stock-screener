@@ -1,3 +1,5 @@
+import { UNIVERSE_GEOGRAPHIC_MARKETS } from '../../constants';
+
 export const STAGE_OPTIONS = [
   { value: 1, label: 'S1 - Basing' },
   { value: 2, label: 'S2 - Advancing' },
@@ -28,7 +30,15 @@ export const MARKET_CAP_OPTIONS = [
 export const FUNDAMENTAL_KEYS = [
   'symbolSearch', 'minMarketCap', 'minVolume', 'price',
   'epsGrowth', 'salesGrowth', 'epsRating', 'ibdIndustries', 'gicsSectors', 'ipoAfter',
+  'markets', 'marketCapUsd', 'advUsd',
 ];
+
+// Derived from the canonical geographic-markets list so adding a new market
+// (e.g. KR) only requires an update in one place.
+export const MARKET_OPTIONS = UNIVERSE_GEOGRAPHIC_MARKETS.map((code) => ({
+  value: code,
+  label: code,
+}));
 
 export const TECHNICAL_KEYS = [
   'stage', 'rsRating', 'rs1m', 'rs3m', 'rs12m', 'maAlignment',

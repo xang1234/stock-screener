@@ -1,4 +1,4 @@
-import { Box, Grid, TextField, Typography } from '@mui/material';
+import { Box, Divider, Grid, TextField, Typography } from '@mui/material';
 import {
   CompactRangeInput,
   CompactSelect,
@@ -6,7 +6,7 @@ import {
   FilterSection,
   IpoDateFilter,
 } from '../../../../components/Scan/filters';
-import { MARKET_CAP_OPTIONS, VOLUME_OPTIONS } from './constants';
+import { MARKET_CAP_OPTIONS, MARKET_OPTIONS, VOLUME_OPTIONS } from './constants';
 
 function FundamentalFiltersSection({
   filters,
@@ -48,7 +48,7 @@ function FundamentalFiltersSection({
         </Grid>
         <Grid item xs={6} sm={3} md={1.5}>
           <CompactSelect
-            label="Mkt Cap"
+            label="Mkt Cap (local)"
             value={filters.minMarketCap}
             options={MARKET_CAP_OPTIONS}
             onChange={(value) => updateFilter('minMarketCap', value)}
@@ -56,7 +56,7 @@ function FundamentalFiltersSection({
         </Grid>
         <Grid item xs={6} sm={3} md={1.5}>
           <CompactSelect
-            label="Dollar Vol"
+            label="Dollar Vol (local)"
             value={filters.minVolume}
             options={VOLUME_OPTIONS}
             onChange={(value) => updateFilter('minVolume', value)}
@@ -133,6 +133,47 @@ function FundamentalFiltersSection({
           <IpoDateFilter
             value={filters.ipoAfter}
             onChange={(value) => updateFilter('ipoAfter', value)}
+          />
+        </Grid>
+      </Grid>
+
+      <Divider sx={{ my: 1.5 }} />
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: 'block', mb: 1, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 0.5 }}
+      >
+        Cross-Market (USD-normalised)
+      </Typography>
+      <Grid container spacing={3}>
+        <Grid item xs={12} sm={6} md={3}>
+          <CompactMultiSelect
+            label="Markets"
+            values={filters.markets || []}
+            options={MARKET_OPTIONS}
+            onChange={(values) => updateFilter('markets', values)}
+          />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <CompactRangeInput
+            label="Mkt Cap (USD)"
+            minValue={filters.marketCapUsd?.min}
+            maxValue={filters.marketCapUsd?.max}
+            onChange={(range) => updateRangeFilter('marketCapUsd', range)}
+            step={100000000}
+            minLimit={0}
+            prefix="$"
+          />
+        </Grid>
+        <Grid item xs={6} sm={4} md={2}>
+          <CompactRangeInput
+            label="ADV (USD)"
+            minValue={filters.advUsd?.min}
+            maxValue={filters.advUsd?.max}
+            onChange={(range) => updateRangeFilter('advUsd', range)}
+            step={1000000}
+            minLimit={0}
+            prefix="$"
           />
         </Grid>
       </Grid>

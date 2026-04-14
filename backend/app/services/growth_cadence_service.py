@@ -7,6 +7,12 @@ from typing import Any, Dict, Optional, Tuple
 import pandas as pd
 
 from . import provider_routing_policy as routing_policy
+from .field_capability_registry import (
+    SUPPORT_STATE_AVAILABLE,
+    SUPPORT_STATE_COMPUTED,
+    SUPPORT_STATE_UNSUPPORTED,
+    field_capability_registry,
+)
 
 CADENCE_QUARTERLY = "quarterly"
 CADENCE_SEMIANNUAL = "semiannual"
@@ -199,3 +205,112 @@ def compute_cadence_aware_growth(
     # them. Comparable-period values remain available via *_yy fields.
     result["growth_metric_basis"] = BASIS_UNAVAILABLE
     return result
+
+
+REASON_INSUFFICIENT_HISTORY = "insufficient_history"
+REASON_MARKET_POLICY_EXCLUDES_QOQ = "unsupported_market_policy_excludes_qoq"
+REASON_COMPARABLE_YOY_FALLBACK = "comparable_period_yoy_fallback"
+
+_GROWTH_FIELDS_AFFECTED_BY_CADENCE: Tuple[str, ...] = (
+    "eps_growth_qq",
+    "sales_growth_qq",
+)
+
+
+def derive_growth_availability(
+    growth_metric_basis: Optional[str],
+    growth_reporting_cadence: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Emit ``field_availability`` entries for growth fields based on cadence state.
+
+    Mirrors :func:`field_capability_registry.derive_ownership_sentiment_availability`
+    but for growth metrics, so a single merged ``field_availability`` dict on the
+    scan-result response can carry both concerns.
+
+    Rules:
+        - ``BASIS_UNAVAILABLE``: QoQ growth fields are unavailable; reason is
+          ``insufficient_history`` (the only way we land here is either a
+          too-short statement history or a market whose cadence isn't QoQ
+          and isn't in the comparable-period primary set).
+        - ``BASIS_COMPARABLE_YOY``: the QoQ fields carry a comparable-period
+          YoY fallback, not genuine QoQ. Flag ``computed`` so clients can
+          surface the synthesis (e.g. show a "computed" chip).
+        - ``BASIS_QOQ`` / ``None``: empty dict — normal case needs no entry.
+
+    Only emits entries for non-available states to keep the response dict
+    compact; callers merging with the ownership helper should filter that
+    output similarly so a "no entries" dict means "nothing to surface".
+    """
+    if growth_metric_basis == BASIS_UNAVAILABLE:
+        # BASIS_UNAVAILABLE covers two distinct root causes that the cadence
+        # already encodes:
+        #   CADENCE_INSUFFICIENT → too few statement periods in history.
+        #   Any other cadence  → the market's reporting pattern isn't QoQ
+        #     and isn't in the comparable-period-primary set (market policy).
+        # Surface the correct reason so clients can distinguish "wait for more
+        # earnings" from "this market never has QoQ".
+        reason_code = (
+            REASON_INSUFFICIENT_HISTORY
+            if growth_reporting_cadence == CADENCE_INSUFFICIENT
+            else REASON_MARKET_POLICY_EXCLUDES_QOQ
+        )
+        return {
+            field: {
+                "status": SUPPORT_STATE_UNSUPPORTED,
+                "reason_code": reason_code,
+                "support_state": SUPPORT_STATE_UNSUPPORTED,
+                "cadence": growth_reporting_cadence,
+            }
+            for field in _GROWTH_FIELDS_AFFECTED_BY_CADENCE
+        }
+    if growth_metric_basis == BASIS_COMPARABLE_YOY:
+        return {
+            field: {
+                "status": SUPPORT_STATE_COMPUTED,
+                "reason_code": REASON_COMPARABLE_YOY_FALLBACK,
+                "support_state": SUPPORT_STATE_COMPUTED,
+                "cadence": growth_reporting_cadence,
+            }
+            for field in _GROWTH_FIELDS_AFFECTED_BY_CADENCE
+        }
+    return {}
+
+
+def build_row_field_availability(
+    *,
+    market: Optional[str],
+    institutional_ownership: Any,
+    insider_ownership: Any,
+    short_interest: Any,
+    growth_metric_basis: Optional[str],
+    growth_reporting_cadence: Optional[str],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Shared builder for scan-result-row ``field_availability``.
+
+    Merges ownership/sentiment entries from
+    :func:`field_capability_registry.derive_ownership_sentiment_availability`
+    with growth-cadence entries from :func:`derive_growth_availability`,
+    filters to only non-available entries (so US-quarterly rows return
+    ``None`` rather than a dict full of ``status=available`` noise), and
+    returns the merged dict or ``None`` when nothing needs surfacing.
+
+    Callers: ``_unpack_joined_row`` in the legacy scan_result repo and
+    ``_unpack_feature_joined_row`` in the feature-store repo. Keeping the
+    merge here rather than duplicating it at each call site avoids the
+    "non-available filter" invariant silently diverging between paths.
+    """
+    ownership = field_capability_registry.derive_ownership_sentiment_availability(
+        {
+            "institutional_ownership": institutional_ownership,
+            "insider_ownership": insider_ownership,
+            "short_interest": short_interest,
+        },
+        market,
+    )
+    growth = derive_growth_availability(growth_metric_basis, growth_reporting_cadence)
+    merged = {
+        field: entry
+        for field, entry in {**ownership, **growth}.items()
+        if entry.get("status") != SUPPORT_STATE_AVAILABLE
+    }
+    return merged or None

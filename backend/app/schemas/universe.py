@@ -37,8 +37,19 @@ class Exchange(str, Enum):
 
 
 class IndexName(str, Enum):
-    """Supported stock market indices."""
+    """Supported stock market indices.
+
+    ``SP500`` membership is stored on ``StockUniverse.is_sp500`` (legacy).
+    Asia indices (``HSI``, ``NIKKEI225``, ``TAIEX``) resolve via the
+    ``stock_universe_index_membership`` table so adding future indices
+    only requires data, not a schema migration. ``TAIEX`` is narrowed to
+    the top-50 constituents by weight to keep the scan set comparable to
+    HSI/Nikkei-225 rather than near-whole-market TW coverage.
+    """
     SP500 = "SP500"
+    HSI = "HSI"
+    NIKKEI225 = "NIKKEI225"
+    TAIEX = "TAIEX"
 
 
 class UniverseDefinition(BaseModel):

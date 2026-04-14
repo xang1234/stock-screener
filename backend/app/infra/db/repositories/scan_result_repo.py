@@ -20,6 +20,7 @@ from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
+from app.services.growth_cadence_service import build_row_field_availability
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,11 @@ def _scan_results_query(session: Session, scan_id: str):
     """Base query for scan results that joins market-identity + USD-normalised fields.
 
     Used by every read path that needs to *materialise* result rows; the joined
-    columns (market, exchange, currency, market_cap_usd, adv_usd) are SELECTed
-    so HTTP response shaping can populate them without extra queries. Symbol-only
-    paths use ``_scan_results_symbol_query`` instead — same joins, lean SELECT.
+    columns (market, exchange, currency, market_cap_usd, adv_usd, ownership/
+    sentiment raw values, growth-cadence metadata) are SELECTed so HTTP response
+    shaping can populate ``field_availability`` and the flat growth-cadence
+    fields without extra queries. Symbol-only paths use
+    ``_scan_results_symbol_query`` instead — same joins, lean SELECT.
     """
     return (
         session.query(
@@ -41,6 +44,15 @@ def _scan_results_query(session: Session, scan_id: str):
             StockUniverse.currency,
             StockFundamental.market_cap_usd,
             StockFundamental.adv_usd,
+            # Raw ownership/sentiment values — inputs to the ownership
+            # graceful-degrade derivation (T5.6 / T8.7).
+            StockFundamental.institutional_ownership,
+            StockFundamental.insider_ownership,
+            StockFundamental.short_interest,
+            # Growth cadence metadata (T5.7) — passed through flat and also
+            # used to derive growth-field availability entries (T8.7).
+            StockFundamental.growth_reporting_cadence,
+            StockFundamental.growth_metric_basis,
         )
         .outerjoin(StockUniverse, ScanResult.symbol == StockUniverse.symbol)
         .outerjoin(StockFundamental, ScanResult.symbol == StockFundamental.symbol)
@@ -66,8 +78,28 @@ def _scan_results_symbol_query(session: Session, scan_id: str):
 
 
 def _unpack_joined_row(row) -> tuple[ScanResult, dict[str, Any]]:
-    """Split a ``_scan_results_query`` row into the ORM row + joined fields."""
-    result, name, market, exchange, currency, market_cap_usd, adv_usd = row
+    """Split a ``_scan_results_query`` row into the ORM row + joined fields.
+
+    Also computes the merged ``field_availability`` dict (ownership/sentiment
+    graceful-degrade + growth-cadence fallback) so the HTTP mapper receives a
+    single, already-filtered "why is this null" signal per row. Only
+    non-``available`` entries are retained to keep response size bounded.
+    """
+    (
+        result,
+        name,
+        market,
+        exchange,
+        currency,
+        market_cap_usd,
+        adv_usd,
+        institutional_ownership,
+        insider_ownership,
+        short_interest,
+        growth_reporting_cadence,
+        growth_metric_basis,
+    ) = row
+
     joined = {
         "company_name": name,
         "market": market,
@@ -75,6 +107,16 @@ def _unpack_joined_row(row) -> tuple[ScanResult, dict[str, Any]]:
         "currency": currency,
         "market_cap_usd": market_cap_usd,
         "adv_usd": adv_usd,
+        "field_availability": build_row_field_availability(
+            market=market,
+            institutional_ownership=institutional_ownership,
+            insider_ownership=insider_ownership,
+            short_interest=short_interest,
+            growth_metric_basis=growth_metric_basis,
+            growth_reporting_cadence=growth_reporting_cadence,
+        ),
+        "growth_reporting_cadence": growth_reporting_cadence,
+        "growth_metric_basis": growth_metric_basis,
     }
     return result, joined
 
@@ -572,6 +614,9 @@ def _map_row_to_domain(
         "currency": joined.get("currency"),
         "market_cap_usd": joined.get("market_cap_usd"),
         "adv_usd": joined.get("adv_usd"),
+        "field_availability": joined.get("field_availability"),
+        "growth_reporting_cadence": joined.get("growth_reporting_cadence"),
+        "growth_metric_basis": joined.get("growth_metric_basis"),
         "minervini_score": result.minervini_score,
         "canslim_score": result.canslim_score,
         "ipo_score": result.ipo_score,

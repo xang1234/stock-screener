@@ -130,7 +130,41 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     # Other
     ("IPO Date", lambda item: item.extended_fields.get("ipo_date")),
     ("Screeners Run", lambda item: item.screeners_run),
+    # Data-availability transparency (T8.7). Column holds both "unavailable"
+    # and "computed" (fallback-synthesized) entries, so the header is
+    # intentionally broader than "Unavailable" — a computed growth value is
+    # present, not missing, and mis-labelling it would mislead spreadsheet
+    # users.
+    ("Growth Metric Basis", lambda item: item.extended_fields.get("growth_metric_basis")),
+    ("Growth Reporting Cadence", lambda item: item.extended_fields.get("growth_reporting_cadence")),
+    ("Field Availability Notes", lambda item: _format_field_availability_notes(item.extended_fields.get("field_availability"))),
 ]
+
+
+def _format_field_availability_notes(field_availability: Any) -> str:
+    """Render the field_availability dict as ``field:status:reason_code`` pipe-list.
+
+    Scan responses carry the full dict, but spreadsheet users need a flat
+    scannable column. Emits status alongside reason so a reader can
+    distinguish ``computed`` (value present via fallback) from
+    ``unsupported`` / ``missing`` (value absent). Skip when empty so US
+    rows with nothing to surface don't get a noisy literal "None".
+    """
+    if not isinstance(field_availability, dict) or not field_availability:
+        return ""
+    pairs = []
+    for field_name, entry in sorted(field_availability.items()):
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status") or ""
+        reason = entry.get("reason_code") or ""
+        segments = [field_name]
+        if status:
+            segments.append(status)
+        if reason:
+            segments.append(reason)
+        pairs.append(":".join(segments))
+    return " | ".join(pairs)
 
 
 # ---------------------------------------------------------------------------
