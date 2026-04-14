@@ -283,9 +283,10 @@ class DataFetchLock:
         Used by status/health API endpoints that need to report ANY active
         data-fetch task across all market scopes, without knowing which
         market is currently active. The legacy unsuffixed key is also checked
-        for backward-compat.
+        so status remains consistent with ``is_any_locked()`` during a
+        rolling upgrade when old tasks may still hold the pre-9.1 key.
         """
-        for key in all_market_lock_keys():
+        for key in [*all_market_lock_keys(), LOCK_KEY]:
             current = self.redis.get(key)
             if not current:
                 continue
@@ -317,9 +318,10 @@ class DataFetchLock:
             from ..services.price_cache_service import WARMUP_HEARTBEAT_KEY
             from ..services.cache.price_cache_warmup import scoped_heartbeat_key
             # Derive market from the lock key: "data_fetch_job_lock:hk" → "hk"
+            # Unsuffixed legacy LOCK_KEY is treated as shared scope.
             lock_key = holder.get('lock_key', '')
-            suffix = lock_key.rsplit(':', 1)[-1]
-            market_str = None if suffix in ('shared', '') else suffix
+            suffix = lock_key.rsplit(':', 1)[-1] if ':' in lock_key else ''
+            market_str = None if lock_key == LOCK_KEY or suffix in ('shared', '') else suffix
             heartbeat_key = scoped_heartbeat_key(WARMUP_HEARTBEAT_KEY, market_str)
             heartbeat_json = self.redis.get(heartbeat_key)
             if heartbeat_json:

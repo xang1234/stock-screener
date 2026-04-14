@@ -886,9 +886,10 @@ class PriceCacheService:
                             completed_at = datetime.fromisoformat(warmup_meta['completed_at'])
                             started_at = datetime.fromisoformat(started_at_str)
                             if completed_at > started_at:
-                                # Task completed but lock is stale — release and fall through
+                                # Task completed but lock is stale — release and fall through.
+                                # Use force_release_all() to clear whichever market key is held.
                                 logger.info("Warmup completed after lock acquired, releasing stale lock")
-                                lock.force_release()
+                                lock.force_release_all()
                                 # Fall through to SPY freshness check below
                             else:
                                 # Old completion, task truly stuck
