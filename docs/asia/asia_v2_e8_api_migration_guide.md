@@ -146,7 +146,7 @@ From `backend/app/api/v1/scan_filter_params.py:146-151`:
 
 **Example — HK + JP stocks, $1B+ USD cap:**
 
-```
+```http
 GET /api/v1/scans/s_abc/results?markets=HK,JP&min_market_cap_usd=1000000000
 ```
 
