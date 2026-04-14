@@ -340,15 +340,25 @@ def weekly_full_refresh(self, market: str | None = None):
         cache_manager = CacheManager(db)
         bulk_fetcher = BulkDataFetcher()
 
-        # 1. Clean up orphaned cache keys (symbols no longer in active universe)
-        #    Scoped to this market so we don't accidentally purge another market's keys.
-        logger.info("\n[1/4] Cleaning up orphaned cache entries...", extra=_log_extra)
-        _active_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
-        if market is not None:
-            _active_q = _active_q.filter(StockUniverse.market == normalize_market(market))
-        active_symbols = set(r.symbol for r in _active_q.all())
-        orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
-        logger.info("✓ Cleaned up %d orphaned cache entries", orphan_count, extra=_log_extra)
+        # 1. Clean up orphaned cache keys (symbols no longer in active universe).
+        #    Skipped for per-market runs: cleanup_orphaned_cache_keys scans ALL
+        #    Redis price keys globally via get_all_cached_symbols(), so passing
+        #    only one market's symbols would treat every other market's cache as
+        #    orphaned and delete it. Only the full-universe (market=None) run
+        #    has the complete active_symbols set needed for correct orphan detection.
+        if market is None:
+            logger.info("\n[1/4] Cleaning up orphaned cache entries...", extra=_log_extra)
+            _active_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active)
+            active_symbols = set(r.symbol for r in _active_q.all())
+            orphan_count = cache_manager.cleanup_orphaned_cache_keys(active_symbols)
+            logger.info("✓ Cleaned up %d orphaned cache entries", orphan_count, extra=_log_extra)
+        else:
+            logger.info(
+                "\n[1/4] Skipping orphan cleanup for market-scoped run (%s) — "
+                "use the full-universe weekly refresh for orphan removal.",
+                normalize_market(market), extra=_log_extra,
+            )
+            orphan_count = 0
 
         # 2. Warm benchmark cache (scoped to this market to avoid 4× redundant
         # work when 4 per-market refreshes run in parallel).
@@ -356,16 +366,16 @@ def weekly_full_refresh(self, market: str | None = None):
         benchmark_results = warm_spy_cache(market=market)
 
         # 3. Get all active symbols ordered by market cap (market-filtered)
-        logger.info(
-            "\n[3/4] Preparing full universe refresh (%d symbols)...",
-            len(active_symbols), extra=_log_extra,
-        )
-        _sym_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+        _sym_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active)
         if market is not None:
             _sym_q = _sym_q.filter(StockUniverse.market == normalize_market(market))
         symbols = [
             r.symbol for r in _sym_q.order_by(StockUniverse.market_cap.desc().nullslast()).all()
         ]
+        logger.info(
+            "\n[3/4] Preparing full universe refresh (%d symbols)...",
+            len(symbols), extra=_log_extra,
+        )
 
         if not symbols:
             logger.warning("No active symbols found in universe")

@@ -568,7 +568,7 @@ class BulkDataFetcher:
     def fetch_batch_fundamentals(
         self,
         symbols: List[str],
-        batch_size: int = 50,
+        batch_size: int | None = None,
         include_quarterly: bool = True,
         delay_between_batches: float = 2.0,
         delay_per_ticker: float = 1.5,
@@ -596,16 +596,17 @@ class BulkDataFetcher:
         if not symbols:
             return {}
 
-        # Per-market batch sizing + backoff. Without market
-        # the legacy global behavior preserves; with market, RateBudgetPolicy
-        # takes over.
+        # Per-market batch sizing + backoff. Policy provides the default when
+        # caller didn't pass an explicit batch_size (None). Explicit values are
+        # honoured as-is, matching the pattern in fetch_prices_in_batches.
         backoff_base_s = 60
         backoff_max_s = 480
         backoff_factor = 2.0
         if market is not None:
             from .rate_budget_policy import get_rate_budget_policy
             _policy = get_rate_budget_policy()
-            batch_size = _policy.get_batch_size("yfinance", market)
+            if batch_size is None:
+                batch_size = _policy.get_batch_size("yfinance", market)
             _bp = _policy.get_backoff_params("yfinance", market)
             backoff_base_s = _bp["base_s"]
             backoff_max_s = _bp["max_s"]
@@ -617,6 +618,7 @@ class BulkDataFetcher:
             f"delay={delay_per_ticker}s/ticker)"
         )
 
+        batch_size = batch_size or 50  # default when caller passed None and market=None
         all_results = {}
         total_batches = (len(symbols) + batch_size - 1) // batch_size
         consecutive_backoffs = 0  # Track consecutive rate-limited batches

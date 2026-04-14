@@ -93,7 +93,7 @@ def _validate_same_day_cache_only_group_rankings(
 @serialized_data_fetch('calculate_daily_group_rankings')
 def calculate_daily_group_rankings(
     self,
-    calculation_date: str = None,
+    calculation_date: str | None = None,
     force_cache_only: bool = False,
     market: str | None = None,
 ):

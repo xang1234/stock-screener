@@ -134,7 +134,7 @@ def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
 @serialized_data_fetch('calculate_daily_breadth')
 def calculate_daily_breadth(
     self,
-    calculation_date: str = None,
+    calculation_date: str | None = None,
     force_cache_only: bool = False,
     market: str | None = None,
 ):
@@ -450,7 +450,7 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
 @serialized_data_fetch('calculate_daily_breadth_with_gapfill')
 def calculate_daily_breadth_with_gapfill(
     self,
-    max_gap_days: int = None,
+    max_gap_days: int | None = None,
     market: str | None = None,
 ):
     """
