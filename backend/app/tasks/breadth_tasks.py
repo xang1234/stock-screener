@@ -58,9 +58,13 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
-def _validate_same_day_cache_only_breadth(price_cache, metrics: dict) -> Optional[str]:
+def _validate_same_day_cache_only_breadth(
+    price_cache,
+    metrics: dict,
+    market: Optional[str] = None,
+) -> Optional[str]:
     """Block publishing daily breadth when the same-day warmup/cache state is incomplete."""
-    warmup_meta = price_cache.get_warmup_metadata() if price_cache else None
+    warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
     if not warmup_meta:
         return "Missing cache warmup metadata for same-day breadth run"
 
@@ -213,6 +217,7 @@ def calculate_daily_breadth(
                 completeness_error = _validate_same_day_cache_only_breadth(
                     calculator.price_cache,
                     metrics,
+                    market=market,
                 )
             if completeness_error:
                 logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
@@ -537,7 +542,7 @@ def calculate_daily_breadth_with_gapfill(
 
         if is_trading_day(today):
             logger.info(f"Calculating breadth for today ({today})...")
-            today_result = calculate_daily_breadth()
+            today_result = calculate_daily_breadth(market=market)
             result['today'] = today_result
         else:
             last_trading = get_last_trading_day(today)

@@ -453,7 +453,7 @@ def weekly_full_refresh(self, market: str | None = None):
             price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
 
             # Extend lock TTL to prevent expiry during long runs (capped at 2h)
-            lock.extend_lock(task_id, 300)
+            lock.extend_lock(task_id, 300, market=market)
 
             # Rate limit between batches
             if batch_start + batch_size < total:
@@ -1444,7 +1444,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
             task_id = self.request.id or 'unknown'
             from ..wiring.bootstrap import get_data_fetch_lock
             lock = get_data_fetch_lock()
-            lock.extend_lock(task_id, 300)
+            lock.extend_lock(task_id, 300, market=market)
 
             # Rate limit between batches (Redis-backed distributed limiter)
             if batch_start + batch_size < total:

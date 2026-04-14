@@ -57,9 +57,12 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
-def _validate_same_day_cache_only_group_rankings(price_cache) -> Optional[str]:
+def _validate_same_day_cache_only_group_rankings(
+    price_cache,
+    market: Optional[str] = None,
+) -> Optional[str]:
     """Block same-day group rankings when the post-close warmup is incomplete."""
-    warmup_meta = price_cache.get_warmup_metadata() if price_cache else None
+    warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
     if not warmup_meta:
         return "Missing cache warmup metadata for same-day group ranking run"
 
@@ -157,6 +160,7 @@ def calculate_daily_group_rankings(
             else:
                 completeness_error = _validate_same_day_cache_only_group_rankings(
                     service.price_cache,
+                    market=market,
                 )
                 if completeness_error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
