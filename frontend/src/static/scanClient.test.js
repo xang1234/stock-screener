@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyScanFilterDefaults,
@@ -68,6 +68,16 @@ const rows = [
 ];
 
 describe('static scan client', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Fix "today" to 2024-01-15 UTC so IPO boundary tests are deterministic.
+    vi.setSystemTime(new Date(Date.UTC(2024, 0, 15)));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('filters rows with the exported read-only criteria set', () => {
     const filters = buildDefaultScanFilters();
     filters.symbolSearch = 'nv';
@@ -119,13 +129,11 @@ describe('static scan client', () => {
   });
 
   it('resolves IPO date presets to a cutoff (not raw string comparison)', () => {
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-    const recentIpo = sixMonthsAgo.toISOString().slice(0, 10);
-
+    // Frozen clock: 2024-01-15 UTC. Derived cutoffs:
+    //   1y  → 2023-01-15   5y → 2019-01-15   6m → 2023-07-15
     const testRows = [
       { ...rows[0], symbol: 'OLD', ipo_date: '1999-01-22' },
-      { ...rows[0], symbol: 'NEW', ipo_date: recentIpo },
+      { ...rows[0], symbol: 'NEW', ipo_date: '2023-07-15' },
     ];
 
     const filtersOneY = buildDefaultScanFilters();

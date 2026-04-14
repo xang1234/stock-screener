@@ -685,8 +685,17 @@ class StaticSiteExportService:
             total = len(ranked)
             for row in rows:
                 row[dst_field] = None
-            for pos, (row_idx, _val) in enumerate(ranked):
-                rows[row_idx][dst_field] = round(((pos + 1) / total) * 100, 2)
+            pos = 0
+            while pos < total:
+                end = pos
+                value = ranked[pos][1]
+                while end + 1 < total and ranked[end + 1][1] == value:
+                    end += 1
+                percentile = round(((end + 1) / total) * 100, 2)
+                for idx in range(pos, end + 1):
+                    row_idx, _ = ranked[idx]
+                    rows[row_idx][dst_field] = percentile
+                pos = end + 1
 
     @staticmethod
     def _apply_static_default_filters(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -165,7 +165,6 @@ const getDesignTokens = (mode) => ({
         sizeSmall: {
           height: 18,
           fontSize: '10px',
-          borderRadius: 3,
         },
         labelSmall: {
           padding: '0 6px',

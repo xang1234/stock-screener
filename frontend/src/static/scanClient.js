@@ -58,14 +58,18 @@ const RATING_SORT_ORDER = {
 
 const IPO_PRESET_MONTHS = { '6m': 6, '1y': 12, '2y': 24, '3y': 36, '5y': 60 };
 
-const resolveIpoCutoff = (preset) => {
+const resolveIpoCutoff = (preset, now = new Date()) => {
   if (!preset) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(preset)) return preset;
   const months = IPO_PRESET_MONTHS[preset];
   if (months == null) return null;
-  const d = new Date();
-  d.setMonth(d.getMonth() - months);
-  return d.toISOString().slice(0, 10);
+  const cutoff = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  ));
+  cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
+  return cutoff.toISOString().slice(0, 10);
 };
 
 const isEmptyRange = (range) => !range || (range.min == null && range.max == null);
