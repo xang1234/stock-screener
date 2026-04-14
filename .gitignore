@@ -65,3 +65,7 @@ celerybeat-schedule
 
 # bv (beads viewer) local config and caches
 .bv/
+
+
+# Load harness ephemeral output (committed baselines stay; per-run does not)
+backend/tests/load/baselines/current_run.json
