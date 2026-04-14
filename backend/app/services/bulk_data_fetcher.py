@@ -648,7 +648,7 @@ class BulkDataFetcher:
                         if include_quarterly:
                             quarterly = self._extract_quarterly_growth(
                                 ticker,
-                                market=(market_by_symbol or {}).get(symbol),
+                                market=(market_by_symbol or {}).get(symbol) or market,
                             )
                             fundamentals.update(quarterly)
 
@@ -762,7 +762,7 @@ class BulkDataFetcher:
                         if include_quarterly:
                             quarterly = self._extract_quarterly_growth(
                                 ticker,
-                                market=(market_by_symbol or {}).get(symbol),
+                                market=(market_by_symbol or {}).get(symbol) or market,
                             )
                             fundamentals.update(quarterly)
 

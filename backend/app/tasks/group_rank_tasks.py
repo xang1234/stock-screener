@@ -115,11 +115,11 @@ def calculate_daily_group_rankings(
     logger.info(
         "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
     )
-    # Group-rank service aggregates across markets; `market` is a routing/log
-    # label here. Deep per-market scoping moves with 9.2.
+    # Group-rank computation aggregates across markets; however, same-day
+    # warmup completeness validation is market-scoped via warmup metadata.
     if market is not None:
         logger.debug(
-            "Group-rank market-scoping is label-only; service aggregates all markets.",
+            "Group-rank computation aggregates across markets; warmup gate is market-scoped.",
             extra=_log_extra,
         )
     today_et = get_eastern_now().date()

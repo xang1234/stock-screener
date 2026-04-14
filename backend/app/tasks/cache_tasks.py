@@ -359,6 +359,7 @@ def weekly_full_refresh(self, market: str | None = None):
                 normalize_market(market), extra=_log_extra,
             )
             orphan_count = 0
+            active_symbols = set()  # not used for cleanup in per-market path
 
         # 2. Warm benchmark cache (scoped to this market to avoid 4× redundant
         # work when 4 per-market refreshes run in parallel).
@@ -413,7 +414,7 @@ def weekly_full_refresh(self, market: str | None = None):
             failure_details = {}
 
             try:
-                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
+                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y", market=market)
                 batch_to_store = {}
                 for symbol, data in batch_results.items():
                     if not data.get('has_error') and data.get('price_data') is not None:
@@ -465,12 +466,15 @@ def weekly_full_refresh(self, market: str | None = None):
             # Extend lock TTL to prevent expiry during long runs (capped at 2h)
             lock.extend_lock(task_id, 300, market=market)
 
-            # Rate limit between batches
+            # Rate limit between batches (per-market key when scoped)
             if batch_start + batch_size < total:
-                get_rate_limiter().wait(
-                    "yfinance:batch",
-                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
-                )
+                if market is not None:
+                    get_rate_limiter().wait_for_market("yfinance:batch", market)
+                else:
+                    get_rate_limiter().wait(
+                        "yfinance:batch",
+                        min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                    )
 
         # Save final metadata
         success_rate = refreshed / total if total > 0 else 0
@@ -493,7 +497,7 @@ def weekly_full_refresh(self, market: str | None = None):
             'refreshed': refreshed,
             'failed': failed,
             'total': total,
-            'universe_size': len(active_symbols),
+            'universe_size': len(symbols) if market is not None else len(active_symbols),
             'failed_symbols': failed_symbols[:20],
             'completed_at': datetime.now().isoformat()
         }
@@ -792,7 +796,13 @@ def _is_rate_limit_error(error_str: str) -> bool:
     return any(indicator in lower for indicator in ("rate", "429", "too many", "limit", "throttl"))
 
 
-def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", max_retries: int = 3):
+def _fetch_with_backoff(
+    bulk_fetcher,
+    symbols: List[str],
+    period: str = "2y",
+    max_retries: int = 3,
+    market: str | None = None,
+):
     """
     Fetch batch data with exponential backoff on rate limit errors.
 
@@ -803,25 +813,41 @@ def _fetch_with_backoff(bulk_fetcher, symbols: List[str], period: str = "2y", ma
     This function detects both and retries with exponential backoff
     (60s, 120s, 240s) before giving up.
 
+    When ``market`` is supplied, ``fetch_prices_in_batches`` uses the
+    per-market batch size from RateBudgetPolicy instead of the hard-coded
+    default, so the policy-configured batch size actually applies.
+
     Args:
         bulk_fetcher: BulkDataFetcher instance
         symbols: List of symbols to fetch
         period: Data period (default "2y")
         max_retries: Maximum retry attempts (default 3)
+        market: Optional market scope — when set, defers batch sizing to
+            RateBudgetPolicy (pass None for legacy global behaviour)
 
     Returns:
         Dict of symbol -> data, or empty dict if all retries fail
     """
     for attempt in range(max_retries):
         try:
-            results = bulk_fetcher.fetch_prices_in_batches(
-                symbols,
-                period=period,
-                start_batch_size=min(
-                    len(symbols),
-                    getattr(bulk_fetcher, "DEFAULT_PRICE_BATCH_SIZE", 100),
-                ),
-            )
+            # When market is set, omit start_batch_size so fetch_prices_in_batches
+            # uses the per-market policy batch size. For shared/None runs keep the
+            # hard-coded default to preserve pre-9.1 behaviour.
+            if market is not None:
+                results = bulk_fetcher.fetch_prices_in_batches(
+                    symbols,
+                    period=period,
+                    market=market,
+                )
+            else:
+                results = bulk_fetcher.fetch_prices_in_batches(
+                    symbols,
+                    period=period,
+                    start_batch_size=min(
+                        len(symbols),
+                        getattr(bulk_fetcher, "DEFAULT_PRICE_BATCH_SIZE", 100),
+                    ),
+                )
 
             return results
 
@@ -1387,7 +1413,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
 
             try:
                 # Batch fetch using yf.download() (single HTTP request per batch)
-                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y")
+                batch_results = _fetch_with_backoff(bulk_fetcher, batch_symbols, period="2y", market=market)
 
                 # Separate successes from failures, then batch-store all successes
                 batch_to_store = {}
@@ -1456,12 +1482,15 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
             lock = get_data_fetch_lock()
             lock.extend_lock(task_id, 300, market=market)
 
-            # Rate limit between batches (Redis-backed distributed limiter)
+            # Rate limit between batches (per-market key when scoped)
             if batch_start + batch_size < total:
-                get_rate_limiter().wait(
-                    "yfinance:batch",
-                    min_interval_s=settings.yfinance_batch_rate_limit_interval,
-                )
+                if market is not None:
+                    get_rate_limiter().wait_for_market("yfinance:batch", market)
+                else:
+                    get_rate_limiter().wait(
+                        "yfinance:batch",
+                        min_interval_s=settings.yfinance_batch_rate_limit_interval,
+                    )
 
         # Save final warmup metadata (treat >95% success as "completed")
         success_rate = refreshed / total if total > 0 else 0
