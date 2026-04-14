@@ -34,6 +34,9 @@ const RANGE_FILTER_TO_FIELD = {
   week52LowDistance: 'week_52_low_distance',
   beta: 'beta',
   betaAdjRs: 'beta_adj_rs',
+  pctDay: 'pct_day',
+  pctWeek: 'pct_week',
+  pctMonth: 'pct_month',
 };
 
 const BOOLEAN_FILTER_TO_FIELD = {
@@ -51,6 +54,18 @@ const RATING_SORT_ORDER = {
   Watch: 3,
   Pass: 2,
   Error: 1,
+};
+
+const IPO_PRESET_MONTHS = { '6m': 6, '1y': 12, '2y': 24, '3y': 36, '5y': 60 };
+
+const resolveIpoCutoff = (preset) => {
+  if (!preset) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(preset)) return preset;
+  const months = IPO_PRESET_MONTHS[preset];
+  if (months == null) return null;
+  const d = new Date();
+  d.setMonth(d.getMonth() - months);
+  return d.toISOString().slice(0, 10);
 };
 
 const isEmptyRange = (range) => !range || (range.min == null && range.max == null);
@@ -87,57 +102,60 @@ const getSortValue = (row, sortBy) => {
   return row?.[sortBy];
 };
 
-export const filterStaticScanRows = (rows, filters) => rows.filter((row) => {
-  if (filters.symbolSearch) {
-    const needle = filters.symbolSearch.toLowerCase();
-    const haystack = `${row.symbol || ''} ${row.company_name || ''}`.toLowerCase();
-    if (!haystack.includes(needle)) {
+export const filterStaticScanRows = (rows, filters) => {
+  const ipoCutoff = resolveIpoCutoff(filters.ipoAfter);
+  return rows.filter((row) => {
+    if (filters.symbolSearch) {
+      const needle = filters.symbolSearch.toLowerCase();
+      const haystack = `${row.symbol || ''} ${row.company_name || ''}`.toLowerCase();
+      if (!haystack.includes(needle)) {
+        return false;
+      }
+    }
+
+    if (filters.stage != null && row.stage !== filters.stage) {
       return false;
     }
-  }
 
-  if (filters.stage != null && row.stage !== filters.stage) {
-    return false;
-  }
-
-  if (filters.ratings?.length && !filters.ratings.includes(row.rating)) {
-    return false;
-  }
-
-  if (!matchesCategoricalFilter(row.ibd_industry_group, filters.ibdIndustries)) {
-    return false;
-  }
-
-  if (!matchesCategoricalFilter(row.gics_sector, filters.gicsSectors)) {
-    return false;
-  }
-
-  if (filters.minVolume != null && (row.volume == null || row.volume < filters.minVolume)) {
-    return false;
-  }
-
-  if (filters.minMarketCap != null && (row.market_cap == null || row.market_cap < filters.minMarketCap)) {
-    return false;
-  }
-
-  if (filters.ipoAfter && (!row.ipo_date || row.ipo_date < filters.ipoAfter)) {
-    return false;
-  }
-
-  for (const [filterKey, fieldName] of Object.entries(RANGE_FILTER_TO_FIELD)) {
-    if (!valueMatchesRange(row[fieldName], filters[filterKey])) {
+    if (filters.ratings?.length && !filters.ratings.includes(row.rating)) {
       return false;
     }
-  }
 
-  for (const [filterKey, fieldName] of Object.entries(BOOLEAN_FILTER_TO_FIELD)) {
-    if (filters[filterKey] != null && Boolean(row[fieldName]) !== filters[filterKey]) {
+    if (!matchesCategoricalFilter(row.ibd_industry_group, filters.ibdIndustries)) {
       return false;
     }
-  }
 
-  return true;
-});
+    if (!matchesCategoricalFilter(row.gics_sector, filters.gicsSectors)) {
+      return false;
+    }
+
+    if (filters.minVolume != null && (row.volume == null || row.volume < filters.minVolume)) {
+      return false;
+    }
+
+    if (filters.minMarketCap != null && (row.market_cap == null || row.market_cap < filters.minMarketCap)) {
+      return false;
+    }
+
+    if (ipoCutoff && (!row.ipo_date || row.ipo_date < ipoCutoff)) {
+      return false;
+    }
+
+    for (const [filterKey, fieldName] of Object.entries(RANGE_FILTER_TO_FIELD)) {
+      if (!valueMatchesRange(row[fieldName], filters[filterKey])) {
+        return false;
+      }
+    }
+
+    for (const [filterKey, fieldName] of Object.entries(BOOLEAN_FILTER_TO_FIELD)) {
+      if (filters[filterKey] != null && Boolean(row[fieldName]) !== filters[filterKey]) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+};
 
 export const sortStaticScanRows = (rows, sortBy, sortOrder = 'desc') => {
   const direction = sortOrder === 'asc' ? 1 : -1;
