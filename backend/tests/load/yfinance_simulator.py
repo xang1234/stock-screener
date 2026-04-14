@@ -102,7 +102,12 @@ class YFinanceSimulator:
         else:
             symbol_list = list(tickers)
 
-        return _build_synthetic_ohlcv(symbol_list)
+        raw = _build_synthetic_ohlcv(symbol_list)
+        # yfinance returns flat columns (Open, High, …) for single-symbol calls,
+        # MultiIndex for multi-symbol. bulk_data_fetcher.py:362 branches on this.
+        if len(symbol_list) == 1:
+            return raw[symbol_list[0]].copy()
+        return raw
 
     @property
     def stats(self) -> dict:

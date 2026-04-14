@@ -33,14 +33,15 @@ SYNTHETIC_UNIVERSE_SIZES: Dict[str, int] = {
 
 def _redis_available() -> bool:
     """Check that a Redis instance is reachable via the shared pool."""
+    from redis.exceptions import RedisError
+    from app.services.redis_pool import get_redis_client
     try:
-        from app.services.redis_pool import get_redis_client
         client = get_redis_client()
         if client is None:
             return False
         client.ping()
         return True
-    except Exception:
+    except RedisError:
         return False
 
 
