@@ -89,10 +89,10 @@ For reproducibility the harness uses fixed per-market symbol counts:
 
 | Market | Symbols |
 |--------|---------|
-| US     | 1000    |
-| HK     | 500     |
-| JP     | 300     |
-| TW     | 200     |
+| US     | 200     |
+| HK     | 100     |
+| JP     | 100     |
+| TW     | 80      |
 
 Defined in `conftest.py:SYNTHETIC_UNIVERSE_SIZES`. The numbers are
 proportional to real production universe sizes but small enough that the

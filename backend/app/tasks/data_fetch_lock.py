@@ -147,11 +147,11 @@ class DataFetchLock:
         Used by chaos/integration tests that need to simulate a stuck task
         holding a market's lock while other code runs.
         """
-        acquired, _ = self.acquire(task_name, task_id, market=market)
+        acquired, is_reentrant = self.acquire(task_name, task_id, market=market)
         try:
             yield acquired
         finally:
-            if acquired:
+            if acquired and not is_reentrant:
                 self.release(task_id, market=market)
 
     def acquire(

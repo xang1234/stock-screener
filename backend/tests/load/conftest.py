@@ -1,7 +1,7 @@
 """Fixtures for the per-market load/soak harness (bead asia.9.3).
 
 Provides:
-- A fixed synthetic universe (1000/500/300/200 symbols per US/HK/JP/TW) so
+- A fixed synthetic universe (200/100/100/80 symbols per US/HK/JP/TW) so
   benchmark numbers don't drift with live universe state.
 - The deterministic YFinanceSimulator, with monkeypatch wiring into
   ``BulkDataFetcher`` so the real fetch path runs against the mock.

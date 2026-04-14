@@ -76,23 +76,24 @@ class YFinanceSimulator:
         BulkDataFetcher's per-symbol parsing path runs end-to-end.
         """
         self._call_count += 1
+        profile = self.profile  # snapshot once; set_profile() may swap it concurrently
 
         # Simulate per-batch latency
         latency = max(
             0.001,
-            self.profile.base_latency_s
-            + self._rng.uniform(-self.profile.latency_jitter_s, self.profile.latency_jitter_s),
+            profile.base_latency_s
+            + self._rng.uniform(-profile.latency_jitter_s, profile.latency_jitter_s),
         )
         self._sleep_fn(latency)
         self._latencies_s.append(latency)
 
         # Inject rate-limit error
-        if self._rng.random() < self.profile.rate_limit_probability:
+        if self._rng.random() < profile.rate_limit_probability:
             self._429_count += 1
             raise Exception("YFRateLimitError: Too Many Requests (429)")
 
         # Inject non-429 transient failure
-        if self._rng.random() < self.profile.failure_probability:
+        if self._rng.random() < profile.failure_probability:
             raise Exception("Transient network error")
 
         # Build synthetic OHLCV DataFrame matching yfinance MultiIndex format
@@ -213,11 +214,17 @@ class MultiMarketSimulator:
         if not symbols:
             return _build_synthetic_ohlcv([])
 
-        market = self._market_for_symbol(symbols[0])
-        if market is None or market not in self._sims:
-            # Unknown symbol prefix — return synthetic shape so the
-            # fetcher's per-symbol parse path doesn't AttributeError.
-            return _build_synthetic_ohlcv(symbols)
+        markets = {self._market_for_symbol(sym) for sym in symbols}
+        if None in markets:
+            raise ValueError(
+                f"All load-harness symbols must use {self.SYMBOL_PREFIX}<MARKET>_<ID>: {symbols!r}"
+            )
+        if len(markets) != 1:
+            raise ValueError(f"Mixed-market batch is not supported: {symbols!r}")
+
+        market = next(iter(markets))
+        if market not in self._sims:
+            raise KeyError(f"Unknown market {market!r}; known: {sorted(self._sims)}")
 
         return self._sims[market].download(tickers, **kwargs)
 
