@@ -63,7 +63,7 @@ export const UNIVERSE_SCOPES_BY_MARKET = {
   ],
   HK: [
     { value: 'market', label: 'All Hong Kong' },
-    { value: 'index:HSI', label: 'Hang Seng Index (HSI)' },
+    { value: 'index:HSI', label: 'Hang Seng Index' },
   ],
   JP: [
     { value: 'market', label: 'All Japan' },

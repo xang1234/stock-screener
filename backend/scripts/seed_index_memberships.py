@@ -23,9 +23,12 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from app.database import SessionLocal  # noqa: E402
 from app.schemas.universe import IndexName  # noqa: E402
 from app.services.index_membership_seeder import seed_from_csv  # noqa: E402
+from app.wiring.bootstrap import (  # noqa: E402
+    get_session_factory,
+    initialize_process_runtime_services,
+)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -71,7 +74,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: CSV not found: {args.csv}", file=sys.stderr)
         return 2
 
-    with SessionLocal() as session:
+    initialize_process_runtime_services()
+    session = get_session_factory()()
+    try:
         counts = seed_from_csv(
             session,
             args.csv,
@@ -80,6 +85,13 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             dry_run=args.dry_run,
         )
+    except ValueError as exc:
+        # Typically raised by seed_from_csv on missing ``symbol`` header.
+        # Return a distinct exit code so shell scripts can branch on it.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        session.close()
 
     mode = "DRY RUN (no writes)" if args.dry_run else "COMMITTED"
     print(

@@ -3,8 +3,38 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+# Register every ORM module tests may touch so Base.metadata.create_all
+# builds a complete in-memory schema. Adding a new model-touching test
+# that uses ``universe_session`` below generally requires another import
+# here if the model isn't already loaded transitively.
+import app.models.stock  # noqa: F401
+import app.models.stock_universe  # noqa: F401
+
 from app.scanners.base_screener import StockData
 from app.scanners.data_preparation import DataPreparationLayer
+
+
+@pytest.fixture
+def universe_session():
+    """In-memory SQLite session with the full ORM metadata loaded.
+
+    Shared across Asia-universe tests (seeder, membership routing,
+    resolver integration) that all need a fresh StockUniverse +
+    StockUniverseIndexMembership schema per test. Function-scoped so
+    each test starts clean.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sess = sessionmaker(bind=engine)()
+    try:
+        yield sess
+    finally:
+        sess.close()
+        engine.dispose()
 
 
 def _make_price_df(days: int, start_price: float, end_price: float) -> pd.DataFrame:
