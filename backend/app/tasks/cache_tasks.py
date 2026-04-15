@@ -181,6 +181,19 @@ def warm_spy_cache(market: Optional[str] = None):
         if failed_periods:
             results["error"] = "Benchmark warm failed for " + ", ".join(failed_periods)
 
+        # Per-market telemetry (bead asia.10.1): record successful warms only
+        # so a fully failed warm doesn't reset the "age" gauge to zero.
+        try:
+            from ..services.telemetry import get_telemetry
+            telemetry = get_telemetry()
+            for warmed_market, periods in by_market.items():
+                if any(periods.values()):
+                    telemetry.record_benchmark_age(
+                        warmed_market, benchmark_symbol="SPY",
+                    )
+        except Exception as exc:
+            logger.debug("telemetry: benchmark_age emit failed (%s)", exc)
+
         logger.info("✓ Market benchmark cache warming task completed")
         return results
 
@@ -481,6 +494,26 @@ def weekly_full_refresh(self, market: str | None = None):
         status = "completed" if success_rate >= 0.95 else "partial"
         price_cache.save_warmup_metadata(status, refreshed, total, market=market)
         price_cache.complete_warmup_heartbeat("completed", market=market)
+
+        # Per-market telemetry (bead asia.10.1): freshness gauge + completeness
+        # distribution for this market, plus opportunistic 15d retention cleanup.
+        try:
+            from ..services.telemetry import get_telemetry
+            telemetry = get_telemetry()
+            telemetry.record_freshness(
+                market, source="prices", symbols_refreshed=refreshed,
+            )
+            telemetry.record_completeness_from_db(market)
+            # Cleanup runs once per weekly_full_refresh invocation; cheap on a
+            # 15d-retained event log. Only the full-universe pass triggers it
+            # to avoid 4× redundant deletes when 4 per-market refreshes run in
+            # parallel.
+            if market is None:
+                deleted = telemetry.cleanup_old_events()
+                if deleted:
+                    logger.info("telemetry: cleaned %d old events", deleted)
+        except Exception as exc:
+            logger.debug("telemetry: emit/cleanup failed (%s)", exc)
 
         logger.info("=" * 80)
         logger.info(f"✓ Weekly full refresh completed:")
