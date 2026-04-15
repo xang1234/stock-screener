@@ -77,6 +77,8 @@ class LaunchGateReport:
     hard_failed: int
     hard_missing_evidence: int
     gates: List[GateResult]
+    execution_mode: Optional[str] = None
+    provenance_note: Optional[str] = None
     content_hash: Optional[str] = None
 
 
@@ -674,6 +676,8 @@ def run_all_gates(
     db=None,
     external_evidence: Optional[Dict[str, str]] = None,
     now: Optional[datetime] = None,
+    execution_mode: Optional[str] = None,
+    provenance_note: Optional[str] = None,
 ) -> LaunchGateReport:
     """Execute every gate in charter order and aggregate into one report.
 
@@ -723,6 +727,8 @@ def run_all_gates(
         report_schema_version=REPORT_SCHEMA_VERSION,
         charter_version=CHARTER_VERSION,
         runner_version=GATE_RUNNER_VERSION,
+        execution_mode=execution_mode,
+        provenance_note=provenance_note,
         generated_at=ctx.now_utc().isoformat(),
         verdict=verdict,
         hard_gate_count=len(hard),
@@ -764,6 +770,10 @@ def render_markdown(report: LaunchGateReport) -> str:
     lines.append(f"- Charter version: {report.charter_version}")
     lines.append(f"- Runner version: {report.runner_version}")
     lines.append(f"- Report schema version: {report.report_schema_version}")
+    if report.execution_mode:
+        lines.append(f"- Execution mode: {report.execution_mode}")
+    if report.provenance_note:
+        lines.append(f"- Provenance: {report.provenance_note}")
     lines.append(f"- **Verdict: {report.verdict.upper()}**")
     lines.append(
         f"- Hard gates: {report.hard_gate_count} total · "

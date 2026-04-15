@@ -329,6 +329,17 @@ class TestArtifactWriter:
         # Hash appears at top + bottom.
         assert md.count(report.content_hash) == 2
 
+    def test_markdown_surfaces_optional_provenance(self):
+        report = run_all_gates(
+            project_root=_PROJECT_ROOT,
+            now=_NOW,
+            execution_mode="synthetic_seeded_harness",
+            provenance_note="Synthetic rehearsal only; does not unblock downstream canaries.",
+        )
+        md = render_markdown(report)
+        assert "Execution mode: synthetic_seeded_harness" in md
+        assert "Synthetic rehearsal only; does not unblock downstream canaries." in md
+
 
 class TestHashDeterminism:
     def test_same_inputs_same_content_hash(self):

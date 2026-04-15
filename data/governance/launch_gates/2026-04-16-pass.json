@@ -1,6 +1,7 @@
 {
   "charter_version": "1.0",
-  "content_hash": "1d93da4ea7aaccdfd9cfc4c5190058190c5bc6ef1d9fa5901f6fa409cdcabba9",
+  "content_hash": "40bae5dc7decf7e71dbcfea5e6a260c2c70dfb1c1d10deeee84166192576d56f",
+  "execution_mode": "synthetic_seeded_harness",
   "gates": [
     {
       "detail": "Migration rehearsal report present with no-data-loss assertion.",
@@ -138,6 +139,7 @@
   "hard_gate_count": 9,
   "hard_missing_evidence": 0,
   "hard_passed": 9,
+  "provenance_note": "Synthetic JP rehearsal generated from an in-process seeded telemetry harness because Docker-backed Postgres was unavailable in this sandbox. This artifact is provisional only and does not close asia.11.4 or unblock asia.11.5.",
   "report_schema_version": 1,
   "runner_version": "1.0",
   "verdict": "pass"

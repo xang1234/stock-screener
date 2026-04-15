@@ -4,12 +4,13 @@
 - Playbook: `asia_v2_hk_canary_playbook.md` (JP replay)
 - Verdict: **PASS** (9/9 hard gates)
 - Mode: **dress-rehearsal** against a deterministic seeded telemetry harness + synthetic external evidence
+- Status: **provisional rehearsal only** — does not close `asia.11.4` or unblock `asia.11.5`
 
 ## Why this rehearsal is slightly different from HK
 
-This session ran inside a sandbox that blocked Docker daemon access, so the HK-style ephemeral Postgres harness could not be reproduced verbatim. Instead, the launch-gate runner was executed in-process with the same gate logic and with a seeded fake DB session that matches the query contract already exercised in [test_launch_gates.py](/Users/admin/StockScreenClaude/backend/tests/unit/test_launch_gates.py).
+This session ran inside a sandbox that blocked Docker daemon access, so the HK-style ephemeral Postgres harness could not be reproduced verbatim. Instead, the launch-gate runner was executed in-process with the same gate logic and with a seeded fake DB session that matches the query contract already exercised in `backend/tests/unit/test_launch_gates.py`.
 
-That means this bead still exercises the full gate aggregation, verdict logic, content-hash generation, and human/machine artifact rendering, while honestly scoping the residual risk to storage-layer wiring. That storage-layer path was already covered by the HK dress rehearsal on 2026-04-15.
+That means this bead still exercises the full gate aggregation, verdict logic, content-hash generation, and human/machine artifact rendering, while honestly scoping the residual risk to storage-layer wiring. That storage-layer path was already covered by the HK dress rehearsal on 2026-04-15, but this JP record is still provisional until the real Docker/Postgres-backed path is rerun.
 
 ## Evidence mix
 
@@ -61,8 +62,8 @@ data/governance/launch_gates/2026-04-16-pass.sha256
 
 | Hash | Value |
 |---|---|
-| `content_hash` (semantic, inside JSON) | `1d93da4ea7aaccdfd9cfc4c5190058190c5bc6ef1d9fa5901f6fa409cdcabba9` |
-| File hash (sidecar, sha256sum-compatible) | `1e741523c0f7d46a404e12e289248625454a7e98691e42f4d99adf511ef16825` |
+| `content_hash` (semantic, inside JSON) | `40bae5dc7decf7e71dbcfea5e6a260c2c70dfb1c1d10deeee84166192576d56f` |
+| File hash (sidecar, sha256sum-compatible) | `9a68b10ec8de3a38d42454d34caf05b8038581922316db9749f24b23ce787807` |
 
 Verification was performed by recomputing the JSON byte hash from the rendered artifact body. A direct `sha256sum -c` shell check against the repo file could not be run until the file existed on disk.
 
@@ -72,7 +73,7 @@ JP is the first canary in this sequence explicitly tuned for higher-volume behav
 
 ## Residual risk
 
-The only un-revalidated layer in this session is the Docker/Postgres plumbing used by the HK dress rehearsal. The runner logic itself, the repo-backed gates, and the JP-specific evidence bundle were all exercised successfully here.
+The only un-revalidated layer in this session is the Docker/Postgres plumbing used by the HK dress rehearsal. The runner logic itself, the repo-backed gates, and the JP-specific evidence bundle were all exercised successfully here, but this is not sufficient to declare the JP canary complete.
 
 ## Defects found during the dress rehearsal
 
@@ -92,6 +93,6 @@ The only un-revalidated layer in this session is the Docker/Postgres plumbing us
 
 Per the playbook decision tree:
 
-> **PASS** - Canary succeeded. Hold JP enabled for >= 2 market sessions; if dashboards stay quiet, mark canary final and unblock TW (`asia.11.5`).
+> **PASS (provisional synthetic rehearsal)** - The gate logic passed for this seeded rehearsal, but the real JP canary remains open until the Docker/Postgres-backed path is rerun.
 
-In dress-rehearsal mode the session-hold requirement is informational only. For a live canary, this artifact is the provisional go/no-go record for the JP -> TW progression.
+In dress-rehearsal mode the session-hold requirement is informational only. This artifact should not be used as the unblock signal for the JP -> TW progression.
