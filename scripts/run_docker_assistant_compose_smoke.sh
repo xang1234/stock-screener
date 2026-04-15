@@ -11,6 +11,9 @@ COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ssc_assistant_smoke}"
 export COMPOSE_PROJECT_NAME
 
 cleanup() {
+  echo "--- Backend container logs (last 100 lines) ---"
+  docker logs --tail=100 "${COMPOSE_PROJECT_NAME}-backend-1" 2>&1 || true
+  echo "--- End backend logs ---"
   docker compose \
     --env-file "$ENV_FILE" \
     --profile assistant \
