@@ -26,6 +26,8 @@ python scripts/run_launch_gates.py [options]
 | `--evidence GATE_ID=PATH` | Attach external evidence for G5/G6/G7. Repeatable. |
 | `--output-dir PATH` | Override output directory (default: `data/governance/launch_gates/`). |
 | `--no-db` | Skip DB-backed gates (G2, G4). They report `MISSING_EVIDENCE`. |
+| `--execution-mode MODE` | Optional provenance label embedded into the report (for example `synthetic_seeded_harness`). |
+| `--provenance-note TEXT` | Optional human-readable provenance note embedded into the report and markdown. |
 
 ### Exit codes
 
