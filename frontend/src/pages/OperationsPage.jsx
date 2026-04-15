@@ -178,6 +178,10 @@ export default function OperationsPage() {
       <Box sx={{ my: 2 }}>
         {alertsQuery.isLoading ? (
           <CircularProgress size={20} />
+        ) : alertsQuery.isError ? (
+          <Typography variant="body2" color="error">
+            Failed to load telemetry summaries. Check backend connectivity.
+          </Typography>
         ) : (
           <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
             {summaries.map((s) => (
@@ -197,6 +201,10 @@ export default function OperationsPage() {
       )}
       {alertsQuery.isLoading ? (
         <CircularProgress size={20} />
+      ) : alertsQuery.isError ? (
+        <Typography variant="body2" color="error">
+          Failed to load alerts.
+        </Typography>
       ) : (
         <AlertsTable alerts={alerts} onAcknowledge={(id) => ackMutation.mutate(id)} />
       )}

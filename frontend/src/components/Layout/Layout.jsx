@@ -184,6 +184,7 @@ function Layout({ children }) {
             component={RouterLink}
             to="/operations"
             color="inherit"
+            aria-label="Operations / telemetry"
             title="Operations / telemetry"
             size="small"
           >

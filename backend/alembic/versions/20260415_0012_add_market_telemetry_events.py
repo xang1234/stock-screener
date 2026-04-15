@@ -31,17 +31,16 @@ def upgrade() -> None:
         sa.Column("schema_version", sa.SmallInteger, nullable=False),
         sa.Column("payload", json_type(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Index("ix_market_telemetry_market_recorded", "market", "recorded_at"),
-        sa.Index("ix_market_telemetry_metric_recorded", "metric_key", "recorded_at"),
-        # Dedicated index for the cleanup DELETE so it doesn't seq-scan the whole
-        # table when the 15d retention sweep runs from weekly_full_refresh.
-        sa.Index("ix_market_telemetry_recorded_at", "recorded_at"),
     )
+    op.create_index("ix_market_telemetry_market_recorded", "market_telemetry_events", ["market", "recorded_at"])
+    op.create_index("ix_market_telemetry_metric_recorded", "market_telemetry_events", ["metric_key", "recorded_at"])
+    # Dedicated index for the 15d retention DELETE so it can index-seek on recorded_at.
+    op.create_index("ix_market_telemetry_recorded_at", "market_telemetry_events", ["recorded_at"])
 
     # Daily aggregating view. Postgres-only; SQLite tests use the table directly.
-    # ``schema_version`` is aggregated (MAX), not grouped by — otherwise a
-    # mid-day schema bump would produce two rows for the same (market, metric, day)
-    # and silently double-count event counts in dashboards.
+    # Both schema_version and last_payload come from the same latest row (same
+    # ORDER BY recorded_at DESC, id DESC tiebreaker) so the schema tag always
+    # matches the payload it annotates, even across mid-day schema bumps.
     if dialect == "postgresql":
         op.execute(
             """
@@ -50,11 +49,11 @@ def upgrade() -> None:
                 market,
                 metric_key,
                 date_trunc('day', recorded_at)::date AS day,
-                MAX(schema_version) AS schema_version,
+                (ARRAY_AGG(schema_version ORDER BY recorded_at DESC, id DESC))[1] AS schema_version,
                 COUNT(*) AS event_count,
                 MIN(recorded_at) AS first_at,
                 MAX(recorded_at) AS last_at,
-                (ARRAY_AGG(payload ORDER BY recorded_at DESC))[1] AS last_payload
+                (ARRAY_AGG(payload ORDER BY recorded_at DESC, id DESC))[1] AS last_payload
             FROM market_telemetry_events
             GROUP BY market, metric_key, date_trunc('day', recorded_at)
             """
@@ -70,3 +69,4 @@ def downgrade() -> None:
     op.drop_index("ix_market_telemetry_metric_recorded", table_name="market_telemetry_events")
     op.drop_index("ix_market_telemetry_market_recorded", table_name="market_telemetry_events")
     op.drop_table("market_telemetry_events")
+

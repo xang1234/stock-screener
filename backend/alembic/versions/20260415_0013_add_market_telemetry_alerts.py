@@ -37,9 +37,9 @@ def upgrade() -> None:
         sa.Column("acknowledged_at", sa.DateTime(timezone=True)),
         sa.Column("acknowledged_by", sa.String(length=64)),
         sa.Column("closed_at", sa.DateTime(timezone=True)),
-        sa.Index("ix_telemetry_alerts_state_opened", "state", "opened_at"),
-        sa.Index("ix_telemetry_alerts_market_state", "market", "state", "opened_at"),
     )
+    op.create_index("ix_telemetry_alerts_state_opened", "market_telemetry_alerts", ["state", "opened_at"])
+    op.create_index("ix_telemetry_alerts_market_state", "market_telemetry_alerts", ["market", "state", "opened_at"])
 
     # Hysteresis enforcement: at most one active (open|acknowledged) alert per
     # (market, metric_key). Re-firing the same alert while it's still active is

@@ -51,7 +51,10 @@ async def list_market_summaries() -> Dict[str, Any]:
 @router.get("/markets/{market}")
 async def market_detail(market: str) -> Dict[str, Any]:
     """Return the full telemetry summary for a single market."""
-    normalized = normalize_market(market)
+    try:
+        normalized = normalize_market(market)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Unknown market: {market}")
     if normalized not in SUPPORTED_MARKETS:
         raise HTTPException(status_code=404, detail=f"Unknown market: {market}")
     return get_telemetry().market_summary(normalized)
@@ -70,7 +73,10 @@ async def market_metric_history(
     Capped at 15 days (the retention window) and 1000 rows. Used by dashboards
     (10.2) for per-metric trend graphs.
     """
-    normalized = normalize_market(market)
+    try:
+        normalized = normalize_market(market)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Unknown market: {market}")
     if normalized not in SUPPORTED_MARKETS:
         raise HTTPException(status_code=404, detail=f"Unknown market: {market}")
     if metric_key not in _ALLOWED_METRIC_KEYS:
