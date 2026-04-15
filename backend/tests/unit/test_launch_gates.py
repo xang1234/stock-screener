@@ -52,8 +52,8 @@ def _make_docs_root(tmp_path: Path) -> Path:
 def _write_rehearsal_report(docs: Path, date: str = "2026-04-15") -> Path:
     path = docs / f"asia_v2_e11_st2_migration_rehearsal_report_{date}.md"
     path.write_text(
-        f"# ASIA v2 E11 ST2 Migration Rehearsal Report\n\n"
-        f"- Outcome: **PASS**\n\nThis rehearsal demonstrates **no data-loss**.\n",
+        "# ASIA v2 E11 ST2 Migration Rehearsal Report\n\n"
+        "- Outcome: **PASS**\n\nThis rehearsal demonstrates **no data-loss**.\n",
         encoding="utf-8",
     )
     return path

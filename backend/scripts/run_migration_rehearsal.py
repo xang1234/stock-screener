@@ -36,6 +36,8 @@ _BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+from app.utils.db_url import redacted_database_url as _redact_url
+
 
 # How many revisions back from head the rollback drill downgrades to.
 # 2 covers the most recent two telemetry migrations (0012, 0013) which
@@ -325,10 +327,10 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
 def render_report(result: Dict[str, Any], *, database_label: str) -> str:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     lines: List[str] = []
-    lines.append(f"# ASIA v2 E11 ST2 Migration Rehearsal Report")
+    lines.append("# ASIA v2 E11 ST2 Migration Rehearsal Report")
     lines.append("")
     lines.append(f"- Date: {now}")
-    lines.append(f"- Bead: `StockScreenClaude-asia.11.2`")
+    lines.append("- Bead: `StockScreenClaude-asia.11.2`")
     scope = (f"{_MIGRATION_CHAIN[0]} → {_MIGRATION_CHAIN[-1]}"
              if _MIGRATION_CHAIN else "no migrations discovered")
     drill = (f"head ({_ROLLBACK_DRILL[0]}) ↔ {_ROLLBACK_DRILL[1]}"
@@ -340,7 +342,7 @@ def render_report(result: Dict[str, Any], *, database_label: str) -> str:
     lines.append("")
 
     if result.get("status") == "fail":
-        lines.append(f"## Failure")
+        lines.append("## Failure")
         lines.append("")
         lines.append(f"- Error: {result.get('error', 'unknown')}")
         if result.get("alembic_output"):
@@ -462,12 +464,6 @@ def main() -> int:
     if status == "env_error":
         return 1
     return 0
-
-
-# URL redaction lives in app.utils.db_url so the rehearsal report and the
-# FastAPI startup banner mask passwords the same way.
-from app.utils.db_url import redacted_database_url as _redact_url  # noqa: E402
-
 
 if __name__ == "__main__":
     sys.exit(main())

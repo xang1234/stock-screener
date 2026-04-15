@@ -101,7 +101,7 @@ def main() -> int:
           f"{report.hard_passed} pass · {report.hard_failed} fail · "
           f"{report.hard_missing_evidence} missing evidence")
     print(f"Content hash: {report.content_hash}")
-    print(f"Artifacts:")
+    print("Artifacts:")
     for k, v in paths.items():
         print(f"  {k}: {v}")
 
