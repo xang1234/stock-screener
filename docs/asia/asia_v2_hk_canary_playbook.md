@@ -143,7 +143,7 @@ After rollback:
 
 This bead is satisfied when **either**:
 
-- A signed launch-gate artifact with `verdict=pass` exists under `data/governance/launch_gates/`, **and** the canary ran end-to-end (all 7 stages executed against staging or production), **and** an execution record (`asia_v2_hk_canary_execution_<date>.md`) records the run; **OR**
+- A signed launch-gate artifact with `verdict=pass` exists under `data/governance/launch_gates/`, **and** the canary ran end-to-end (all 8 stages — preconditions through post-canary verdict — executed against staging or production), **and** an execution record (`asia_v2_hk_canary_execution_<date>.md`) records the run; **OR**
 - A rollback was executed per the playbook **and** a postmortem document exists under `docs/asia/`.
 
 Both outcomes are valid completions — what matters is the documented evidence trail.
