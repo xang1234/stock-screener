@@ -21,12 +21,15 @@ The aggregate verdict is **PASS** only if every hard gate is PASS. A
 
 from __future__ import annotations
 
-import hashlib
+import inspect
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from ...utils.datetime_utils import as_aware_utc
+from .signed_artifact import compute_content_hash
 
 
 REPORT_SCHEMA_VERSION = 1
@@ -90,12 +93,7 @@ class GateContext:
     now: Optional[datetime] = None
 
     def now_utc(self) -> datetime:
-        if self.now is None:
-            return datetime.now(timezone.utc)
-        # Coerce to UTC-aware (same pattern as weekly_audit).
-        if self.now.tzinfo is None:
-            return self.now.replace(tzinfo=timezone.utc)
-        return self.now.astimezone(timezone.utc)
+        return as_aware_utc(self.now) or datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -139,18 +137,24 @@ def _drill_age_days(text: str, ctx: GateContext) -> Optional[int]:
 def _check_g1_schema(ctx: GateContext) -> GateResult:
     """G1 — Schema/Contract Readiness.
 
-    Self-check: presence of the migration rehearsal report under
-    docs/asia/. The report must exist and the most recent rehearsal must
-    be referenced. Failures here block all downstream gates.
+    Self-check: most recent migration rehearsal report under docs/asia/.
+    Glob-based so a new dated report (e.g. pre-canary rehearsal) is
+    picked up automatically without editing the gate. Failures here
+    block all downstream gates.
     """
-    path = _doc_path(ctx, "asia_v2_e2_st3_t2_migration_rehearsal_report_2026-04-11.md")
-    if not _file_exists(path):
+    reports = sorted(
+        (ctx.project_root / "docs" / "asia").glob(
+            "asia_v2_e2_st3_t2_migration_rehearsal_report_*.md"
+        ),
+        reverse=True,
+    )
+    if not reports:
         return GateResult(
             gate_id="G1", name="Schema/Contract Readiness", severity="hard",
             status=GateStatus.MISSING_EVIDENCE,
-            detail="Migration rehearsal report not found in docs/asia/",
-            evidence_paths=[str(path)],
+            detail="No migration rehearsal report found in docs/asia/",
         )
+    path = reports[0]
     text = _read_text(path) or ""
     text_lower = text.lower()
     # Accept the report if it asserts no-data-loss OR logs multiple "Success"
@@ -665,7 +669,6 @@ def run_all_gates(
         # Two-arg gates take db; one-arg gates don't. Detected via signature
         # inspection rather than registering metadata — keeps adding a new
         # gate to a one-line edit of _GATES.
-        import inspect
         sig = inspect.signature(check)
         if "db" in sig.parameters:
             results.append(check(ctx, db=db))
@@ -701,16 +704,7 @@ def run_all_gates(
 
 
 def _content_hash(report: LaunchGateReport) -> str:
-    """SHA-256 over canonical compact JSON with content_hash nulled.
-
-    Same pattern as ``weekly_audit._content_hash`` (bead 10.4) — semantic
-    integrity of the report data, distinct from the file hash that the
-    .sha256 sidecar carries for sha256sum -c verification.
-    """
-    as_dict = asdict(report)
-    as_dict["content_hash"] = None
-    blob = json.dumps(as_dict, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return compute_content_hash(asdict(report))
 
 
 def render_json(report: LaunchGateReport) -> str:

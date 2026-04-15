@@ -16,6 +16,16 @@ def _get_project_root() -> Path:
 
 
 _PROJECT_ROOT = _get_project_root()
+
+
+def get_project_root() -> Path:
+    """Public accessor for the project root path.
+
+    Callers outside this module should import this rather than re-deriving
+    the path from their own __file__, so nested-module refactors only need
+    to update one place (see bead asia.11.1 simplify pass).
+    """
+    return _PROJECT_ROOT
 logger = logging.getLogger(__name__)
 
 

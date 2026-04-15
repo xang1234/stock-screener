@@ -14,7 +14,6 @@ Two complementary integrity checks:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -22,7 +21,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..celery_app import celery_app
+from ..config.settings import get_project_root
 from ..database import SessionLocal
+from ..services.governance.signed_artifact import write_signed_artifact_trio
 from ..services.telemetry.weekly_audit import (
     GovernanceReport,
     render_json,
@@ -44,43 +45,22 @@ def _resolve_output_dir(override: Optional[str]) -> Path:
     env = os.environ.get("TELEMETRY_AUDIT_REPORT_DIR")
     if env:
         return Path(env)
-    # Project-root-relative: backend/app/tasks/telemetry_tasks.py -> project root is 3 levels up.
-    project_root = Path(__file__).resolve().parents[3]
-    return project_root / _DEFAULT_REPORT_SUBPATH
+    return get_project_root() / _DEFAULT_REPORT_SUBPATH
 
 
 def _write_report_artifacts(report: GovernanceReport, out_dir: Path) -> Dict[str, str]:
-    """Write JSON, Markdown, and separate SHA-256 file. Return paths written."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = report.generated_at[:10]  # YYYY-MM-DD prefix of ISO datetime
+    """Write JSON, Markdown, and separate SHA-256 file. Return paths written.
 
-    json_path = out_dir / f"{stamp}.json"
-    md_path = out_dir / f"{stamp}.md"
-    hash_path = out_dir / f"{stamp}.sha256"
-
-    json_blob = render_json(report)
-    md_blob = render_markdown(report)
-
-    json_path.write_text(json_blob, encoding="utf-8")
-    md_path.write_text(md_blob, encoding="utf-8")
-    # The .sha256 file is the *file-level* integrity check — sha256sum hashes
-    # raw file bytes, so we must hash json_blob (the bytes actually written to
-    # disk) not report.content_hash (which is SHA-256 of compact JSON with a
-    # null content_hash field — a different document).
-    #
-    # Two complementary verification paths:
-    #   sha256sum -c <stamp>.sha256          → file not truncated/corrupted
-    #   programmatic Python re-canonicalize  → data not semantically altered
-    #                                          (see governance_report.md)
-    file_hash = hashlib.sha256(json_blob.encode("utf-8")).hexdigest()
-    hash_path.write_text(
-        f"{file_hash}  {json_path.name}\n", encoding="utf-8",
+    The dual-hash contract (content_hash inside JSON for semantic integrity,
+    file_hash in .sha256 for ``sha256sum -c``) is enforced inside the shared
+    helper — see signed_artifact.write_signed_artifact_trio.
+    """
+    return write_signed_artifact_trio(
+        out_dir=out_dir,
+        stamp=report.generated_at[:10],
+        json_blob=render_json(report),
+        md_blob=render_markdown(report),
     )
-    return {
-        "json": str(json_path),
-        "markdown": str(md_path),
-        "sha256": str(hash_path),
-    }
 
 
 @celery_app.task(name="app.tasks.telemetry_tasks.weekly_telemetry_audit")
