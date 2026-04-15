@@ -601,6 +601,20 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
     assert index_payload["skipped_symbols"] == ["NVDA"]
 
 
+def _make_chart_price_frame(close: float = 100.0) -> pd.DataFrame:
+    dates = pd.date_range("2026-03-28", periods=2, freq="D")
+    return pd.DataFrame(
+        {
+            "Open": [close - 1, close],
+            "High": [close, close + 1],
+            "Low": [close - 2, close - 1],
+            "Close": [close - 0.5, close],
+            "Volume": [1_000_000, 1_100_000],
+        },
+        index=dates,
+    )
+
+
 def test_export_chart_bundle_expands_coverage_for_preset_screens(
     service_and_session_factory,
     monkeypatch,
@@ -623,29 +637,14 @@ def test_export_chart_bundle_expands_coverage_for_preset_screens(
         pointer_run_id=19,
     )
 
-    # Pass 1 keeps only 1 chart (the top composite-score row).
-    # Pass 2 per-preset budget of 5 gives us headroom for extras.
+    # Tight Pass 1 limit forces the GAIN* rows to rely on Pass 2 expansion.
     monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
     monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
     monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
 
-    def make_price_frame(close: float) -> pd.DataFrame:
-        dates = pd.date_range("2026-03-28", periods=2, freq="D")
-        return pd.DataFrame(
-            {
-                "Open": [close - 1, close],
-                "High": [close, close + 1],
-                "Low": [close - 2, close - 1],
-                "Close": [close - 0.5, close],
-                "Volume": [1_000_000, 1_100_000],
-            },
-            index=dates,
-        )
-
-    # Every symbol has cached price data so nothing is force-skipped.
     service._price_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols, period="2y": {
-            symbol: make_price_frame(100.0 + i)
+            symbol: _make_chart_price_frame(100.0 + i)
             for i, symbol in enumerate(symbols)
         }
     )
@@ -653,10 +652,8 @@ def test_export_chart_bundle_expands_coverage_for_preset_screens(
         get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
     )
 
-    # NVDA tops the composite ranking and gets Pass 1.
-    # The remaining rows have lower composite scores but massive perfDay
-    # values, so they match the "4% Daily Gainers" preset — Pass 2 should
-    # pick them up.
+    # NVDA has the highest composite score but a small perfDay (won't match
+    # the 4% Gainers preset). GAIN* rows invert that — they rely on Pass 2.
     rows = [
         SimpleNamespace(
             symbol="NVDA",
@@ -712,18 +709,14 @@ def test_export_chart_bundle_expands_coverage_for_preset_screens(
     index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
     symbols_in_order = [entry["symbol"] for entry in index_payload["symbols"]]
 
-    # Pass 1 exported NVDA (composite top-1).
     assert symbols_in_order[0] == "NVDA"
     assert index_payload["symbols"][0]["rank"] == 1
-
-    # Pass 2 added the 4% Daily Gainers preset matches with rank=None.
     assert set(symbols_in_order[1:]) == {"GAIN1", "GAIN2", "GAIN3"}
     for entry in index_payload["symbols"][1:]:
         assert entry["rank"] is None
 
     assert manifest["symbols_total"] == 4
     assert manifest["available"] is True
-    # Each Pass 2 chart has its own payload with rank=None.
     gain1_payload = json.loads((tmp_path / "charts" / "GAIN1.json").read_text(encoding="utf-8"))
     assert gain1_payload["rank"] is None
     assert gain1_payload["symbol"] == "GAIN1"
@@ -754,23 +747,11 @@ def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
     monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
     monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
 
-    def make_price_frame() -> pd.DataFrame:
-        dates = pd.date_range("2026-03-28", periods=2, freq="D")
-        return pd.DataFrame(
-            {
-                "Open": [100.0, 101.0],
-                "High": [101.0, 102.0],
-                "Low": [99.0, 100.0],
-                "Close": [100.5, 101.5],
-                "Volume": [1_000_000, 1_100_000],
-            },
-            index=dates,
-        )
-
-    # NOCACHE has no price data; it's also a preset match.
+    # NOCACHE has no cached prices but matches the 4% Gainers preset —
+    # Pass 2 must honor the skipped_symbols exclusion and not re-attempt.
     service._price_cache = SimpleNamespace(
         get_many_cached_only=lambda symbols, period="2y": {
-            "NVDA": make_price_frame(),
+            "NVDA": _make_chart_price_frame(),
             "NOCACHE": None,
         }
     )

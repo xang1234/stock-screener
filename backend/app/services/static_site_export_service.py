@@ -399,7 +399,7 @@ class StaticSiteExportService:
                     }
                 )
 
-        # --- Pass 2: expand charts for preset screen top-N (per STATIC_CHART_PRESET_TOP_N) ---
+        # --- Pass 2: expand preset screen top-N charts ---
         if serialized_rows is not None:
             preset_symbols = get_preset_chart_symbols(
                 serialized_rows, PRESET_SCREENS, STATIC_CHART_PRESET_TOP_N,
