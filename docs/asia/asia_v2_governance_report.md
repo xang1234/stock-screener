@@ -92,6 +92,7 @@ assert expected == recomputed, "Report has been tampered with or is corrupt"
 | `benchmark_age` | `latest_benchmark_symbol`, `latest_warmed_at_epoch`, `implied_age_seconds` |
 | `extraction_success` | `overall_total`, `overall_success`, `overall_success_ratio`, `by_language` |
 | `completeness_distribution` | `first_snapshot_low_bucket_ratio`, `last_snapshot_low_bucket_ratio`, `low_bucket_ratio_delta`, `last_snapshot_symbols_total` |
+| `field_coverage` | `latest_support_state_counts`, `latest_unsupported_field_names`, `latest_computed_field_names`, `latest_cadence_counts`, `latest_cadence_eligible_universe`, `worst_unsupported_ratio`, `worst_cadence_fallback_ratio` — latest snapshot drives the "current state" section; worst-window signals catch mid-week regressions that recovered by Sunday |
 
 The `low_bucket_ratio_delta` for completeness is the **governance regression signal**: a positive delta means the fraction of symbols with sub-25% provenance grew over the week.
 

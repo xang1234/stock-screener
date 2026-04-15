@@ -506,6 +506,11 @@ def weekly_full_refresh(self, market: str | None = None):
                 market, source="prices", symbols_refreshed=refreshed,
             )
             telemetry.record_completeness_from_db(market)
+            # Field-coverage snapshot (bead asia.10.5). Per-market only; the
+            # SHARED scope has no field-capability semantics (policy chains
+            # differ by market), so the emit method no-ops when market is None.
+            if market is not None:
+                telemetry.record_field_coverage_from_registry(market)
             # Cleanup runs once per weekly_full_refresh invocation; cheap on a
             # 15d-retained event log. Only the full-universe pass triggers it
             # to avoid 4× redundant deletes when 4 per-market refreshes run in

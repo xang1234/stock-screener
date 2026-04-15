@@ -216,7 +216,7 @@ class TestMarketSummary:
 
     def test_market_summary_handles_empty_redis(self):
         client = MagicMock()
-        client.mget.return_value = [None, None, None, None]
+        client.mget.return_value = [None, None, None, None, None]
         client.scan_iter.return_value = iter([])
         telemetry = self._telemetry(client)
 
@@ -233,7 +233,7 @@ class TestMarketSummary:
         """
         client = MagicMock()
         # Gauges all empty; we only care about the extraction scan/mget path.
-        client.mget.return_value = [None, None, None, None]
+        client.mget.return_value = [None, None, None, None, None]
 
         # The scan_iter pattern under inspection — must scan SHARED scope,
         # not the per-market scope, so capture the actual pattern.

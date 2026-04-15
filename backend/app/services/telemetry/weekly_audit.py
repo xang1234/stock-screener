@@ -31,7 +31,13 @@ from ...models.market_telemetry import MarketTelemetryEvent
 from ...models.market_telemetry_alert import MarketTelemetryAlert, AlertState
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
 from .alert_thresholds import OWNERS, THRESHOLDS
-from .schema import MetricKey, SCHEMA_VERSION, low_completeness_ratio
+from .schema import (
+    MetricKey,
+    SCHEMA_VERSION,
+    cadence_fallback_ratio,
+    low_completeness_ratio,
+    unsupported_field_ratio,
+)
 
 # Window the weekly report covers. Fits comfortably inside the 15d retention
 # window of market_telemetry_events so week-on-week gaps don't silently lose data.
@@ -126,6 +132,7 @@ _METRIC_KEYS: Tuple[str, ...] = (
     MetricKey.BENCHMARK_AGE,
     MetricKey.EXTRACTION_SUCCESS,
     MetricKey.COMPLETENESS_DISTRIBUTION,
+    MetricKey.FIELD_COVERAGE,
 )
 
 
@@ -265,6 +272,31 @@ def _rollup_for_metric(
                 }
                 for lang, v in sorted(by_lang.items())
             },
+        }
+
+    if metric_key == MetricKey.FIELD_COVERAGE:
+        # Static + dynamic coverage rolled up: the last snapshot is
+        # authoritative (registry is deterministic), but we also record the
+        # worst unsupported ratio and cadence-fallback ratio seen in the
+        # window so a mid-week policy regression that was corrected doesn't
+        # hide silently.
+        latest = rows[-1].payload or {}
+        worst_unsupported = max(
+            (r for r in (unsupported_field_ratio(row.payload or {}) for row in rows) if r is not None),
+            default=None,
+        )
+        worst_cadence_fallback = max(
+            (r for r in (cadence_fallback_ratio(row.payload or {}) for row in rows) if r is not None),
+            default=None,
+        )
+        return {
+            "latest_support_state_counts": latest.get("support_state_counts") or {},
+            "latest_unsupported_field_names": latest.get("unsupported_field_names") or [],
+            "latest_computed_field_names": latest.get("computed_field_names") or [],
+            "latest_cadence_counts": latest.get("cadence_counts") or {},
+            "latest_cadence_eligible_universe": latest.get("cadence_eligible_universe") or 0,
+            "worst_unsupported_ratio": worst_unsupported,
+            "worst_cadence_fallback_ratio": worst_cadence_fallback,
         }
 
     if metric_key == MetricKey.COMPLETENESS_DISTRIBUTION:

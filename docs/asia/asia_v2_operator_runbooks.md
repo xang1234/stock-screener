@@ -48,6 +48,7 @@ Runbook IDs (`RB-XX`) are stable identifiers — search the document for the `##
 | `universe_drift` | US, HK, JP, TW | RB-03 |
 | `completeness_distribution` | US, HK, JP, TW | RB-04 |
 | `extraction_success` | SHARED | RB-05 |
+| `field_coverage` | US, HK, JP, TW | RB-06 |
 
 ---
 
@@ -329,6 +330,66 @@ Re-enable in **reverse order** of rollback. For each step:
 - Provider incident closed (Minimax or Z.AI).
 - Dry-run extraction against the multilingual QA golden set (Charter G5) passes precision ≥ 0.85 / recall ≥ 0.75.
 - Re-enable themes market-by-market, not all at once.
+
+---
+
+## RB-06 `field_coverage` — Unsupported-field or cadence-fallback regression
+
+### Trigger
+
+- **Metric**: `field_coverage` (fraction of screening fields in the `unsupported` state per market)
+- **Severity ladder**: US 5%/15%, HK/JP/TW 10%/25% (warning/critical; bigger = worse). Defined in `alert_thresholds.py`.
+- **Owner**: market owner team
+- **Payload fields**: `support_state_counts`, `unsupported_field_names`, `computed_field_names`, `cadence_counts`, `cadence_eligible_universe`
+- **Related signal (not thresholded yet)**: `cadence_fallback_ratio` — fraction of the cadence-eligible universe on comparable-period YoY. Visible in the payload and in the weekly audit `worst_cadence_fallback_ratio`.
+- **Likely causes**: provider returning empty payloads for ownership/sentiment fields, registry version change that demoted a field's support state, policy-chain edit for a market (`provider_routing_policy.providers_for`), widespread cadence degradation from provider statement restatements
+
+### Diagnosis
+
+1. Pull the latest snapshot and read the offending field names:
+   ```bash
+   curl -sS "$HOST/api/v1/telemetry/markets/$MARKET/field_coverage" | jq '.events[0].payload | {support_state_counts, unsupported_field_names, computed_field_names}'
+   ```
+   If `unsupported_field_names` contains a field that used to be supported, the canonical provider has regressed for that market. Cross-reference with `docs/asia/asia_v2_symbol_constraint_inventory_matrix.md`.
+2. Compare against the registry artifact. The registry version is stamped into each entry:
+   ```python
+   from app.services.field_capability_registry import field_capability_registry
+   print(field_capability_registry.REGISTRY_VERSION)
+   ```
+   A mid-week registry version change that operators did not expect is itself the incident.
+3. For cadence: inspect `cadence_counts` vs `cadence_eligible_universe`. A sudden spike in `comparable_period_yoy` for a market that normally reports quarterly means upstream fundamentals arrived with non-quarterly statement cadence.
+
+### Rollback
+
+1. **If a field that is marked unsupported is referenced by a user-visible scan or UI column**, hide the field or disable the column rather than fail-closed the scan:
+   ```
+   asia_non_us_unsupported_fields_graceful_degrade=true
+   ```
+   (This is the default; confirm it hasn't been flipped off.)
+2. **If scans for the market produce misleading results** (e.g. an IBD-style composite that requires the now-unsupported ownership data):
+   ```
+   asia_scans_<MARKET>_enabled=false
+   ```
+3. **If themes depend on the now-computed fields**:
+   ```
+   asia_themes_<MARKET>_enabled=false
+   ```
+
+### Verification checkpoints
+
+| Check | Expected delta | When |
+|---|---|---|
+| Graceful-degrade active | sample scan response includes `field_availability[field].reason_code` for the unsupported fields | immediate |
+| Next coverage snapshot | new `field_coverage` event emitted after next weekly_full_refresh run with current state | ≤ next Sunday 02:00 ET |
+| Scan block | scan POST rejects market | immediate |
+| Weekly audit | report's `worst_unsupported_ratio` for the market reflects the regression | next Sunday 05:00 ET |
+
+### Recovery
+
+- Provider or registry regression fixed.
+- Run a manual `weekly_full_refresh` for the market to emit a fresh `field_coverage` snapshot.
+- Confirm alert auto-closes via the evaluator (unsupported ratio back below threshold).
+- Re-enable scans/themes in reverse order.
 
 ---
 

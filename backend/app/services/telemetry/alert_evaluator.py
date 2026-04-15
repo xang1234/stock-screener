@@ -28,7 +28,7 @@ from ...models.market_telemetry_alert import (
 )
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
 from .alert_thresholds import Levels, owner_for, thresholds_for
-from .schema import MetricKey, low_completeness_ratio
+from .schema import MetricKey, low_completeness_ratio, unsupported_field_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ _METRIC_RULES: Dict[str, Tuple[Callable[[Dict[str, Any]], Optional[float]], str]
     MetricKey.BENCHMARK_AGE: (_benchmark_age_value, "hi"),
     MetricKey.COMPLETENESS_DISTRIBUTION: (_completeness_value, "hi"),
     MetricKey.UNIVERSE_DRIFT: (_drift_value, "hi"),
+    MetricKey.FIELD_COVERAGE: (unsupported_field_ratio, "hi"),
 }
 
 

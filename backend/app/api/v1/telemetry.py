@@ -34,6 +34,7 @@ _ALLOWED_METRIC_KEYS = {
     MetricKey.UNIVERSE_DRIFT,
     MetricKey.BENCHMARK_AGE,
     MetricKey.COMPLETENESS_DISTRIBUTION,
+    MetricKey.FIELD_COVERAGE,
     # EXTRACTION_SUCCESS deliberately omitted: it's Redis-only (counter
     # increments per LLM call), so no PG rows exist for the history endpoint
     # to return. Live counters surface via /v1/telemetry/markets[/{m}].
