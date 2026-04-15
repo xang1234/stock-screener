@@ -12,6 +12,7 @@ from .stock_universe import (
 )
 from .provider_snapshot import ProviderSnapshotRun, ProviderSnapshotRow, ProviderSnapshotPointer
 from .market_telemetry import MarketTelemetryEvent
+from .market_telemetry_alert import MarketTelemetryAlert
 from .theme import (
     ContentSource,
     ContentItem,
@@ -68,6 +69,8 @@ __all__ = [
     "ProviderSnapshotPointer",
     # Per-market telemetry (bead asia.10.1)
     "MarketTelemetryEvent",
+    # Per-market telemetry alerts (bead asia.10.2)
+    "MarketTelemetryAlert",
     # Theme discovery models
     "ContentSource",
     "ContentItem",

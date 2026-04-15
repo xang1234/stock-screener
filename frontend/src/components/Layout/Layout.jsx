@@ -21,6 +21,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
 import { AssistantChat } from '../AssistantChat';
@@ -178,6 +179,16 @@ function Layout({ children }) {
               <SettingsIcon fontSize="small" />
             </IconButton>
           )}
+          <IconButton
+            sx={{ ml: 0.5 }}
+            component={RouterLink}
+            to="/operations"
+            color="inherit"
+            title="Operations / telemetry"
+            size="small"
+          >
+            <MonitorHeartIcon fontSize="small" />
+          </IconButton>
           {auth?.required && auth?.authenticated && (
             <Button
               color="inherit"
