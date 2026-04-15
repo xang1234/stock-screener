@@ -185,11 +185,13 @@ def warm_spy_cache(market: Optional[str] = None):
         # so a fully failed warm doesn't reset the "age" gauge to zero.
         try:
             from ..services.telemetry import get_telemetry
+            from ..services.benchmark_registry_service import benchmark_registry
             telemetry = get_telemetry()
             for warmed_market, periods in by_market.items():
                 if any(periods.values()):
                     telemetry.record_benchmark_age(
-                        warmed_market, benchmark_symbol="SPY",
+                        warmed_market,
+                        benchmark_symbol=benchmark_registry.get_primary_symbol(warmed_market),
                     )
         except Exception as exc:
             logger.debug("telemetry: benchmark_age emit failed (%s)", exc)
