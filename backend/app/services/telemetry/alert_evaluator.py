@@ -28,7 +28,7 @@ from ...models.market_telemetry_alert import (
 )
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
 from .alert_thresholds import Levels, owner_for, thresholds_for
-from .schema import MetricKey
+from .schema import MetricKey, low_completeness_ratio, unsupported_field_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,7 @@ def _benchmark_age_value(payload: Dict[str, Any]) -> Optional[float]:
 
 
 def _completeness_value(payload: Dict[str, Any]) -> Optional[float]:
-    """Return fraction of universe in the 0-25 completeness bucket."""
-    total = payload.get("symbols_total") or 0
-    if total <= 0:
-        return None
-    bucket_counts = payload.get("bucket_counts") or {}
-    return float(bucket_counts.get("0-25", 0)) / float(total)
+    return low_completeness_ratio(payload)
 
 
 def _drift_value(payload: Dict[str, Any]) -> Optional[float]:
@@ -75,6 +70,7 @@ _METRIC_RULES: Dict[str, Tuple[Callable[[Dict[str, Any]], Optional[float]], str]
     MetricKey.BENCHMARK_AGE: (_benchmark_age_value, "hi"),
     MetricKey.COMPLETENESS_DISTRIBUTION: (_completeness_value, "hi"),
     MetricKey.UNIVERSE_DRIFT: (_drift_value, "hi"),
+    MetricKey.FIELD_COVERAGE: (unsupported_field_ratio, "hi"),
 }
 
 

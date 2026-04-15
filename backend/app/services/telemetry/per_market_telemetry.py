@@ -279,7 +279,7 @@ class PerMarketTelemetry:
                 db.query(bucket_expr, func.count().label("count"))
                 .select_from(StockFundamental)
                 .join(StockUniverse, StockUniverse.symbol == StockFundamental.symbol)
-                .filter(StockUniverse.is_active == True)
+                .filter(StockUniverse.is_active.is_(True))
                 .filter(score.isnot(None))
             )
             if m != SHARED_SENTINEL:
@@ -315,6 +315,105 @@ class PerMarketTelemetry:
             market=m, metric_key=MetricKey.COMPLETENESS_DISTRIBUTION, payload=payload,
         )
 
+    def record_field_coverage_from_registry(self, market: Optional[str]) -> None:
+        """Snapshot per-market field coverage (bead asia.10.5).
+
+        Static part comes from ``field_capability_registry`` (policy-level
+        supported/computed/unsupported counts per market). Dynamic part comes
+        from a single GROUP BY on ``stock_fundamentals.growth_metric_basis``
+        for the market's active universe — the comparable-period-YoY count
+        gives the cadence-fallback rate.
+        """
+        from ..field_capability_registry import (
+            SUPPORT_STATE_COMPUTED,
+            SUPPORT_STATE_UNSUPPORTED,
+            field_capability_registry,
+        )
+        from .schema import field_coverage_payload
+
+        m = normalize_market(market)
+        if m == SHARED_SENTINEL:
+            # Coverage is inherently per-market (policy chains differ); SHARED
+            # has no meaningful field-capability view.
+            return
+
+        try:
+            entries = field_capability_registry.entries()
+        except Exception as exc:
+            logger.debug("telemetry: registry read failed (%s)", exc)
+            return
+
+        state_counts: Dict[str, int] = {}
+        unsupported: list = []
+        computed: list = []
+        for entry in entries:
+            cap = entry.markets.get(m)
+            if cap is None:
+                continue
+            state_counts[cap.support_state] = state_counts.get(cap.support_state, 0) + 1
+            if cap.support_state == SUPPORT_STATE_UNSUPPORTED:
+                unsupported.append(entry.field)
+            elif cap.support_state == SUPPORT_STATE_COMPUTED:
+                computed.append(entry.field)
+
+        cadence_counts, cadence_eligible = self._read_cadence_counts(m)
+
+        payload = field_coverage_payload(
+            total_fields=len(entries),
+            support_state_counts=state_counts,
+            unsupported_field_names=tuple(sorted(unsupported)),
+            computed_field_names=tuple(sorted(computed)),
+            cadence_counts=cadence_counts,
+            cadence_eligible_universe=cadence_eligible,
+        )
+        self._set_gauge(MetricKey.FIELD_COVERAGE, m, payload)
+        self._emit_pg(market=m, metric_key=MetricKey.FIELD_COVERAGE, payload=payload)
+
+    def _read_cadence_counts(self, market: str) -> tuple:
+        """Return ((basis→count) dict, eligible_universe) for one market.
+
+        Eligible universe = active symbols with a non-NULL ``growth_metric_basis``.
+        A NULL basis means fundamentals never landed or never produced a
+        reportable basis — excluding from the denominator prevents false
+        ``cadence_fallback_ratio`` signals driven by missing data.
+        """
+        from sqlalchemy import func as sa_func
+
+        try:
+            db = self._session()
+        except Exception:
+            return ({}, 0)
+
+        counts: Dict[str, int] = {}
+        total = 0
+        try:
+            from ...models.stock import StockFundamental
+            from ...models.stock_universe import StockUniverse
+
+            basis = StockFundamental.growth_metric_basis
+            q = (
+                db.query(basis, sa_func.count().label("n"))
+                .select_from(StockFundamental)
+                .join(StockUniverse, StockUniverse.symbol == StockFundamental.symbol)
+                .filter(StockUniverse.is_active.is_(True))
+                .filter(StockUniverse.market == market)
+                .filter(basis.isnot(None))
+                .group_by(basis)
+            )
+            for value, n in q.all():
+                counts[str(value)] = int(n)
+                total += int(n)
+        except Exception as exc:
+            logger.debug("telemetry: cadence DB query failed (%s)", exc)
+            return ({}, 0)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+        return (counts, total)
+
     # ------------------------------------------------------------------
     # Read API
     # ------------------------------------------------------------------
@@ -339,6 +438,7 @@ class PerMarketTelemetry:
         MetricKey.UNIVERSE_DRIFT,
         MetricKey.BENCHMARK_AGE,
         MetricKey.COMPLETENESS_DISTRIBUTION,
+        MetricKey.FIELD_COVERAGE,
     )
 
     def market_summary(self, market: Optional[str]) -> Dict[str, Any]:
@@ -373,6 +473,7 @@ class PerMarketTelemetry:
         out[MetricKey.BENCHMARK_AGE] = bench
 
         out[MetricKey.COMPLETENESS_DISTRIBUTION] = gauges[MetricKey.COMPLETENESS_DISTRIBUTION]
+        out[MetricKey.FIELD_COVERAGE] = gauges[MetricKey.FIELD_COVERAGE]
         # Extraction is recorded under SHARED scope (the meaningful dimension is
         # language, not market), so every per-market summary surfaces the same
         # global counters. Pass SHARED explicitly rather than ``m`` — otherwise

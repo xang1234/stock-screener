@@ -58,6 +58,18 @@ THRESHOLDS: Dict[str, Dict[str, Levels]] = {
     MetricKey.EXTRACTION_SUCCESS: {
         SHARED_SENTINEL: {"warning": 0.85, "critical": 0.70},
     },
+    # Field-coverage (bead asia.10.5). Thresholds target the unsupported-field
+    # ratio: the fraction of screening fields policy-excluded for the market.
+    # Bigger = worse. US should never breach (all fields supported); HK/JP/TW
+    # warn above 10% and critical above 25% to catch provider regressions that
+    # push a previously supported field into the unsupported bucket.
+    MetricKey.FIELD_COVERAGE: {
+        "US": {"warning": 0.05, "critical": 0.15},
+        "HK": {"warning": 0.10, "critical": 0.25},
+        "JP": {"warning": 0.10, "critical": 0.25},
+        "TW": {"warning": 0.10, "critical": 0.25},
+        SHARED_SENTINEL: {"warning": 0.10, "critical": 0.25},
+    },
 }
 
 
