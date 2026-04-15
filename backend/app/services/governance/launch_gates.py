@@ -458,7 +458,10 @@ def _check_g7_performance(ctx: GateContext) -> GateResult:
         data = json.loads(text)
         p95 = float(data["scan_create_p95_ms"])
         failure = float(data["scan_failure_rate"])
-        isolation = bool(data["market_isolation_pass"])
+        # Require a real JSON boolean, not a truthy coercion.
+        if not isinstance(data.get("market_isolation_pass"), bool):
+            raise TypeError(f"market_isolation_pass must be a JSON boolean, got {type(data.get('market_isolation_pass')).__name__!r}")
+        isolation = data["market_isolation_pass"]
     except Exception as exc:
         return GateResult(
             gate_id="G7", name="Performance and Stability", severity="hard",
@@ -618,7 +621,18 @@ def _check_external_pass_fail(
             detail=f"Evidence not JSON-parseable: {exc}",
             evidence_paths=[ev],
         )
-    failed_keys = [k for k in required_keys if not bool(data.get(k))]
+    # Require actual JSON booleans, not truthy coercion. bool("false") is True
+    # in Python, so a malformed evidence file would incorrectly pass the gate.
+    malformed = [k for k in required_keys if not isinstance(data.get(k), bool)]
+    if malformed:
+        return GateResult(
+            gate_id=gate_id, name=name, severity="hard",
+            status=GateStatus.MISSING_EVIDENCE,
+            detail=f"Evidence keys must be JSON booleans, got non-bool values: {malformed}",
+            evidence_paths=[ev],
+            metrics={k: data.get(k) for k in required_keys},
+        )
+    failed_keys = [k for k in required_keys if not data[k]]
     if failed_keys:
         return GateResult(
             gate_id=gate_id, name=name, severity="hard",
@@ -697,6 +711,14 @@ def run_all_gates(
     else:
         verdict = GateVerdict.PASS
 
+    # Normalize evidence_paths to repo-relative paths before serialising.
+    # Absolute workstation-local paths make the signed artifact non-portable
+    # and prevent reproducible verification on other machines.
+    for r in results:
+        r.evidence_paths = [
+            _make_relative(p, project_root) for p in r.evidence_paths
+        ]
+
     report = LaunchGateReport(
         report_schema_version=REPORT_SCHEMA_VERSION,
         charter_version=CHARTER_VERSION,
@@ -711,6 +733,18 @@ def run_all_gates(
     )
     report.content_hash = _content_hash(report)
     return report
+
+
+def _make_relative(path_str: str, root: Path) -> str:
+    """Convert an absolute path to a repo-relative string if possible.
+
+    Falls back to the original string for paths that can't be relativised
+    (e.g. external evidence on a different drive on Windows).
+    """
+    try:
+        return str(Path(path_str).relative_to(root))
+    except ValueError:
+        return path_str
 
 
 def _content_hash(report: LaunchGateReport) -> str:

@@ -65,7 +65,10 @@ def write_signed_artifact_trio(
 
     json_path.write_text(json_blob, encoding="utf-8")
     md_path.write_text(md_blob, encoding="utf-8")
-    file_hash = hashlib.sha256(json_blob.encode("utf-8")).hexdigest()
+    # Hash the actual on-disk bytes, not the pre-write string. On Windows,
+    # write_text() translates \n → \r\n by default, so encoding the string
+    # directly would produce a hash that never matches sha256sum output.
+    file_hash = hashlib.sha256(json_path.read_bytes()).hexdigest()
     hash_path.write_text(f"{file_hash}  {json_path.name}\n", encoding="utf-8")
 
     return {

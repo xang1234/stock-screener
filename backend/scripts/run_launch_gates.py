@@ -66,10 +66,21 @@ def main() -> int:
         try:
             from app.database import SessionLocal
             db = SessionLocal()
-        except Exception as exc:
-            # Surface why DB-backed gates will report MISSING_EVIDENCE.
-            print(f"[warn] DB session unavailable ({exc}); G2/G4 will report MISSING_EVIDENCE.",
+        except (ImportError, ModuleNotFoundError) as exc:
+            # app.database not importable — likely wrong working directory or
+            # missing dependencies. Treat as "DB unavailable" for this CLI run.
+            print(f"[warn] app.database not importable ({exc}); G2/G4 will report MISSING_EVIDENCE.",
                   file=sys.stderr)
+        except Exception as exc:
+            # Narrow to SQLAlchemy connection / configuration failures.
+            from sqlalchemy.exc import SQLAlchemyError
+            if isinstance(exc, SQLAlchemyError):
+                print(f"[warn] DB session unavailable ({exc}); G2/G4 will report MISSING_EVIDENCE.",
+                      file=sys.stderr)
+            else:
+                # An unexpected error (import regression, logic bug) — let it
+                # abort the script so the problem is visible, not masked.
+                raise
 
     try:
         report = run_all_gates(

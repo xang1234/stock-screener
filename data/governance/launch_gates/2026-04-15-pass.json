@@ -1,11 +1,11 @@
 {
   "charter_version": "1.0",
-  "content_hash": "6077e58242fda4efcbd9acf5e6ec97608078d17f9033cd0e5e4cc53513094cdc",
+  "content_hash": "cd8ceb39cce0e0bf341ef66e5588c01c782645add5cb4a2b40f48305516033bc",
   "gates": [
     {
       "detail": "Migration rehearsal report present with no-data-loss assertion.",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/docs/asia/asia_v2_e11_st2_migration_rehearsal_report_2026-04-15.md"
+        "docs/asia/asia_v2_e11_st2_migration_rehearsal_report_2026-04-15.md"
       ],
       "gate_id": "G1",
       "metrics": {
@@ -57,7 +57,7 @@
     {
       "detail": "QA: precision=0.910, recall=0.820, fpr=0.060 (thresholds: 0.85 / 0.75 / 0.10).",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/data/governance/canary_evidence/hk-2026-04-15/multilingual_qa.json"
+        "data/governance/canary_evidence/hk-2026-04-15/multilingual_qa.json"
       ],
       "gate_id": "G5",
       "metrics": {
@@ -72,7 +72,7 @@
     {
       "detail": "All required keys true: ['us_parity_pass', 'non_us_correctness_pass']",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/data/governance/canary_evidence/hk-2026-04-15/parity_regression.json"
+        "data/governance/canary_evidence/hk-2026-04-15/parity_regression.json"
       ],
       "gate_id": "G6",
       "metrics": {
@@ -86,7 +86,7 @@
     {
       "detail": "p95=1180ms, failure_rate=0.004, market_isolation=True.",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/data/governance/canary_evidence/hk-2026-04-15/load_soak.json"
+        "data/governance/canary_evidence/hk-2026-04-15/load_soak.json"
       ],
       "gate_id": "G7",
       "metrics": {
@@ -101,8 +101,8 @@
     {
       "detail": "Runbook present; drill asia_v2_runbook_drill_2026-04-15.md is 0 days old (<=14d).",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/docs/asia/asia_v2_operator_runbooks.md",
-        "/Users/admin/StockScreenClaude/docs/asia/asia_v2_runbook_drill_2026-04-15.md"
+        "docs/asia/asia_v2_operator_runbooks.md",
+        "docs/asia/asia_v2_runbook_drill_2026-04-15.md"
       ],
       "gate_id": "G8",
       "metrics": {
@@ -115,7 +115,7 @@
     {
       "detail": "Flag matrix references all 6 required kill switches.",
       "evidence_paths": [
-        "/Users/admin/StockScreenClaude/docs/asia/asia_v2_flag_matrix_and_rollback_runbook.md"
+        "docs/asia/asia_v2_flag_matrix_and_rollback_runbook.md"
       ],
       "gate_id": "G9",
       "metrics": {
@@ -133,7 +133,7 @@
       "status": "pass"
     }
   ],
-  "generated_at": "2026-04-15T12:48:54.750130+00:00",
+  "generated_at": "2026-04-15T14:22:13.514037+00:00",
   "hard_failed": 0,
   "hard_gate_count": 9,
   "hard_missing_evidence": 0,

@@ -1,7 +1,9 @@
 """Unit tests for the ASIA v2 launch-gate runner (bead asia.11.1).
 
 Covers:
-- Self-check gates (G1, G3, G8, G9) pass against the live repo artifacts
+- Self-check gates (G1, G3, G8, G9) pass against controlled fixture trees —
+  NOT the live repo docs/asia tree, which changes as JP/TW canary evidence
+  lands and would silently flip assertions without any code regression.
 - DB-backed gates (G2, G4) report MISSING_EVIDENCE when no session is passed
 - External-evidence gates (G5, G6, G7) report MISSING_EVIDENCE without
   evidence, FAIL on threshold breach, PASS when all thresholds met
@@ -32,42 +34,103 @@ from app.services.governance.launch_gates import (
 from app.services.governance.gate_artifact import write_artifacts
 
 
-# Pin the project root to the actual repo — gates G1, G8, G9 read docs/asia/.
+# G3 and G9 read the live benchmark registry and flag matrix doc — both are
+# stable module-level constants, safe to test against the real repo. G1 and
+# G8 are isolated via fixture project roots so that new drill/rehearsal
+# artifacts for JP/TW don't silently change which file the gate selects.
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-# Pin "now" close to the 2026-04-15 drill record so G8 drill-age check passes.
 _NOW = datetime(2026, 4, 15, 18, 0, 0, tzinfo=timezone.utc)
 
 
+def _make_docs_root(tmp_path: Path) -> Path:
+    """Return a minimal fixture project root with just docs/asia/ populated."""
+    docs = tmp_path / "docs" / "asia"
+    docs.mkdir(parents=True)
+    return tmp_path
+
+
+def _write_rehearsal_report(docs: Path, date: str = "2026-04-15") -> Path:
+    path = docs / f"asia_v2_e11_st2_migration_rehearsal_report_{date}.md"
+    path.write_text(
+        f"# ASIA v2 E11 ST2 Migration Rehearsal Report\n\n"
+        f"- Outcome: **PASS**\n\nThis rehearsal demonstrates **no data-loss**.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_runbook(docs: Path) -> Path:
+    path = docs / "asia_v2_operator_runbooks.md"
+    path.write_text("# ASIA v2 Operator Runbooks\n\n## RB-01\n", encoding="utf-8")
+    return path
+
+
+def _write_drill(docs: Path, date: str = "2026-04-15") -> Path:
+    path = docs / f"asia_v2_runbook_drill_{date}.md"
+    path.write_text(
+        f"# ASIA v2 Runbook Drill Record — {date}\n\nSigned at {date}.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_flag_matrix(docs: Path) -> Path:
+    path = docs / "asia_v2_flag_matrix_and_rollback_runbook.md"
+    path.write_text(
+        "asia_master_enabled\nasia_market_hk_enabled\nasia_market_jp_enabled\n"
+        "asia_market_tw_enabled\nasia_universe_apply_destructive_enabled\n"
+        "asia_reconciliation_quarantine_enforced\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 class TestSelfCheckGates:
-    def test_g1_schema_passes_with_rehearsal_report(self):
-        report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
+    def test_g1_schema_passes_with_rehearsal_report(self, tmp_path):
+        root = _make_docs_root(tmp_path)
+        _write_rehearsal_report(root / "docs" / "asia")
+        report = run_all_gates(project_root=root, now=_NOW)
         g1 = next(g for g in report.gates if g.gate_id == "G1")
         assert g1.status == GateStatus.PASS, g1.detail
 
+    def test_g1_missing_without_report(self, tmp_path):
+        root = _make_docs_root(tmp_path)  # no rehearsal report written
+        report = run_all_gates(project_root=root, now=_NOW)
+        g1 = next(g for g in report.gates if g.gate_id == "G1")
+        assert g1.status == GateStatus.MISSING_EVIDENCE
+
     def test_g3_benchmark_passes_live_registry(self):
+        # G3 reads app.services.benchmark_registry_service — stable module,
+        # safe to test against the live import.
         report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
         g3 = next(g for g in report.gates if g.gate_id == "G3")
         assert g3.status == GateStatus.PASS, g3.detail
         assert g3.metrics["checked_markets"] == ["HK", "JP", "TW", "US"]
 
-    def test_g8_observability_passes_with_recent_drill(self):
-        report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
+    def test_g8_observability_passes_with_recent_drill(self, tmp_path):
+        root = _make_docs_root(tmp_path)
+        docs = root / "docs" / "asia"
+        _write_runbook(docs)
+        _write_drill(docs, date="2026-04-15")
+        report = run_all_gates(project_root=root, now=_NOW)
         g8 = next(g for g in report.gates if g.gate_id == "G8")
         assert g8.status == GateStatus.PASS, g8.detail
-        assert g8.metrics["drill_age_days"] <= 14
+        assert g8.metrics["drill_age_days"] == 0
 
-    def test_g8_stale_drill_fails(self):
-        # Drill record dated 2026-04-15; pin now 30 days later.
-        report = run_all_gates(
-            project_root=_PROJECT_ROOT,
-            now=_NOW + timedelta(days=30),
-        )
+    def test_g8_stale_drill_fails(self, tmp_path):
+        root = _make_docs_root(tmp_path)
+        docs = root / "docs" / "asia"
+        _write_runbook(docs)
+        _write_drill(docs, date="2026-04-15")
+        report = run_all_gates(project_root=root, now=_NOW + timedelta(days=30))
         g8 = next(g for g in report.gates if g.gate_id == "G8")
         assert g8.status == GateStatus.FAIL
-        assert g8.metrics["drill_age_days"] >= 30
+        assert g8.metrics["drill_age_days"] == 30
 
-    def test_g9_flag_matrix_passes(self):
-        report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
+    def test_g9_flag_matrix_passes(self, tmp_path):
+        root = _make_docs_root(tmp_path)
+        _write_flag_matrix(root / "docs" / "asia")
+        report = run_all_gates(project_root=root, now=_NOW)
         g9 = next(g for g in report.gates if g.gate_id == "G9")
         assert g9.status == GateStatus.PASS, g9.detail
 

@@ -100,15 +100,29 @@ def _engine(database_url: str):
     return create_engine(database_url, pool_pre_ping=True, future=True)
 
 
+_TABLE_MISSING_CODES = frozenset({"42P01", "42S02"})  # Postgres, SQLite "no such table"
+
+
 def _row_count(engine, table: str) -> Optional[int]:
-    """Best-effort row count; returns None if the table doesn't exist yet."""
+    """Return row count, or None when the table does not exist (expected after downgrade).
+
+    Only swallows the "table does not exist" case (SQLSTATE 42P01 on Postgres).
+    Every other failure — connection drop, permission error, malformed query —
+    is re-raised so the rehearsal fails rather than producing false PASS evidence.
+    """
     from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError, OperationalError
     try:
         with engine.connect() as conn:
             result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
             return int(result.scalar() or 0)
-    except Exception:
-        return None
+    except (ProgrammingError, OperationalError) as exc:
+        # Inspect SQLSTATE: 42P01 = undefined_table (Postgres), 42S02 = SQLite.
+        code = getattr(getattr(exc, "orig", None), "pgcode", None) or ""
+        msg = str(exc).lower()
+        if code in _TABLE_MISSING_CODES or "does not exist" in msg or "no such table" in msg:
+            return None  # expected after downgrade
+        raise  # unexpected — let the rehearsal fail
 
 
 def _seed_universe(engine, *, total: int = SEED_UNIVERSE_SIZE) -> int:
@@ -213,12 +227,15 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
     """Walk the full migration chain + rollback drill. Return a results dict."""
     pre_check = _verify_postgres(database_url)
     if pre_check:
-        return {"status": "fail", "error": pre_check, "steps": []}
+        # "env_error" maps to exit 1 in main() — distinct from "fail" (exit 2)
+        # so automation can distinguish environment/setup problems from a
+        # real migration regression.
+        return {"status": "env_error", "error": pre_check, "steps": []}
 
     engine = _engine(database_url)
     dirty = _refuse_dirty(engine)
     if dirty:
-        return {"status": "fail", "error": dirty, "steps": []}
+        return {"status": "env_error", "error": dirty, "steps": []}
 
     steps: List[Dict[str, Any]] = []
 
@@ -256,6 +273,11 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
     }
 
     # Phase 4: rollback drill — downgrade head → N-2, then re-upgrade.
+    if not _ROLLBACK_DRILL:
+        return {"status": "fail",
+                "error": f"Migration chain too short for rollback drill "
+                         f"(need > {ROLLBACK_DEPTH} revisions, got {len(_MIGRATION_CHAIN)})",
+                "steps": steps}
     head, rollback_to = _ROLLBACK_DRILL
     code, elapsed, out = _alembic(database_url, ["downgrade", rollback_to])
     if not record("downgrade", rollback_to, code, elapsed,
@@ -307,8 +329,12 @@ def render_report(result: Dict[str, Any], *, database_label: str) -> str:
     lines.append("")
     lines.append(f"- Date: {now}")
     lines.append(f"- Bead: `StockScreenClaude-asia.11.2`")
-    lines.append(f"- Scope: full Alembic chain baseline → head ({_MIGRATION_CHAIN[0]} → {_MIGRATION_CHAIN[-1]})")
-    lines.append(f"- Rollback drill: head ({_ROLLBACK_DRILL[0]}) ↔ {_ROLLBACK_DRILL[1]}")
+    scope = (f"{_MIGRATION_CHAIN[0]} → {_MIGRATION_CHAIN[-1]}"
+             if _MIGRATION_CHAIN else "no migrations discovered")
+    drill = (f"head ({_ROLLBACK_DRILL[0]}) ↔ {_ROLLBACK_DRILL[1]}"
+             if _ROLLBACK_DRILL else "skipped — chain too short")
+    lines.append(f"- Scope: full Alembic chain baseline → head ({scope})")
+    lines.append(f"- Rollback drill: {drill}")
     lines.append(f"- Database: {database_label}")
     lines.append(f"- Outcome: **{result.get('status', 'unknown').upper()}**")
     lines.append("")
@@ -430,8 +456,11 @@ def main() -> int:
     report_path.write_text(render_report(result, database_label=label), encoding="utf-8")
     print(f"Report: {report_path}")
 
-    if result.get("status") == "fail":
+    status = result.get("status")
+    if status == "fail":
         return 2
+    if status == "env_error":
+        return 1
     return 0
 
 
