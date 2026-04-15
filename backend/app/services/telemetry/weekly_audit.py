@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,9 +31,7 @@ from ...models.market_telemetry import MarketTelemetryEvent
 from ...models.market_telemetry_alert import MarketTelemetryAlert, AlertState
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
 from .alert_thresholds import OWNERS, THRESHOLDS
-from .schema import MetricKey, SCHEMA_VERSION
-
-logger = logging.getLogger(__name__)
+from .schema import MetricKey, SCHEMA_VERSION, low_completeness_ratio
 
 # Window the weekly report covers. Fits comfortably inside the 15d retention
 # window of market_telemetry_events so week-on-week gaps don't silently lose data.
@@ -275,8 +272,8 @@ def _rollup_for_metric(
         # A growing 0-25 bucket means provenance quality eroded over the week.
         first_p = rows[0].payload or {}
         last_p = rows[-1].payload or {}
-        first_ratio = _low_bucket_ratio(first_p)
-        last_ratio = _low_bucket_ratio(last_p)
+        first_ratio = low_completeness_ratio(first_p)
+        last_ratio = low_completeness_ratio(last_p)
         return {
             "first_snapshot_low_bucket_ratio": first_ratio,
             "last_snapshot_low_bucket_ratio": last_ratio,
@@ -291,12 +288,10 @@ def _rollup_for_metric(
     return {}
 
 
-def _low_bucket_ratio(payload: Dict[str, Any]) -> Optional[float]:
-    total = payload.get("symbols_total") or 0
-    if total <= 0:
-        return None
-    buckets = payload.get("bucket_counts") or {}
-    return float(buckets.get("0-25", 0)) / float(total)
+def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
 
 
 def _summarize_alerts(
@@ -307,41 +302,42 @@ def _summarize_alerts(
     "Opened in window": opened_at inside [start, end].
     "Closed in window": closed_at inside [start, end].
     "Still active at report time": state != CLOSED and opened_at <= end.
+
+    Implementation: single query for all rows with ``opened_at <= window_end``
+    (superset of the three categories), then classify in Python. Collapses
+    the former 3 queries per market into 1 while keeping the semantics above.
     """
-    opened = (
+    rows = (
         db.query(MarketTelemetryAlert)
         .filter(
             MarketTelemetryAlert.market == market,
-            MarketTelemetryAlert.opened_at >= window_start,
             MarketTelemetryAlert.opened_at <= window_end,
         )
         .all()
     )
-    closed = (
-        db.query(MarketTelemetryAlert)
-        .filter(
-            MarketTelemetryAlert.market == market,
-            MarketTelemetryAlert.closed_at >= window_start,
-            MarketTelemetryAlert.closed_at <= window_end,
-        )
-        .count()
-    )
-    still_active = (
-        db.query(MarketTelemetryAlert)
-        .filter(
-            MarketTelemetryAlert.market == market,
-            MarketTelemetryAlert.state != AlertState.CLOSED,
-            MarketTelemetryAlert.opened_at <= window_end,
-        )
-        .count()
-    )
+
+    opened_in_window = 0
+    closed_in_window = 0
+    still_active = 0
     by_severity: Dict[str, int] = {}
-    for a in opened:
-        by_severity[a.severity] = by_severity.get(a.severity, 0) + 1
+    for a in rows:
+        # SQLite returns naive datetimes even for `DateTime(timezone=True)`;
+        # Postgres returns aware. Coerce to UTC-aware so Python comparisons
+        # don't raise `can't compare offset-naive and offset-aware`.
+        opened_at = _as_aware_utc(a.opened_at)
+        closed_at = _as_aware_utc(a.closed_at)
+        if opened_at is not None and opened_at >= window_start:
+            opened_in_window += 1
+            by_severity[a.severity] = by_severity.get(a.severity, 0) + 1
+        if closed_at is not None and window_start <= closed_at <= window_end:
+            closed_in_window += 1
+        if a.state != AlertState.CLOSED:
+            still_active += 1
+
     return AlertRollup(
         market=market,
-        opened=len(opened),
-        closed=closed,
+        opened=opened_in_window,
+        closed=closed_in_window,
         still_active=still_active,
         by_severity=by_severity,
     )

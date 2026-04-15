@@ -98,6 +98,21 @@ def completeness_bucket_for(score: float) -> str:
     return "90-100"
 
 
+def low_completeness_ratio(payload: Dict[str, Any]) -> Optional[float]:
+    """Return fraction of a completeness payload's universe in the 0-25 bucket.
+
+    Shared reader helper for the alert evaluator (live breach check) and the
+    weekly audit (historical regression signal) — both interpret the same
+    payload shape the same way, so the extraction keeps their semantics in
+    lockstep when the payload schema evolves.
+    """
+    total = payload.get("symbols_total") or 0
+    if total <= 0:
+        return None
+    buckets = payload.get("bucket_counts") or {}
+    return float(buckets.get("0-25", 0)) / float(total)
+
+
 def completeness_distribution_payload(
     *, bucket_counts: Dict[str, int], symbols_total: int
 ) -> Dict[str, Any]:
