@@ -341,8 +341,9 @@ def render_report(result: Dict[str, Any], *, database_label: str) -> str:
     lines.append(f"- Outcome: **{result.get('status', 'unknown').upper()}**")
     lines.append("")
 
-    if result.get("status") == "fail":
-        lines.append("## Failure")
+    status = str(result.get("status", "unknown")).lower()
+    if status in {"fail", "env_error"}:
+        lines.append("## Failure" if status == "fail" else "## Environment Error")
         lines.append("")
         lines.append(f"- Error: {result.get('error', 'unknown')}")
         if result.get("alembic_output"):
@@ -377,10 +378,15 @@ def render_report(result: Dict[str, Any], *, database_label: str) -> str:
     lines.append("")
     lines.append("| Checkpoint | stock_universe | market_telemetry_events | market_telemetry_alerts |")
     lines.append("|---|---:|---:|---:|")
+    rollback_label = (
+        "After downgrade to %s" % _ROLLBACK_DRILL[1]
+        if _ROLLBACK_DRILL
+        else "After downgrade (rollback drill unavailable)"
+    )
     for label, key in [
         ("Head (pre-seed)", "at_head_pre_seed"),
         ("After seed", "after_seed"),
-        ("After downgrade to %s" % _ROLLBACK_DRILL[1], "after_downgrade"),
+        (rollback_label, "after_downgrade"),
         ("After re-upgrade to head", "after_reupgrade"),
     ]:
         c = rc.get(key, {})
