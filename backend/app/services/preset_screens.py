@@ -8,6 +8,8 @@ logic is involved at runtime.
 
 from __future__ import annotations
 
+import heapq
+
 RANGE_FILTER_TO_FIELD: dict[str, str] = {
     "compositeScore": "composite_score",
     "minerviniScore": "minervini_score",
@@ -344,12 +346,10 @@ def _matches_preset_filters(row: dict, filters: dict) -> bool:
 def get_preset_chart_symbols(
     serialized_rows: list[dict],
     presets: list[dict] | None = None,
-    top_n: int = 50,
+    top_n: int = 200,
 ) -> set[str]:
-    """Return the union of top-N symbols per preset screen.
-
-    Used by the chart export to expand chart coverage beyond the default
-    top-200 composite-score ranking.
+    """Return the union of top-N symbols per preset screen, used to expand
+    static-site chart coverage beyond the composite-score ranking.
     """
     if presets is None:
         presets = PRESET_SCREENS
@@ -361,16 +361,19 @@ def get_preset_chart_symbols(
             if _matches_preset_filters(row, preset["filters"])
         ]
         sort_field = preset.get("sort_by", "composite_score")
-        reverse = preset.get("sort_order", "desc") == "desc"
-        # Always sort None values last regardless of direction: a None row
-        # should never "win" a slot over a real row.
-        matching.sort(
-            key=lambda r, f=sort_field, d=reverse: (
-                r.get(f) is None,
-                -(r.get(f) or 0) if d else (r.get(f) or 0),
-            ),
-        )
-        for row in matching[:top_n]:
+        descending = preset.get("sort_order", "desc") == "desc"
+
+        # Rank None values last regardless of direction: a None row should
+        # never win a slot over a real row. heapq.nlargest keeps this
+        # O(m log top_n) instead of sorting the full match list.
+        def sort_key(row, f=sort_field, d=descending):
+            value = row.get(f)
+            if value is None:
+                return (0, 0)
+            return (1, value if d else -value)
+
+        top_rows = heapq.nlargest(top_n, matching, key=sort_key)
+        for row in top_rows:
             sym = row.get("symbol")
             if sym:
                 symbols.add(sym)
