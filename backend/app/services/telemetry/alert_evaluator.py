@@ -136,9 +136,17 @@ def _evaluate_one(
     else:
         return None
 
-    severity = _classify(value, levels, direction) if value is not None else None
+    if value is None:
+        # No gauge data — Redis outage, newly onboarded market, or malformed
+        # payload. We can't distinguish "recovered" from "still breached", so
+        # preserving the current alert state is the safe choice. Silently
+        # closing alerts during a Redis outage would create a blind spot.
+        return active  # None when no active alert; unchanged row when active
+
+    severity = _classify(value, levels, direction)
 
     if severity is None:
+        # Real recovery: gauge is present and below all thresholds.
         if active is None:
             return None
         active.state = AlertState.CLOSED

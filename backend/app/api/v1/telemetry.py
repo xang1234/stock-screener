@@ -61,7 +61,7 @@ async def market_detail(market: str) -> Dict[str, Any]:
 
 
 @router.get("/markets/{market}/{metric_key}")
-async def market_metric_history(
+def market_metric_history(
     market: str,
     metric_key: str,
     days: int = Query(default=15, ge=1, le=15),
@@ -135,7 +135,7 @@ def _serialize_alert(alert) -> Dict[str, Any]:
 
 
 @router.get("/alerts")
-async def get_alerts(
+def get_alerts(
     evaluate: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
@@ -170,7 +170,7 @@ async def get_alerts(
 
 
 @router.post("/alerts/{alert_id}/acknowledge")
-async def post_acknowledge(
+def post_acknowledge(
     alert_id: int,
     body: Dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
