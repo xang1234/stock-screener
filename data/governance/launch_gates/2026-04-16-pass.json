@@ -1,0 +1,144 @@
+{
+  "charter_version": "1.0",
+  "content_hash": "1d93da4ea7aaccdfd9cfc4c5190058190c5bc6ef1d9fa5901f6fa409cdcabba9",
+  "gates": [
+    {
+      "detail": "Migration rehearsal report present with no-data-loss assertion.",
+      "evidence_paths": [
+        "docs/asia/asia_v2_e11_st2_migration_rehearsal_report_2026-04-15.md"
+      ],
+      "gate_id": "G1",
+      "metrics": {
+        "success_markers": 0
+      },
+      "name": "Schema/Contract Readiness",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "Worst universe drift ratio in last 2d = 0.012 (< 0.15).",
+      "evidence_paths": [],
+      "gate_id": "G2",
+      "metrics": {
+        "worst_drift_ratio": 0.012422360248447204
+      },
+      "name": "Universe Integrity and Freshness",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "Benchmark registry maps US\u2192SPY, HK\u2192^HSI, JP\u2192^N225, TW\u2192^TWII.",
+      "evidence_paths": [],
+      "gate_id": "G3",
+      "metrics": {
+        "checked_markets": [
+          "HK",
+          "JP",
+          "TW",
+          "US"
+        ]
+      },
+      "name": "Benchmark/Calendar Correctness",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "Worst market completeness 0-25 bucket = 0.03 (< 0.50) on JP.",
+      "evidence_paths": [],
+      "gate_id": "G4",
+      "metrics": {
+        "worst_low_bucket_ratio": 0.03,
+        "worst_market": "JP"
+      },
+      "name": "Fundamentals Data Quality",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "QA: precision=0.920, recall=0.840, fpr=0.050 (thresholds: 0.85 / 0.75 / 0.10).",
+      "evidence_paths": [
+        "data/governance/canary_evidence/jp-2026-04-16/multilingual_qa.json"
+      ],
+      "gate_id": "G5",
+      "metrics": {
+        "false_positive_rate": 0.05,
+        "precision": 0.92,
+        "recall": 0.84
+      },
+      "name": "Multilingual Extraction Quality",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "All required keys true: ['us_parity_pass', 'non_us_correctness_pass']",
+      "evidence_paths": [
+        "data/governance/canary_evidence/jp-2026-04-16/parity_regression.json"
+      ],
+      "gate_id": "G6",
+      "metrics": {
+        "non_us_correctness_pass": true,
+        "us_parity_pass": true
+      },
+      "name": "US Parity and Non-US Scan Correctness",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "p95=1325ms, failure_rate=0.005, market_isolation=True.",
+      "evidence_paths": [
+        "data/governance/canary_evidence/jp-2026-04-16/load_soak.json"
+      ],
+      "gate_id": "G7",
+      "metrics": {
+        "failure_rate": 0.005,
+        "isolation": true,
+        "p95_ms": 1325.0
+      },
+      "name": "Performance and Stability",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "Runbook present; drill asia_v2_runbook_drill_2026-04-15.md is 1 days old (<=14d).",
+      "evidence_paths": [
+        "docs/asia/asia_v2_operator_runbooks.md",
+        "docs/asia/asia_v2_runbook_drill_2026-04-15.md"
+      ],
+      "gate_id": "G8",
+      "metrics": {
+        "drill_age_days": 1
+      },
+      "name": "Observability and Operations Readiness",
+      "severity": "hard",
+      "status": "pass"
+    },
+    {
+      "detail": "Flag matrix references all 6 required kill switches.",
+      "evidence_paths": [
+        "docs/asia/asia_v2_flag_matrix_and_rollback_runbook.md"
+      ],
+      "gate_id": "G9",
+      "metrics": {
+        "checked_flags": [
+          "asia_master_enabled",
+          "asia_market_hk_enabled",
+          "asia_market_jp_enabled",
+          "asia_market_tw_enabled",
+          "asia_universe_apply_destructive_enabled",
+          "asia_reconciliation_quarantine_enforced"
+        ]
+      },
+      "name": "Rollback Control Validation",
+      "severity": "hard",
+      "status": "pass"
+    }
+  ],
+  "generated_at": "2026-04-16T12:00:00+00:00",
+  "hard_failed": 0,
+  "hard_gate_count": 9,
+  "hard_missing_evidence": 0,
+  "hard_passed": 9,
+  "report_schema_version": 1,
+  "runner_version": "1.0",
+  "verdict": "pass"
+}
