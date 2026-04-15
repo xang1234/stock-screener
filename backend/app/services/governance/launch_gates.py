@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -146,7 +147,6 @@ def _check_g1_schema(ctx: GateContext) -> GateResult:
     # full-chain rehearsal (bead 11.2). G1 prefers the newest by date
     # SUFFIX (filename ends in _YYYY-MM-DD.md) — sorting by full filename
     # would put e11 before e2 alphabetically and pick the wrong report.
-    import re
     candidates = list(
         (ctx.project_root / "docs" / "asia").glob(
             "asia_v2_e*_*_migration_rehearsal_report_*.md"

@@ -37,27 +37,45 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 
-# Migration chain to walk forward in order. Source: backend/alembic/versions/.
-_MIGRATION_CHAIN: Tuple[str, ...] = (
-    "20260408_0001",
-    "20260410_0002",
-    "20260411_0003",
-    "20260411_0004",
-    "20260411_0005",
-    "20260412_0006",
-    "20260412_0007",
-    "20260412_0008",
-    "20260412_0009",
-    "20260413_0010",
-    "20260414_0011",
-    "20260415_0012",
-    "20260415_0013",
-)
+# How many revisions back from head the rollback drill downgrades to.
+# 2 covers the most recent two telemetry migrations (0012, 0013) which
+# are the most likely rollback targets during canary.
+ROLLBACK_DEPTH = 2
 
-# Rollback drill: downgrade head -> N back, then re-upgrade. Touches the
-# bead-10.x telemetry migrations which are the newest and most likely to
-# be the rollback target during canary.
-_ROLLBACK_DRILL = (_MIGRATION_CHAIN[-1], _MIGRATION_CHAIN[-3])
+# Production-shaped seed sizes — large enough to exercise indices, small
+# enough to keep the rehearsal under one minute of wall time.
+SEED_UNIVERSE_SIZE = 5000
+SEED_TELEMETRY_SIZE = 1000
+
+
+def _discover_migration_chain() -> Tuple[str, ...]:
+    """Walk the Alembic graph baseline → head dynamically.
+
+    Source of truth = the alembic.ini next to this repo's alembic/. Doing
+    this at runtime rather than hardcoding the revision IDs means the
+    rehearsal stays in lockstep with whatever migrations have landed,
+    without an editor diff every time a migration is added.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_BACKEND_DIR / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    head = script.get_current_head()
+    if head is None:
+        return tuple()
+    # walk_revisions yields newest → oldest; reverse to walk forward.
+    chain = [rev.revision for rev in script.walk_revisions(base="base", head=head)]
+    return tuple(reversed(chain))
+
+
+_MIGRATION_CHAIN: Tuple[str, ...] = _discover_migration_chain()
+_ROLLBACK_DRILL = (
+    (_MIGRATION_CHAIN[-1], _MIGRATION_CHAIN[-(ROLLBACK_DEPTH + 1)])
+    if len(_MIGRATION_CHAIN) > ROLLBACK_DEPTH
+    else tuple()
+)
 
 
 def _alembic(database_url: str, args: List[str]) -> Tuple[int, float, str]:
@@ -93,7 +111,7 @@ def _row_count(engine, table: str) -> Optional[int]:
         return None
 
 
-def _seed_universe(engine, *, total: int = 5000) -> int:
+def _seed_universe(engine, *, total: int = SEED_UNIVERSE_SIZE) -> int:
     """Insert a US-baseline universe. Idempotent on rerun; returns rows added.
 
     Production-like cardinality is ~10k symbols across markets; we seed half
@@ -126,7 +144,7 @@ def _seed_universe(engine, *, total: int = 5000) -> int:
     return total
 
 
-def _seed_telemetry_events(engine, *, total: int = 1000) -> int:
+def _seed_telemetry_events(engine, *, total: int = SEED_TELEMETRY_SIZE) -> int:
     """Seed telemetry events (touches the 0012 migration's table).
 
     Mixed markets and metric_keys to exercise the indices.
@@ -402,8 +420,10 @@ def main() -> int:
     result = run_rehearsal(database_url)
     print(f"Status: {result.get('status', 'unknown').upper()}")
 
-    project_root = Path(__file__).resolve().parents[2]
-    report_dir = Path(args.report_dir) if args.report_dir else (project_root / "docs" / "asia")
+    from app.config.settings import get_project_root
+    report_dir = Path(args.report_dir) if args.report_dir else (
+        get_project_root() / "docs" / "asia"
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     report_path = report_dir / f"asia_v2_e11_st2_migration_rehearsal_report_{stamp}.md"
@@ -415,16 +435,9 @@ def main() -> int:
     return 0
 
 
-def _redact_url(url: str) -> str:
-    """Return a label safe to write into the report (strips password)."""
-    from sqlalchemy.engine.url import make_url
-    try:
-        u = make_url(url)
-        if u.password:
-            u = u.set(password="***")
-        return str(u)
-    except Exception:
-        return "<unparseable DATABASE_URL>"
+# URL redaction lives in app.utils.db_url so the rehearsal report and the
+# FastAPI startup banner mask passwords the same way.
+from app.utils.db_url import redacted_database_url as _redact_url  # noqa: E402
 
 
 if __name__ == "__main__":
