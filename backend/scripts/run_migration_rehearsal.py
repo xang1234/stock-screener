@@ -97,6 +97,12 @@ def _alembic(database_url: str, args: List[str]) -> Tuple[int, float, str]:
     return (proc.returncode, elapsed, out)
 
 
+def _last_output_line(text: str) -> str:
+    """Return the last line from output, safely handling whitespace-only output."""
+    lines = text.strip().splitlines()
+    return lines[-1] if lines else ""
+
+
 def _engine(database_url: str):
     from sqlalchemy import create_engine
     return create_engine(database_url, pool_pre_ping=True, future=True)
@@ -254,7 +260,7 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
     # Phase 1: forward walk one revision at a time.
     for rev in _MIGRATION_CHAIN:
         code, elapsed, out = _alembic(database_url, ["upgrade", rev])
-        ok = record("upgrade", rev, code, elapsed, out.strip().splitlines()[-1] if out else "")
+        ok = record("upgrade", rev, code, elapsed, _last_output_line(out))
         if not ok:
             return {"status": "fail", "error": f"upgrade {rev} failed", "steps": steps,
                     "alembic_output": out}
@@ -283,7 +289,7 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
     head, rollback_to = _ROLLBACK_DRILL
     code, elapsed, out = _alembic(database_url, ["downgrade", rollback_to])
     if not record("downgrade", rollback_to, code, elapsed,
-                  out.strip().splitlines()[-1] if out else ""):
+                  _last_output_line(out)):
         return {"status": "fail", "error": f"downgrade to {rollback_to} failed",
                 "steps": steps, "alembic_output": out}
 
@@ -298,7 +304,7 @@ def run_rehearsal(database_url: str) -> Dict[str, Any]:
     # Phase 6: re-upgrade to head.
     code, elapsed, out = _alembic(database_url, ["upgrade", head])
     if not record("re-upgrade", head, code, elapsed,
-                  out.strip().splitlines()[-1] if out else ""):
+                  _last_output_line(out)):
         return {"status": "fail", "error": f"re-upgrade to {head} failed",
                 "steps": steps, "alembic_output": out}
 

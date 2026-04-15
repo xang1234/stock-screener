@@ -330,7 +330,7 @@ def _check_g4_fundamentals(ctx: GateContext, db=None) -> GateResult:
             if row is None:
                 continue
             ratio = low_completeness_ratio(row.payload or {})
-            if ratio is not None and ratio > worst:
+            if ratio is not None and (worst_market is None or ratio > worst):
                 worst, worst_market = ratio, m
     except Exception as exc:
         return GateResult(
