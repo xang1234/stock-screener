@@ -313,6 +313,25 @@ class RateBudgetPolicy:
 
     _COUNTER_TTL_S = 90 * 86400  # 90-day retention for daily buckets
 
+    @staticmethod
+    def counter_key_429(provider: str, market: Optional[str]) -> str:
+        """Return the running 429 counter Redis key. Single source of truth
+        used by both ``record_429`` writes and external readers (load harness,
+        epic-10 observability) so the format stays in sync."""
+        return f"ratelimit:429:{provider}:{market_suffix(market)}"
+
+    @staticmethod
+    def counter_keys_throttle(
+        provider: str, market: Optional[str], day: Optional[str] = None
+    ) -> tuple[str, str]:
+        """Return ``(count_key, seconds_key)`` for the per-day throttle bucket."""
+        day = day or datetime.now().strftime('%Y%m%d')
+        label = market_suffix(market)
+        return (
+            f"ratelimit:throttle_count:{provider}:{label}:{day}",
+            f"ratelimit:throttle_seconds:{provider}:{label}:{day}",
+        )
+
     def _pipeline_counters(self, ops, *, expire_keys=None) -> None:
         """Execute a Redis pipeline of counter ops, swallowing errors.
 
@@ -339,9 +358,9 @@ class RateBudgetPolicy:
         Running key is monotonic (no TTL); daily-bucketed key gets 90-day TTL
         so daily counters self-expire while the running total stays authoritative.
         """
-        label = market_suffix(market)
-        running_key = f"ratelimit:429:{provider}:{label}"
-        daily_key = f"ratelimit:429:{provider}:{label}:{datetime.now().strftime('%Y%m%d')}"
+        running_key = self.counter_key_429(provider, market)
+        day = datetime.now().strftime('%Y%m%d')
+        daily_key = f"{running_key}:{day}"
         self._pipeline_counters(
             [("incr", running_key), ("incr", daily_key)],
             expire_keys={daily_key},
@@ -354,10 +373,7 @@ class RateBudgetPolicy:
         """
         if wait_s <= 0:
             return
-        label = market_suffix(market)
-        day = datetime.now().strftime('%Y%m%d')
-        count_key = f"ratelimit:throttle_count:{provider}:{label}:{day}"
-        seconds_key = f"ratelimit:throttle_seconds:{provider}:{label}:{day}"
+        count_key, seconds_key = self.counter_keys_throttle(provider, market)
         self._pipeline_counters(
             [("incr", count_key), ("incrbyfloat", seconds_key, wait_s)],
             expire_keys={count_key, seconds_key},

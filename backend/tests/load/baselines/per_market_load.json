@@ -1,0 +1,61 @@
+{
+  "git_sha": "417a7328",
+  "markets": [
+    {
+      "market": "US",
+      "p50_batch_latency_s": 0.1639,
+      "p95_batch_latency_s": 0.1892,
+      "p99_batch_latency_s": 0.1892,
+      "rate_limit_429s": 0,
+      "symbols_processed": 200,
+      "transient_failures": 0,
+      "wall_clock_s": 0.477,
+      "yfinance_calls": 4
+    },
+    {
+      "market": "HK",
+      "p50_batch_latency_s": 0.2906,
+      "p95_batch_latency_s": 0.2925,
+      "p99_batch_latency_s": 0.2925,
+      "rate_limit_429s": 0,
+      "symbols_processed": 100,
+      "transient_failures": 25,
+      "wall_clock_s": 0.405,
+      "yfinance_calls": 4
+    },
+    {
+      "market": "JP",
+      "p50_batch_latency_s": 0.2353,
+      "p95_batch_latency_s": 0.3387,
+      "p99_batch_latency_s": 0.3387,
+      "rate_limit_429s": 1,
+      "symbols_processed": 100,
+      "transient_failures": 0,
+      "wall_clock_s": 0.442,
+      "yfinance_calls": 5
+    },
+    {
+      "market": "TW",
+      "p50_batch_latency_s": 0.3516,
+      "p95_batch_latency_s": 0.473,
+      "p99_batch_latency_s": 0.473,
+      "rate_limit_429s": 1,
+      "symbols_processed": 80,
+      "transient_failures": 25,
+      "wall_clock_s": 0.369,
+      "yfinance_calls": 5
+    }
+  ],
+  "run_id": "b31ee5ea-90a4-48ce-80ea-2a85af2e771b",
+  "scenario": "parallel_per_market_weekly_refresh",
+  "schema_version": 1,
+  "seed": 42,
+  "timestamp_utc": "2026-04-14T16:30:28.256982+00:00",
+  "universe_size_per_market": {
+    "HK": 100,
+    "JP": 100,
+    "TW": 80,
+    "US": 200
+  },
+  "worker_resources": null
+}
