@@ -591,6 +591,12 @@ Example themes for this pipeline: {examples_str}
             content=content,
         )
 
+        # Telemetry: success only flips True after parsing finishes; the
+        # finally block below records the outcome regardless of return path.
+        _telem_lang = (content_item.source_language or "unknown").lower()
+        _telem_start_ms = int(time.time() * 1000)
+        _telem_success = False
+
         response_text = ""
         try:
             # Apply rate limiting
@@ -655,6 +661,7 @@ Example themes for this pipeline: {examples_str}
                     "excerpt": (mention.get("excerpt", ""))[:500],  # Limit excerpt length
                 })
 
+            _telem_success = True
             return cleaned_mentions
 
         except json.JSONDecodeError as e:
@@ -669,6 +676,21 @@ Example themes for this pipeline: {examples_str}
         ) as e:
             logger.error(f"LLM extraction failed (will retry): {e}")
             raise  # Re-raise so process_batch() marks extraction_error
+        finally:
+            # Best-effort — never breaks the extraction path. Market scope is
+            # SHARED because language, not market, is the meaningful dimension
+            # for theme extraction.
+            try:
+                from .telemetry import get_telemetry, SHARED_SENTINEL
+                get_telemetry().record_extraction(
+                    SHARED_SENTINEL,
+                    language=_telem_lang,
+                    success=_telem_success,
+                    latency_ms=int(time.time() * 1000) - _telem_start_ms,
+                    provider=self.provider,
+                )
+            except Exception:
+                pass
 
     def _extract_and_store_mentions(self, content_item: ContentItem) -> int:
         """

@@ -7,7 +7,7 @@ Provides scheduled tasks for:
 """
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
@@ -15,6 +15,47 @@ from ..wiring.bootstrap import get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+
+def _count_active_universe(market: Optional[str]) -> Optional[int]:
+    """Return active-universe size for ``market`` (None on any failure).
+
+    Used as a pre-ingest snapshot so :func:`_emit_universe_drift` can compute
+    real drift instead of guessing from the stats dict — HK/JP/TW ingest
+    paths don't carry a ``deactivated`` key, so an after-the-fact heuristic
+    would miss real drift.
+    """
+    try:
+        from ..models.stock_universe import StockUniverse
+        from .market_queues import normalize_market
+
+        m = normalize_market(market) if market is not None else None
+        db = SessionLocal()
+        try:
+            q = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+            if m is not None:
+                q = q.filter(StockUniverse.market == m)
+            return int(q.count())
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.debug("telemetry: pre-count failed (%s)", exc)
+        return None
+
+
+def _emit_universe_drift(market: Optional[str], prior_size: Optional[int]) -> None:
+    """Emit drift telemetry using a real pre-ingest snapshot."""
+    try:
+        from ..services.telemetry import get_telemetry
+
+        current_size = _count_active_universe(market)
+        if current_size is None:
+            return
+        get_telemetry().record_universe_drift(
+            market, current_size=current_size, prior_size=prior_size,
+        )
+    except Exception as exc:
+        logger.debug("telemetry: universe_drift emit failed (%s)", exc)
 
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_stock_universe')
@@ -68,6 +109,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
             'timestamp': datetime.now().isoformat(),
         }
 
+    prior_size = _count_active_universe(_market or "US")
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -80,6 +122,8 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         logger.info(f"Deactivated: {stats.get('deactivated', 0)}")
         logger.info(f"Total in finviz: {stats.get('total', 0)}")
         logger.info("=" * 60)
+
+        _emit_universe_drift(_market or "US", prior_size)
 
         return {
             'status': 'success',
@@ -123,6 +167,7 @@ def ingest_hk_universe_csv(
         logger.info(f"Snapshot ID: {snapshot_id}")
     logger.info("=" * 60)
 
+    _hk_prior_size = _count_active_universe("HK")
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -142,6 +187,7 @@ def ingest_hk_universe_csv(
         logger.info(f"Canonical rows: {stats.get('total', 0)}")
         logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
         logger.info("=" * 60)
+        _emit_universe_drift("HK", _hk_prior_size)
         return {
             'status': 'success',
             **stats,
@@ -179,6 +225,7 @@ def ingest_jp_universe_csv(
         logger.info(f"Snapshot ID: {snapshot_id}")
     logger.info("=" * 60)
 
+    _jp_prior_size = _count_active_universe("JP")
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -198,6 +245,7 @@ def ingest_jp_universe_csv(
         logger.info(f"Canonical rows: {stats.get('total', 0)}")
         logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
         logger.info("=" * 60)
+        _emit_universe_drift("JP", _jp_prior_size)
         return {
             'status': 'success',
             **stats,
@@ -235,6 +283,7 @@ def ingest_tw_universe_csv(
         logger.info(f"Snapshot ID: {snapshot_id}")
     logger.info("=" * 60)
 
+    _tw_prior_size = _count_active_universe("TW")
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -254,6 +303,7 @@ def ingest_tw_universe_csv(
         logger.info(f"Canonical rows: {stats.get('total', 0)}")
         logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
         logger.info("=" * 60)
+        _emit_universe_drift("TW", _tw_prior_size)
         return {
             'status': 'success',
             **stats,

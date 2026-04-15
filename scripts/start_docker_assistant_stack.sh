@@ -268,7 +268,7 @@ COMPOSE_CMD=(
   docker compose
   --env-file "$ENV_FILE"
   --profile assistant
-  up -d
+  up --build -d
   postgres redis backend frontend hermes
 )
 
