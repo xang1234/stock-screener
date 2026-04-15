@@ -45,6 +45,7 @@ celery_app = Celery(
         'app.tasks.group_rank_tasks',  # IBD group ranking tasks
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
         'app.tasks.universe_tasks',  # Stock universe management tasks
+        'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
     ]
 )
@@ -499,6 +500,20 @@ if settings.cache_warmup_enabled:
             'schedule': crontab(
                 hour=3,
                 minute=30,
+                day_of_week=0,  # Sunday
+            ),
+        },
+
+        # Weekly telemetry governance audit (bead asia.10.4).
+        # Sunday 5 AM ET — after weekly-full-refresh (2 AM), universe refresh
+        # (3 AM), taxonomy (3:30 AM), and consolidation (4 AM) have emitted
+        # their final telemetry for the week. Produces a signed report at
+        # data/governance/telemetry_audit/YYYY-MM-DD.{json,md,sha256}.
+        'weekly-telemetry-governance-audit': {
+            'task': 'app.tasks.telemetry_tasks.weekly_telemetry_audit',
+            'schedule': crontab(
+                hour=5,
+                minute=0,
                 day_of_week=0,  # Sunday
             ),
         },
