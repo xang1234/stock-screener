@@ -601,6 +601,224 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
     assert index_payload["skipped_symbols"] == ["NVDA"]
 
 
+def test_export_chart_bundle_expands_coverage_for_preset_screens(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Pass 2 should export charts for preset top-N matches that fall
+    outside the composite-score top-N covered by Pass 1, so selective or
+    orthogonally-ranked presets (e.g. 97 Club) get full chart coverage.
+    """
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=19,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=19,
+    )
+
+    # Pass 1 keeps only 1 chart (the top composite-score row).
+    # Pass 2 per-preset budget of 5 gives us headroom for extras.
+    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
+    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
+    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
+
+    def make_price_frame(close: float) -> pd.DataFrame:
+        dates = pd.date_range("2026-03-28", periods=2, freq="D")
+        return pd.DataFrame(
+            {
+                "Open": [close - 1, close],
+                "High": [close, close + 1],
+                "Low": [close - 2, close - 1],
+                "Close": [close - 0.5, close],
+                "Volume": [1_000_000, 1_100_000],
+            },
+            index=dates,
+        )
+
+    # Every symbol has cached price data so nothing is force-skipped.
+    service._price_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols, period="2y": {
+            symbol: make_price_frame(100.0 + i)
+            for i, symbol in enumerate(symbols)
+        }
+    )
+    service._fundamentals_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+
+    # NVDA tops the composite ranking and gets Pass 1.
+    # The remaining rows have lower composite scores but massive perfDay
+    # values, so they match the "4% Daily Gainers" preset — Pass 2 should
+    # pick them up.
+    rows = [
+        SimpleNamespace(
+            symbol="NVDA",
+            composite_score=99.0,
+            rating="Strong Buy",
+            current_price=100.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 2.0},
+        ),
+        SimpleNamespace(
+            symbol="GAIN1",
+            composite_score=50.0,
+            rating="Buy",
+            current_price=101.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 12.0},
+        ),
+        SimpleNamespace(
+            symbol="GAIN2",
+            composite_score=49.0,
+            rating="Buy",
+            current_price=102.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 9.0},
+        ),
+        SimpleNamespace(
+            symbol="GAIN3",
+            composite_score=48.0,
+            rating="Hold",
+            current_price=103.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 7.0},
+        ),
+    ]
+
+    serialized_rows = [
+        {"symbol": "NVDA", "composite_score": 99.0, "price_change_1d": 2.0},
+        {"symbol": "GAIN1", "composite_score": 50.0, "price_change_1d": 12.0},
+        {"symbol": "GAIN2", "composite_score": 49.0, "price_change_1d": 9.0},
+        {"symbol": "GAIN3", "composite_score": 48.0, "price_change_1d": 7.0},
+    ]
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 19)
+        manifest = service._export_chart_bundle(  # noqa: SLF001 - intentional unit coverage
+            output_dir=tmp_path,
+            generated_at="2026-04-02T22:00:00Z",
+            run=run,
+            rows=rows,
+            serialized_rows=serialized_rows,
+        )
+
+    index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
+    symbols_in_order = [entry["symbol"] for entry in index_payload["symbols"]]
+
+    # Pass 1 exported NVDA (composite top-1).
+    assert symbols_in_order[0] == "NVDA"
+    assert index_payload["symbols"][0]["rank"] == 1
+
+    # Pass 2 added the 4% Daily Gainers preset matches with rank=None.
+    assert set(symbols_in_order[1:]) == {"GAIN1", "GAIN2", "GAIN3"}
+    for entry in index_payload["symbols"][1:]:
+        assert entry["rank"] is None
+
+    assert manifest["symbols_total"] == 4
+    assert manifest["available"] is True
+    # Each Pass 2 chart has its own payload with rank=None.
+    gain1_payload = json.loads((tmp_path / "charts" / "GAIN1.json").read_text(encoding="utf-8"))
+    assert gain1_payload["rank"] is None
+    assert gain1_payload["symbol"] == "GAIN1"
+
+
+def test_export_chart_bundle_skips_preset_symbols_without_cached_prices(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    """Symbols skipped in Pass 1 for lack of cached prices should not be
+    re-attempted in Pass 2 (they're already tracked in skipped_symbols).
+    """
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=20,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=20,
+    )
+
+    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 5)
+    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 5)
+    monkeypatch.setattr(export_module, "STATIC_CHART_PRESET_TOP_N", 5)
+
+    def make_price_frame() -> pd.DataFrame:
+        dates = pd.date_range("2026-03-28", periods=2, freq="D")
+        return pd.DataFrame(
+            {
+                "Open": [100.0, 101.0],
+                "High": [101.0, 102.0],
+                "Low": [99.0, 100.0],
+                "Close": [100.5, 101.5],
+                "Volume": [1_000_000, 1_100_000],
+            },
+            index=dates,
+        )
+
+    # NOCACHE has no price data; it's also a preset match.
+    service._price_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols, period="2y": {
+            "NVDA": make_price_frame(),
+            "NOCACHE": None,
+        }
+    )
+    service._fundamentals_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+
+    rows = [
+        SimpleNamespace(
+            symbol="NVDA",
+            composite_score=99.0,
+            rating="Strong Buy",
+            current_price=100.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 1.0},
+        ),
+        SimpleNamespace(
+            symbol="NOCACHE",
+            composite_score=10.0,
+            rating="Hold",
+            current_price=50.0,
+            screeners_run=[],
+            extended_fields={"price_change_1d": 15.0},
+        ),
+    ]
+    serialized_rows = [
+        {"symbol": "NVDA", "composite_score": 99.0, "price_change_1d": 1.0},
+        {"symbol": "NOCACHE", "composite_score": 10.0, "price_change_1d": 15.0},
+    ]
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 20)
+        manifest = service._export_chart_bundle(  # noqa: SLF001 - intentional unit coverage
+            output_dir=tmp_path,
+            generated_at="2026-04-02T22:00:00Z",
+            run=run,
+            rows=rows,
+            serialized_rows=serialized_rows,
+        )
+
+    index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
+    exported = [e["symbol"] for e in index_payload["symbols"]]
+
+    assert exported == ["NVDA"]
+    assert index_payload["skipped_symbols"] == ["NOCACHE"]
+    assert manifest["symbols_total"] == 1
+
+
 def test_build_key_markets_skips_change_when_latest_close_is_null(service_and_session_factory):
     service, session_factory = service_and_session_factory
 

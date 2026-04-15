@@ -39,7 +39,7 @@ STATIC_CHART_PERIOD = "6mo"
 STATIC_CHART_PERIOD_DAYS = 180
 STATIC_CHART_LOOKUP_BATCH_SIZE = 250
 STATIC_DEFAULT_SCAN_FILTERS = {"minVolume": 100_000_000}
-STATIC_CHART_PRESET_TOP_N = 50
+STATIC_CHART_PRESET_TOP_N = 200
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 
 _DEFAULT_KEY_MARKETS = (
@@ -399,7 +399,7 @@ class StaticSiteExportService:
                     }
                 )
 
-        # --- Pass 2: expand charts for preset screen top-50s ---
+        # --- Pass 2: expand charts for preset screen top-N (per STATIC_CHART_PRESET_TOP_N) ---
         if serialized_rows is not None:
             preset_symbols = get_preset_chart_symbols(
                 serialized_rows, PRESET_SCREENS, STATIC_CHART_PRESET_TOP_N,

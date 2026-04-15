@@ -344,12 +344,13 @@ def _matches_preset_filters(row: dict, filters: dict) -> bool:
 def get_preset_chart_symbols(
     serialized_rows: list[dict],
     presets: list[dict] | None = None,
-    top_n: int = 50,
+    top_n: int = 200,
 ) -> set[str]:
     """Return the union of top-N symbols per preset screen.
 
     Used by the chart export to expand chart coverage beyond the default
-    top-200 composite-score ranking.
+    composite-score ranking so each preset scan's top N matches also
+    receive chart + stock-info payloads.
     """
     if presets is None:
         presets = PRESET_SCREENS
