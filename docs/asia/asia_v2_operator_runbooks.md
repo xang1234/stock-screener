@@ -39,13 +39,15 @@ The owner is stamped onto the alert row at trigger time, so later `OWNERS` edits
 
 ## Alert → Runbook Index
 
-| Alert (metric_key) | Markets | Triggers runbook |
+Runbook IDs (`RB-XX`) are stable identifiers — search the document for the `## RB-XX` header rather than relying on rendered anchor links, which vary by renderer (GitHub vs. Gitea vs. preview tools).
+
+| Alert (metric_key) | Markets | Runbook |
 |---|---|---|
-| `freshness_lag` | US, HK, JP, TW | [RB-01](#rb-01-freshnesslag-stale-price-refresh) |
-| `benchmark_age` | US, HK, JP, TW | [RB-02](#rb-02-benchmarkage-benchmark-cache-not-warming) |
-| `universe_drift` | US, HK, JP, TW | [RB-03](#rb-03-universedrift-universe-growing-or-shrinking-abnormally) |
-| `completeness_distribution` | US, HK, JP, TW | [RB-04](#rb-04-completenessdistribution-too-many-symbols-with-low-provenance) |
-| `extraction_success` | SHARED | [RB-05](#rb-05-extractionsuccess-theme-extraction-ratio-collapse) |
+| `freshness_lag` | US, HK, JP, TW | RB-01 |
+| `benchmark_age` | US, HK, JP, TW | RB-02 |
+| `universe_drift` | US, HK, JP, TW | RB-03 |
+| `completeness_distribution` | US, HK, JP, TW | RB-04 |
+| `extraction_success` | SHARED | RB-05 |
 
 ---
 
@@ -339,7 +341,7 @@ These are short per-subsystem checks that feed into the per-alert runbooks above
 - Celery: `celery -A app.celery_app inspect active -d datafetch@%h`
 - Beat: `celery -A app.celery_app inspect scheduled`
 - DB: `SELECT market, MAX(recorded_at) FROM market_telemetry_events WHERE metric_key='freshness_lag' GROUP BY market;`
-- Redis hot path: `rtk proxy redis-cli -n 2 GET "market:${MARKET}:last_refresh_epoch"`
+- Redis hot path: `rtk proxy redis-cli -n 2 GET "telemetry:gauge:freshness_lag:<market>"` where `<market>` is the lowercase market suffix (`us`, `hk`, `jp`, `tw`, or `shared`) — see `_gauge_key()` in `backend/app/services/telemetry/per_market_telemetry.py`
 
 ### Benchmark cache (`asia_benchmark_cache_<MARKET>_enabled`)
 
@@ -443,14 +445,16 @@ This is the table operators consult after flipping a flag to confirm the rollbac
 
 | Flag change | Event evidence | Max latency |
 |---|---|---|
-| `asia_ingestion_<M>_enabled=false` | no new `freshness_lag` events for `<M>` | 1 Beat cycle (60s) |
-| `asia_benchmark_cache_<M>_enabled=false` | no new `benchmark_age` events for `<M>` | 1 Beat cycle (60s) |
-| `asia_scans_<M>_enabled=false` | scan API rejects `<M>` | immediate (next request) |
-| `asia_themes_<M>_enabled=false` | no new `extraction_success` events attributable to `<M>` | 1 extraction cycle (≤5 min) |
+| `asia_ingestion_<MARKET>_enabled=false` | no new `freshness_lag` events for `<MARKET>` | 1 Beat cycle + margin (90s) |
+| `asia_benchmark_cache_<MARKET>_enabled=false` | no new `benchmark_age` events for `<MARKET>` | 1 Beat cycle + margin (90s) |
+| `asia_scans_<MARKET>_enabled=false` | scan API rejects `<MARKET>` | immediate (next request) |
+| `asia_themes_<MARKET>_enabled=false` | no new `extraction_success` events attributable to `<MARKET>` | 1 extraction cycle (≤5 min) |
 | `asia_universe_apply_destructive_enabled=false` | reconciliation logs `apply=dry_run` | next reconciliation (≤15 min) |
 | `asia_reconciliation_quarantine_enforced=true` | breaching diffs have `quarantined=true` | next reconciliation |
-| `asia_ui_exposure_<M>_enabled=false` | `/api/v1/stocks/markets` omits `<M>` | immediate |
+| `asia_ui_exposure_<MARKET>_enabled=false` | `/api/v1/stocks/markets` omits `<MARKET>` | immediate |
 | `asia_master_enabled=false` | all non-US subsystem flags effectively off | immediate |
+
+Rationale for the 90s Beat-cycle budget: Celery Beat polls on a 60s interval and the first telemetry emission post-flag-flip lands on the following tick. The drill on 2026-04-15 observed 64s in practice; the 30s margin absorbs that plus normal scheduling jitter.
 
 If the expected delta does **not** appear within the listed latency, escalate one severity band and assume the flag did not take effect (misrouted env var, stale cache, wrong environment).
 

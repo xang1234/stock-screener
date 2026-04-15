@@ -35,7 +35,7 @@
 | Diagnosis 2 | `celery inspect ping -d datafetch@%h` | 09:02:10 | 1.2s | — | Pass — worker alive, so this is a schedule-level stall not a worker crash |
 | Diagnosis 3 | cross-market check (`/api/v1/telemetry/markets`) | 09:03:05 | 1.1s | — | Pass — US + JP + TW freshness normal, confirms market-scoped fault |
 | Rollback 1 | `asia_scans_HK_enabled=false` | 09:05:00 | scan POST rejected in 0.08s | immediate | Pass |
-| Rollback 2 | `asia_ingestion_HK_enabled=false` | 09:07:30 | no new `freshness_lag` event for HK observed for 5 min window | 60s | Pass at 64s (just over — see Defects) |
+| Rollback 2 | `asia_ingestion_HK_enabled=false` | 09:07:30 | no new `freshness_lag` event for HK observed for 5 min window | 90s (post-drill) / 60s (pre-drill) | 64s observed — under the post-drill budget; triggered the budget revision |
 | Rollback 3 | (not executed — market-scoped fault did not escalate) | — | — | — | Skipped correctly |
 | Verify A | `/api/v1/telemetry/alerts` → alert acknowledged | 09:12:15 | 0.4s after ACK click | ≤30s poll | Pass |
 | Verify B | freshness_lag gauge plateau in OperationsPage | 09:14:00 | gauge stopped climbing | ≤5 min | Pass |
@@ -57,7 +57,7 @@
 
 ## Documentation Defects Found
 
-1. **RB-01 Rollback 2 latency** came in at 64s against a 60s budget. This is a borderline pass but repeatable. Cause traced to Celery Beat's 60s poll interval — the first emission post-flag-flip always lands in the next Beat cycle. Recommendation: change the "Max latency" column in the `Expected Telemetry Deltas Reference` table from `60s` to `90s` for Beat-driven events. **Tracked**: open a doc PR off this drill.
+1. **RB-01 Rollback 2 latency** came in at 64s against a 60s budget. This is a borderline pass but repeatable. Cause traced to Celery Beat's 60s poll interval — the first emission post-flag-flip always lands in the next Beat cycle. Recommendation: change the "Max latency" column in the `Expected Telemetry Deltas Reference` table from `60s` to `90s` for Beat-driven events. **Resolved in same commit**: runbook updated to 90s with rationale.
 2. **Diagnosis step 1 wording** implies a single JSON path (`.events[0]`) that assumes the client uses `jq`. Mild nit, not blocking. Tracked as a future clarification.
 
 No SEV-blocking defects found.
