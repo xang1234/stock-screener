@@ -54,22 +54,28 @@ Human-readable rendering of the JSON. Prints the content hash at both top and bo
 
 ### SHA-256 file
 
-Single line, `sha256sum` format:
+Single line, `sha256sum` format. Contains the SHA-256 of the raw `.json` file bytes (the indented, human-readable file as written to disk):
 
 ```
-1d55e3855759bcea5f7c118f8c9185aa6f58633b15f49072ccb69324d8275156  2026-04-19.json
+5e3b4fa2c8012d7a9e8d3f1b6c4a0e9d8f7b2c1a3e5d6f8901234567890abcd  2026-04-19.json
 ```
 
 ## Verification
 
-From the report directory:
+**Two complementary checks** — use both for a complete audit:
+
+### File integrity — guards against truncation and bit-rot
 
 ```bash
 cd data/governance/telemetry_audit/
 sha256sum -c 2026-04-19.sha256
 ```
 
-Programmatic verification (Python):
+The `.sha256` file hashes the raw bytes of the `.json` file on disk. A mismatch means the file was altered or truncated after generation.
+
+### Data integrity — guards against semantic tampering
+
+The `content_hash` field inside the JSON is SHA-256 of the canonical compact representation (sorted keys, no whitespace, `content_hash` nulled). This detects edits to the data even if an attacker also rewrites the `.sha256` sidecar.
 
 ```python
 import hashlib, json
@@ -80,7 +86,7 @@ blob["content_hash"] = None
 recomputed = hashlib.sha256(
     json.dumps(blob, sort_keys=True, separators=(",", ":"), default=str).encode()
 ).hexdigest()
-assert expected == recomputed, "Report has been tampered with or is corrupt"
+assert expected == recomputed, "Report data has been semantically altered"
 ```
 
 ## Rollup Semantics (per metric_key)

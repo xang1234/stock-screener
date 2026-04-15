@@ -279,7 +279,7 @@ class PerMarketTelemetry:
                 db.query(bucket_expr, func.count().label("count"))
                 .select_from(StockFundamental)
                 .join(StockUniverse, StockUniverse.symbol == StockFundamental.symbol)
-                .filter(StockUniverse.is_active == True)
+                .filter(StockUniverse.is_active.is_(True))
                 .filter(score.isnot(None))
             )
             if m != SHARED_SENTINEL:
@@ -395,7 +395,7 @@ class PerMarketTelemetry:
                 db.query(basis, sa_func.count().label("n"))
                 .select_from(StockFundamental)
                 .join(StockUniverse, StockUniverse.symbol == StockFundamental.symbol)
-                .filter(StockUniverse.is_active == True)
+                .filter(StockUniverse.is_active.is_(True))
                 .filter(StockUniverse.market == market)
                 .filter(basis.isnot(None))
                 .group_by(basis)

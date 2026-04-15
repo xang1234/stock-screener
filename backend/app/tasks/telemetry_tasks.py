@@ -5,13 +5,16 @@ telemetry event log and alert table. Artifacts land at:
 
     data/governance/telemetry_audit/YYYY-MM-DD.{json,md,sha256}
 
-The JSON + Markdown + SHA-256 triple is treated as a single artifact: the
-hash file must match the hash inside the JSON; otherwise the JSON has been
-tampered with or truncated.
+Two complementary integrity checks:
+  - content_hash (inside JSON): SHA-256 over canonical compact JSON with
+    content_hash nulled — verified programmatically by re-canonicalizing.
+  - file_hash (.sha256 sidecar): SHA-256 of the raw .json file bytes —
+    verified with `sha256sum -c <stamp>.sha256` from the report directory.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -60,10 +63,18 @@ def _write_report_artifacts(report: GovernanceReport, out_dir: Path) -> Dict[str
 
     json_path.write_text(json_blob, encoding="utf-8")
     md_path.write_text(md_blob, encoding="utf-8")
-    # Hash-file format matches `sha256sum` output so it can be verified with
-    # `sha256sum -c <stamp>.sha256` from the report directory.
+    # The .sha256 file is the *file-level* integrity check — sha256sum hashes
+    # raw file bytes, so we must hash json_blob (the bytes actually written to
+    # disk) not report.content_hash (which is SHA-256 of compact JSON with a
+    # null content_hash field — a different document).
+    #
+    # Two complementary verification paths:
+    #   sha256sum -c <stamp>.sha256          → file not truncated/corrupted
+    #   programmatic Python re-canonicalize  → data not semantically altered
+    #                                          (see governance_report.md)
+    file_hash = hashlib.sha256(json_blob.encode("utf-8")).hexdigest()
     hash_path.write_text(
-        f"{report.content_hash}  {json_path.name}\n", encoding="utf-8",
+        f"{file_hash}  {json_path.name}\n", encoding="utf-8",
     )
     return {
         "json": str(json_path),
@@ -89,7 +100,7 @@ def weekly_telemetry_audit(output_dir: Optional[str] = None) -> Dict[str, Any]:
 
     paths = _write_report_artifacts(report, out_dir)
     logger.info(
-        "telemetry governance report generated: hash=%s json=%s",
+        "telemetry governance report generated: content_hash=%s json=%s",
         report.content_hash, paths["json"],
     )
     return {

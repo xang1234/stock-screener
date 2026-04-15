@@ -96,7 +96,8 @@ def run_weekly_audit(
     The function reads from the passed session and does not commit. ``now``
     is injectable so tests can pin the window deterministically.
     """
-    generated_at = now or datetime.now(timezone.utc)
+    generated_at = _as_aware_utc(now) or datetime.now(timezone.utc)
+    generated_at = generated_at.astimezone(timezone.utc)
     window_start = generated_at - timedelta(days=AUDIT_WINDOW_DAYS)
 
     markets = [*SUPPORTED_MARKETS, SHARED_SENTINEL]

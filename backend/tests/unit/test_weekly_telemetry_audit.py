@@ -395,6 +395,33 @@ class TestRendering:
         # Hash appears twice (top + bottom) to resist single-field tampering.
         assert md.count(report.content_hash) == 2
 
+    def test_sha256_sidecar_hashes_file_bytes_not_content_hash(self, telemetry_session):
+        """sha256sum -c must work against the actual .json file bytes.
+
+        The .sha256 sidecar stores SHA-256 of the raw .json file (indented,
+        with populated content_hash). The content_hash inside the JSON is a
+        different (compact, null-hash) artifact — these are two distinct
+        verification paths.
+        """
+        import tempfile
+        from pathlib import Path
+        from app.tasks.telemetry_tasks import _write_report_artifacts
+
+        report = run_weekly_audit(telemetry_session, now=_NOW)
+        with tempfile.TemporaryDirectory() as td:
+            paths = _write_report_artifacts(report, Path(td))
+
+            json_bytes = Path(paths["json"]).read_bytes()
+            sha256_line = Path(paths["sha256"]).read_text().strip()
+            file_hash_in_sidecar = sha256_line.split("  ")[0]
+
+            # Sidecar must match the actual file bytes.
+            expected_file_hash = hashlib.sha256(json_bytes).hexdigest()
+            assert file_hash_in_sidecar == expected_file_hash
+
+            # Sidecar must NOT equal content_hash (they are different things).
+            assert file_hash_in_sidecar != report.content_hash
+
 
 class TestWindowRespected:
     def test_events_outside_window_are_ignored(self, telemetry_session):
