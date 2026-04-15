@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.background import BackgroundTask
 from starlette.responses import Response
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import settings
@@ -58,11 +57,7 @@ def _log_critical_error(
     )
 
 
-def _redacted_database_url(database_url: str) -> str:
-    try:
-        return make_url(database_url).render_as_string(hide_password=True)
-    except (TypeError, ValueError, AttributeError, SQLAlchemyError):
-        return "<invalid>"
+from .utils.db_url import redacted_database_url as _redacted_database_url  # noqa: E402
 
 
 async def trigger_gapfill_on_startup():

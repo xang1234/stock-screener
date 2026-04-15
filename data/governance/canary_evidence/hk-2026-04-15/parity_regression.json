@@ -1,0 +1,10 @@
+{
+  "_provenance": "synthetic dress-rehearsal evidence — represents what the consolidated regression suite (asia.6.5) would emit before HK canary. US parity suite must remain green; non-US correctness suite must remain green for HK.",
+  "evidence_label": "hk-canary-dress-rehearsal-2026-04-15",
+  "us_parity_pass": true,
+  "non_us_correctness_pass": true,
+  "us_parity_test_count": 142,
+  "us_parity_failed": 0,
+  "non_us_correctness_test_count": 38,
+  "non_us_correctness_failed": 0
+}

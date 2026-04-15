@@ -1,0 +1,15 @@
+{
+  "_provenance": "synthetic dress-rehearsal evidence — represents what the load/soak + fault-injection harness (asia.9.3, 9.4) would emit. Thresholds from launch-gate charter: p95 ≤ 1500ms, failure_rate ≤ 0.01, market_isolation_pass true.",
+  "evidence_label": "hk-canary-dress-rehearsal-2026-04-15",
+  "scan_create_p95_ms": 1180,
+  "scan_create_p99_ms": 1450,
+  "scan_failure_rate": 0.004,
+  "market_isolation_pass": true,
+  "fault_injection_summary": {
+    "hk_yfinance_outage": "isolated; US p95 unaffected",
+    "hk_redis_partition":  "isolated; US scan throughput unchanged",
+    "hk_pg_lock_contention": "queue-isolated; data_fetch_hk paused, data_fetch_us continued"
+  },
+  "soak_window_hours": 4,
+  "scans_executed": 1240
+}

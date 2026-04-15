@@ -19,7 +19,6 @@ Design:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -27,6 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from ...services.governance.signed_artifact import compute_content_hash
+from ...utils.datetime_utils import as_aware_utc
 from ...models.market_telemetry import MarketTelemetryEvent
 from ...models.market_telemetry_alert import MarketTelemetryAlert, AlertState
 from ...tasks.market_queues import SHARED_SENTINEL, SUPPORTED_MARKETS
@@ -96,8 +97,7 @@ def run_weekly_audit(
     The function reads from the passed session and does not commit. ``now``
     is injectable so tests can pin the window deterministically.
     """
-    generated_at = _as_aware_utc(now) or datetime.now(timezone.utc)
-    generated_at = generated_at.astimezone(timezone.utc)
+    generated_at = as_aware_utc(now) or datetime.now(timezone.utc)
     window_start = generated_at - timedelta(days=AUDIT_WINDOW_DAYS)
 
     markets = [*SUPPORTED_MARKETS, SHARED_SENTINEL]
@@ -321,12 +321,6 @@ def _rollup_for_metric(
     return {}
 
 
-def _as_aware_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None or dt.tzinfo is not None:
-        return dt
-    return dt.replace(tzinfo=timezone.utc)
-
-
 def _summarize_alerts(
     db: Session, market: str, window_start: datetime, window_end: datetime,
 ) -> AlertRollup:
@@ -357,8 +351,8 @@ def _summarize_alerts(
         # SQLite returns naive datetimes even for `DateTime(timezone=True)`;
         # Postgres returns aware. Coerce to UTC-aware so Python comparisons
         # don't raise `can't compare offset-naive and offset-aware`.
-        opened_at = _as_aware_utc(a.opened_at)
-        closed_at = _as_aware_utc(a.closed_at)
+        opened_at = as_aware_utc(a.opened_at)
+        closed_at = as_aware_utc(a.closed_at)
         if opened_at is not None and opened_at >= window_start:
             opened_in_window += 1
             by_severity[a.severity] = by_severity.get(a.severity, 0) + 1
@@ -390,15 +384,7 @@ def _serialize_thresholds() -> Dict[str, Dict[str, Dict[str, float]]]:
 
 
 def _content_hash(report: GovernanceReport) -> str:
-    """SHA-256 over canonical JSON (sorted keys, no whitespace).
-
-    The hash excludes its own field — otherwise the report would need to
-    re-hash itself. We set the field to None, serialize, hash, then assign.
-    """
-    as_dict = asdict(report)
-    as_dict["content_hash"] = None
-    blob = json.dumps(as_dict, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return compute_content_hash(asdict(report))
 
 
 def render_json(report: GovernanceReport) -> str:
