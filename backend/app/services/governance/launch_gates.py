@@ -221,6 +221,22 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
             .filter(MarketTelemetryEvent.recorded_at >= ctx.now_utc() - timedelta(days=2))
             .all()
         )
+        if not rows:
+            return GateResult(
+                gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+                status=GateStatus.MISSING_EVIDENCE,
+                detail="No universe_drift events in the last 2 days.",
+            )
+
+        worst = 0.0
+        for r in rows:
+            p = r.payload or {}
+            prior = p.get("prior_size") or 0
+            delta = p.get("delta") or 0
+            if prior > 0:
+                ratio = abs(float(delta)) / float(prior)
+                if ratio > worst:
+                    worst = ratio
     except Exception as exc:
         return GateResult(
             gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
@@ -228,22 +244,6 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
             detail=f"DB query failed: {exc}",
         )
 
-    if not rows:
-        return GateResult(
-            gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
-            status=GateStatus.MISSING_EVIDENCE,
-            detail="No universe_drift events in the last 2 days.",
-        )
-
-    worst = 0.0
-    for r in rows:
-        p = r.payload or {}
-        prior = p.get("prior_size") or 0
-        delta = p.get("delta") or 0
-        if prior > 0:
-            ratio = abs(float(delta)) / float(prior)
-            if ratio > worst:
-                worst = ratio
     if worst >= 0.15:
         return GateResult(
             gate_id="G2", name="Universe Integrity and Freshness", severity="hard",

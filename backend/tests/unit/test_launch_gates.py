@@ -17,16 +17,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import tempfile
+from types import ModuleType
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from app.services.governance.launch_gates import (
+    GateContext,
     GateStatus,
     GateVerdict,
     LaunchGateReport,
+    _check_g2_universe,
     render_json,
     render_markdown,
     run_all_gates,
@@ -145,6 +150,53 @@ class TestDbBackedGatesWithoutDb:
         report = run_all_gates(project_root=_PROJECT_ROOT, db=None, now=_NOW)
         g4 = next(g for g in report.gates if g.gate_id == "G4")
         assert g4.status == GateStatus.MISSING_EVIDENCE
+
+
+class _FakeComparableColumn:
+    def __eq__(self, other):
+        return self
+
+    def __ge__(self, other):
+        return self
+
+
+class _FakeMarketTelemetryEvent:
+    metric_key = _FakeComparableColumn()
+    recorded_at = _FakeComparableColumn()
+
+
+class _FakeQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeDb:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def query(self, *args, **kwargs):
+        return _FakeQuery(self._rows)
+
+
+class TestDbBackedGateResilience:
+    def test_g2_malformed_payload_returns_missing_evidence(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW)
+        rows = [SimpleNamespace(payload={"prior_size": "bad", "delta": "1"})]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDb(rows))
+
+        assert g2.status == GateStatus.MISSING_EVIDENCE
+        assert g2.detail.startswith("DB query failed:")
 
 
 class TestExternalEvidenceGates:
