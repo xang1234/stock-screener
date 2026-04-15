@@ -142,12 +142,22 @@ def _check_g1_schema(ctx: GateContext) -> GateResult:
     picked up automatically without editing the gate. Failures here
     block all downstream gates.
     """
-    reports = sorted(
+    # Match both the original E2/ST3 rehearsal and the broader E11/ST2
+    # full-chain rehearsal (bead 11.2). G1 prefers the newest by date
+    # SUFFIX (filename ends in _YYYY-MM-DD.md) — sorting by full filename
+    # would put e11 before e2 alphabetically and pick the wrong report.
+    import re
+    candidates = list(
         (ctx.project_root / "docs" / "asia").glob(
-            "asia_v2_e2_st3_t2_migration_rehearsal_report_*.md"
-        ),
-        reverse=True,
+            "asia_v2_e*_*_migration_rehearsal_report_*.md"
+        )
     )
+
+    def _date_key(p: Path) -> str:
+        m = re.search(r"_(\d{4}-\d{2}-\d{2})\.md$", p.name)
+        return m.group(1) if m else ""
+
+    reports = sorted(candidates, key=_date_key, reverse=True)
     if not reports:
         return GateResult(
             gate_id="G1", name="Schema/Contract Readiness", severity="hard",
