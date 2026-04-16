@@ -23,9 +23,15 @@ from app.services.provider_snapshot_service import ProviderSnapshotService, sett
 
 
 class _StubFundamentalsCache:
-    def __init__(self, cached: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        cached: dict[str, dict] | None = None,
+        *,
+        fail_symbols: set[str] | None = None,
+    ):
         self.stored: dict[str, dict] = {}
         self.cached = cached or {}
+        self.fail_symbols = fail_symbols or set()
 
     def get_many(self, symbols):
         return {symbol: dict(self.cached.get(symbol) or {}) for symbol in symbols}
@@ -39,10 +45,13 @@ class _StubFundamentalsCache:
         return merged
 
     def store(self, symbol, data, data_source="snapshot", market=None):
+        if symbol in self.fail_symbols:
+            return False
         payload = dict(data)
         payload["data_source"] = data_source
         payload["market"] = market or payload.get("market")
         self.stored[symbol] = payload
+        return True
 
 
 class _StubPriceCache:
@@ -976,6 +985,57 @@ def test_import_weekly_reference_bundle_can_skip_cache_hydration(tmp_path):
     assert stats["hydrate_cache"] is False
     assert stats["hydrated_symbols"] == 0
     assert service.fundamentals_cache.stored == {}
+    db.close()
+
+
+def test_import_weekly_reference_bundle_raises_on_cache_hydration_failure(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service(
+        fundamentals_cache=_StubFundamentalsCache(fail_symbols={"AAPL"})
+    )
+
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": service.SNAPSHOT_KEY_FUNDAMENTALS,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1_us:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {
+                        "symbol": "AAPL",
+                        "exchange": "NASDAQ",
+                        "market": "US",
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    with pytest.raises(RuntimeError, match="Failed to persist imported fundamentals"):
+        service.import_weekly_reference_bundle(db, input_path=bundle_path)
     db.close()
 
 

@@ -1108,6 +1108,7 @@ class ProviderSnapshotService:
             raise
 
         hydrated_symbols = 0
+        failed_hydration_symbols: list[str] = []
         if hydrate_cache and imported_payloads:
             existing_payloads = (
                 self.fundamentals_cache.get_many(
@@ -1124,13 +1125,25 @@ class ProviderSnapshotService:
                         payload_to_store,
                         existing_payloads.get(symbol) or {},
                     )
-                self.fundamentals_cache.store(
+                persisted = self.fundamentals_cache.store(
                     symbol,
                     payload_to_store,
                     data_source="bundle_import",
                     market=payload_to_store.get("market"),
                 )
-                hydrated_symbols += 1
+                if persisted:
+                    hydrated_symbols += 1
+                else:
+                    failed_hydration_symbols.append(symbol)
+
+        if failed_hydration_symbols:
+            preview = ", ".join(failed_hydration_symbols[:10])
+            if len(failed_hydration_symbols) > 10:
+                preview += ", ..."
+            raise RuntimeError(
+                "Failed to persist imported fundamentals for "
+                f"{len(failed_hydration_symbols)} symbol(s): {preview}"
+            )
 
         return {
             "run_id": run.id,
