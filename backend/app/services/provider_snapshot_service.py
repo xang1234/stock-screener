@@ -398,6 +398,21 @@ class ProviderSnapshotService:
             db.bulk_save_objects(imported_universe)
         return len(imported_universe)
 
+    @staticmethod
+    def _replace_all_universe_rows(
+        db: Session,
+        *,
+        rows: Iterable[Dict[str, Any]],
+    ) -> int:
+        db.query(StockUniverse).delete(synchronize_session=False)
+        imported_universe = [
+            StockUniverse(**ProviderSnapshotService._deserialize_universe_row(row))
+            for row in rows
+        ]
+        if imported_universe:
+            db.bulk_save_objects(imported_universe)
+        return len(imported_universe)
+
     def publish_market_snapshot_run(
         self,
         db: Session,
@@ -985,16 +1000,23 @@ class ProviderSnapshotService:
         bundle_market = str(
             payload.get("market") or inferred_market or self.market_for_snapshot_key(snapshot_key)
         ).strip().upper()
+        legacy_global_bundle = snapshot_key == "fundamentals_v1" and not payload.get("market")
         coverage = snapshot.get("coverage_stats")
         parity = snapshot.get("parity_stats")
         warnings = snapshot.get("warnings")
 
         self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
-        imported_universe_count = self._replace_market_universe_rows(
-            db,
-            market=bundle_market,
-            rows=universe_rows,
-        )
+        if legacy_global_bundle:
+            imported_universe_count = self._replace_all_universe_rows(
+                db,
+                rows=universe_rows,
+            )
+        else:
+            imported_universe_count = self._replace_market_universe_rows(
+                db,
+                market=bundle_market,
+                rows=universe_rows,
+            )
         db.commit()
         db.expunge_all()
 
@@ -1056,7 +1078,7 @@ class ProviderSnapshotService:
             "rows": len(rows),
             "universe_rows": imported_universe_count,
             "as_of_date": payload.get("as_of_date"),
-            "market": bundle_market,
+            "market": "MULTI" if legacy_global_bundle else bundle_market,
         }
 
     @staticmethod

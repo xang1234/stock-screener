@@ -709,6 +709,95 @@ def test_import_weekly_reference_bundle_preserves_other_market_universe_rows(
     db.close()
 
 
+def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="2330.TW",
+                market="TW",
+                exchange="TWSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    bundle_path = tmp_path / "weekly-reference-legacy.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": "fundamentals_v1",
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                },
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {"symbol": "0700.HK", "exchange": "XHKG"},
+                },
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            },
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            },
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    import_stats = service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    imported_symbols = [
+        row.symbol
+        for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    ]
+    imported_run = service.get_published_run(db, snapshot_key="fundamentals_v1")
+
+    assert import_stats["market"] == "MULTI"
+    assert import_stats["universe_rows"] == 2
+    assert imported_symbols == ["0700.HK", "AAPL"]
+    assert imported_run is not None
+    assert imported_run.source_revision == "fundamentals_v1:20260411120000"
+    db.close()
+
+
 def test_imported_weekly_reference_bundle_hydrates_ipo_date_back_to_database(tmp_path, monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
