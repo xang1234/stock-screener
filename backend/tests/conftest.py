@@ -3,6 +3,7 @@ Shared pytest fixtures for backend tests.
 
 Provides database session fixtures, mock data, and common test configuration.
 """
+import os
 import pytest
 import sys
 from pathlib import Path
@@ -11,7 +12,21 @@ from pathlib import Path
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
+# Keep backend tests independent from a developer's local backend/.env.
+# Production runtime remains Postgres-only; this SQLite bootstrap is test-only.
+os.environ["STOCKSCANNER_TEST_ALLOW_SQLITE"] = "1"
+os.environ["DATABASE_URL"] = "sqlite://"
+
+import app.models  # noqa: F401
 from app.database import SessionLocal, engine, Base
+
+
+@pytest.fixture(autouse=True)
+def shared_test_database():
+    """Reset the shared test database before each test."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
 
 
 @pytest.fixture(autouse=True)

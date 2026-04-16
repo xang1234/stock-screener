@@ -1,26 +1,46 @@
 """Database setup and session management using SQLAlchemy."""
 
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from .config import settings
 
 _parsed_url = make_url(settings.database_url)
-if _parsed_url.get_backend_name() != "postgresql":
+_backend_name = _parsed_url.get_backend_name()
+_allow_test_sqlite = (
+    _backend_name == "sqlite"
+    and os.getenv("STOCKSCANNER_TEST_ALLOW_SQLITE") == "1"
+)
+
+if _backend_name != "postgresql" and not _allow_test_sqlite:
     raise ValueError(
         f"Only PostgreSQL is supported. Got DATABASE_URL with backend "
-        f"'{_parsed_url.get_backend_name()}'. Use: postgresql://user:pass@host/dbname"
+        f"'{_backend_name}'. Use: postgresql://user:pass@host/dbname"
     )
 
-engine = create_engine(
-    settings.database_url,
-    echo=False,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=5,
-)
+_engine_kwargs = {
+    "echo": False,
+}
+
+if _allow_test_sqlite:
+    # Shared in-memory SQLite is permitted only for the test harness.
+    _engine_kwargs.update(
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
+    _engine_kwargs.update(
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+    )
+
+engine = create_engine(settings.database_url, **_engine_kwargs)
 
 # Create SessionLocal class for database sessions
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
