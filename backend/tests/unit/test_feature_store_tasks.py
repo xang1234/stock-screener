@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.config import settings
 from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
@@ -336,6 +337,51 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
     assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is True
     assert fake_use_case.received_cmd.batch_only_prices is True
     assert fake_use_case.received_cmd.batch_only_fundamentals is True
+    assert (
+        fake_use_case.received_cmd.static_chunk_size
+        == settings.static_snapshot_chunk_size
+    )
+    assert (
+        fake_use_case.received_cmd.static_parallel_workers
+        == settings.static_snapshot_parallel_workers
+    )
+
+
+def test_build_daily_snapshot_static_daily_mode_uses_null_progress_sink():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        side_effect=AssertionError("CeleryProgressSink should not be used in static mode"),
+    ), patch(
+        "app.domain.scanning.ports.NullProgressSink",
+        return_value=object(),
+    ) as mock_null_progress, patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            static_daily_mode=True,
+        )
+
+    assert result["status"] == "published"
+    mock_null_progress.assert_called_once_with()
 
 
 def test_enrich_feature_run_with_ibd_metadata_updates_details_json():

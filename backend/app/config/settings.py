@@ -154,6 +154,8 @@ class Settings(BaseSettings):
 
     # Scan use-case configuration
     scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
+    static_snapshot_chunk_size: int = 100  # Larger chunk size for CI/static batch processing
+    static_snapshot_parallel_workers: int = 8  # Bounded symbol-level parallelism for static batch processing
     feature_snapshot_soft_time_limit_seconds: int = 10800  # 3h budget for full ALL-universe daily snapshot in Docker/Postgres
     feature_snapshot_stale_after_minutes: int = 240  # Running feature runs older than this are treated as stale and failed
 

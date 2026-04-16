@@ -686,7 +686,7 @@ class FundamentalsCacheService:
         data: Dict,
         data_source: str = 'unknown',
         market: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         """
         Store fundamental data in database (StockFundamental table).
 
@@ -1013,9 +1013,11 @@ class FundamentalsCacheService:
                 logger.warning(f"Error updating ownership history for {symbol}: {e}")
                 db.rollback()
 
+            return True
         except Exception as e:
             logger.error(f"Error storing {symbol} in database: {e}", exc_info=True)
             db.rollback()
+            return False
 
         finally:
             db.close()
@@ -1387,7 +1389,7 @@ class FundamentalsCacheService:
         data: Dict,
         data_source: str = 'hybrid',
         market: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         """
         Store fundamental data in cache (Redis + Database).
 
@@ -1404,7 +1406,7 @@ class FundamentalsCacheService:
         """
         if not data:
             logger.warning(f"Cannot store empty data for {symbol}")
-            return
+            return False
 
         normalized_data = self._normalize_payload_for_storage(data)
 
@@ -1416,11 +1418,13 @@ class FundamentalsCacheService:
         self._store_in_redis(symbol, normalized_data)
 
         # Store in database
-        self._store_in_database(
+        persisted = self._store_in_database(
             symbol, normalized_data, data_source=data_source, market=market
         )
 
-        logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
+        if persisted:
+            logger.debug(f"Stored fundamentals for {symbol} from {data_source}")
+        return persisted
 
     def record_on_demand_fallback(self) -> None:
         """Track explicit single-symbol provider fallbacks for observability."""

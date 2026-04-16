@@ -166,6 +166,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
         skip_universe_refresh=True,
         skip_fundamentals_refresh=True,
+        build_mode=export_script.STATIC_BUILD_MODE_FULL,
         hydrate_published_snapshot=True,
     )
 
@@ -183,6 +184,82 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     assert "universe_refresh" not in results
     assert "fundamentals_refresh" not in results
     assert results["fundamentals_hydrate"]["task"] == "fundamentals_hydrate"
+
+
+def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch):
+    calls: list[str] = []
+
+    def make_task(name: str):
+        return SimpleNamespace(
+            run=lambda **kwargs: calls.append(name) or {"task": name, "kwargs": kwargs},
+        )
+
+    @contextmanager
+    def fake_session():
+        yield "db-session"
+
+    hydrate_calls: list[tuple[object, bool]] = []
+
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
+    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: calls.append("feature_snapshot")
+            or {"run_id": 77, "kwargs": kwargs}
+        ),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date: calls.append("price_refresh") or {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_breadth_history",
+        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_ensure_group_rank_history",
+        lambda *, as_of_date: {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(
+        export_script,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            hydrate_all_published_snapshots=lambda db, allow_yahoo_hydration=False: hydrate_calls.append((db, allow_yahoo_hydration))
+            or {"task": "fundamentals_hydrate"},
+        ),
+    )
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "_enrich_feature_run_with_ibd_metadata",
+        lambda *, feature_run_id, ranking_date: {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
+    )
+
+    results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
+        skip_universe_refresh=True,
+        skip_fundamentals_refresh=True,
+        build_mode=export_script.STATIC_BUILD_MODE_PRICE_DELTA,
+        hydrate_published_snapshot=True,
+    )
+
+    assert warnings == []
+    assert hydrate_calls == []
+    assert "fundamentals_hydrate" not in results
 
 
 def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):

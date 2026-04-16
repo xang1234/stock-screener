@@ -65,6 +65,63 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
 
+      - name: Seed prior weekly reference bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/weekly-reference-seed
+          export MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
+          BUNDLE_ASSET_NAME=""
+
+          if gh release download weekly-reference-data \
+            --pattern "weekly-reference-latest-${MARKET_LOWER}.json" \
+            --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+            BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          market = os.environ["MARKET_LOWER"]
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference-seed/weekly-reference-latest-{market}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+          elif [ "${{ matrix.market }}" = "US" ] && gh release download weekly-reference-data \
+            --pattern "weekly-reference-latest.json" \
+            --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+            BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path("/tmp/weekly-reference-seed/weekly-reference-latest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+          fi
+
+          if [ -n "$BUNDLE_ASSET_NAME" ]; then
+            if gh release download weekly-reference-data \
+              --pattern "$BUNDLE_ASSET_NAME" \
+              --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+              cd backend
+              python -m app.scripts.import_weekly_reference_bundle \
+                --input "/tmp/weekly-reference-seed/${BUNDLE_ASSET_NAME}" \
+                --hydrate-mode full
+            else
+              echo "Unable to download prior bundle ${BUNDLE_ASSET_NAME} for ${{ matrix.market }}; continuing without seed."
+            fi
+          else
+            echo "No prior weekly reference bundle found for ${{ matrix.market }}; continuing without seed."
+          fi
+
       - name: Build weekly reference bundle
         run: |
           cd backend

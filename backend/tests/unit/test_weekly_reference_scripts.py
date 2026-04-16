@@ -30,7 +30,7 @@ def test_build_weekly_reference_bundle_requires_market(monkeypatch, tmp_path):
         build_script.main()
 
 
-def test_build_weekly_reference_bundle_runs_us_publish_hydrate_and_export(monkeypatch, tmp_path, capsys):
+def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, tmp_path, capsys):
     published_at = datetime(2026, 4, 4, 12, 10, 0)
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
@@ -56,34 +56,6 @@ def test_build_weekly_reference_bundle_runs_us_publish_hydrate_and_export(monkey
                 "snapshot_key": snapshot_key,
                 "market": market,
             }
-        ),
-        hydrate_published_snapshot=lambda db, snapshot_key, allow_yahoo_hydration=True, **kwargs: (
-            kwargs["progress_callback"](
-                {
-                    "stage": "hydrate_start",
-                    "total_symbols": 10,
-                    "total_chunks": 1,
-                    "chunk_size": 200,
-                }
-            )
-            or kwargs["progress_callback"](
-                {
-                    "stage": "hydrate_chunk_complete",
-                    "chunk_index": 1,
-                    "total_chunks": 1,
-                    "processed_symbols": 10,
-                    "total_symbols": 10,
-                    "percent_complete": 100.0,
-                    "live_price_symbols": 9,
-                    "cached_only_symbols": 1,
-                    "yahoo_hydrated": 3,
-                    "missing_prices": 0,
-                    "missing_yahoo": 1,
-                    "skipped_yahoo_price_symbols": 1,
-                    "skipped_yahoo_field_symbols": 1,
-                }
-            )
-            or {"hydrated": 10, "snapshot_key": snapshot_key}
         ),
         get_published_run=lambda db, snapshot_key: type(
             "Run",
@@ -135,8 +107,6 @@ def test_build_weekly_reference_bundle_runs_us_publish_hydrate_and_export(monkey
     stdout = capsys.readouterr().out
     assert "Starting stock universe refresh from Finviz..." in stdout
     assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
-    assert "[hydrate] starting 10 symbols in 1 chunks (chunk_size=200)" in stdout
-    assert "[hydrate] chunk 1/1 processed 10/10 (100.0%)" in stdout
     assert "Weekly reference bundle complete for US:" in stdout
 
 
@@ -267,9 +237,11 @@ def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_pa
     bundle_path.write_bytes(b"bundle")
     monkeypatch.setattr(import_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(import_script, "SessionLocal", _fake_session)
-    import_calls: list[Path] = []
+    import_calls: list[tuple[Path, bool, str]] = []
     provider_snapshot_service = SimpleNamespace(
-        import_weekly_reference_bundle=lambda db, input_path: import_calls.append(input_path) or {"rows": 10},
+        import_weekly_reference_bundle=lambda db, input_path, hydrate_cache=True, hydrate_mode="static": (
+            import_calls.append((input_path, hydrate_cache, hydrate_mode)) or {"rows": 10}
+        ),
     )
     monkeypatch.setattr(import_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
     monkeypatch.setattr(
@@ -278,7 +250,7 @@ def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_pa
     )
 
     assert import_script.main() == 0
-    assert import_calls == [bundle_path]
+    assert import_calls == [(bundle_path, True, "static")]
     assert "Weekly reference import complete:" in capsys.readouterr().out
 
 

@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -996,8 +996,12 @@ class ProviderSnapshotService:
         db: Session,
         *,
         input_path: Path,
+        hydrate_cache: bool = True,
+        hydrate_mode: Literal["static", "full"] = "static",
     ) -> Dict[str, Any]:
         """Import a weekly reference bundle into the local database."""
+        if hydrate_mode not in {"static", "full"}:
+            raise ValueError(f"Unsupported hydrate_mode {hydrate_mode!r}")
         payload = self._read_bundle_payload(input_path)
         if payload.get("schema_version") != self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION:
             raise ValueError(
@@ -1017,6 +1021,7 @@ class ProviderSnapshotService:
         coverage = snapshot.get("coverage_stats")
         parity = snapshot.get("parity_stats")
         warnings = snapshot.get("warnings")
+        imported_payloads: list[dict[str, Any]] = []
 
         try:
             self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
@@ -1073,6 +1078,7 @@ class ProviderSnapshotService:
                         "local_code": identity.local_code,
                     }
                 )
+                imported_payloads.append(normalized_payload)
                 rows.append(
                     ProviderSnapshotRow(
                         run_id=run.id,
@@ -1101,6 +1107,44 @@ class ProviderSnapshotService:
             db.rollback()
             raise
 
+        hydrated_symbols = 0
+        failed_hydration_symbols: list[str] = []
+        if hydrate_cache and imported_payloads:
+            existing_payloads = (
+                self.fundamentals_cache.get_many(
+                    [payload["symbol"] for payload in imported_payloads]
+                )
+                if hydrate_mode == "full"
+                else {}
+            )
+            for normalized_payload in imported_payloads:
+                symbol = normalized_payload["symbol"]
+                payload_to_store = dict(normalized_payload)
+                if hydrate_mode == "full":
+                    payload_to_store = self.fundamentals_cache._merge_fundamentals(
+                        payload_to_store,
+                        existing_payloads.get(symbol) or {},
+                    )
+                persisted = self.fundamentals_cache.store(
+                    symbol,
+                    payload_to_store,
+                    data_source="bundle_import",
+                    market=payload_to_store.get("market"),
+                )
+                if persisted:
+                    hydrated_symbols += 1
+                else:
+                    failed_hydration_symbols.append(symbol)
+
+        if failed_hydration_symbols:
+            preview = ", ".join(failed_hydration_symbols[:10])
+            if len(failed_hydration_symbols) > 10:
+                preview += ", ..."
+            raise RuntimeError(
+                "Failed to persist imported fundamentals for "
+                f"{len(failed_hydration_symbols)} symbol(s): {preview}"
+            )
+
         return {
             "run_id": run.id,
             "source_revision": run.source_revision,
@@ -1108,6 +1152,9 @@ class ProviderSnapshotService:
             "universe_rows": imported_universe_count,
             "as_of_date": payload.get("as_of_date"),
             "market": "MULTI" if legacy_global_bundle else bundle_market,
+            "hydrate_cache": hydrate_cache,
+            "hydrate_mode": hydrate_mode,
+            "hydrated_symbols": hydrated_symbols,
         }
 
     @staticmethod

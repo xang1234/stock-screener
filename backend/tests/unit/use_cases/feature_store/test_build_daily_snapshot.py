@@ -147,6 +147,14 @@ class TestBuildDailySnapshotCommand:
         assert cmd.dq_thresholds.row_count_threshold == 0.5
         assert cmd.dq_thresholds.null_max_rate == 0.1
 
+    def test_static_parallel_workers_must_be_positive(self):
+        with pytest.raises(ValueError, match="static_parallel_workers"):
+            _make_cmd(static_parallel_workers=0)
+
+    def test_static_chunk_size_must_be_positive_when_provided(self):
+        with pytest.raises(ValueError, match="static_chunk_size"):
+            _make_cmd(static_chunk_size=0)
+
 
 # ---------------------------------------------------------------------------
 # Happy path
@@ -553,6 +561,73 @@ class TestBulkDataPreparation:
         assert scanner.calls == ["AAPL", "NVDA"]
         assert any("Skipped unsupported Yahoo price symbols" in warning for warning in result.warnings)
         assert uow.feature_store._universe[result.run_id] == ["AAPL", "NVDA"]
+
+    @_PATCH_TRADING_DAY
+    def test_static_daily_mode_uses_static_chunk_size_for_bulk_prefetch(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT", "GOOGL", "NVDA"])
+
+        class CountingProvider(FakeStockDataProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.bulk_calls: list[list[str]] = []
+
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
+            ) -> dict[str, object]:
+                self.bulk_calls.append(list(symbols))
+                return super().prepare_data_bulk(
+                    symbols,
+                    requirements,
+                    allow_partial=allow_partial,
+                    batch_only_prices=batch_only_prices,
+                    batch_only_fundamentals=batch_only_fundamentals,
+                )
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
+                self.calls.append(symbol)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        provider = CountingProvider()
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=provider,
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                chunk_size=2,
+                require_bulk_prefetch=True,
+                batch_only_prices=True,
+                batch_only_fundamentals=True,
+                static_chunk_size=4,
+                static_parallel_workers=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert result.status == RunStatus.PUBLISHED.value
+        assert provider.bulk_calls == [["AAPL", "MSFT", "GOOGL", "NVDA"]]
 
 
 # ---------------------------------------------------------------------------

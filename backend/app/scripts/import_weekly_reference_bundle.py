@@ -17,6 +17,17 @@ def main() -> int:
         required=True,
         help="Path to a weekly-reference bundle (.json or .json.gz).",
     )
+    parser.add_argument(
+        "--no-hydrate-cache",
+        action="store_true",
+        help="Import snapshot/universe rows without hydrating stock_fundamentals or Redis.",
+    )
+    parser.add_argument(
+        "--hydrate-mode",
+        choices=("static", "full"),
+        default="static",
+        help="How to hydrate imported fundamentals into local cache/database.",
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -26,6 +37,8 @@ def main() -> int:
         stats = provider_snapshot_service.import_weekly_reference_bundle(
             db,
             input_path=Path(args.input),
+            hydrate_cache=not args.no_hydrate_cache,
+            hydrate_mode=args.hydrate_mode,
         )
 
     print("Weekly reference import complete:")
