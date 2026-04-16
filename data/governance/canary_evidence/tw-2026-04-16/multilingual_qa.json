@@ -1,0 +1,15 @@
+{
+  "_provenance": "synthetic dress-rehearsal evidence - represents what the multilingual QA harness would emit against the zh-TW/zh/ja golden set after enabling TW/TPEX behind asia_themes_TW_enabled. Real production evidence supersedes this once asia.7.6 produces it.",
+  "evidence_label": "tw-canary-dress-rehearsal-2026-04-16",
+  "harness_version": "1.0",
+  "languages_evaluated": ["zh-TW", "zh", "ja"],
+  "golden_set_size": 540,
+  "precision": 0.94,
+  "recall": 0.86,
+  "false_positive_rate": 0.04,
+  "per_language": {
+    "zh-TW": {"precision": 0.95, "recall": 0.87, "false_positive_rate": 0.04},
+    "zh": {"precision": 0.93, "recall": 0.85, "false_positive_rate": 0.05},
+    "ja": {"precision": 0.94, "recall": 0.86, "false_positive_rate": 0.03}
+  }
+}

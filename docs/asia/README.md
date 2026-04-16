@@ -23,6 +23,10 @@ This folder contains the authoritative architecture decision records for ASIA ex
 12. [ASIA v2 Legacy Universe Compat + Deprecation Policy](./asia_v2_legacy_universe_compat_deprecation_policy.md)
 13. [ASIA v2 E8 API / Client Migration Guide](./asia_v2_e8_api_migration_guide.md)
 14. [ADR ASIA-E8: Asia Index Membership Storage and Seed Workflow (v1)](./adr_asia_e8_index_membership_v1.md)
+15. [ASIA v2 Data-Availability Launch Gate (2026-04-16)](./asia_v2_data_availability_launch_gate_2026-04-16.md)
+16. [ASIA v2 GA Signoff (2026-04-16)](./asia_v2_ga_signoff_2026-04-16.md)
+17. [ASIA v2 Rollout Retrospective (2026-04-16)](./asia_v2_rollout_retrospective_2026-04-16.md)
+18. [ASIA v2 TW Canary Execution Record (2026-04-16)](./asia_v2_tw_canary_execution_2026-04-16.md)
 
 ## Consumption Rules
 

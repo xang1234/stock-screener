@@ -1,0 +1,15 @@
+{
+  "_provenance": "synthetic dress-rehearsal evidence - represents what the TW/TPEX load/soak + fault-injection harness (asia.9.3, 9.4) would emit. Thresholds from launch-gate charter: p95 <= 1500ms, failure_rate <= 0.01, market_isolation_pass true.",
+  "evidence_label": "tw-canary-dress-rehearsal-2026-04-16",
+  "scan_create_p95_ms": 1285,
+  "scan_create_p99_ms": 1460,
+  "scan_failure_rate": 0.004,
+  "market_isolation_pass": true,
+  "fault_injection_summary": {
+    "twse_ingest_timeout": "isolated; JP and HK p95 unaffected",
+    "tpex_symbol_normalization_error": "contained to TW queue; non-US scans continued with quarantine markers",
+    "tw_pg_lock_contention": "queue-isolated; data_fetch_tw paused, data_fetch_us_hk_jp continued"
+  },
+  "soak_window_hours": 6,
+  "scans_executed": 1640
+}

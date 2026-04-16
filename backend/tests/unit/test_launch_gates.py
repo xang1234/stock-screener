@@ -32,11 +32,13 @@ from app.services.governance.launch_gates import (
     GateVerdict,
     LaunchGateReport,
     _check_g2_universe,
+    _check_g4_fundamentals,
     render_json,
     render_markdown,
     run_all_gates,
 )
 from app.services.governance.gate_artifact import write_artifacts
+from app.services.telemetry.schema import completeness_distribution_payload
 
 
 # G3 and G9 read the live benchmark registry and flag matrix doc — both are
@@ -110,7 +112,7 @@ class TestSelfCheckGates:
         report = run_all_gates(project_root=_PROJECT_ROOT, now=_NOW)
         g3 = next(g for g in report.gates if g.gate_id == "G3")
         assert g3.status == GateStatus.PASS, g3.detail
-        assert g3.metrics["checked_markets"] == ["HK", "JP", "TW", "US"]
+        assert g3.metrics["checked_markets"] == ["US", "HK", "JP", "TW"]
 
     def test_g8_observability_passes_with_recent_drill(self, tmp_path):
         root = _make_docs_root(tmp_path)
@@ -197,6 +199,58 @@ class TestDbBackedGateResilience:
 
         assert g2.status == GateStatus.MISSING_EVIDENCE
         assert g2.detail.startswith("DB query failed:")
+
+    def test_g2_scopes_to_enabled_markets(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("US", "HK"))
+        rows = [
+            SimpleNamespace(market="HK", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 8}),
+            SimpleNamespace(market="TW", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 120}),
+        ]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDb(rows))
+
+        assert g2.status == GateStatus.PASS
+        assert g2.metrics["worst_market"] == "HK"
+
+    def test_g4_scopes_to_enabled_markets_and_checks_transparency(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(
+            project_root=_PROJECT_ROOT,
+            now=_NOW,
+            enabled_markets=("US", "HK"),
+            target_market="HK",
+        )
+        rows = [
+            SimpleNamespace(
+                market="HK",
+                recorded_at=_NOW,
+                payload=completeness_distribution_payload(
+                    bucket_counts={"0-25": 20, "25-50": 120, "50-75": 220, "75-90": 260, "90-100": 380},
+                    symbols_total=1000,
+                ),
+            ),
+            SimpleNamespace(
+                market="TW",
+                recorded_at=_NOW,
+                payload=completeness_distribution_payload(
+                    bucket_counts={"0-25": 490, "25-50": 120, "50-75": 120, "75-90": 120, "90-100": 150},
+                    symbols_total=1000,
+                ),
+            ),
+        ]
+
+        g4 = _check_g4_fundamentals(ctx, db=_FakeDb(rows))
+
+        assert g4.status == GateStatus.PASS, g4.detail
+        assert g4.metrics["worst_market"] == "HK"
+        assert g4.metrics["transparency_sample_market"] == "HK"
 
 
 class TestExternalEvidenceGates:
@@ -328,6 +382,30 @@ class TestArtifactWriter:
         assert report.verdict.upper() in md
         # Hash appears at top + bottom.
         assert md.count(report.content_hash) == 2
+
+    def test_markdown_surfaces_optional_provenance(self):
+        report = run_all_gates(
+            project_root=_PROJECT_ROOT,
+            now=_NOW,
+            enabled_markets=["US", "HK"],
+            target_market="HK",
+            execution_mode="synthetic_seeded_harness",
+            provenance_note="Synthetic rehearsal only; does not unblock downstream canaries.",
+        )
+        md = render_markdown(report)
+        assert "Enabled markets: ['US', 'HK']" in md
+        assert "Target market: HK" in md
+        assert "Execution mode: synthetic_seeded_harness" in md
+        assert "Synthetic rehearsal only; does not unblock downstream canaries." in md
+
+    def test_target_market_must_be_in_enabled_markets(self):
+        with pytest.raises(ValueError):
+            run_all_gates(
+                project_root=_PROJECT_ROOT,
+                now=_NOW,
+                enabled_markets=["US", "HK"],
+                target_market="JP",
+            )
 
 
 class TestHashDeterminism:

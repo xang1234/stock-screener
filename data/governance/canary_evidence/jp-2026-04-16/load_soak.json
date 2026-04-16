@@ -1,0 +1,15 @@
+{
+  "_provenance": "synthetic dress-rehearsal evidence - represents what the higher-volume JP load/soak + fault-injection harness (asia.9.3, 9.4) would emit. Thresholds from launch-gate charter: p95 <= 1500ms, failure_rate <= 0.01, market_isolation_pass true.",
+  "evidence_label": "jp-canary-dress-rehearsal-2026-04-16",
+  "scan_create_p95_ms": 1325,
+  "scan_create_p99_ms": 1492,
+  "scan_failure_rate": 0.005,
+  "market_isolation_pass": true,
+  "fault_injection_summary": {
+    "jp_yfinance_outage": "isolated; US and HK p95 unaffected",
+    "jp_redis_partition": "isolated; JP queue retried without cross-market spillover",
+    "jp_pg_lock_contention": "queue-isolated; data_fetch_jp paused, data_fetch_us_hk_tw continued"
+  },
+  "soak_window_hours": 6,
+  "scans_executed": 1860
+}

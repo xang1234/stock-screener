@@ -25,7 +25,7 @@ import inspect
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -33,9 +33,9 @@ from ...utils.datetime_utils import as_aware_utc
 from .signed_artifact import compute_content_hash
 
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 CHARTER_VERSION = "1.0"  # ties to docs/asia/asia_v2_launch_gate_charter.md
-GATE_RUNNER_VERSION = "1.0"
+GATE_RUNNER_VERSION = "1.1"
 
 
 class GateStatus:
@@ -77,6 +77,10 @@ class LaunchGateReport:
     hard_failed: int
     hard_missing_evidence: int
     gates: List[GateResult]
+    enabled_markets: List[str] = field(default_factory=list)
+    target_market: Optional[str] = None
+    execution_mode: Optional[str] = None
+    provenance_note: Optional[str] = None
     content_hash: Optional[str] = None
 
 
@@ -92,6 +96,8 @@ class GateContext:
     external_evidence: Dict[str, str] = field(default_factory=dict)
     # Injectable wall-clock for tests.
     now: Optional[datetime] = None
+    enabled_markets: tuple[str, ...] = ()
+    target_market: Optional[str] = None
 
     def now_utc(self) -> datetime:
         return as_aware_utc(self.now) or datetime.now(timezone.utc)
@@ -113,6 +119,41 @@ def _read_text(path: Path) -> Optional[str]:
 
 def _doc_path(ctx: GateContext, name: str) -> Path:
     return ctx.project_root / "docs" / "asia" / name
+
+
+def _normalize_markets(markets: Optional[List[str]] = None) -> tuple[str, ...]:
+    from ...tasks.market_queues import SUPPORTED_MARKETS
+
+    allowed = set(SUPPORTED_MARKETS)
+    normalized: List[str] = []
+    for raw in markets or list(SUPPORTED_MARKETS):
+        market = str(raw).strip().upper()
+        if market not in allowed:
+            raise ValueError(
+                f"Unsupported market {raw!r}; expected one of {sorted(allowed)}."
+            )
+        if market not in normalized:
+            normalized.append(market)
+    if not normalized:
+        raise ValueError("enabled_markets must not be empty.")
+    return tuple(normalized)
+
+
+def _latest_rows_by_market(rows: List[object], markets: tuple[str, ...]) -> Dict[str, object]:
+    latest: Dict[str, object] = {}
+    for row in rows:
+        market = getattr(row, "market", None)
+        if market is not None and market not in markets:
+            continue
+        if market is None:
+            # Test doubles may omit market because they only exercise payload parsing.
+            market = "__unknown__"
+        current = latest.get(market)
+        recorded_at = getattr(row, "recorded_at", None)
+        current_at = getattr(current, "recorded_at", None) if current is not None else None
+        if current is None or (recorded_at is not None and current_at is not None and recorded_at > current_at):
+            latest[market] = row
+    return latest
 
 
 def _drill_age_days(text: str, ctx: GateContext) -> Optional[int]:
@@ -221,15 +262,22 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
             .filter(MarketTelemetryEvent.recorded_at >= ctx.now_utc() - timedelta(days=2))
             .all()
         )
-        if not rows:
+        latest_rows = _latest_rows_by_market(rows, ctx.enabled_markets)
+        if not latest_rows:
             return GateResult(
                 gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                 status=GateStatus.MISSING_EVIDENCE,
-                detail="No universe_drift events in the last 2 days.",
+                detail=(
+                    "No universe_drift events in the last 2 days for enabled markets "
+                    f"{list(ctx.enabled_markets)}."
+                ),
             )
 
         worst = 0.0
-        for r in rows:
+        worst_market = None
+        for market, r in latest_rows.items():
+            if market == "__unknown__":
+                market = None
             p = r.payload or {}
             prior = p.get("prior_size") or 0
             delta = p.get("delta") or 0
@@ -237,6 +285,7 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
                 ratio = abs(float(delta)) / float(prior)
                 if ratio > worst:
                     worst = ratio
+                    worst_market = market
     except Exception as exc:
         return GateResult(
             gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
@@ -248,14 +297,28 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
         return GateResult(
             gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
             status=GateStatus.FAIL,
-            detail=f"Worst universe drift ratio in last 2d = {worst:.3f} (>= 0.15 critical).",
-            metrics={"worst_drift_ratio": worst},
+            detail=(
+                f"Worst universe drift ratio in last 2d = {worst:.3f} "
+                f"(>= 0.15 critical) across {list(ctx.enabled_markets)}."
+            ),
+            metrics={
+                "enabled_markets": list(ctx.enabled_markets),
+                "worst_drift_ratio": worst,
+                "worst_market": worst_market,
+            },
         )
     return GateResult(
         gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
         status=GateStatus.PASS,
-        detail=f"Worst universe drift ratio in last 2d = {worst:.3f} (< 0.15).",
-        metrics={"worst_drift_ratio": worst},
+        detail=(
+            f"Worst universe drift ratio in last 2d = {worst:.3f} (< 0.15) "
+            f"across {list(ctx.enabled_markets)}."
+        ),
+        metrics={
+            "enabled_markets": list(ctx.enabled_markets),
+            "worst_drift_ratio": worst,
+            "worst_market": worst_market,
+        },
     )
 
 
@@ -268,35 +331,85 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
     """
     try:
         from ...services.benchmark_registry_service import benchmark_registry
+        from ...services.market_calendar_service import MarketCalendarService
     except Exception as exc:
         return GateResult(
             gate_id="G3", name="Benchmark/Calendar Correctness", severity="hard",
             status=GateStatus.MISSING_EVIDENCE,
-            detail=f"Benchmark registry import failed: {exc}",
+            detail=f"Benchmark/calendar dependency import failed: {exc}",
         )
 
     expected = {"US": "SPY", "HK": "^HSI", "JP": "^N225", "TW": "^TWII"}
-    mismatches = {}
-    for market, want in expected.items():
+    expected_calendar_ids = {"US": "XNYS", "HK": "XHKG", "JP": "XTKS", "TW": "XTAI"}
+    markets = ctx.enabled_markets
+    benchmark_mismatches = {}
+    calendar_id_mismatches = {}
+    weekend_regressions = []
+    sunday_regressions = {}
+
+    service = MarketCalendarService()
+    saturday = date(2026, 4, 11)
+    sunday_utc = datetime(2026, 4, 12, 12, 0, 0, tzinfo=timezone.utc)
+    expected_last_completed = date(2026, 4, 10)
+
+    for market in markets:
         try:
             got = benchmark_registry.get_primary_symbol(market)
         except Exception as exc:
-            mismatches[market] = f"lookup failed: {exc}"
+            benchmark_mismatches[market] = f"lookup failed: {exc}"
             continue
-        if got != want:
-            mismatches[market] = f"expected {want}, got {got}"
-    if mismatches:
+        if got != expected[market]:
+            benchmark_mismatches[market] = f"expected {expected[market]}, got {got}"
+        try:
+            calendar_id = service.calendar_id(market)
+            if calendar_id != expected_calendar_ids[market]:
+                calendar_id_mismatches[market] = (
+                    f"expected {expected_calendar_ids[market]}, got {calendar_id}"
+                )
+            if service.is_trading_day(market, saturday):
+                weekend_regressions.append(market)
+            last_completed = service.last_completed_trading_day(market, now=sunday_utc)
+            if last_completed != expected_last_completed:
+                sunday_regressions[market] = str(last_completed)
+        except Exception as exc:
+            return GateResult(
+                gate_id="G3", name="Benchmark/Calendar Correctness", severity="hard",
+                status=GateStatus.MISSING_EVIDENCE,
+                detail=f"Calendar invariant check failed to execute: {exc}",
+                metrics={"enabled_markets": list(markets)},
+            )
+
+    if benchmark_mismatches or calendar_id_mismatches or weekend_regressions or sunday_regressions:
         return GateResult(
             gate_id="G3", name="Benchmark/Calendar Correctness", severity="hard",
             status=GateStatus.FAIL,
-            detail=f"Benchmark registry mismatches: {mismatches}",
-            metrics={"mismatches": mismatches},
+            detail=(
+                "Benchmark/calendar regressions detected: "
+                f"benchmark={benchmark_mismatches}, "
+                f"calendar_ids={calendar_id_mismatches}, "
+                f"weekend_sessions={weekend_regressions}, "
+                f"sunday_rollover={sunday_regressions}"
+            ),
+            metrics={
+                "enabled_markets": list(markets),
+                "benchmark_mismatches": benchmark_mismatches,
+                "calendar_id_mismatches": calendar_id_mismatches,
+                "weekend_session_regressions": weekend_regressions,
+                "sunday_rollover_regressions": sunday_regressions,
+            },
         )
     return GateResult(
         gate_id="G3", name="Benchmark/Calendar Correctness", severity="hard",
         status=GateStatus.PASS,
-        detail="Benchmark registry maps US→SPY, HK→^HSI, JP→^N225, TW→^TWII.",
-        metrics={"checked_markets": sorted(expected.keys())},
+        detail=(
+            "Benchmark registry and calendar invariants passed for "
+            f"{list(markets)}."
+        ),
+        metrics={
+            "checked_markets": list(markets),
+            "saturday_probe": str(saturday),
+            "sunday_rollover_probe": str(sunday_utc.date()),
+        },
     )
 
 
@@ -315,23 +428,129 @@ def _check_g4_fundamentals(ctx: GateContext, db=None) -> GateResult:
     try:
         from ...models.market_telemetry import MarketTelemetryEvent
         from ...services.telemetry.schema import MetricKey, low_completeness_ratio
-        from ...tasks.market_queues import SUPPORTED_MARKETS
+        from ...domain.scanning.models import ScanResultItemDomain
+        from ...infra.db.repositories.feature_store_repo import _unpack_feature_joined_row
+        from ...infra.db.repositories.scan_result_repo import _unpack_joined_row
+        from ...schemas.scanning import ScanResultItem
+        from ...services.field_capability_registry import (
+            REASON_CODE_NON_US_GAP,
+            REASON_CODE_POLICY_EXCLUDED,
+        )
+        from ...services.growth_cadence_service import (
+            BASIS_COMPARABLE_YOY,
+            BASIS_UNAVAILABLE,
+            CADENCE_INSUFFICIENT,
+            CADENCE_SEMIANNUAL,
+            REASON_COMPARABLE_YOY_FALLBACK,
+            REASON_INSUFFICIENT_HISTORY,
+        )
 
+        rows = (
+            db.query(MarketTelemetryEvent)
+            .filter(MarketTelemetryEvent.metric_key == MetricKey.COMPLETENESS_DISTRIBUTION)
+            .all()
+        )
+        latest_rows = _latest_rows_by_market(rows, ctx.enabled_markets)
         worst = 0.0
         worst_market = None
-        for m in SUPPORTED_MARKETS:
-            row = (
-                db.query(MarketTelemetryEvent)
-                .filter(MarketTelemetryEvent.market == m)
-                .filter(MarketTelemetryEvent.metric_key == MetricKey.COMPLETENESS_DISTRIBUTION)
-                .order_by(MarketTelemetryEvent.recorded_at.desc())
-                .first()
-            )
-            if row is None:
-                continue
+        for market, row in latest_rows.items():
+            if market == "__unknown__":
+                market = None
             ratio = low_completeness_ratio(row.payload or {})
             if ratio is not None and (worst_market is None or ratio > worst):
-                worst, worst_market = ratio, m
+                worst, worst_market = ratio, market
+
+        sample_market = ctx.target_market or next(
+            (market for market in ctx.enabled_markets if market != "US"),
+            "HK",
+        )
+
+        fields = getattr(ScanResultItem, "model_fields", None) or getattr(ScanResultItem, "__fields__", {})
+        required_fields = {"field_availability", "growth_reporting_cadence", "growth_metric_basis"}
+        missing_fields = sorted(required_fields.difference(fields))
+        if missing_fields:
+            raise AssertionError(f"scan schema missing transparency fields: {missing_fields}")
+
+        unavailable_row = (
+            object(),
+            "Synthetic Co",
+            sample_market,
+            "TEST",
+            "USD",
+            1_000_000.0,
+            100_000.0,
+            None,
+            None,
+            None,
+            CADENCE_INSUFFICIENT,
+            BASIS_UNAVAILABLE,
+        )
+        _, unavailable_joined = _unpack_joined_row(unavailable_row)
+        availability = unavailable_joined["field_availability"] or {}
+        for field_name in ("institutional_ownership", "insider_ownership", "short_interest"):
+            entry = availability.get(field_name) or {}
+            if entry.get("status") != "unsupported":
+                raise AssertionError(f"{field_name} did not surface unsupported status")
+            if entry.get("reason_code") not in (REASON_CODE_POLICY_EXCLUDED, REASON_CODE_NON_US_GAP):
+                raise AssertionError(f"{field_name} surfaced unexpected reason code {entry.get('reason_code')!r}")
+        if (availability.get("eps_growth_qq") or {}).get("reason_code") != REASON_INSUFFICIENT_HISTORY:
+            raise AssertionError("eps_growth_qq missing insufficient-history reason code")
+
+        computed_row = (
+            object(),
+            "Synthetic Co",
+            sample_market,
+            "TEST",
+            "USD",
+            1_000_000.0,
+            100_000.0,
+            None,
+            None,
+            None,
+            CADENCE_SEMIANNUAL,
+            BASIS_COMPARABLE_YOY,
+        )
+        _, computed_joined = _unpack_joined_row(computed_row)
+        computed_entry = (computed_joined["field_availability"] or {}).get("eps_growth_qq") or {}
+        if computed_entry.get("status") != "computed":
+            raise AssertionError("eps_growth_qq comparable-period fallback did not surface computed status")
+        if computed_entry.get("reason_code") != REASON_COMPARABLE_YOY_FALLBACK:
+            raise AssertionError("eps_growth_qq comparable-period fallback reason code missing")
+
+        _, feature_joined = _unpack_feature_joined_row(unavailable_row)
+        if "institutional_ownership" not in (feature_joined["field_availability"] or {}):
+            raise AssertionError("feature-store transparency contract dropped ownership availability")
+
+        domain_item = ScanResultItemDomain(
+            symbol="0700.HK",
+            composite_score=80.0,
+            rating="Buy",
+            current_price=410.0,
+            screener_outputs={},
+            screeners_run=["minervini"],
+            composite_method="weighted_average",
+            screeners_passed=1,
+            screeners_total=1,
+            extended_fields={
+                "field_availability": computed_joined["field_availability"],
+                "growth_reporting_cadence": CADENCE_SEMIANNUAL,
+                "growth_metric_basis": BASIS_COMPARABLE_YOY,
+            },
+        )
+        response = ScanResultItem.from_domain(domain_item)
+        if response.field_availability != computed_joined["field_availability"]:
+            raise AssertionError("HTTP schema mapping dropped field_availability")
+        if response.growth_reporting_cadence != CADENCE_SEMIANNUAL:
+            raise AssertionError("HTTP schema mapping dropped growth_reporting_cadence")
+        if response.growth_metric_basis != BASIS_COMPARABLE_YOY:
+            raise AssertionError("HTTP schema mapping dropped growth_metric_basis")
+    except AssertionError as exc:
+        return GateResult(
+            gate_id="G4", name="Fundamentals Data Quality", severity="hard",
+            status=GateStatus.FAIL,
+            detail=f"Transparency contract failed: {exc}",
+            metrics={"enabled_markets": list(ctx.enabled_markets)},
+        )
     except Exception as exc:
         return GateResult(
             gate_id="G4", name="Fundamentals Data Quality", severity="hard",
@@ -343,20 +562,39 @@ def _check_g4_fundamentals(ctx: GateContext, db=None) -> GateResult:
         return GateResult(
             gate_id="G4", name="Fundamentals Data Quality", severity="hard",
             status=GateStatus.MISSING_EVIDENCE,
-            detail="No completeness_distribution events found for any market.",
+            detail=(
+                "No completeness_distribution events found for enabled markets "
+                f"{list(ctx.enabled_markets)}."
+            ),
         )
     if worst >= 0.50:
         return GateResult(
             gate_id="G4", name="Fundamentals Data Quality", severity="hard",
             status=GateStatus.FAIL,
-            detail=f"Market {worst_market} 0-25 completeness bucket = {worst:.2f} (>= 0.50).",
-            metrics={"worst_market": worst_market, "worst_low_bucket_ratio": worst},
+            detail=(
+                f"Market {worst_market} 0-25 completeness bucket = {worst:.2f} "
+                f"(>= 0.50) across {list(ctx.enabled_markets)}."
+            ),
+            metrics={
+                "enabled_markets": list(ctx.enabled_markets),
+                "transparency_sample_market": sample_market,
+                "worst_market": worst_market,
+                "worst_low_bucket_ratio": worst,
+            },
         )
     return GateResult(
         gate_id="G4", name="Fundamentals Data Quality", severity="hard",
         status=GateStatus.PASS,
-        detail=f"Worst market completeness 0-25 bucket = {worst:.2f} (< 0.50) on {worst_market}.",
-        metrics={"worst_market": worst_market, "worst_low_bucket_ratio": worst},
+        detail=(
+            f"Worst market completeness 0-25 bucket = {worst:.2f} (< 0.50) on "
+            f"{worst_market}; transparency contract passed for {sample_market}."
+        ),
+        metrics={
+            "enabled_markets": list(ctx.enabled_markets),
+            "transparency_sample_market": sample_market,
+            "worst_market": worst_market,
+            "worst_low_bucket_ratio": worst,
+        },
     )
 
 
@@ -674,6 +912,10 @@ def run_all_gates(
     db=None,
     external_evidence: Optional[Dict[str, str]] = None,
     now: Optional[datetime] = None,
+    enabled_markets: Optional[List[str]] = None,
+    target_market: Optional[str] = None,
+    execution_mode: Optional[str] = None,
+    provenance_note: Optional[str] = None,
 ) -> LaunchGateReport:
     """Execute every gate in charter order and aggregate into one report.
 
@@ -686,7 +928,14 @@ def run_all_gates(
         project_root=project_root,
         external_evidence=dict(external_evidence or {}),
         now=now,
+        enabled_markets=_normalize_markets(enabled_markets),
+        target_market=target_market.strip().upper() if target_market else None,
     )
+    if ctx.target_market and ctx.target_market not in ctx.enabled_markets:
+        raise ValueError(
+            f"target_market {ctx.target_market!r} must be included in enabled_markets "
+            f"{list(ctx.enabled_markets)}."
+        )
 
     results: List[GateResult] = []
     for check in _GATES:
@@ -723,6 +972,10 @@ def run_all_gates(
         report_schema_version=REPORT_SCHEMA_VERSION,
         charter_version=CHARTER_VERSION,
         runner_version=GATE_RUNNER_VERSION,
+        enabled_markets=list(ctx.enabled_markets),
+        target_market=ctx.target_market,
+        execution_mode=execution_mode,
+        provenance_note=provenance_note,
         generated_at=ctx.now_utc().isoformat(),
         verdict=verdict,
         hard_gate_count=len(hard),
@@ -764,6 +1017,13 @@ def render_markdown(report: LaunchGateReport) -> str:
     lines.append(f"- Charter version: {report.charter_version}")
     lines.append(f"- Runner version: {report.runner_version}")
     lines.append(f"- Report schema version: {report.report_schema_version}")
+    lines.append(f"- Enabled markets: {report.enabled_markets}")
+    if report.target_market:
+        lines.append(f"- Target market: {report.target_market}")
+    if report.execution_mode:
+        lines.append(f"- Execution mode: {report.execution_mode}")
+    if report.provenance_note:
+        lines.append(f"- Provenance: {report.provenance_note}")
     lines.append(f"- **Verdict: {report.verdict.upper()}**")
     lines.append(
         f"- Hard gates: {report.hard_gate_count} total · "

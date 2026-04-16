@@ -9,6 +9,11 @@ Options:
                                   Pass multiple times: --evidence G5=qa.json --evidence G7=load.json
     --output-dir PATH             Override default output directory.
     --no-db                       Skip DB-backed gates (G2, G4) — they will report MISSING_EVIDENCE.
+    --enabled-market MARKET       Limit G2/G3/G4 evaluation scope to the named market set.
+                                  Repeatable; defaults to all supported markets.
+    --target-market MARKET        Optional canary target market recorded in the report.
+    --execution-mode MODE         Optional provenance label stored in the report.
+    --provenance-note TEXT        Optional human-readable provenance note stored in the report.
 
 Exit codes:
     0 — verdict PASS (all hard gates pass)
@@ -56,6 +61,14 @@ def main() -> int:
                         help="Override report output directory.")
     parser.add_argument("--no-db", action="store_true",
                         help="Skip DB-backed gates (G2, G4).")
+    parser.add_argument("--enabled-market", action="append", dest="enabled_markets",
+                        help="Enabled market scope for staged canary evaluation (repeatable).")
+    parser.add_argument("--target-market", default=None,
+                        help="Optional canary target market recorded in the report.")
+    parser.add_argument("--execution-mode", default=None,
+                        help="Optional provenance label to embed in the report.")
+    parser.add_argument("--provenance-note", default=None,
+                        help="Optional human-readable provenance note to embed in the report.")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[2]
@@ -84,7 +97,13 @@ def main() -> int:
 
     try:
         report = run_all_gates(
-            project_root=project_root, db=db, external_evidence=external,
+            project_root=project_root,
+            db=db,
+            external_evidence=external,
+            enabled_markets=args.enabled_markets,
+            target_market=args.target_market,
+            execution_mode=args.execution_mode,
+            provenance_note=args.provenance_note,
         )
     finally:
         if db is not None:
@@ -100,6 +119,13 @@ def main() -> int:
     print(f"Hard gates: {report.hard_gate_count} total · "
           f"{report.hard_passed} pass · {report.hard_failed} fail · "
           f"{report.hard_missing_evidence} missing evidence")
+    print(f"Enabled markets: {report.enabled_markets}")
+    if report.target_market:
+        print(f"Target market: {report.target_market}")
+    if report.execution_mode:
+        print(f"Execution mode: {report.execution_mode}")
+    if report.provenance_note:
+        print(f"Provenance: {report.provenance_note}")
     print(f"Content hash: {report.content_hash}")
     print("Artifacts:")
     for k, v in paths.items():
