@@ -2,7 +2,7 @@
 Celery tasks for stock universe management.
 
 Provides scheduled tasks for:
-- Weekly universe refresh from finviz (adds new stocks, deactivates removed)
+- Weekly universe refresh from finviz / official exchange sources
 - S&P 500 membership refresh
 """
 import logging
@@ -15,6 +15,11 @@ from ..wiring.bootstrap import get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "JP", "TW"})
+_OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
+_OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
+_OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
 
 
 def _count_active_universe(market: Optional[str]) -> Optional[int]:
@@ -56,6 +61,50 @@ def _emit_universe_drift(market: Optional[str], prior_size: Optional[int]) -> No
         )
     except Exception as exc:
         logger.debug("telemetry: universe_drift emit failed (%s)", exc)
+
+
+def _official_lock_retry_delay(retry_count: int) -> int:
+    return min(
+        _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS * max(1, retry_count + 1),
+        _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS,
+    )
+
+
+def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
+    """Dispatch an official-source snapshot into the market-specific ingest path."""
+    db = SessionLocal()
+    try:
+        stock_universe_service = get_stock_universe_service()
+        if snapshot.market == "HK":
+            return stock_universe_service.ingest_hk_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        if snapshot.market == "JP":
+            return stock_universe_service.ingest_jp_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        if snapshot.market == "TW":
+            return stock_universe_service.ingest_tw_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        raise ValueError(f"Unsupported official universe snapshot market {snapshot.market!r}")
+    finally:
+        db.close()
 
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_stock_universe')
@@ -140,6 +189,84 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         }
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_official_market_universe')
+def refresh_official_market_universe(self, market: str):
+    """Refresh HK/JP/TW universe snapshots from official exchange sources."""
+    from ..services.official_market_universe_source_service import (
+        OfficialMarketUniverseSourceService,
+    )
+    from ..wiring.bootstrap import get_data_fetch_lock
+    from .market_queues import log_extra, market_tag, normalize_market
+
+    _market = normalize_market(market)
+    if _market not in _OFFICIAL_SOURCE_MARKETS:
+        raise ValueError(
+            f"refresh_official_market_universe only supports {sorted(_OFFICIAL_SOURCE_MARKETS)}, "
+            f"got {_market!r}"
+        )
+
+    _log_extra = log_extra(_market)
+    task_id = getattr(self.request, "id", None) or "unknown"
+    task_name = "refresh_official_market_universe"
+    logger.info("=" * 60)
+    logger.info("TASK: Official Universe Refresh %s", market_tag(_market), extra=_log_extra)
+    logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
+    logger.info("=" * 60)
+
+    lock = get_data_fetch_lock()
+    acquired, is_reentrant = lock.acquire(task_name, task_id, market=_market)
+    if not acquired:
+        holder = lock.get_current_holder(market=_market) or {}
+        delay_seconds = _official_lock_retry_delay(getattr(self.request, "retries", 0))
+        logger.info(
+            "Official universe refresh lock busy for %s; held by %s (%s). Retrying in %ss.",
+            _market,
+            holder.get("task_name", "unknown"),
+            holder.get("task_id", "unknown"),
+            delay_seconds,
+            extra=_log_extra,
+        )
+        raise self.retry(
+            countdown=delay_seconds,
+            max_retries=_OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES,
+            exc=RuntimeError(
+                f"Market data fetch lock busy for {_market}; retrying official universe refresh"
+            ),
+        )
+
+    try:
+        prior_size = _count_active_universe(_market)
+        snapshot = OfficialMarketUniverseSourceService().fetch_market_snapshot(_market)
+        stats = _ingest_official_snapshot(snapshot)
+        _emit_universe_drift(_market, prior_size)
+
+        logger.info("=" * 60)
+        logger.info("Official Universe Refresh Complete %s", market_tag(_market), extra=_log_extra)
+        logger.info("Source: %s", snapshot.source_name, extra=_log_extra)
+        logger.info("Snapshot ID: %s", snapshot.snapshot_id, extra=_log_extra)
+        logger.info("Canonical rows: %s", stats.get('total', 0), extra=_log_extra)
+        logger.info("Added: %s", stats.get('added', 0), extra=_log_extra)
+        logger.info("Updated: %s", stats.get('updated', 0), extra=_log_extra)
+        logger.info("Rejected rows: %s", stats.get('rejected', 0), extra=_log_extra)
+        logger.info("=" * 60)
+
+        return {
+            'status': 'success',
+            'market': _market,
+            'source_name': snapshot.source_name,
+            'snapshot_id': snapshot.snapshot_id,
+            'snapshot_as_of': snapshot.snapshot_as_of,
+            **stats,
+            'timestamp': datetime.now().isoformat(),
+        }
+    except Exception:
+        logger.exception("Error refreshing official universe for %s", _market)
+        raise
+    finally:
+        if acquired and not is_reentrant:
+            lock.release(task_id, market=_market)
 
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_hk_universe_csv')
