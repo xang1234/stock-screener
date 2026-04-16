@@ -1540,7 +1540,7 @@ class PriceCacheService:
                     except Exception as e:
                         logger.warning(f"Error preparing row for {symbol}: {e}")
 
-            # Bulk insert in chunks (SQLite 999-variable limit / 8 columns = ~124 rows max)
+            # Bulk insert in conservative chunks to keep statement size bounded.
             if rows_to_insert:
                 chunk_size = 100
                 for i in range(0, len(rows_to_insert), chunk_size):

@@ -43,7 +43,6 @@ backend_dir = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(backend_dir))
 
 import pandas as pd
-from sqlalchemy import text
 
 from app.analysis.patterns.models import SETUP_ENGINE_DEFAULT_SCHEMA_VERSION
 from app.database import SessionLocal
@@ -232,9 +231,6 @@ def run_backfill(args: argparse.Namespace) -> None:
     db = SessionLocal()
 
     try:
-        # SQLite busy timeout for concurrent access
-        db.execute(text("PRAGMA busy_timeout = 30000"))
-
         # ── 1. Query target rows ──────────────────────────────────────
         statuses = [s.strip() for s in args.status.split(",")]
         all_rows = _build_query(

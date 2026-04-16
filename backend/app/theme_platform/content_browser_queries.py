@@ -411,8 +411,8 @@ def fetch_content_items_with_themes_with_recovery(
             if not _corruption_targets_theme_content_storage(**kwargs):
                 logger.error(
                     "Theme content browser detected database corruption outside rebuildable "
-                    "theme-content storage. Run backend/scripts/check_db_integrity.py --repair "
-                    "or restore the latest valid backup. Initial error: %s. Retry error: %s",
+                    "theme-content storage. Inspect the database and restore the latest valid "
+                    "backup. Initial error: %s. Retry error: %s",
                     exc,
                     retry_exc,
                 )

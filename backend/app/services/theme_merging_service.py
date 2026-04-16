@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func, or_, and_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from ..infra.db.portability import is_postgres
 from ..models.app_settings import AppSetting
 from ..models.theme import (
     ThemeCluster,
@@ -181,8 +182,7 @@ class ThemeMergingService:
 
     def _maybe_with_for_update(self, query):
         """Apply row-level locking on databases that support it."""
-        bind = self.db.get_bind()
-        if bind is not None and bind.dialect.name != "sqlite":
+        if is_postgres(self.db):
             return query.with_for_update()
         return query
 

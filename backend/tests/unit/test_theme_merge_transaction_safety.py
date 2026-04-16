@@ -54,6 +54,13 @@ def _make_cluster(db_session, *, key: str, name: str, pipeline: str = "technical
     return cluster
 
 
+def test_maybe_with_for_update_is_noop_for_sqlite_test_sessions(db_session):
+    service = _make_service(db_session)
+    query = db_session.query(ThemeCluster)
+
+    assert service._maybe_with_for_update(query) is query
+
+
 def test_approve_suggestion_retry_returns_idempotent_success(db_session):
     source = _make_cluster(db_session, key="ai_source", name="AI Source")
     target = _make_cluster(db_session, key="ai_target", name="AI Target")

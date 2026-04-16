@@ -164,8 +164,8 @@ class FeatureStoreRepository(abc.ABC):
     ) -> int:
         """Insert or update snapshot rows for a run.  Returns row count.
 
-        Uses true UPSERT (INSERT OR REPLACE) so Celery retries are safe.
-        Batched internally to avoid SQLite variable limit errors.
+        Uses true UPSERT semantics so Celery retries are safe.
+        Batched internally to keep statement size bounded.
         """
         ...
 

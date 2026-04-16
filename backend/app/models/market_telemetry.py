@@ -8,15 +8,11 @@ payload so metric definitions can evolve without breaking historical reads.
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, JSON, SmallInteger, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, Column, DateTime, Index, SmallInteger, String
 from sqlalchemy.sql import func
 
 from ..database import Base
-
-
-# Use JSONB on Postgres (queryable, indexed) and fall back to JSON on SQLite for tests.
-JsonType = JSON().with_variant(JSONB(), "postgresql")
+from .types import JsonColumn
 
 
 class MarketTelemetryEvent(Base):
@@ -28,7 +24,7 @@ class MarketTelemetryEvent(Base):
     market = Column(String(8), nullable=False)             # US/HK/JP/TW/SHARED
     metric_key = Column(String(64), nullable=False)        # freshness_lag/universe_drift/etc.
     schema_version = Column(SmallInteger, nullable=False)
-    payload = Column(JsonType, nullable=False)
+    payload = Column(JsonColumn, nullable=False)
     recorded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (

@@ -23,7 +23,7 @@ NEW_COLUMNS = [
     ("universe_market", "VARCHAR(8)"),
     ("universe_exchange", "VARCHAR(20)"),
     ("universe_index", "VARCHAR(20)"),
-    ("universe_symbols", "TEXT"),  # JSON stored as text in SQLite
+    ("universe_symbols", "TEXT"),
 ]
 
 # Mapping from legacy universe string to structured fields

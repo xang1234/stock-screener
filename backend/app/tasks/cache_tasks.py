@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -112,6 +112,122 @@ def allow_smart_refresh_time_window_bypass():
         yield
     finally:
         _SMART_REFRESH_TIME_WINDOW_BYPASS.reset(token)
+
+
+def run_orphaned_scan_cleanup(
+    *,
+    session_factory=SessionLocal,
+    now_utc: Optional[datetime] = None,
+):
+    """Delete cancelled and stale unfinished scans synchronously.
+
+    This is the operator-safe implementation used both by the Celery task and
+    by the manual maintenance script. It performs the cleanup itself rather
+    than only queueing work for a background worker.
+    """
+    from datetime import timedelta
+    from ..models.scan_result import Scan, ScanResult
+
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+
+    logger.info("=" * 80)
+    logger.info("Cleanup Orphaned Scans")
+    logger.info("Timestamp: %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("=" * 80)
+
+    db = session_factory()
+
+    try:
+        total_deleted_scans = 0
+        total_deleted_results = 0
+
+        def _locked_scan_ids(*criteria):
+            return [
+                scan.scan_id
+                for scan in (
+                    db.query(Scan)
+                    .filter(*criteria)
+                    .with_for_update()
+                    .all()
+                )
+            ]
+
+        logger.info("[1/2] Deleting cancelled scans...")
+        cancelled_scan_ids = _locked_scan_ids(Scan.status == "cancelled")
+        if cancelled_scan_ids:
+            cancelled_results = db.query(ScanResult).filter(
+                ScanResult.scan_id.in_(cancelled_scan_ids)
+            ).delete(synchronize_session=False)
+            cancelled_scans = db.query(Scan).filter(
+                Scan.scan_id.in_(cancelled_scan_ids)
+            ).delete(synchronize_session=False)
+            total_deleted_scans += cancelled_scans
+            total_deleted_results += cancelled_results
+            logger.info(
+                "  Deleted %s cancelled scans, %s results",
+                cancelled_scans,
+                cancelled_results,
+            )
+        else:
+            logger.info("  No cancelled scans found")
+
+        logger.info("[2/2] Deleting stale running/queued scans...")
+        stale_cutoff = now_utc - timedelta(hours=1)
+        stale_scan_ids = _locked_scan_ids(
+            Scan.status.in_(["running", "queued"]),
+            Scan.started_at < stale_cutoff,
+        )
+        if stale_scan_ids:
+            stale_results = db.query(ScanResult).filter(
+                ScanResult.scan_id.in_(stale_scan_ids)
+            ).delete(synchronize_session=False)
+            stale_scans = db.query(Scan).filter(
+                Scan.scan_id.in_(stale_scan_ids),
+            ).delete(synchronize_session=False)
+            total_deleted_scans += stale_scans
+            total_deleted_results += stale_results
+            logger.info(
+                "  Deleted %s stale scans, %s results",
+                stale_scans,
+                stale_results,
+            )
+        else:
+            logger.info("  No stale running/queued scans found")
+
+        db.commit()
+
+        logger.info("=" * 80)
+        logger.info("Orphaned scan cleanup completed")
+        logger.info("  Deleted scans: %s", total_deleted_scans)
+        logger.info("  Deleted results: %s", total_deleted_results)
+        logger.info("=" * 80)
+
+        return {
+            "deleted_scans": total_deleted_scans,
+            "deleted_results": total_deleted_results,
+            "completed_at": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        if is_corruption_error(e):
+            logger.critical(
+                "DATABASE CORRUPTION in cleanup_orphaned_scans: %s — inspect the database "
+                "and restore from backup or rerun migrations as appropriate",
+                e,
+            )
+        else:
+            logger.error("Error in cleanup_orphaned_scans task: %s", e, exc_info=True)
+        safe_rollback(db)
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    finally:
+        db.close()
 
 
 @celery_app.task(name='app.tasks.cache_tasks.refresh_universe_weights')
@@ -1005,7 +1121,7 @@ def _track_symbol_failures(
             if not is_corruption_error(exc):
                 raise
             logger.warning(
-                "Skipping stock_universe fetch tracking commit for %d symbols due to SQLite "
+                "Skipping stock_universe fetch tracking commit for %d symbols due to database "
                 "corruption signature: %s",
                 len(successes) + len(failures),
                 exc,
@@ -1015,7 +1131,7 @@ def _track_symbol_failures(
 
         if skipped_corrupt_symbols:
             logger.warning(
-                "Skipped stock_universe fetch-tracking writes for %d symbols due to SQLite "
+                "Skipped stock_universe fetch-tracking writes for %d symbols due to database "
                 "corruption signatures. Sample symbols: %s",
                 len(skipped_corrupt_symbols),
                 skipped_corrupt_symbols[:10],
@@ -1695,7 +1811,11 @@ def cleanup_old_price_data(self, keep_years: int = 5):
 
     except Exception as e:
         if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in cleanup_old_price_data: %s — run scripts/check_db_integrity.py --repair", e)
+            logger.critical(
+                "DATABASE CORRUPTION in cleanup_old_price_data: %s — inspect the database "
+                "and restore from backup or rerun migrations as appropriate",
+                e,
+            )
         else:
             logger.error("Error in cleanup_old_price_data task: %s", e, exc_info=True)
         safe_rollback(db)
@@ -1827,94 +1947,5 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
 
 @celery_app.task(bind=True, name='app.tasks.cache_tasks.cleanup_orphaned_scans')
 def cleanup_orphaned_scans(self):
-    """
-    Clean up orphaned scan data across all universes.
-
-    This task cleans up:
-    1. All cancelled scans and their results (no value)
-    2. All stale running/queued scans older than 1 hour (will never complete)
-
-    Should be run periodically to prevent scan data buildup.
-
-    Returns:
-        Dict with cleanup statistics
-    """
-    from datetime import timedelta
-    from ..models.scan_result import Scan, ScanResult
-    from sqlalchemy import func
-
-    logger.info("=" * 80)
-    logger.info("TASK: Cleanup Orphaned Scans")
-    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 80)
-
-    db = SessionLocal()
-
-    try:
-        total_deleted_scans = 0
-        total_deleted_results = 0
-
-        # 1. Delete all cancelled scans
-        logger.info("[1/2] Deleting cancelled scans...")
-        cancelled_scan_ids = [s.scan_id for s in db.query(Scan).filter(Scan.status == "cancelled").all()]
-        if cancelled_scan_ids:
-            cancelled_results = db.query(ScanResult).filter(
-                ScanResult.scan_id.in_(cancelled_scan_ids)
-            ).delete(synchronize_session=False)
-            cancelled_scans = db.query(Scan).filter(Scan.status == "cancelled").delete(synchronize_session=False)
-            total_deleted_scans += cancelled_scans
-            total_deleted_results += cancelled_results
-            logger.info(f"  Deleted {cancelled_scans} cancelled scans, {cancelled_results} results")
-        else:
-            logger.info("  No cancelled scans found")
-
-        # 2. Delete stale running/queued scans (older than 1 hour)
-        logger.info("[2/2] Deleting stale running/queued scans...")
-        stale_cutoff = datetime.utcnow() - timedelta(hours=1)
-        stale_scan_ids = [
-            s.scan_id for s in db.query(Scan).filter(
-                Scan.status.in_(["running", "queued"]),
-                Scan.started_at < stale_cutoff
-            ).all()
-        ]
-        if stale_scan_ids:
-            stale_results = db.query(ScanResult).filter(
-                ScanResult.scan_id.in_(stale_scan_ids)
-            ).delete(synchronize_session=False)
-            stale_scans = db.query(Scan).filter(
-                Scan.status.in_(["running", "queued"]),
-                Scan.started_at < stale_cutoff
-            ).delete(synchronize_session=False)
-            total_deleted_scans += stale_scans
-            total_deleted_results += stale_results
-            logger.info(f"  Deleted {stale_scans} stale scans, {stale_results} results")
-        else:
-            logger.info("  No stale running/queued scans found")
-
-        db.commit()
-
-        logger.info("=" * 80)
-        logger.info(f"✓ Orphaned scan cleanup completed:")
-        logger.info(f"  Deleted scans: {total_deleted_scans}")
-        logger.info(f"  Deleted results: {total_deleted_results}")
-        logger.info("=" * 80)
-
-        return {
-            'deleted_scans': total_deleted_scans,
-            'deleted_results': total_deleted_results,
-            'completed_at': datetime.now().isoformat()
-        }
-
-    except Exception as e:
-        if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in cleanup_orphaned_scans: %s — run scripts/check_db_integrity.py --repair", e)
-        else:
-            logger.error("Error in cleanup_orphaned_scans task: %s", e, exc_info=True)
-        safe_rollback(db)
-        return {
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }
-
-    finally:
-        db.close()
+    """Queueable Celery entrypoint for orphaned scan cleanup."""
+    return run_orphaned_scan_cleanup()

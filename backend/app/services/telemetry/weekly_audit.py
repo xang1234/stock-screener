@@ -348,9 +348,9 @@ def _summarize_alerts(
     still_active = 0
     by_severity: Dict[str, int] = {}
     for a in rows:
-        # SQLite returns naive datetimes even for `DateTime(timezone=True)`;
-        # Postgres returns aware. Coerce to UTC-aware so Python comparisons
-        # don't raise `can't compare offset-naive and offset-aware`.
+        # Some DB adapters return naive datetimes even for
+        # `DateTime(timezone=True)`. Coerce to UTC-aware so Python
+        # comparisons don't raise `can't compare offset-naive and offset-aware`.
         opened_at = as_aware_utc(a.opened_at)
         closed_at = as_aware_utc(a.closed_at)
         if opened_at is not None and opened_at >= window_start:

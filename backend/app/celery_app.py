@@ -161,9 +161,8 @@ def _dispose_engine_after_fork(sender=None, **kwargs):
     """Dispose inherited SQLAlchemy engine after Celery prefork.
 
     When using prefork pool, the child process inherits the parent's
-    engine and open file descriptors. For SQLite, shared FDs across
-    processes bypass locking and cause corruption. Disposing forces
-    the child to create fresh connections.
+    engine and open file descriptors. Disposing forces each child to
+    create fresh connections instead of reusing inherited DB state.
     """
     try:
         from .database import engine

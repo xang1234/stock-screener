@@ -96,7 +96,8 @@ def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> No
     except Exception as exc:  # noqa: BLE001
         if is_corruption_error(exc):
             logger.critical(
-                "DATABASE CORRUPTION in cleanup_old_scans: %s — run scripts/check_db_integrity.py --repair",
+                "DATABASE CORRUPTION in cleanup_old_scans: %s — inspect the database and "
+                "restore from backup or rerun migrations as appropriate",
                 exc,
             )
         else:
@@ -152,7 +153,8 @@ def compute_industry_peer_metrics(db: Session, scan_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         if is_corruption_error(exc):
             logger.critical(
-                "DATABASE CORRUPTION in compute_industry_peer_metrics: %s — run scripts/check_db_integrity.py --repair",
+                "DATABASE CORRUPTION in compute_industry_peer_metrics: %s — inspect the "
+                "database and restore from backup or rerun migrations as appropriate",
                 exc,
             )
         else:

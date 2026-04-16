@@ -340,7 +340,7 @@ def test_theme_content_recovery_does_not_reset_for_non_resettable_corruption(
 
     assert reset_calls["reindex"] == 1
     assert reset_calls["count"] == 0
-    assert "check_db_integrity.py --repair" in caplog.text
+    assert "restore the latest valid backup" in caplog.text
 
 
 @pytest.mark.asyncio

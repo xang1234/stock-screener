@@ -108,7 +108,11 @@ def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> No
 
     except Exception as e:
         if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in cleanup_old_scans: %s — run scripts/check_db_integrity.py --repair", e)
+            logger.critical(
+                "DATABASE CORRUPTION in cleanup_old_scans: %s — inspect the database and "
+                "restore from backup or rerun migrations as appropriate",
+                e,
+            )
         else:
             logger.error("Error cleaning up old scans: %s", e, exc_info=True)
         safe_rollback(db)
@@ -174,7 +178,11 @@ def compute_industry_peer_metrics(db: Session, scan_id: str):
 
     except Exception as e:
         if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in compute_industry_peer_metrics: %s — run scripts/check_db_integrity.py --repair", e)
+            logger.critical(
+                "DATABASE CORRUPTION in compute_industry_peer_metrics: %s — inspect the "
+                "database and restore from backup or rerun migrations as appropriate",
+                e,
+            )
         else:
             logger.error("Error computing peer metrics: %s", e, exc_info=True)
         safe_rollback(db)
