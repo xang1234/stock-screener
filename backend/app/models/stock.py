@@ -1,11 +1,8 @@
 """Stock-related database models"""
 from sqlalchemy import Column, Integer, String, Float, BigInteger, Date, DateTime, Index, JSON, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from ..database import Base
-
-
-JsonDocument = JSON().with_variant(JSONB(), "postgresql")
+from .types import JsonColumn
 
 
 class StockPrice(Base):
@@ -169,7 +166,7 @@ class StockFundamental(Base):
     # scanners/ranking logic. NULL means "not yet computed" — treat as unknown.
     field_completeness_score = Column(Integer, index=True)
     # {field_name: provider_name} for every populated field.
-    field_provenance = Column(JsonDocument)
+    field_provenance = Column(JsonColumn)
 
     # USD normalisation (T3). Computed at storage time using the FX rate
     # captured in ``fx_metadata``; NULL when source currency or amount is
@@ -179,7 +176,7 @@ class StockFundamental(Base):
     # Per-row FX snapshot: {from_currency, to_currency, rate, as_of_date,
     # source}. Stored so a single row can be replayed without consulting
     # the fx_rates log.
-    fx_metadata = Column(JsonDocument)
+    fx_metadata = Column(JsonColumn)
 
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

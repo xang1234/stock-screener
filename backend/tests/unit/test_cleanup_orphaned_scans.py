@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -108,3 +108,26 @@ def test_run_orphaned_scan_cleanup_returns_zero_when_nothing_matches(cleanup_ses
 
     assert result["deleted_scans"] == 0
     assert result["deleted_results"] == 0
+
+
+def test_run_orphaned_scan_cleanup_accepts_aware_utc_cutoff(cleanup_session_factory):
+    now_utc = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+    session = cleanup_session_factory()
+    try:
+        _add_scan(
+            session,
+            scan_id="stale-running-scan",
+            status="running",
+            started_at=now_utc - timedelta(hours=2),
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    result = run_orphaned_scan_cleanup(
+        session_factory=cleanup_session_factory,
+        now_utc=now_utc,
+    )
+
+    assert result["deleted_scans"] == 1
+    assert result["deleted_results"] == 1

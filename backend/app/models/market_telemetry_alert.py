@@ -8,14 +8,11 @@ at most one active alert per (market, metric_key).
 
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, JSON, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, Column, DateTime, Index, String, Text
 from sqlalchemy.sql import func
 
 from ..database import Base
-
-
-JsonType = JSON().with_variant(JSONB(), "postgresql")
+from .types import JsonColumn
 
 
 class AlertSeverity:
@@ -42,7 +39,7 @@ class MarketTelemetryAlert(Base):
     owner = Column(String(64))
     title = Column(String(200), nullable=False)
     description = Column(Text)
-    metrics = Column(JsonType)
+    metrics = Column(JsonColumn)
     opened_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     acknowledged_at = Column(DateTime(timezone=True))
     acknowledged_by = Column(String(64))

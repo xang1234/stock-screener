@@ -79,7 +79,9 @@ Required column names:
 ### 3) Required indexes exist
 
 ```sql
-PRAGMA index_list(content_item_pipeline_state);
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'content_item_pipeline_state';
 ```
 
 Required indexes:
@@ -94,7 +96,24 @@ Required indexes:
 ### 4) Foreign key cascade check
 
 ```sql
-PRAGMA foreign_key_list(content_item_pipeline_state);
+SELECT
+  ccu.table_name AS table,
+  kcu.column_name AS "from",
+  ccu.column_name AS "to",
+  rc.delete_rule AS on_delete
+FROM information_schema.table_constraints AS tc
+JOIN information_schema.key_column_usage AS kcu
+  ON tc.constraint_name = kcu.constraint_name
+ AND tc.table_schema = kcu.table_schema
+JOIN information_schema.constraint_column_usage AS ccu
+  ON ccu.constraint_name = tc.constraint_name
+ AND ccu.table_schema = tc.table_schema
+JOIN information_schema.referential_constraints AS rc
+  ON rc.constraint_name = tc.constraint_name
+ AND rc.constraint_schema = tc.table_schema
+WHERE tc.constraint_type = 'FOREIGN KEY'
+  AND tc.table_schema = 'public'
+  AND tc.table_name = 'content_item_pipeline_state';
 ```
 
 Expected row includes:

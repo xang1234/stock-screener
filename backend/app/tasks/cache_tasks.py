@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from celery.exceptions import SoftTimeLimitExceeded
 
@@ -129,7 +129,9 @@ def run_orphaned_scan_cleanup(
     from ..models.scan_result import Scan, ScanResult
 
     if now_utc is None:
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
 
     logger.info("=" * 80)
     logger.info("Cleanup Orphaned Scans")
@@ -142,16 +144,25 @@ def run_orphaned_scan_cleanup(
         total_deleted_scans = 0
         total_deleted_results = 0
 
+        def _locked_scan_ids(*criteria):
+            return [
+                scan.scan_id
+                for scan in (
+                    db.query(Scan)
+                    .filter(*criteria)
+                    .with_for_update()
+                    .all()
+                )
+            ]
+
         logger.info("[1/2] Deleting cancelled scans...")
-        cancelled_scan_ids = [
-            s.scan_id for s in db.query(Scan).filter(Scan.status == "cancelled").all()
-        ]
+        cancelled_scan_ids = _locked_scan_ids(Scan.status == "cancelled")
         if cancelled_scan_ids:
             cancelled_results = db.query(ScanResult).filter(
                 ScanResult.scan_id.in_(cancelled_scan_ids)
             ).delete(synchronize_session=False)
             cancelled_scans = db.query(Scan).filter(
-                Scan.status == "cancelled"
+                Scan.scan_id.in_(cancelled_scan_ids)
             ).delete(synchronize_session=False)
             total_deleted_scans += cancelled_scans
             total_deleted_results += cancelled_results
@@ -165,20 +176,16 @@ def run_orphaned_scan_cleanup(
 
         logger.info("[2/2] Deleting stale running/queued scans...")
         stale_cutoff = now_utc - timedelta(hours=1)
-        stale_scan_ids = [
-            s.scan_id
-            for s in db.query(Scan).filter(
-                Scan.status.in_(["running", "queued"]),
-                Scan.started_at < stale_cutoff,
-            ).all()
-        ]
+        stale_scan_ids = _locked_scan_ids(
+            Scan.status.in_(["running", "queued"]),
+            Scan.started_at < stale_cutoff,
+        )
         if stale_scan_ids:
             stale_results = db.query(ScanResult).filter(
                 ScanResult.scan_id.in_(stale_scan_ids)
             ).delete(synchronize_session=False)
             stale_scans = db.query(Scan).filter(
-                Scan.status.in_(["running", "queued"]),
-                Scan.started_at < stale_cutoff,
+                Scan.scan_id.in_(stale_scan_ids),
             ).delete(synchronize_session=False)
             total_deleted_scans += stale_scans
             total_deleted_results += stale_results
