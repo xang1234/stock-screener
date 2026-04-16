@@ -39,6 +39,27 @@ python scripts/run_launch_gates.py [options]
 
 The `FAIL` vs `NO_GO` distinction is deliberate. A `FAIL` is a regression; a `NO_GO` is missing paperwork. Treating them differently prevents incidents where an operator re-runs with partial evidence and mistakes "we didn't measure it" for "we measured and it passed."
 
+## Replaying a canary rehearsal
+
+For HK, JP, and TW dress rehearsals against an ephemeral PostgreSQL target, use the dedicated harness instead of stitching together manual DB seeding:
+
+```bash
+cd backend
+source venv/bin/activate
+DATABASE_URL=postgresql://stockscanner:stockscanner@127.0.0.1:55435/stockscanner_asia_canary_jp \
+python scripts/run_market_canary_rehearsal.py \
+  --market JP \
+  --evidence-dir ../data/governance/canary_evidence/jp-2026-04-16 \
+  --now 2026-04-16T12:00:00+00:00
+```
+
+The harness:
+
+- runs `alembic upgrade head` unless `--skip-migrate` is set
+- refuses to seed over a non-empty `market_telemetry_events` table
+- inserts deterministic `universe_drift`, `completeness_distribution`, `freshness_lag`, and `benchmark_age` rows for the selected canary market
+- invokes the normal launch-gate runner with explicit `execution_mode=ephemeral_postgres_dress_rehearsal`
+
 ## Gate coverage
 
 | Gate | Name | Evidence source | Check |

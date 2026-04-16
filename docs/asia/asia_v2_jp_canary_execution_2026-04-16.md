@@ -75,6 +75,27 @@ JP is the first canary in this sequence explicitly tuned for higher-volume behav
 
 The only un-revalidated layer in this session is the Docker/Postgres plumbing used by the HK dress rehearsal. The runner logic itself, the repo-backed gates, and the JP-specific evidence bundle were all exercised successfully here, but this is not sufficient to declare the JP canary complete.
 
+## Concrete rerun command
+
+Once Docker/Postgres access is available again, rerun the JP dress rehearsal through the checked-in harness rather than recreating the seeded DB state by hand:
+
+```bash
+docker rm -f asia-canary-jp-pg 2>/dev/null || true
+docker run --name asia-canary-jp-pg \
+  -e POSTGRES_USER=stockscanner \
+  -e POSTGRES_PASSWORD=stockscanner \
+  -e POSTGRES_DB=stockscanner_asia_canary_jp \
+  -p 55435:5432 \
+  -d postgres:16
+
+cd backend
+source venv/bin/activate
+export DATABASE_URL=postgresql://stockscanner:stockscanner@127.0.0.1:55435/stockscanner_asia_canary_jp
+python scripts/run_market_canary_rehearsal.py \
+  --market JP \
+  --evidence-dir ../data/governance/canary_evidence/jp-2026-04-16
+```
+
 ## Defects found during the dress rehearsal
 
 | # | Description | Resolution |
