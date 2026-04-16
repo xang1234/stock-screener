@@ -5,6 +5,7 @@ import json
 from datetime import date, datetime
 from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -128,6 +129,61 @@ def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkey
     assert result["warnings"]
     assert blocked_run.status == "publish_blocked"
     assert db.query(ProviderSnapshotPointer).count() == 0
+    db.close()
+
+
+def test_create_snapshot_run_market_scope_ignores_other_markets(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None, **kwargs: {
+            "AAPL": {
+                "exchange": "NASDAQ",
+                "row_hash": "hash-aapl",
+                "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                "raw_payload": {"overview": {"Ticker": "AAPL"}},
+            }
+        },
+    )
+    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage", 0.98)
+    monkeypatch.setattr(settings, "provider_snapshot_max_missing_active_symbols", 50)
+
+    result = service.create_snapshot_run(
+        db,
+        run_mode="publish",
+        market="US",
+        publish=True,
+    )
+
+    assert result["published"] is True
+    assert result["coverage"]["active_symbols"] == 1
+    assert result["coverage"]["covered_active_symbols"] == 1
+    assert result["coverage"]["missing_active_symbols"] == 0
     db.close()
 
 
@@ -403,6 +459,75 @@ def test_hydrate_published_snapshot_emits_progress_events():
     db.close()
 
 
+def test_hydrate_all_published_snapshots_falls_back_to_legacy_snapshot_key():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    run = ProviderSnapshotRun(
+        snapshot_key="fundamentals_v1",
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260416110000",
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key="fundamentals_v1",
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    hydrate_calls: list[str] = []
+
+    def fake_hydrate(db, *, snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS, **kwargs):
+        hydrate_calls.append(snapshot_key)
+        return {"snapshot_key": snapshot_key}
+
+    service.hydrate_published_snapshot = fake_hydrate
+
+    result = service.hydrate_all_published_snapshots(db, allow_yahoo_hydration=False)
+
+    assert hydrate_calls == ["fundamentals_v1"]
+    assert result == {"US": {"snapshot_key": "fundamentals_v1"}}
+    db.close()
+
+
+def test_get_snapshot_stats_falls_back_to_legacy_snapshot_key():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    run = ProviderSnapshotRun(
+        snapshot_key="fundamentals_v1",
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260416110000",
+        coverage_stats_json=json.dumps({"active_symbols": 1, "covered_active_symbols": 1}),
+        parity_stats_json=json.dumps({"missing_active_symbols": []}),
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key="fundamentals_v1",
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    stats = service.get_snapshot_stats(db)
+
+    assert stats["published_snapshot_revision"] == "fundamentals_v1:20260416110000"
+    assert stats["snapshot_coverage"] == {"active_symbols": 1, "covered_active_symbols": 1}
+    assert stats["parity_summary"] == {"missing_active_symbols": []}
+    db.close()
+
+
 def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -493,7 +618,7 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
         run_mode="publish",
         status="published",
-        source_revision="fundamentals_v1:20260402081000",
+        source_revision="fundamentals_v1_us:20260402081000",
         coverage_stats_json=json.dumps({"active_symbols": 1, "covered_active_symbols": 1, "missing_active_symbols": 0}),
         parity_stats_json=json.dumps({"missing_active_symbols": []}),
         warnings_json=json.dumps([]),
@@ -550,30 +675,22 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         payload = json.load(fh)
 
     assert export_stats["rows"] == 1
-    assert export_stats["universe_rows"] == 2
+    assert export_stats["universe_rows"] == 1
+    assert export_stats["market"] == "US"
     assert payload["schema_version"] == ProviderSnapshotService.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
+    assert payload["market"] == "US"
     assert len(payload["snapshot"]["rows"]) == 1
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["ipo_date"] == "2020-01-02"
     assert payload["snapshot"]["rows"][0]["normalized_payload"]["description_yfinance"] == "Long summary"
-    assert len(payload["universe"]) == 2
-    hk_row = next(row for row in payload["universe"] if row["symbol"] == "0700.HK")
-    assert hk_row["market"] == "HK"
-    assert hk_row["currency"] == "HKD"
-    assert hk_row["timezone"] == "Asia/Hong_Kong"
-    assert hk_row["local_code"] == "0700"
-
-    # Simulate legacy bundle row with market absent and currency/timezone missing.
-    hk_row.pop("market", None)
-    hk_row["exchange"] = " sehk "
-    hk_row.pop("currency", None)
-    hk_row.pop("timezone", None)
-    hk_row.pop("local_code", None)
-    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
-        json.dump(payload, fh, sort_keys=True, default=str)
+    assert len(payload["universe"]) == 1
+    us_row = payload["universe"][0]
+    assert us_row["symbol"] == "AAPL"
+    assert us_row["market"] == "US"
 
     manifest = json.loads(latest_manifest_path.read_text(encoding="utf-8"))
     assert manifest["bundle_asset_name"] == bundle_path.name
     assert manifest["sha256"]
+    assert manifest["market"] == "US"
 
     unrelated_run = ProviderSnapshotRun(
         snapshot_key="other_snapshot",
@@ -611,15 +728,12 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     imported_hk_row = next(row for row in imported_universe_rows if row.symbol == "0700.HK")
 
     assert import_stats["rows"] == 1
-    assert import_stats["universe_rows"] == 2
-    assert imported_run.source_revision == "fundamentals_v1:20260402081000"
+    assert import_stats["universe_rows"] == 1
+    assert import_stats["market"] == "US"
+    assert imported_run.source_revision == "fundamentals_v1_us:20260402081000"
     assert imported_payload["ipo_date"] == "2020-01-02"
     assert imported_symbols == ["0700.HK", "AAPL"]
     assert imported_hk_row.market == "HK"
-    # Missing bundle values should hydrate from market-aware defaults.
-    assert imported_hk_row.currency == "HKD"
-    assert imported_hk_row.timezone == "Asia/Hong_Kong"
-    assert imported_hk_row.local_code == "0700"
     assert db.query(ProviderSnapshotRun).filter(
         ProviderSnapshotRun.snapshot_key == ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS
     ).count() == 1
@@ -627,6 +741,262 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
         ProviderSnapshotRun.snapshot_key == "other_snapshot"
     ).count() == 1
     assert db.query(ProviderSnapshotPointer).count() == 2
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("market", "symbol", "exchange", "expected_symbols"),
+    [
+        ("HK", "0700.HK", "XHKG", ["0700.HK", "AAPL", "2330.TW"]),
+        ("JP", "7203.T", "XTKS", ["2330.TW", "7203.T", "AAPL"]),
+    ],
+)
+def test_import_weekly_reference_bundle_preserves_other_market_universe_rows(
+    tmp_path,
+    market,
+    symbol,
+    exchange,
+    expected_symbols,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="2330.TW",
+                market="TW",
+                exchange="TWSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    snapshot_key = ProviderSnapshotService.snapshot_key_for_market(market)
+    bundle_path = tmp_path / f"weekly-reference-{market.lower()}.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": market,
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": snapshot_key,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": f"{snapshot_key}:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "row_hash": "row-hash-1",
+                    "normalized_payload": {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "market": market,
+                    },
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": symbol,
+                "exchange": exchange,
+                "market": market,
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    imported_symbols = [
+        row.symbol
+        for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    ]
+    assert imported_symbols == sorted(expected_symbols)
+    db.close()
+
+
+def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="AAPL",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+            StockUniverse(
+                symbol="2330.TW",
+                market="TW",
+                exchange="TWSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            ),
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    bundle_path = tmp_path / "weekly-reference-legacy.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": "fundamentals_v1",
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ"},
+                },
+                {
+                    "symbol": "0700.HK",
+                    "exchange": "XHKG",
+                    "row_hash": "row-hash-hk",
+                    "normalized_payload": {"symbol": "0700.HK", "exchange": "XHKG"},
+                },
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            },
+            {
+                "symbol": "0700.HK",
+                "exchange": "XHKG",
+                "market": "HK",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            },
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    import_stats = service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    imported_symbols = [
+        row.symbol
+        for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()
+    ]
+    imported_run = service.get_published_run(db, snapshot_key="fundamentals_v1")
+
+    assert import_stats["market"] == "MULTI"
+    assert import_stats["universe_rows"] == 2
+    assert imported_symbols == ["0700.HK", "AAPL"]
+    assert imported_run is not None
+    assert imported_run.source_revision == "fundamentals_v1:20260411120000"
+    db.close()
+
+
+def test_import_weekly_reference_bundle_rolls_back_on_error(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="AAPL",
+            market="US",
+            exchange="NASDAQ",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            status_reason="active",
+        )
+    )
+    existing_run = ProviderSnapshotRun(
+        snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1_us:20260401000000",
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(existing_run)
+    db.flush()
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key=ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            run_id=existing_run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    bundle_path = tmp_path / "weekly-reference-invalid.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1_us:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ", "market": "US"},
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    with pytest.raises(KeyError):
+        service.import_weekly_reference_bundle(db, input_path=bundle_path)
+
+    original_run = service.get_published_run(db)
+    symbols = [row.symbol for row in db.query(StockUniverse).order_by(StockUniverse.symbol.asc()).all()]
+
+    assert original_run is not None
+    assert original_run.source_revision == "fundamentals_v1_us:20260401000000"
+    assert symbols == ["AAPL"]
     db.close()
 
 
@@ -761,8 +1131,15 @@ def test_import_weekly_reference_bundle_canonicalizes_snapshot_row_symbol(tmp_pa
 
     run = service.get_published_run(db)
     row = db.query(ProviderSnapshotRow).filter(ProviderSnapshotRow.run_id == run.id).one()
+    payload = json.loads(row.normalized_payload_json)
     assert row.symbol == "3008.TWO"
     assert row.exchange == "TPEX"
+    assert payload["symbol"] == "3008.TWO"
+    assert payload["market"] == "TW"
+    assert payload["exchange"] == "TPEX"
+    assert payload["currency"] == "TWD"
+    assert payload["timezone"] == "Asia/Taipei"
+    assert payload["local_code"] == "3008"
     db.close()
 
 

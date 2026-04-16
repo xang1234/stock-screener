@@ -14,9 +14,27 @@ permissions:
   contents: write
 
 jobs:
-  publish:
+  ensure_release:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
+    steps:
+      - name: Ensure weekly release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view weekly-reference-data >/dev/null 2>&1 || \
+          gh release create weekly-reference-data \
+            --title "Weekly Reference Data" \
+            --notes "Automated weekly market-scoped reference bundles for static-site builds."
+
+  publish:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: ensure_release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [US, HK, JP, TW]
     services:
       postgres:
         image: postgres:16-alpine
@@ -51,23 +69,16 @@ jobs:
         run: |
           cd backend
           python -m app.scripts.build_weekly_reference_bundle \
+            --market "${{ matrix.market }}" \
             --output-dir /tmp/weekly-reference
-
-      - name: Ensure weekly release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view weekly-reference-data >/dev/null 2>&1 || \
-          gh release create weekly-reference-data \
-            --title "Weekly Reference Data" \
-            --notes "Automated weekly fundamentals reference bundle for static-site builds."
 
       - name: Upload weekly reference assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BUNDLE_PATH="$(find /tmp/weekly-reference -maxdepth 1 -name 'weekly-reference-*.json.gz' | head -n 1)"
-          MANIFEST_PATH="/tmp/weekly-reference/weekly-reference-latest.json"
+          MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
+          BUNDLE_PATH="$(find /tmp/weekly-reference -maxdepth 1 -name "weekly-reference-${MARKET_LOWER}-*.json.gz" | head -n 1)"
+          MANIFEST_PATH="/tmp/weekly-reference/weekly-reference-latest-${MARKET_LOWER}.json"
 
           if [ -z "$BUNDLE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
             echo "Missing weekly reference bundle outputs" >&2

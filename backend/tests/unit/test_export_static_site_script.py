@@ -152,7 +152,7 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         export_script,
         "get_provider_snapshot_service",
         lambda: SimpleNamespace(
-            hydrate_published_snapshot=lambda db, allow_yahoo_hydration=False: hydrate_calls.append((db, allow_yahoo_hydration))
+            hydrate_all_published_snapshots=lambda db, allow_yahoo_hydration=False: hydrate_calls.append((db, allow_yahoo_hydration))
             or {"task": "fundamentals_hydrate"},
         ),
     )

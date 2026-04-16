@@ -64,40 +64,59 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/weekly-reference
-          gh release download weekly-reference-data \
-            --pattern weekly-reference-latest.json \
-            --dir /tmp/weekly-reference
+          if gh release download weekly-reference-data \
+            --pattern "weekly-reference-latest-us.json" \
+            --dir /tmp/weekly-reference >/dev/null 2>&1; then
+            echo "WEEKLY_REFERENCE_MODE=market_scoped" >> "$GITHUB_ENV"
+            for market in hk jp tw; do
+              gh release download weekly-reference-data \
+                --pattern "weekly-reference-latest-${market}.json" \
+                --dir /tmp/weekly-reference
+            done
+          else
+            gh release download weekly-reference-data \
+              --pattern "weekly-reference-latest.json" \
+              --dir /tmp/weekly-reference
+            echo "WEEKLY_REFERENCE_MODE=legacy" >> "$GITHUB_ENV"
+          fi
 
       - name: Download weekly reference bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BUNDLE_ASSET_NAME="$(python - <<'PY'
+          if [ "${WEEKLY_REFERENCE_MODE}" = "legacy" ]; then
+            BUNDLE_ASSET_NAME="$(python - <<'PY'
           import json
           from pathlib import Path
 
-          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          manifest = json.loads(
+              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
           print(manifest["bundle_asset_name"])
           PY
-          )"
-          BUNDLE_SHA256="$(python - <<'PY'
+            )"
+            BUNDLE_SHA256="$(python - <<'PY'
           import json
           from pathlib import Path
 
-          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          manifest = json.loads(
+              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
           print(manifest["sha256"])
           PY
-          )"
-          export BUNDLE_ASSET_NAME
-          export BUNDLE_SHA256
-          echo "BUNDLE_ASSET_NAME=$BUNDLE_ASSET_NAME" >> "$GITHUB_ENV"
-          echo "BUNDLE_SHA256=$BUNDLE_SHA256" >> "$GITHUB_ENV"
+            )"
 
-          gh release download weekly-reference-data \
-            --pattern "$BUNDLE_ASSET_NAME" \
-            --dir /tmp/weekly-reference
+            gh release download weekly-reference-data \
+              --pattern "$BUNDLE_ASSET_NAME" \
+              --dir /tmp/weekly-reference
 
-          python - <<'PY'
+            export BUNDLE_ASSET_NAME
+            export BUNDLE_SHA256
+            python - <<'PY'
           import hashlib
           import os
           from pathlib import Path
@@ -111,12 +130,97 @@ jobs:
                   f"{digest} != {expected}"
               )
           PY
+          else
+            for market in us hk jp tw; do
+              export MARKET="$market"
+              BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+            BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["sha256"])
+          PY
+            )"
+
+            gh release download weekly-reference-data \
+              --pattern "$BUNDLE_ASSET_NAME" \
+              --dir /tmp/weekly-reference
+
+            export BUNDLE_ASSET_NAME
+            export BUNDLE_SHA256
+            python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          bundle_path = Path("/tmp/weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
+          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          expected = os.environ["BUNDLE_SHA256"]
+          if digest != expected:
+              raise SystemExit(
+                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
+                  f"{digest} != {expected}"
+              )
+          PY
+            done
+          fi
 
       - name: Import weekly reference bundle
         run: |
           cd backend
-          python -m app.scripts.import_weekly_reference_bundle \
-            --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
+          if [ "${WEEKLY_REFERENCE_MODE}" = "legacy" ]; then
+            python -m app.scripts.import_weekly_reference_bundle \
+              --input "/tmp/weekly-reference/$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+          else
+            for market in us hk jp tw; do
+              export MARKET="$market"
+              BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          market = os.environ["MARKET"]
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{market}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+            python -m app.scripts.import_weekly_reference_bundle \
+              --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
+            done
+          fi
 
       - name: Load tracked IBD industry seed
         run: |
