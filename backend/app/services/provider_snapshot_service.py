@@ -851,6 +851,8 @@ class ProviderSnapshotService:
     def get_snapshot_stats(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Dict[str, Any]:
         """Return published snapshot stats for API/status reporting."""
         run = self.get_published_run(db, snapshot_key=snapshot_key)
+        if run is None and snapshot_key == self.SNAPSHOT_KEY_FUNDAMENTALS:
+            run = self.get_published_run(db, snapshot_key="fundamentals_v1")
         if run is None:
             return {
                 "published_snapshot_revision": None,

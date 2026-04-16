@@ -496,6 +496,38 @@ def test_hydrate_all_published_snapshots_falls_back_to_legacy_snapshot_key():
     db.close()
 
 
+def test_get_snapshot_stats_falls_back_to_legacy_snapshot_key():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    run = ProviderSnapshotRun(
+        snapshot_key="fundamentals_v1",
+        run_mode="publish",
+        status="published",
+        source_revision="fundamentals_v1:20260416110000",
+        coverage_stats_json=json.dumps({"active_symbols": 1, "covered_active_symbols": 1}),
+        parity_stats_json=json.dumps({"missing_active_symbols": []}),
+        created_at=datetime.utcnow(),
+        published_at=datetime.utcnow(),
+    )
+    db.add(run)
+    db.flush()
+    db.add(
+        ProviderSnapshotPointer(
+            snapshot_key="fundamentals_v1",
+            run_id=run.id,
+        )
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    stats = service.get_snapshot_stats(db)
+
+    assert stats["published_snapshot_revision"] == "fundamentals_v1:20260416110000"
+    assert stats["snapshot_coverage"] == {"active_symbols": 1, "covered_active_symbols": 1}
+    assert stats["parity_summary"] == {"missing_active_symbols": []}
+    db.close()
+
+
 def test_snapshot_active_coverage_ignores_status_active_rows_marked_inactive(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
