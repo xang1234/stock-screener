@@ -37,6 +37,9 @@ export function StaticMarketProvider({
       ? window.localStorage.getItem(STATIC_MARKET_STORAGE_KEY)
       : null;
     const nextMarket = normalizeMarket(fromQuery || fromStorage, supportedMarkets, defaultMarket);
+    if (typeof window !== 'undefined' && fromQuery) {
+      window.localStorage.setItem(STATIC_MARKET_STORAGE_KEY, nextMarket);
+    }
     if (nextMarket !== selectedMarket) {
       setSelectedMarketState(nextMarket);
     }

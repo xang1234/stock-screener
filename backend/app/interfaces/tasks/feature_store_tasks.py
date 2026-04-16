@@ -24,6 +24,23 @@ from app.tasks.data_fetch_lock import serialized_data_fetch
 logger = logging.getLogger(__name__)
 
 
+def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
+    """Ensure a published-run pointer references *run_id*."""
+    from app.infra.db.models.feature_store import FeatureRunPointer
+
+    with session_factory() as db:
+        pointer = (
+            db.query(FeatureRunPointer)
+            .filter(FeatureRunPointer.key == pointer_key)
+            .first()
+        )
+        if pointer is None:
+            db.add(FeatureRunPointer(key=pointer_key, run_id=run_id))
+        else:
+            pointer.run_id = run_id
+        db.commit()
+
+
 def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> int:
     """Fail abandoned RUNNING feature runs and emit a warning log."""
     from sqlalchemy import func
@@ -411,6 +428,11 @@ def build_daily_snapshot(
                 as_of_date=as_of,
             )
             if matching_run is not None:
+                _upsert_feature_run_pointer(
+                    session_factory=SessionLocal,
+                    pointer_key=publish_pointer_key,
+                    run_id=matching_run.id,
+                )
                 auto_scan_id = _create_auto_scan_for_published_run(
                     feature_run_id=matching_run.id,
                     universe_name=universe_name,

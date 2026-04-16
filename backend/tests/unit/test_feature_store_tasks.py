@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
@@ -233,6 +233,65 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
         "universe_hash": "same-universe",
         "as_of_date": date(2026, 3, 16),
     }]
+
+
+def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
+    class _CheckUoW:
+        def __init__(self) -> None:
+            self.universe = SimpleNamespace(resolve_symbols=lambda _universe_def: ["0700.HK"])
+            self.feature_runs = SimpleNamespace(
+                find_latest_published_exact=lambda **_kwargs: SimpleNamespace(
+                    id=84,
+                    as_of_date=date(2026, 3, 16),
+                )
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        return_value=_CheckUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._upsert_feature_run_pointer",
+    ) as mock_upsert:
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            universe_name="market:hk",
+            market="HK",
+            publish_pointer_key="latest_published_market:HK",
+        )
+
+    assert result["status"] == "skipped"
+    assert result["existing_run_id"] == 84
+    mock_upsert.assert_called_once_with(
+        session_factory=ANY,
+        pointer_key="latest_published_market:HK",
+        run_id=84,
+    )
 
 
 def test_build_daily_snapshot_reraises_soft_time_limit():

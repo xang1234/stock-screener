@@ -150,7 +150,9 @@ class StaticSiteExportService:
                 latest_run = self._get_latest_published_run(db)
                 if latest_run is None:
                     raise RuntimeError("No published feature run is available for static-site export")
-                available_markets = [STATIC_DEFAULT_MARKET]
+                raise RuntimeError(
+                    "No market-scoped published feature runs are available for static-site export"
+                )
 
             for market in available_markets:
                 market_entries[market] = self._export_market_bundle(
@@ -369,8 +371,6 @@ class StaticSiteExportService:
         for run in query.all():
             if self._run_market(run) == market.upper():
                 return run
-        if market.upper() == STATIC_DEFAULT_MARKET:
-            return query.first()
         return None
 
     @staticmethod

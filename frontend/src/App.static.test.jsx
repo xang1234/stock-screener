@@ -367,6 +367,7 @@ describe('App static mode', () => {
     expect(await screen.findByRole('heading', { name: 'Hong Kong Breadth' })).toBeInTheDocument();
     expect(window.location.hash).toContain('#/breadth');
     expect(window.location.hash).toContain('market=HK');
+    expect(window.localStorage.getItem('static-site:selected-market')).toBe('HK');
 
     const requestedUrls = globalThis.fetch.mock.calls.map(([url]) => String(url));
     expect(requestedUrls.some((url) => url.includes('/static-data/markets/hk/breadth.json'))).toBe(true);

@@ -41,11 +41,16 @@ def service_and_session_factory():
         engine.dispose()
 
 
-def _insert_runs(session_factory, *runs: FeatureRun, pointer_run_id: int | None = None) -> None:
+def _insert_runs(
+    session_factory,
+    *runs: FeatureRun,
+    pointer_run_id: int | None = None,
+    pointer_key: str = "latest_published",
+) -> None:
     with session_factory() as db:
         db.add_all(runs)
         if pointer_run_id is not None:
-            db.add(FeatureRunPointer(key="latest_published", run_id=pointer_run_id))
+            db.add(FeatureRunPointer(key=pointer_key, run_id=pointer_run_id))
         db.commit()
 
 
@@ -128,6 +133,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
         ),
         pointer_run_id=7,
     )
@@ -300,6 +306,7 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 4, 2, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
         ),
         pointer_run_id=12,
     )
@@ -393,6 +400,27 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
             generated_at="2026-04-02T22:00:00Z",
             expected_as_of_date=date(2026, 4, 2),
         )
+
+
+def test_export_rejects_legacy_unscoped_run_for_market_bundle(
+    service_and_session_factory,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=21,
+            as_of_date=date(2026, 4, 3),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 3, 21, 30, 0),
+        ),
+        pointer_run_id=21,
+    )
+
+    with pytest.raises(RuntimeError, match="No market-scoped published feature runs"):
+        service.export(tmp_path / "static-data")
 
 
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
