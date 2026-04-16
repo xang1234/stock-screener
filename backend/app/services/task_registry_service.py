@@ -28,22 +28,20 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
 
 def _weekly_universe_task_definitions() -> Dict[str, Dict]:
     """Build task-registry entries that match the per-market beat fanout."""
-    entries: Dict[str, Dict] = {
-        'weekly-universe-refresh-us': {
-            'task_function': 'app.tasks.universe_tasks.refresh_stock_universe',
-            'display_name': 'Weekly Universe Refresh (US)',
-            'description': 'Adds new US stocks, deactivates removed, updates metadata',
-            'schedule_description': 'Sunday 3:00 AM ET (US)',
-            'manual_dispatch_kwargs': {'market': 'US'},
-            'manual_dispatch_headers': {'origin': 'manual'},
-            'manual_dispatch_options': {'queue': data_fetch_queue_for_market('US')},
-        },
-    }
-    for market in ('HK', 'JP', 'TW'):
+    entries: Dict[str, Dict] = {}
+    for market in settings.enabled_markets_list:
         entries[f'weekly-universe-refresh-{market.lower()}'] = {
-            'task_function': 'app.tasks.universe_tasks.refresh_official_market_universe',
+            'task_function': (
+                'app.tasks.universe_tasks.refresh_stock_universe'
+                if market == 'US'
+                else 'app.tasks.universe_tasks.refresh_official_market_universe'
+            ),
             'display_name': f'Weekly Universe Refresh ({market})',
-            'description': f'Refreshes the official {market} universe snapshot from exchange sources',
+            'description': (
+                'Adds new US stocks, deactivates removed, updates metadata'
+                if market == 'US'
+                else f'Refreshes the official {market} universe snapshot from exchange sources'
+            ),
             'schedule_description': f'Sunday 3:00 AM ET ({market})',
             'manual_dispatch_kwargs': {'market': market},
             'manual_dispatch_headers': {'origin': 'manual'},

@@ -9,7 +9,6 @@ import io
 import logging
 import re
 from typing import Any, Iterable
-from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -134,11 +133,11 @@ class OfficialMarketUniverseSourceService:
     def fetch_tw_snapshot(self) -> OfficialMarketUniverseSnapshot:
         twse_fetched = self._http_get(
             settings.tw_universe_source_twse_url,
-            allow_insecure_fallback=self._is_twse_host(settings.tw_universe_source_twse_url),
+            allow_insecure_fallback=settings.tw_universe_allow_insecure_fallback,
         )
         tpex_fetched = self._http_get(
             settings.tw_universe_source_tpex_url,
-            allow_insecure_fallback=self._is_twse_host(settings.tw_universe_source_tpex_url),
+            allow_insecure_fallback=settings.tw_universe_allow_insecure_fallback,
         )
 
         twse_html = twse_fetched.content.decode("cp950", errors="replace")
@@ -473,8 +472,3 @@ class OfficialMarketUniverseSourceService:
         if match is None:
             return None
         return match.group(1), match.group(2)
-
-    @staticmethod
-    def _is_twse_host(url: str) -> bool:
-        parsed = urlparse(url)
-        return parsed.hostname == "isin.twse.com.tw"

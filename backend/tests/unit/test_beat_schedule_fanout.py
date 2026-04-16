@@ -81,7 +81,7 @@ class TestBeatScheduleFanout:
         assert schedule["weekly-universe-refresh-us"]["task"] == (
             "app.tasks.universe_tasks.refresh_stock_universe"
         )
-        for market in ("hk", "jp", "tw"):
+        for market in (m.lower() for m in SUPPORTED_MARKETS if m != "US"):
             assert schedule[f"weekly-universe-refresh-{market}"]["task"] == (
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )

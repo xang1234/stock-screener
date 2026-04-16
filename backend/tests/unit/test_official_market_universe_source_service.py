@@ -106,6 +106,44 @@ def test_fetch_tw_snapshot_fails_when_exchange_dates_do_not_match(monkeypatch):
         service.fetch_tw_snapshot()
 
 
+def test_fetch_tw_snapshot_requires_explicit_opt_in_for_insecure_tls(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    html_twse = _fixture_bytes("twse_stocks_fixture.html")
+    html_tpex = _fixture_bytes("tpex_stocks_fixture.html")
+    calls = []
+
+    def fake_get(url, allow_insecure_fallback=False):
+        calls.append((url, allow_insecure_fallback))
+        if "strMode=2" in url:
+            return _FetchedSource(
+                url=url,
+                content=html_twse,
+                fetched_at="2026-04-16T01:00:00+00:00",
+                last_modified=None,
+                tls_verification_disabled=False,
+            )
+        return _FetchedSource(
+            url=url,
+            content=html_tpex,
+            fetched_at="2026-04-16T01:01:00+00:00",
+            last_modified=None,
+            tls_verification_disabled=False,
+        )
+
+    monkeypatch.setattr(service, "_http_get", fake_get)
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.settings.tw_universe_allow_insecure_fallback",
+        False,
+    )
+
+    service.fetch_tw_snapshot()
+
+    assert calls == [
+        ("https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2", False),
+        ("https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4", False),
+    ]
+
+
 def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
     import app.tasks.universe_tasks as module
     import app.wiring.bootstrap as bootstrap

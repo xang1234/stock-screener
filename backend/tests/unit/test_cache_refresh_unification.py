@@ -325,18 +325,20 @@ def test_warm_price_cache_uses_batch_store(monkeypatch):
 
 def test_task_registry_lists_daily_smart_refresh_only():
     from app.services.task_registry_service import TaskRegistryService
+    from app.config import settings as app_settings
 
     db = MagicMock()
     db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
     tasks = TaskRegistryService().get_all_scheduled_tasks(db)
     names = {task["name"] for task in tasks}
+    expected_universe_tasks = {
+        f"weekly-universe-refresh-{market.lower()}"
+        for market in app_settings.enabled_markets_list
+    }
 
     assert "daily-smart-refresh" in names
-    assert "weekly-universe-refresh-us" in names
-    assert "weekly-universe-refresh-hk" in names
-    assert "weekly-universe-refresh-jp" in names
-    assert "weekly-universe-refresh-tw" in names
+    assert expected_universe_tasks.issubset(names)
     assert "weekly-universe-refresh" not in names
     assert "daily-cache-warmup" not in names
     assert "auto-refresh-after-close" not in names
@@ -344,8 +346,14 @@ def test_task_registry_lists_daily_smart_refresh_only():
     daily_task = next(task for task in tasks if task["name"] == "daily-smart-refresh")
     assert daily_task["task_function"] == "app.tasks.cache_tasks.smart_refresh_cache"
 
-    hk_universe_task = next(task for task in tasks if task["name"] == "weekly-universe-refresh-hk")
-    assert hk_universe_task["task_function"] == "app.tasks.universe_tasks.refresh_official_market_universe"
+    for market in app_settings.enabled_markets_list:
+        task = next(task for task in tasks if task["name"] == f"weekly-universe-refresh-{market.lower()}")
+        expected_task_function = (
+            "app.tasks.universe_tasks.refresh_stock_universe"
+            if market == "US"
+            else "app.tasks.universe_tasks.refresh_official_market_universe"
+        )
+        assert task["task_function"] == expected_task_function
 
 
 def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
@@ -399,6 +407,25 @@ def test_task_registry_triggers_hk_weekly_universe_refresh_on_hk_queue(monkeypat
     assert result["task_id"] == "task-hk-123"
     assert result["task_name"] == "weekly-universe-refresh-hk"
     assert result["execution_id"] == 101
+
+
+def test_task_registry_omits_disabled_market_universe_entries(monkeypatch):
+    import importlib
+    import app.services.task_registry_service as task_registry_module
+
+    original_enabled_markets = task_registry_module.settings.enabled_markets
+    try:
+        task_registry_module.settings.enabled_markets = "US,HK"
+        importlib.reload(task_registry_module)
+
+        names = set(task_registry_module.SCHEDULED_TASKS)
+        assert "weekly-universe-refresh-us" in names
+        assert "weekly-universe-refresh-hk" in names
+        assert "weekly-universe-refresh-jp" not in names
+        assert "weekly-universe-refresh-tw" not in names
+    finally:
+        task_registry_module.settings.enabled_markets = original_enabled_markets
+        importlib.reload(task_registry_module)
 
 
 @pytest.mark.asyncio
