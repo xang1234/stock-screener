@@ -1,7 +1,7 @@
 {
   "charter_version": "1.0",
-  "content_hash": "40bae5dc7decf7e71dbcfea5e6a260c2c70dfb1c1d10deeee84166192576d56f",
-  "execution_mode": "synthetic_seeded_harness",
+  "content_hash": "3c63d625dfcf74bd3beb2fcd46c0ffdc98c5bee63c72f229a237ad84c7fb0442",
+  "execution_mode": "ephemeral_postgres_dress_rehearsal",
   "gates": [
     {
       "detail": "Migration rehearsal report present with no-data-loss assertion.",
@@ -21,7 +21,7 @@
       "evidence_paths": [],
       "gate_id": "G2",
       "metrics": {
-        "worst_drift_ratio": 0.012422360248447204
+        "worst_drift_ratio": 0.012105263157894737
       },
       "name": "Universe Integrity and Freshness",
       "severity": "hard",
@@ -44,12 +44,12 @@
       "status": "pass"
     },
     {
-      "detail": "Worst market completeness 0-25 bucket = 0.03 (< 0.50) on JP.",
+      "detail": "Worst market completeness 0-25 bucket = 0.04 (< 0.50) on TW.",
       "evidence_paths": [],
       "gate_id": "G4",
       "metrics": {
-        "worst_low_bucket_ratio": 0.03,
-        "worst_market": "JP"
+        "worst_low_bucket_ratio": 0.04,
+        "worst_market": "TW"
       },
       "name": "Fundamentals Data Quality",
       "severity": "hard",
@@ -139,7 +139,7 @@
   "hard_gate_count": 9,
   "hard_missing_evidence": 0,
   "hard_passed": 9,
-  "provenance_note": "Synthetic JP rehearsal generated from an in-process seeded telemetry harness because Docker-backed Postgres was unavailable in this sandbox. This artifact is provisional only and does not close asia.11.4 or unblock asia.11.5.",
+  "provenance_note": "Seeded PostgreSQL rehearsal telemetry for JP and attached external evidence from data/governance/canary_evidence/jp-2026-04-16.",
   "report_schema_version": 1,
   "runner_version": "1.0",
   "verdict": "pass"

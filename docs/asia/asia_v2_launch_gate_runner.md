@@ -49,7 +49,7 @@ source venv/bin/activate
 DATABASE_URL=postgresql://stockscanner:stockscanner@127.0.0.1:55435/stockscanner_asia_canary_jp \
 python scripts/run_market_canary_rehearsal.py \
   --market JP \
-  --evidence-dir ../data/governance/canary_evidence/jp-2026-04-16 \
+  --evidence-dir data/governance/canary_evidence/jp-2026-04-16 \
   --now 2026-04-16T12:00:00+00:00
 ```
 
@@ -57,6 +57,7 @@ The harness:
 
 - runs `alembic upgrade head` unless `--skip-migrate` is set
 - refuses to seed over a non-empty `market_telemetry_events` table
+- resolves `--evidence-dir` relative to the repo root (or accepts an absolute path)
 - inserts deterministic `universe_drift`, `completeness_distribution`, `freshness_lag`, and `benchmark_age` rows for the selected canary market
 - invokes the normal launch-gate runner with explicit `execution_mode=ephemeral_postgres_dress_rehearsal`
 

@@ -155,7 +155,7 @@ def _alembic(database_url: str, args: list[str]) -> tuple[int, str]:
     env = {**os.environ, "DATABASE_URL": database_url}
     try:
         proc = subprocess.run(
-            ["alembic", *args],
+            [sys.executable, "-m", "alembic", *args],
             cwd=str(_BACKEND_DIR),
             env=env,
             capture_output=True,

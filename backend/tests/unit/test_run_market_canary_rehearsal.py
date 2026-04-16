@@ -17,6 +17,22 @@ def test_profile_for_jp_matches_expected_canary_envelope():
     assert profile.low_bucket_ratios["JP"] == pytest.approx(0.03)
 
 
+def test_alembic_runs_via_current_python(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    code, output = cli._alembic("postgresql://user:pass@localhost/rehearsal", ["upgrade", "head"])
+
+    assert code == 0
+    assert output == "ok"
+    assert captured["cmd"][:3] == [cli.sys.executable, "-m", "alembic"]
+
+
 def test_cli_passes_default_provenance_and_evidence(monkeypatch, tmp_path, capsys):
     captured: dict[str, object] = {}
     evidence_dir = tmp_path / "jp-evidence"
@@ -95,4 +111,3 @@ def test_cli_passes_default_provenance_and_evidence(monkeypatch, tmp_path, capsy
     out = capsys.readouterr().out
     assert "Verdict: PASS" in out
     assert "Execution mode: ephemeral_postgres_dress_rehearsal" in out
-
