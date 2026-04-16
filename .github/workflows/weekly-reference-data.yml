@@ -14,8 +14,22 @@ permissions:
   contents: write
 
 jobs:
+  ensure_release:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure weekly release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view weekly-reference-data >/dev/null 2>&1 || \
+          gh release create weekly-reference-data \
+            --title "Weekly Reference Data" \
+            --notes "Automated weekly market-scoped reference bundles for static-site builds."
+
   publish:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: ensure_release
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,15 +71,6 @@ jobs:
           python -m app.scripts.build_weekly_reference_bundle \
             --market "${{ matrix.market }}" \
             --output-dir /tmp/weekly-reference
-
-      - name: Ensure weekly release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view weekly-reference-data >/dev/null 2>&1 || \
-          gh release create weekly-reference-data \
-            --title "Weekly Reference Data" \
-            --notes "Automated weekly market-scoped reference bundles for static-site builds."
 
       - name: Upload weekly reference assets
         env:

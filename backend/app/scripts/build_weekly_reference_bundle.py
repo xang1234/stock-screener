@@ -126,6 +126,7 @@ def _build_us_bundle(
         db,
         run_mode="publish",
         snapshot_key=snapshot_key,
+        market=market,
         publish=True,
         progress_callback=_print_progress,
         show_finviz_progress=True,

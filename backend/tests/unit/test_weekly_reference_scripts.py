@@ -38,7 +38,7 @@ def test_build_weekly_reference_bundle_runs_us_publish_hydrate_and_export(monkey
         populate_universe=lambda db: {"added": 10},
     )
     provider_snapshot_service = SimpleNamespace(
-        create_snapshot_run=lambda db, run_mode, publish, snapshot_key, **kwargs: (
+        create_snapshot_run=lambda db, run_mode, publish, snapshot_key, market, **kwargs: (
             kwargs["progress_callback"](
                 {
                     "stage": "snapshot_fetch_complete",
@@ -54,6 +54,7 @@ def test_build_weekly_reference_bundle_runs_us_publish_hydrate_and_export(monkey
                 "published": True,
                 "source_revision": "fundamentals_v1_us:20260404121000",
                 "snapshot_key": snapshot_key,
+                "market": market,
             }
         ),
         hydrate_published_snapshot=lambda db, snapshot_key, allow_yahoo_hydration=True, **kwargs: (

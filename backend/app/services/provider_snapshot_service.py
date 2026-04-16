@@ -563,6 +563,7 @@ class ProviderSnapshotService:
         *,
         run_mode: str,
         snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
+        market: Optional[str] = None,
         exchange_filter: Optional[str] = None,
         publish: bool = False,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -584,12 +585,12 @@ class ProviderSnapshotService:
             progress_callback=progress_callback,
             show_finviz_progress=show_finviz_progress,
         )
-        active_symbols = {
-            row[0]
-            for row in db.query(StockUniverse.symbol).filter(
-                StockUniverse.active_filter()
-            ).all()
-        }
+        active_symbols_query = db.query(StockUniverse.symbol).filter(StockUniverse.active_filter())
+        if market is not None:
+            active_symbols_query = active_symbols_query.filter(
+                StockUniverse.market == str(market).strip().upper()
+            )
+        active_symbols = {row[0] for row in active_symbols_query.all()}
         missing_active = sorted(symbol for symbol in active_symbols if symbol not in merged_rows)
         coverage_stats = {
             "active_symbols": len(active_symbols),
@@ -835,6 +836,16 @@ class ProviderSnapshotService:
                 snapshot_key=snapshot_key,
                 allow_yahoo_hydration=allow_yahoo_hydration,
             )
+        legacy_snapshot_key = "fundamentals_v1"
+        if (
+            self.get_published_run(db, snapshot_key=legacy_snapshot_key) is not None
+            and "US" not in results
+        ):
+            results["US"] = self.hydrate_published_snapshot(
+                db,
+                snapshot_key=legacy_snapshot_key,
+                allow_yahoo_hydration=allow_yahoo_hydration,
+            )
         return results
 
     def get_snapshot_stats(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Dict[str, Any]:
@@ -1005,72 +1016,88 @@ class ProviderSnapshotService:
         parity = snapshot.get("parity_stats")
         warnings = snapshot.get("warnings")
 
-        self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
-        if legacy_global_bundle:
-            imported_universe_count = self._replace_all_universe_rows(
-                db,
-                rows=universe_rows,
-            )
-        else:
-            imported_universe_count = self._replace_market_universe_rows(
-                db,
-                market=bundle_market,
-                rows=universe_rows,
-            )
-        db.commit()
-        db.expunge_all()
+        try:
+            self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
+            if legacy_global_bundle:
+                imported_universe_count = self._replace_all_universe_rows(
+                    db,
+                    rows=universe_rows,
+                )
+            else:
+                imported_universe_count = self._replace_market_universe_rows(
+                    db,
+                    market=bundle_market,
+                    rows=universe_rows,
+                )
 
-        run = ProviderSnapshotRun(
-            snapshot_key=snapshot["snapshot_key"],
-            run_mode=snapshot["run_mode"],
-            status=snapshot["status"],
-            source_revision=snapshot["source_revision"],
-            coverage_stats_json=json.dumps(coverage, sort_keys=True) if coverage is not None else None,
-            parity_stats_json=json.dumps(parity, sort_keys=True) if parity is not None else None,
-            warnings_json=json.dumps(warnings, sort_keys=True) if warnings else None,
-            symbols_total=snapshot.get("symbols_total", len(snapshot_rows)),
-            symbols_published=snapshot.get("symbols_published", len(snapshot_rows)),
-            created_at=_deserialize_datetime(snapshot.get("created_at")),
-            published_at=_deserialize_datetime(snapshot.get("published_at")),
-        )
-        db.add(run)
-        db.flush()
-
-        rows = []
-        for row in snapshot_rows:
-            identity = security_master_resolver.resolve_identity(
-                symbol=str(row.get("symbol") or ""),
-                market=(
-                    row.get("market")
-                    or row.get("normalized_payload", {}).get("market")
-                    or bundle_market
-                ),
-                exchange=row.get("exchange"),
-                currency=row.get("currency"),
-                timezone=row.get("timezone"),
-                local_code=row.get("local_code"),
+            run = ProviderSnapshotRun(
+                snapshot_key=snapshot["snapshot_key"],
+                run_mode=snapshot["run_mode"],
+                status=snapshot["status"],
+                source_revision=snapshot["source_revision"],
+                coverage_stats_json=json.dumps(coverage, sort_keys=True) if coverage is not None else None,
+                parity_stats_json=json.dumps(parity, sort_keys=True) if parity is not None else None,
+                warnings_json=json.dumps(warnings, sort_keys=True) if warnings else None,
+                symbols_total=snapshot.get("symbols_total", len(snapshot_rows)),
+                symbols_published=snapshot.get("symbols_published", len(snapshot_rows)),
+                created_at=_deserialize_datetime(snapshot.get("created_at")),
+                published_at=_deserialize_datetime(snapshot.get("published_at")),
             )
-            rows.append(
-                ProviderSnapshotRow(
+            db.add(run)
+            db.flush()
+
+            rows = []
+            for row in snapshot_rows:
+                identity = security_master_resolver.resolve_identity(
+                    symbol=str(row.get("symbol") or ""),
+                    market=(
+                        row.get("market")
+                        or row.get("normalized_payload", {}).get("market")
+                        or bundle_market
+                    ),
+                    exchange=row.get("exchange"),
+                    currency=row.get("currency"),
+                    timezone=row.get("timezone"),
+                    local_code=row.get("local_code"),
+                )
+                normalized_payload = dict(row["normalized_payload"])
+                normalized_payload.update(
+                    {
+                        "symbol": identity.canonical_symbol,
+                        "market": identity.market,
+                        "exchange": identity.exchange,
+                        "currency": identity.currency,
+                        "timezone": identity.timezone,
+                        "local_code": identity.local_code,
+                    }
+                )
+                rows.append(
+                    ProviderSnapshotRow(
+                        run_id=run.id,
+                        symbol=identity.canonical_symbol,
+                        exchange=identity.exchange,
+                        row_hash=row["row_hash"],
+                        normalized_payload_json=json.dumps(
+                            normalized_payload, sort_keys=True, default=str
+                        ),
+                        raw_payload_json=None,
+                    )
+                )
+            if rows:
+                db.bulk_save_objects(rows)
+
+            db.add(
+                ProviderSnapshotPointer(
+                    snapshot_key=run.snapshot_key,
                     run_id=run.id,
-                    symbol=identity.canonical_symbol,
-                    exchange=identity.exchange,
-                    row_hash=row["row_hash"],
-                    normalized_payload_json=json.dumps(row["normalized_payload"], sort_keys=True, default=str),
-                    raw_payload_json=None,
+                    updated_at=_deserialize_datetime(snapshot.get("published_at"))
+                    or datetime.utcnow(),
                 )
             )
-        if rows:
-            db.bulk_save_objects(rows)
-
-        db.add(
-            ProviderSnapshotPointer(
-                snapshot_key=run.snapshot_key,
-                run_id=run.id,
-                updated_at=_deserialize_datetime(snapshot.get("published_at")) or datetime.utcnow(),
-            )
-        )
-        db.commit()
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
         return {
             "run_id": run.id,
