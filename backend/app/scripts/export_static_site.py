@@ -324,7 +324,7 @@ def _run_daily_refresh(
         if hydrate_published_snapshot:
             provider_snapshot_service = get_provider_snapshot_service()
             with SessionLocal() as db:
-                results["fundamentals_hydrate"] = provider_snapshot_service.hydrate_published_snapshot(
+                results["fundamentals_hydrate"] = provider_snapshot_service.hydrate_all_published_snapshots(
                     db,
                     allow_yahoo_hydration=False,
                 )

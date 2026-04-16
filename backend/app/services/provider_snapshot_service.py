@@ -39,6 +39,16 @@ WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = "weekly-reference-bundle-v1"
 WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = "weekly-reference-manifest-v1"
 WEEKLY_REFERENCE_RELEASE_TAG = "weekly-reference-data"
 WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = "weekly-reference-latest.json"
+WEEKLY_REFERENCE_MARKETS: tuple[str, ...] = ("US", "HK", "JP", "TW")
+WEEKLY_REFERENCE_SNAPSHOT_KEYS: dict[str, str] = {
+    "US": "fundamentals_v1_us",
+    "HK": "fundamentals_v1_hk",
+    "JP": "fundamentals_v1_jp",
+    "TW": "fundamentals_v1_tw",
+}
+WEEKLY_REFERENCE_MARKET_BY_SNAPSHOT_KEY: dict[str, str] = {
+    snapshot_key: market for market, snapshot_key in WEEKLY_REFERENCE_SNAPSHOT_KEYS.items()
+}
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -54,7 +64,8 @@ def _deserialize_datetime(value: str | None) -> datetime | None:
 class ProviderSnapshotService:
     """Build, publish, and hydrate provider-backed fundamentals snapshots."""
 
-    SNAPSHOT_KEY_FUNDAMENTALS = "fundamentals_v1"
+    SNAPSHOT_KEY_FUNDAMENTALS = WEEKLY_REFERENCE_SNAPSHOT_KEYS["US"]
+    SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET = WEEKLY_REFERENCE_SNAPSHOT_KEYS
     CATEGORY_LOADERS = {
         "overview": ("finvizfinance.screener.overview", "Overview"),
         "valuation": ("finvizfinance.screener.valuation", "Valuation"),
@@ -84,6 +95,55 @@ class ProviderSnapshotService:
     WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION
     WEEKLY_REFERENCE_RELEASE_TAG = WEEKLY_REFERENCE_RELEASE_TAG
     WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = WEEKLY_REFERENCE_LATEST_MANIFEST_NAME
+
+    @classmethod
+    def snapshot_key_for_market(cls, market: str) -> str:
+        normalized_market = str(market or "").strip().upper()
+        if normalized_market not in cls.SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET:
+            raise ValueError(
+                f"Unsupported weekly reference market {market!r}. "
+                f"Expected one of {sorted(cls.SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET)}."
+            )
+        return cls.SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET[normalized_market]
+
+    @classmethod
+    def market_for_snapshot_key(cls, snapshot_key: str) -> str:
+        normalized_key = str(snapshot_key or "").strip()
+        if normalized_key == "fundamentals_v1":
+            return "US"
+        market = WEEKLY_REFERENCE_MARKET_BY_SNAPSHOT_KEY.get(normalized_key)
+        if market is None:
+            raise ValueError(f"Unsupported weekly reference snapshot key {snapshot_key!r}")
+        return market
+
+    @classmethod
+    def weekly_reference_snapshot_keys(cls) -> tuple[str, ...]:
+        return tuple(
+            cls.SNAPSHOT_KEY_FUNDAMENTALS_BY_MARKET[market]
+            for market in WEEKLY_REFERENCE_MARKETS
+        )
+
+    @classmethod
+    def weekly_reference_latest_manifest_name_for_market(cls, market: str) -> str:
+        return f"weekly-reference-latest-{str(market or '').strip().lower()}.json"
+
+    @staticmethod
+    def _infer_market_from_bundle_rows(
+        universe_rows: Iterable[Dict[str, Any]],
+        snapshot_rows: Iterable[Dict[str, Any]],
+    ) -> str | None:
+        for row in [*list(universe_rows), *list(snapshot_rows)]:
+            identity = security_master_resolver.resolve_identity(
+                symbol=str(row.get("symbol") or ""),
+                market=row.get("market"),
+                exchange=row.get("exchange"),
+                currency=row.get("currency"),
+                timezone=row.get("timezone"),
+                local_code=row.get("local_code"),
+            )
+            if identity.market:
+                return identity.market
+        return None
 
     def __init__(
         self,
@@ -240,6 +300,40 @@ class ProviderSnapshotService:
     def _needs_yahoo_hydration(self, payload: Dict[str, Any]) -> bool:
         return any(not self._has_value(payload.get(key)) for key in self.YAHOO_ONLY_REQUIRED_KEYS)
 
+    def build_market_snapshot_row(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        exchange: str | None,
+        normalized_payload: Dict[str, Any],
+        raw_payload: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Return a ProviderSnapshotRow-ready payload for a market-scoped bundle."""
+        identity = security_master_resolver.resolve_identity(
+            symbol=str(symbol or ""),
+            market=market,
+            exchange=exchange,
+            currency=normalized_payload.get("currency"),
+            timezone=normalized_payload.get("timezone"),
+            local_code=normalized_payload.get("local_code"),
+        )
+        payload = dict(normalized_payload)
+        payload.setdefault("symbol", identity.canonical_symbol)
+        payload.setdefault("market", identity.market)
+        payload.setdefault("exchange", identity.exchange)
+        payload.setdefault("currency", identity.currency)
+        payload.setdefault("timezone", identity.timezone)
+        payload.setdefault("local_code", identity.local_code)
+        payload_json = json.dumps(payload, sort_keys=True, default=str)
+        return {
+            "symbol": identity.canonical_symbol,
+            "exchange": identity.exchange,
+            "row_hash": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+            "normalized_payload": payload,
+            "raw_payload": raw_payload,
+        }
+
     def _coverage_gate(
         self,
         coverage_stats: Dict[str, Any],
@@ -266,6 +360,138 @@ class ProviderSnapshotService:
                 f"{settings.provider_snapshot_max_missing_active_symbols}"
             )
         return (not warnings), warnings
+
+    @staticmethod
+    def _replace_snapshot_key_runs(db: Session, *, snapshot_key: str) -> None:
+        existing_run_ids = [
+            row[0]
+            for row in db.query(ProviderSnapshotRun.id)
+            .filter(ProviderSnapshotRun.snapshot_key == snapshot_key)
+            .all()
+        ]
+        db.query(ProviderSnapshotPointer).filter(
+            ProviderSnapshotPointer.snapshot_key == snapshot_key
+        ).delete()
+        if existing_run_ids:
+            db.query(ProviderSnapshotRow).filter(
+                ProviderSnapshotRow.run_id.in_(existing_run_ids)
+            ).delete(synchronize_session=False)
+            db.query(ProviderSnapshotRun).filter(
+                ProviderSnapshotRun.id.in_(existing_run_ids)
+            ).delete(synchronize_session=False)
+
+    @staticmethod
+    def _replace_market_universe_rows(
+        db: Session,
+        *,
+        market: str,
+        rows: Iterable[Dict[str, Any]],
+    ) -> int:
+        db.query(StockUniverse).filter(StockUniverse.market == market).delete(
+            synchronize_session=False
+        )
+        imported_universe = [
+            StockUniverse(**ProviderSnapshotService._deserialize_universe_row(row))
+            for row in rows
+        ]
+        if imported_universe:
+            db.bulk_save_objects(imported_universe)
+        return len(imported_universe)
+
+    def publish_market_snapshot_run(
+        self,
+        db: Session,
+        *,
+        snapshot_key: str,
+        market: str,
+        source_revision: str,
+        rows: Iterable[Dict[str, Any]],
+        coverage_stats: Dict[str, Any],
+        warnings: Optional[list[str]] = None,
+        run_mode: str = "publish",
+        publish: bool = True,
+    ) -> Dict[str, Any]:
+        """Publish a pre-built market snapshot using the standard run/pointer tables."""
+        normalized_market = str(market or "").strip().upper()
+        parity_stats = {
+            "market": normalized_market,
+            "missing_active_symbols": [],
+        }
+        coverage_ok, coverage_warnings = self._coverage_gate(coverage_stats)
+        all_warnings = list(warnings or [])
+        all_warnings.extend(coverage_warnings)
+
+        run = ProviderSnapshotRun(
+            snapshot_key=snapshot_key,
+            run_mode=run_mode,
+            status="building",
+            source_revision=source_revision,
+        )
+        db.add(run)
+        db.flush()
+
+        materialized_rows = list(rows)
+        if materialized_rows:
+            db.bulk_save_objects(
+                [
+                    ProviderSnapshotRow(
+                        run_id=run.id,
+                        symbol=row["symbol"],
+                        exchange=row.get("exchange"),
+                        row_hash=row["row_hash"],
+                        normalized_payload_json=json.dumps(
+                            row["normalized_payload"], sort_keys=True, default=str
+                        ),
+                        raw_payload_json=(
+                            json.dumps(row["raw_payload"], sort_keys=True, default=str)
+                            if row.get("raw_payload") is not None
+                            else None
+                        ),
+                    )
+                    for row in materialized_rows
+                ]
+            )
+
+        run.symbols_total = int(coverage_stats.get("snapshot_symbols", len(materialized_rows)) or 0)
+        run.symbols_published = int(
+            coverage_stats.get("covered_active_symbols", len(materialized_rows)) or 0
+        )
+        run.coverage_stats_json = json.dumps(coverage_stats, sort_keys=True)
+        run.parity_stats_json = json.dumps(parity_stats, sort_keys=True)
+        run.warnings_json = json.dumps(all_warnings, sort_keys=True) if all_warnings else None
+        run.status = "preview_ready" if not publish else "published"
+        published = False
+        if publish and coverage_ok:
+            published_at = datetime.utcnow()
+            run.published_at = published_at
+            pointer = db.query(ProviderSnapshotPointer).filter(
+                ProviderSnapshotPointer.snapshot_key == snapshot_key
+            ).first()
+            if pointer is None:
+                db.add(
+                    ProviderSnapshotPointer(
+                        snapshot_key=snapshot_key,
+                        run_id=run.id,
+                        updated_at=published_at,
+                    )
+                )
+            else:
+                pointer.run_id = run.id
+                pointer.updated_at = published_at
+            published = True
+        elif publish and not coverage_ok:
+            run.status = "publish_blocked"
+
+        db.commit()
+        return {
+            "run_id": run.id,
+            "source_revision": run.source_revision,
+            "coverage": coverage_stats,
+            "parity": parity_stats,
+            "published": published,
+            "warnings": all_warnings,
+            "market": normalized_market,
+        }
 
     def _fetch_yahoo_only_fields(self, symbol: str) -> Dict[str, Any]:
         import yfinance as yf
@@ -577,6 +803,25 @@ class ProviderSnapshotService:
             "skipped_yahoo_field_symbols": skipped_yahoo_field_symbols,
         }
 
+    def hydrate_all_published_snapshots(
+        self,
+        db: Session,
+        *,
+        allow_yahoo_hydration: bool = True,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Hydrate every market-scoped weekly reference snapshot that is currently published."""
+        results: Dict[str, Dict[str, Any]] = {}
+        for snapshot_key in self.weekly_reference_snapshot_keys():
+            if self.get_published_run(db, snapshot_key=snapshot_key) is None:
+                continue
+            market = self.market_for_snapshot_key(snapshot_key)
+            results[market] = self.hydrate_published_snapshot(
+                db,
+                snapshot_key=snapshot_key,
+                allow_yahoo_hydration=allow_yahoo_hydration,
+            )
+        return results
+
     def get_snapshot_stats(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Dict[str, Any]:
         """Return published snapshot stats for API/status reporting."""
         run = self.get_published_run(db, snapshot_key=snapshot_key)
@@ -609,11 +854,13 @@ class ProviderSnapshotService:
         bundle_asset_name: str,
         latest_manifest_path: Path | None = None,
         snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS,
+        market: str | None = None,
     ) -> Dict[str, Any]:
         """Export the current published fundamentals snapshot + active universe bundle."""
         run = self.get_published_run(db, snapshot_key=snapshot_key)
         if run is None:
             raise ValueError(f"No published snapshot for {snapshot_key}")
+        bundle_market = str(market or self.market_for_snapshot_key(snapshot_key)).strip().upper()
 
         coverage = json.loads(run.coverage_stats_json) if run.coverage_stats_json else None
         parity = json.loads(run.parity_stats_json) if run.parity_stats_json else None
@@ -621,7 +868,10 @@ class ProviderSnapshotService:
 
         active_universe_rows = (
             db.query(StockUniverse)
-            .filter(StockUniverse.active_filter())
+            .filter(
+                StockUniverse.active_filter(),
+                StockUniverse.market == bundle_market,
+            )
             .order_by(StockUniverse.symbol.asc())
             .all()
         )
@@ -655,6 +905,7 @@ class ProviderSnapshotService:
 
         bundle_payload = {
             "schema_version": self.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+            "market": bundle_market,
             "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
             "as_of_date": (
                 (run.published_at or run.created_at).date().isoformat()
@@ -685,6 +936,7 @@ class ProviderSnapshotService:
         sha256 = hashlib.sha256(output_path.read_bytes()).hexdigest()
         manifest = {
             "schema_version": self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
+            "market": bundle_market,
             "generated_at": bundle_payload["generated_at"],
             "as_of_date": bundle_payload["as_of_date"],
             "source_revision": run.source_revision,
@@ -708,6 +960,7 @@ class ProviderSnapshotService:
             "rows": len(bundle_rows),
             "universe_rows": len(active_universe_rows),
             "as_of_date": bundle_payload["as_of_date"],
+            "market": bundle_market,
         }
 
     def import_weekly_reference_bundle(
@@ -728,36 +981,22 @@ class ProviderSnapshotService:
         snapshot_key = snapshot["snapshot_key"]
         universe_rows = payload.get("universe", [])
         snapshot_rows = snapshot.get("rows", [])
+        inferred_market = self._infer_market_from_bundle_rows(universe_rows, snapshot_rows)
+        bundle_market = str(
+            payload.get("market") or inferred_market or self.market_for_snapshot_key(snapshot_key)
+        ).strip().upper()
         coverage = snapshot.get("coverage_stats")
         parity = snapshot.get("parity_stats")
         warnings = snapshot.get("warnings")
 
-        existing_run_ids = [
-            row[0]
-            for row in db.query(ProviderSnapshotRun.id)
-            .filter(ProviderSnapshotRun.snapshot_key == snapshot_key)
-            .all()
-        ]
-        db.query(ProviderSnapshotPointer).filter(
-            ProviderSnapshotPointer.snapshot_key == snapshot_key
-        ).delete()
-        if existing_run_ids:
-            db.query(ProviderSnapshotRow).filter(
-                ProviderSnapshotRow.run_id.in_(existing_run_ids)
-            ).delete(synchronize_session=False)
-            db.query(ProviderSnapshotRun).filter(
-                ProviderSnapshotRun.id.in_(existing_run_ids)
-            ).delete(synchronize_session=False)
-        db.query(StockUniverse).delete()
+        self._replace_snapshot_key_runs(db, snapshot_key=snapshot_key)
+        imported_universe_count = self._replace_market_universe_rows(
+            db,
+            market=bundle_market,
+            rows=universe_rows,
+        )
         db.commit()
         db.expunge_all()
-
-        imported_universe = [
-            StockUniverse(**self._deserialize_universe_row(row))
-            for row in universe_rows
-        ]
-        if imported_universe:
-            db.bulk_save_objects(imported_universe)
 
         run = ProviderSnapshotRun(
             snapshot_key=snapshot["snapshot_key"],
@@ -779,7 +1018,11 @@ class ProviderSnapshotService:
         for row in snapshot_rows:
             identity = security_master_resolver.resolve_identity(
                 symbol=str(row.get("symbol") or ""),
-                market=row.get("market"),
+                market=(
+                    row.get("market")
+                    or row.get("normalized_payload", {}).get("market")
+                    or bundle_market
+                ),
                 exchange=row.get("exchange"),
                 currency=row.get("currency"),
                 timezone=row.get("timezone"),
@@ -811,8 +1054,9 @@ class ProviderSnapshotService:
             "run_id": run.id,
             "source_revision": run.source_revision,
             "rows": len(rows),
-            "universe_rows": len(universe_rows),
+            "universe_rows": imported_universe_count,
             "as_of_date": payload.get("as_of_date"),
+            "market": bundle_market,
         }
 
     @staticmethod

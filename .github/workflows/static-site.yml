@@ -64,40 +64,52 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/weekly-reference
-          gh release download weekly-reference-data \
-            --pattern weekly-reference-latest.json \
-            --dir /tmp/weekly-reference
+          for market in us hk jp tw; do
+            gh release download weekly-reference-data \
+              --pattern "weekly-reference-latest-${market}.json" \
+              --dir /tmp/weekly-reference
+          done
 
       - name: Download weekly reference bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BUNDLE_ASSET_NAME="$(python - <<'PY'
+          for market in us hk jp tw; do
+            export MARKET="$market"
+            BUNDLE_ASSET_NAME="$(python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
           print(manifest["bundle_asset_name"])
           PY
-          )"
-          BUNDLE_SHA256="$(python - <<'PY'
+            )"
+            BUNDLE_SHA256="$(python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          manifest = json.loads(Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(encoding="utf-8"))
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
           print(manifest["sha256"])
           PY
-          )"
-          export BUNDLE_ASSET_NAME
-          export BUNDLE_SHA256
-          echo "BUNDLE_ASSET_NAME=$BUNDLE_ASSET_NAME" >> "$GITHUB_ENV"
-          echo "BUNDLE_SHA256=$BUNDLE_SHA256" >> "$GITHUB_ENV"
+            )"
 
-          gh release download weekly-reference-data \
-            --pattern "$BUNDLE_ASSET_NAME" \
-            --dir /tmp/weekly-reference
+            gh release download weekly-reference-data \
+              --pattern "$BUNDLE_ASSET_NAME" \
+              --dir /tmp/weekly-reference
 
-          python - <<'PY'
+            export BUNDLE_ASSET_NAME
+            export BUNDLE_SHA256
+            python - <<'PY'
           import hashlib
           import os
           from pathlib import Path
@@ -111,12 +123,30 @@ jobs:
                   f"{digest} != {expected}"
               )
           PY
+          done
 
       - name: Import weekly reference bundle
         run: |
           cd backend
-          python -m app.scripts.import_weekly_reference_bundle \
-            --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
+          for market in us hk jp tw; do
+            export MARKET="$market"
+            BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          market = os.environ["MARKET"]
+          manifest = json.loads(
+              Path(f"/tmp/weekly-reference/weekly-reference-latest-{market}.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(manifest["bundle_asset_name"])
+          PY
+            )"
+            python -m app.scripts.import_weekly_reference_bundle \
+              --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
+          done
 
       - name: Load tracked IBD industry seed
         run: |
