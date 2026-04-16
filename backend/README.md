@@ -276,8 +276,15 @@ Diagnostic utilities in `scripts/`:
 | `check_cache_status.py` | Check price cache status |
 | `clear_redis_price_cache.py` | Clear Redis cache after config change |
 | `force_full_cache_refresh.py` | Force full cache refresh |
+| `cleanup_orphaned_scans.py` | Synchronously delete cancelled and stale scans |
 
-Orphaned scan cleanup is exposed as the Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans`.
+Manual orphaned scan cleanup runs directly:
+
+```bash
+python scripts/cleanup_orphaned_scans.py
+```
+
+Scheduled cleanup still runs through the Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans`.
 
 ## Rate Limits
 

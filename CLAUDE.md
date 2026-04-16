@@ -140,12 +140,15 @@ python scripts/cache_diagnostic.py         # Trace cache flow (DB → Redis)
 python scripts/check_cache_status.py       # Check price cache status
 python scripts/clear_redis_price_cache.py  # Clear Redis cache after config change
 python scripts/force_full_cache_refresh.py # Force full cache refresh
+python scripts/cleanup_orphaned_scans.py   # Synchronously delete orphaned scans
 ```
 
-Orphaned scan cleanup runs through Celery:
+Manual orphaned scan cleanup runs directly:
 ```bash
-./venv/bin/celery -A app.celery_app call app.tasks.cache_tasks.cleanup_orphaned_scans
+python scripts/cleanup_orphaned_scans.py
 ```
+
+The Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans` remains the scheduled background path and requires a live worker to execute.
 
 ## Architecture
 
