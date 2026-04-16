@@ -89,11 +89,11 @@ class MarketCalendarService:
         current_session = pd.Timestamp(market_now.date())
 
         if not calendar.is_session(current_session):
-            return calendar.previous_session(current_session).date()
+            return calendar.date_to_session(current_session, direction="previous").date()
 
         schedule = calendar.schedule.loc[current_session:current_session]
         if schedule.empty:
-            return calendar.previous_session(current_session).date()
+            return calendar.date_to_session(current_session, direction="previous").date()
 
         market_close = schedule.iloc[0]["close"] if "close" in schedule.columns else schedule.iloc[0]["market_close"]
         if market_close.tzinfo is None:
