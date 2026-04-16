@@ -365,9 +365,10 @@ def _run_daily_refresh(
             feature_snapshots[market] = market_result
 
         results["feature_snapshots"] = feature_snapshots
+        default_snapshot = feature_snapshots.get(STATIC_DEFAULT_MARKET, {})
         default_run_id = (
-            feature_snapshots.get(STATIC_DEFAULT_MARKET, {}).get("run_id")
-            or feature_snapshots.get(STATIC_DEFAULT_MARKET, {}).get("existing_run_id")
+            default_snapshot.get("run_id")
+            or default_snapshot.get("existing_run_id")
         )
         if default_run_id is not None:
             _upsert_feature_run_pointer(
@@ -379,6 +380,11 @@ def _run_daily_refresh(
                 "pointer_key": "latest_published",
                 "run_id": default_run_id,
             }
+        else:
+            warnings.append(
+                f"No {STATIC_DEFAULT_MARKET} feature snapshot produced a run id; "
+                "'latest_published' was not updated."
+            )
 
     return results, warnings
 

@@ -10,6 +10,7 @@ from unittest.mock import ANY, patch
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -18,6 +19,7 @@ from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
     _fail_stale_feature_runs,
+    _upsert_feature_run_pointer,
     build_daily_snapshot,
 )
 from app.domain.scanning.defaults import get_default_scan_profile
@@ -292,6 +294,55 @@ def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
         pointer_key="latest_published_market:HK",
         run_id=84,
     )
+
+
+def test_upsert_feature_run_pointer_retries_after_integrity_error():
+    pointer = SimpleNamespace(run_id=10)
+    query_results = [None, pointer]
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.added = []
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def query(self, _model):
+            return self
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return query_results.pop(0)
+
+        def add(self, obj):
+            self.added.append(obj)
+
+        def commit(self):
+            self.commit_calls += 1
+            if self.commit_calls == 1:
+                raise IntegrityError("insert", {}, Exception("duplicate"))
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    fake_session = _FakeSession()
+
+    _upsert_feature_run_pointer(
+        session_factory=lambda: fake_session,
+        pointer_key="latest_published_market:HK",
+        run_id=84,
+    )
+
+    assert fake_session.rollback_calls == 1
+    assert fake_session.commit_calls == 2
+    assert pointer.run_id == 84
 
 
 def test_build_daily_snapshot_reraises_soft_time_limit():

@@ -26,19 +26,34 @@ logger = logging.getLogger(__name__)
 
 def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
     """Ensure a published-run pointer references *run_id*."""
+    from sqlalchemy.exc import IntegrityError
+
     from app.infra.db.models.feature_store import FeatureRunPointer
 
     with session_factory() as db:
-        pointer = (
-            db.query(FeatureRunPointer)
-            .filter(FeatureRunPointer.key == pointer_key)
-            .first()
-        )
-        if pointer is None:
-            db.add(FeatureRunPointer(key=pointer_key, run_id=run_id))
-        else:
-            pointer.run_id = run_id
-        db.commit()
+        try:
+            pointer = (
+                db.query(FeatureRunPointer)
+                .filter(FeatureRunPointer.key == pointer_key)
+                .first()
+            )
+            if pointer is None:
+                db.add(FeatureRunPointer(key=pointer_key, run_id=run_id))
+            else:
+                pointer.run_id = run_id
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            pointer = (
+                db.query(FeatureRunPointer)
+                .filter(FeatureRunPointer.key == pointer_key)
+                .first()
+            )
+            if pointer is None:
+                db.add(FeatureRunPointer(key=pointer_key, run_id=run_id))
+            else:
+                pointer.run_id = run_id
+            db.commit()
 
 
 def _fail_stale_feature_runs(*, session_factory, stale_after_minutes: int) -> int:

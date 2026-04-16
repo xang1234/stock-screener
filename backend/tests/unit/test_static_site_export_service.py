@@ -423,6 +423,37 @@ def test_export_rejects_legacy_unscoped_run_for_market_bundle(
         service.export(tmp_path / "static-data")
 
 
+def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, float("nan"), 104.0],
+            "High": [101.0, 102.0, 104.0, 105.0],
+            "Low": [99.0, 100.0, 102.0, 103.0],
+            "Close": [100.5, 101.5, 103.5, 104.5],
+            "Volume": [1000, 1100, 1200, 1300],
+        },
+        index=pd.to_datetime(["2026-03-01", "2026-04-01", "2026-04-02", "2026-04-03"]),
+    )
+
+    payload = service._serialize_history_bars(  # noqa: SLF001 - intentional unit test coverage
+        frame,
+        period_days=10,
+        end_date=date(2026, 4, 2),
+    )
+
+    assert payload == [
+        {
+            "date": "2026-04-01",
+            "open": 101.0,
+            "high": 102.0,
+            "low": 100.0,
+            "close": 101.5,
+            "volume": 1100,
+        },
+    ]
+
+
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
     service, session_factory = service_and_session_factory
 

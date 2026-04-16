@@ -701,6 +701,7 @@ class StaticSiteExportService:
                 "spy_overlay": self._serialize_history_bars(
                     benchmark,
                     period_days=31,
+                    end_date=expected_as_of_date,
                 ),
             },
         }
@@ -1339,13 +1340,20 @@ class StaticSiteExportService:
         ]
 
     @staticmethod
-    def _serialize_history_bars(data: pd.DataFrame | None, *, period_days: int) -> list[dict[str, Any]]:
+    def _serialize_history_bars(
+        data: pd.DataFrame | None,
+        *,
+        period_days: int,
+        end_date: date | None = None,
+    ) -> list[dict[str, Any]]:
         if data is None or data.empty:
             return []
-        cutoff_date = pd.Timestamp(datetime.utcnow() - timedelta(days=period_days))
+        end_timestamp = pd.Timestamp(end_date or datetime.utcnow())
+        cutoff_date = end_timestamp - timedelta(days=period_days)
         if data.index.tz is not None:
             cutoff_date = cutoff_date.tz_localize(data.index.tz)
-        filtered = data[data.index >= cutoff_date]
+            end_timestamp = end_timestamp.tz_localize(data.index.tz)
+        filtered = data[(data.index >= cutoff_date) & (data.index <= end_timestamp)]
         if filtered.empty:
             return []
         frame = filtered.reset_index()
@@ -1362,6 +1370,10 @@ class StaticSiteExportService:
                 "volume": int(row["Volume"]),
             }
             for _, row in frame.iterrows()
+            if all(
+                value is not None and not math.isnan(float(value))
+                for value in (row["Open"], row["High"], row["Low"], row["Close"], row["Volume"])
+            )
         ]
 
     def _serialize_scan_row(self, row) -> dict[str, Any]:

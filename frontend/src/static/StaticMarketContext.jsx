@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, useEffect } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 export const STATIC_MARKET_STORAGE_KEY = 'static-site:selected-market';
@@ -45,7 +45,7 @@ export function StaticMarketProvider({
     }
   }, [defaultMarket, searchParams, selectedMarket, supportedMarkets]);
 
-  const setSelectedMarket = (market) => {
+  const setSelectedMarket = useCallback((market) => {
     const normalized = normalizeMarket(market, supportedMarkets, defaultMarket);
     setSelectedMarketState(normalized);
     if (typeof window !== 'undefined') {
@@ -59,12 +59,12 @@ export function StaticMarketProvider({
       nextParams.set('market', normalized);
     }
     setSearchParams(nextParams, { replace: true });
-  };
+  }, [defaultMarket, searchParams, setSearchParams, supportedMarkets]);
 
   const value = useMemo(() => ({
     selectedMarket,
     setSelectedMarket,
-  }), [selectedMarket]);
+  }), [selectedMarket, setSelectedMarket]);
 
   return (
     <StaticMarketContext.Provider value={value}>
