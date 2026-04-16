@@ -26,6 +26,8 @@ python scripts/run_launch_gates.py [options]
 | `--evidence GATE_ID=PATH` | Attach external evidence for G5/G6/G7. Repeatable. |
 | `--output-dir PATH` | Override output directory (default: `data/governance/launch_gates/`). |
 | `--no-db` | Skip DB-backed gates (G2, G4). They report `MISSING_EVIDENCE`. |
+| `--enabled-market MARKET` | Scope G2/G3/G4 to the staged enabled-market set. Repeatable; defaults to all supported markets. |
+| `--target-market MARKET` | Optional canary target market recorded in the signed artifact. |
 | `--execution-mode MODE` | Optional provenance label embedded into the report (for example `synthetic_seeded_harness`). |
 | `--provenance-note TEXT` | Optional human-readable provenance note embedded into the report and markdown. |
 
@@ -58,7 +60,8 @@ The harness:
 - runs `alembic upgrade head` unless `--skip-migrate` is set
 - refuses to seed over a non-empty `market_telemetry_events` table
 - resolves `--evidence-dir` relative to the repo root (or accepts an absolute path)
-- inserts deterministic `universe_drift`, `completeness_distribution`, `freshness_lag`, and `benchmark_age` rows for the selected canary market
+- infers the staged enabled-market set (`HK` -> `US,HK`; `JP` -> `US,HK,JP`; `TW` -> `US,HK,JP,TW`)
+- inserts deterministic `universe_drift` and `completeness_distribution` rows for the staged enabled-market set, plus `freshness_lag` / `benchmark_age` for the selected canary market
 - invokes the normal launch-gate runner with explicit `execution_mode=ephemeral_postgres_dress_rehearsal`
 
 ## Gate coverage
@@ -66,9 +69,9 @@ The harness:
 | Gate | Name | Evidence source | Check |
 |---|---|---|---|
 | G1 | Schema/Contract Readiness | `docs/asia/asia_v2_e2_st3_t2_migration_rehearsal_report_*.md` | Report exists with no-data-loss assertion or ≥3 Success rows |
-| G2 | Universe Integrity and Freshness | `market_telemetry_events` DB table | Worst `universe_drift` ratio in last 2d < 0.15 |
-| G3 | Benchmark/Calendar Correctness | `benchmark_registry_service` | Every ASIA market maps to its index symbol (no SPY leakage) |
-| G4 | Fundamentals Data Quality | `market_telemetry_events` DB table | Every market's latest `completeness_distribution` has `0-25` bucket < 0.50 |
+| G2 | Universe Integrity and Freshness | `market_telemetry_events` DB table | Latest `universe_drift` for each enabled market stays < 0.15 |
+| G3 | Benchmark/Calendar Correctness | `benchmark_registry_service` + `market_calendar_service` | Enabled markets keep canonical benchmark mappings, canonical calendar IDs, weekend non-session behavior, and Sunday rollover correctness |
+| G4 | Fundamentals Data Quality | `market_telemetry_events` DB table + scan/feature-store transparency plumbing | Enabled markets' latest `completeness_distribution` keeps `0-25` bucket < 0.50 and the scan contract surfaces provenance / unsupported / computed reason codes |
 | G5 | Multilingual Extraction Quality | External JSON via `--evidence G5=...` | precision ≥ 0.85, recall ≥ 0.75, false-positive-rate ≤ 0.10 |
 | G6 | US Parity and Non-US Scan Correctness | External JSON via `--evidence G6=...` | Both `us_parity_pass` and `non_us_correctness_pass` true |
 | G7 | Performance and Stability | External JSON via `--evidence G7=...` | p95 ≤ 1500ms, failure rate ≤ 0.01, `market_isolation_pass` true |

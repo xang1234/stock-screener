@@ -38,17 +38,19 @@ def test_cli_passes_default_provenance_and_evidence(monkeypatch, tmp_path, capsy
     evidence_dir = tmp_path / "jp-evidence"
     evidence_dir.mkdir()
 
-    def fake_seed(database_url: str, market: str, now):
+    def fake_seed(database_url: str, market: str, now, enabled_markets):
         assert database_url == "postgresql://user:pass@localhost/rehearsal"
         assert market == "JP"
+        assert enabled_markets == ["US", "HK", "JP"]
         return {
-            "universe_drift_rows": 4,
-            "completeness_rows": 4,
+            "enabled_markets": ["US", "HK", "JP"],
+            "universe_drift_rows": 3,
+            "completeness_rows": 3,
             "freshness_rows": 1,
             "benchmark_rows": 1,
             "worst_drift_ratio": 0.012,
             "worst_low_bucket_ratio": 0.03,
-            "worst_low_bucket_market": "TW",
+            "worst_low_bucket_market": "JP",
             "benchmark_symbol": "^N225",
         }
 
@@ -60,6 +62,8 @@ def test_cli_passes_default_provenance_and_evidence(monkeypatch, tmp_path, capsy
             hard_passed=9,
             hard_failed=0,
             hard_missing_evidence=0,
+            enabled_markets=kwargs.get("enabled_markets"),
+            target_market=kwargs.get("target_market"),
             execution_mode=kwargs.get("execution_mode"),
             provenance_note=kwargs.get("provenance_note"),
             content_hash="abc123",
@@ -104,10 +108,13 @@ def test_cli_passes_default_provenance_and_evidence(monkeypatch, tmp_path, capsy
 
     assert exit_code == 0
     assert captured["external_evidence"] == {"G5": "qa.json", "G6": "parity.json", "G7": "load.json"}
+    assert captured["enabled_markets"] == ["US", "HK", "JP"]
+    assert captured["target_market"] == "JP"
     assert captured["execution_mode"] == "ephemeral_postgres_dress_rehearsal"
-    assert "Seeded PostgreSQL rehearsal telemetry for JP" in str(captured["provenance_note"])
+    assert "Seeded PostgreSQL rehearsal telemetry for staged markets through JP" in str(captured["provenance_note"])
     assert "jp-evidence" in str(captured["provenance_note"])
 
     out = capsys.readouterr().out
     assert "Verdict: PASS" in out
+    assert "Enabled markets: ['US', 'HK', 'JP']" in out
     assert "Execution mode: ephemeral_postgres_dress_rehearsal" in out

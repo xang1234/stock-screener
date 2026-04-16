@@ -95,7 +95,7 @@ export DATABASE_URL=postgresql://stockscanner:stockscanner@127.0.0.1:55436/stock
 python scripts/run_market_canary_rehearsal.py \
   --market TW \
   --evidence-dir data/governance/canary_evidence/tw-2026-04-16 \
-  --output-dir /Users/admin/StockScreenClaude/data/governance/launch_gates/tw-2026-04-16 \
+  --output-dir data/governance/launch_gates/tw-2026-04-16 \
   --now 2026-04-16T16:00:00+00:00
 ```
 

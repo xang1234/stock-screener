@@ -50,7 +50,6 @@ from app.services.telemetry.schema import (  # noqa: E402
     freshness_lag_payload,
     universe_drift_payload,
 )
-from app.tasks.market_queues import SUPPORTED_MARKETS  # noqa: E402
 from app.utils.db_url import redacted_database_url as _redact_url  # noqa: E402
 
 
@@ -90,6 +89,7 @@ _EVIDENCE_FILENAMES = {
     "G7": "load_soak.json",
 }
 _DEFAULT_EXECUTION_MODE = "ephemeral_postgres_dress_rehearsal"
+_ROLLOUT_ORDER = ("HK", "JP", "TW")
 
 
 def _parse_now(raw: Optional[str]) -> datetime:
@@ -129,9 +129,18 @@ def _profile_for_market(market: str) -> MarketCanaryProfile:
 
 def _default_provenance_note(market: str, evidence_dir: Path, root: Path) -> str:
     return (
-        f"Seeded PostgreSQL rehearsal telemetry for {market} and attached external "
+        f"Seeded PostgreSQL rehearsal telemetry for staged markets through {market} and attached external "
         f"evidence from {_maybe_relative(evidence_dir, root)}."
     )
+
+
+def _enabled_markets_for_stage(market: str) -> list[str]:
+    market = market.strip().upper()
+    try:
+        stage_idx = _ROLLOUT_ORDER.index(market)
+    except ValueError as exc:
+        raise ValueError(f"unsupported market {market!r}") from exc
+    return ["US", *_ROLLOUT_ORDER[: stage_idx + 1]]
 
 
 def _load_database_url() -> str:
@@ -220,7 +229,12 @@ def _bucket_counts_for_low_ratio(low_ratio: float, *, total: int = 1000) -> Dict
     }
 
 
-def _seed_rehearsal_telemetry(database_url: str, market: str, now: datetime) -> Dict[str, object]:
+def _seed_rehearsal_telemetry(
+    database_url: str,
+    market: str,
+    now: datetime,
+    enabled_markets: list[str],
+) -> Dict[str, object]:
     profile = _profile_for_market(market)
     existing_rows = _telemetry_row_count(database_url)
     if existing_rows:
@@ -229,7 +243,7 @@ def _seed_rehearsal_telemetry(database_url: str, market: str, now: datetime) -> 
         )
 
     rows = []
-    for idx, code in enumerate(SUPPORTED_MARKETS):
+    for idx, code in enumerate(enabled_markets):
         prior_size = _UNIVERSE_PRIOR_SIZE[code]
         delta = max(1, int(round(prior_size * profile.drift_ratios[code])))
         rows.append(
@@ -246,7 +260,7 @@ def _seed_rehearsal_telemetry(database_url: str, market: str, now: datetime) -> 
                 "recorded_at": now - timedelta(hours=6 - idx),
             }
         )
-    for idx, code in enumerate(SUPPORTED_MARKETS):
+    for idx, code in enumerate(enabled_markets):
         rows.append(
             {
                 "market": code,
@@ -308,13 +322,14 @@ def _seed_rehearsal_telemetry(database_url: str, market: str, now: datetime) -> 
     finally:
         engine.dispose()
 
-    worst_market = max(profile.low_bucket_ratios, key=profile.low_bucket_ratios.__getitem__)
+    worst_market = max(enabled_markets, key=profile.low_bucket_ratios.__getitem__)
     return {
-        "universe_drift_rows": len(SUPPORTED_MARKETS),
-        "completeness_rows": len(SUPPORTED_MARKETS),
+        "enabled_markets": enabled_markets,
+        "universe_drift_rows": len(enabled_markets),
+        "completeness_rows": len(enabled_markets),
         "freshness_rows": 1,
         "benchmark_rows": 1,
-        "worst_drift_ratio": max(profile.drift_ratios.values()),
+        "worst_drift_ratio": max(profile.drift_ratios[code] for code in enabled_markets),
         "worst_low_bucket_ratio": profile.low_bucket_ratios[worst_market],
         "worst_low_bucket_market": worst_market,
         "benchmark_symbol": profile.benchmark_symbol,
@@ -375,9 +390,10 @@ def main() -> int:
         database_url = _load_database_url()
         _verify_postgres(database_url)
         evidence = _resolve_evidence_bundle(args.evidence_dir, root)
+        enabled_markets = _enabled_markets_for_stage(args.market)
         if not args.skip_migrate:
             _ensure_migrated(database_url)
-        seeded = _seed_rehearsal_telemetry(database_url, args.market, now)
+        seeded = _seed_rehearsal_telemetry(database_url, args.market, now, enabled_markets)
         provenance_note = args.provenance_note or _default_provenance_note(
             args.market, _resolve_path(args.evidence_dir, root), root
         )
@@ -389,6 +405,8 @@ def main() -> int:
                 db=db,
                 external_evidence=evidence,
                 now=now,
+                enabled_markets=enabled_markets,
+                target_market=args.market,
                 execution_mode=args.execution_mode,
                 provenance_note=provenance_note,
             )
@@ -405,6 +423,7 @@ def main() -> int:
         return 1
 
     print(f"Market: {args.market}")
+    print(f"Enabled markets: {seeded['enabled_markets']}")
     print(f"Database: {_redact_url(database_url)}")
     print(f"Evidence dir: {_maybe_relative(_resolve_path(args.evidence_dir, root), root)}")
     print(

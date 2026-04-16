@@ -17,6 +17,8 @@ def test_cli_passes_provenance_fields_to_runner(monkeypatch, tmp_path, capsys):
             hard_passed=9,
             hard_failed=0,
             hard_missing_evidence=0,
+            enabled_markets=kwargs.get("enabled_markets") or ["US", "HK", "JP", "TW"],
+            target_market=kwargs.get("target_market"),
             execution_mode=kwargs.get("execution_mode"),
             provenance_note=kwargs.get("provenance_note"),
             content_hash="abc123",
@@ -38,6 +40,12 @@ def test_cli_passes_provenance_fields_to_runner(monkeypatch, tmp_path, capsys):
         [
             "run_launch_gates.py",
             "--no-db",
+            "--enabled-market",
+            "US",
+            "--enabled-market",
+            "HK",
+            "--target-market",
+            "HK",
             "--execution-mode",
             "synthetic_seeded_harness",
             "--provenance-note",
@@ -48,9 +56,13 @@ def test_cli_passes_provenance_fields_to_runner(monkeypatch, tmp_path, capsys):
     exit_code = cli.main()
 
     assert exit_code == 0
+    assert captured["enabled_markets"] == ["US", "HK"]
+    assert captured["target_market"] == "HK"
     assert captured["execution_mode"] == "synthetic_seeded_harness"
     assert captured["provenance_note"] == "Synthetic rehearsal only."
 
     out = capsys.readouterr().out
+    assert "Enabled markets: ['US', 'HK']" in out
+    assert "Target market: HK" in out
     assert "Execution mode: synthetic_seeded_harness" in out
     assert "Provenance: Synthetic rehearsal only." in out
