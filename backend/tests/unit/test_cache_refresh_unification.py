@@ -333,11 +333,19 @@ def test_task_registry_lists_daily_smart_refresh_only():
     names = {task["name"] for task in tasks}
 
     assert "daily-smart-refresh" in names
+    assert "weekly-universe-refresh-us" in names
+    assert "weekly-universe-refresh-hk" in names
+    assert "weekly-universe-refresh-jp" in names
+    assert "weekly-universe-refresh-tw" in names
+    assert "weekly-universe-refresh" not in names
     assert "daily-cache-warmup" not in names
     assert "auto-refresh-after-close" not in names
 
     daily_task = next(task for task in tasks if task["name"] == "daily-smart-refresh")
     assert daily_task["task_function"] == "app.tasks.cache_tasks.smart_refresh_cache"
+
+    hk_universe_task = next(task for task in tasks if task["name"] == "weekly-universe-refresh-hk")
+    assert hk_universe_task["task_function"] == "app.tasks.universe_tasks.refresh_official_market_universe"
 
 
 def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
@@ -364,6 +372,33 @@ def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
     assert result["task_id"] == "task-123"
     assert result["task_name"] == "daily-smart-refresh"
     assert result["execution_id"] == 99
+
+
+def test_task_registry_triggers_hk_weekly_universe_refresh_on_hk_queue(monkeypatch):
+    from app.services.task_registry_service import TaskRegistryService
+
+    service = TaskRegistryService()
+    fake_task = MagicMock()
+    fake_task.apply_async.return_value = SimpleNamespace(id="task-hk-123")
+    monkeypatch.setattr(service, "_get_task", lambda task_name: fake_task)
+
+    db = MagicMock()
+
+    def _assign_id(record):
+        record.id = 101
+
+    db.add.side_effect = _assign_id
+
+    result = service.trigger_task("weekly-universe-refresh-hk", db)
+
+    fake_task.apply_async.assert_called_once_with(
+        kwargs={"market": "HK"},
+        headers={"origin": "manual"},
+        queue="data_fetch_hk",
+    )
+    assert result["task_id"] == "task-hk-123"
+    assert result["task_name"] == "weekly-universe-refresh-hk"
+    assert result["execution_id"] == 101
 
 
 @pytest.mark.asyncio

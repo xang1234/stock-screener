@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
+from ..tasks.market_queues import data_fetch_queue_for_market
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,32 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _weekly_universe_task_definitions() -> Dict[str, Dict]:
+    """Build task-registry entries that match the per-market beat fanout."""
+    entries: Dict[str, Dict] = {
+        'weekly-universe-refresh-us': {
+            'task_function': 'app.tasks.universe_tasks.refresh_stock_universe',
+            'display_name': 'Weekly Universe Refresh (US)',
+            'description': 'Adds new US stocks, deactivates removed, updates metadata',
+            'schedule_description': 'Sunday 3:00 AM ET (US)',
+            'manual_dispatch_kwargs': {'market': 'US'},
+            'manual_dispatch_headers': {'origin': 'manual'},
+            'manual_dispatch_options': {'queue': data_fetch_queue_for_market('US')},
+        },
+    }
+    for market in ('HK', 'JP', 'TW'):
+        entries[f'weekly-universe-refresh-{market.lower()}'] = {
+            'task_function': 'app.tasks.universe_tasks.refresh_official_market_universe',
+            'display_name': f'Weekly Universe Refresh ({market})',
+            'description': f'Refreshes the official {market} universe snapshot from exchange sources',
+            'schedule_description': f'Sunday 3:00 AM ET ({market})',
+            'manual_dispatch_kwargs': {'market': market},
+            'manual_dispatch_headers': {'origin': 'manual'},
+            'manual_dispatch_options': {'queue': data_fetch_queue_for_market(market)},
+        }
+    return entries
 
 
 # Task definitions with metadata
@@ -39,12 +66,6 @@ SCHEDULED_TASKS = {
         'display_name': 'Weekly Full Refresh',
         'description': 'Clears all Redis caches and re-fetches fresh data',
         'schedule_description': f'Sunday {settings.cache_weekly_hour}:00 AM ET',
-    },
-    'weekly-universe-refresh': {
-        'task_function': 'app.tasks.universe_tasks.refresh_stock_universe',
-        'display_name': 'Weekly Universe Refresh',
-        'description': 'Adds new stocks, deactivates removed, updates metadata',
-        'schedule_description': 'Sunday 3:00 AM ET',
     },
     'weekly-theme-consolidation': {
         'task_function': 'app.tasks.theme_discovery_tasks.consolidate_themes',
@@ -97,6 +118,7 @@ SCHEDULED_TASKS = {
         'description': 'Deletes price data older than 5 years',
         'schedule_description': '1st of month, 1:00 AM ET',
     },
+    **_weekly_universe_task_definitions(),
 }
 
 
@@ -196,10 +218,12 @@ class TaskRegistryService:
         task_func = self._get_task(task_name)
         manual_dispatch_kwargs = task_info.get('manual_dispatch_kwargs')
         manual_dispatch_headers = task_info.get('manual_dispatch_headers')
-        if manual_dispatch_kwargs or manual_dispatch_headers:
+        manual_dispatch_options = task_info.get('manual_dispatch_options') or {}
+        if manual_dispatch_kwargs or manual_dispatch_headers or manual_dispatch_options:
             celery_task = task_func.apply_async(
                 kwargs=manual_dispatch_kwargs or {},
                 headers=manual_dispatch_headers,
+                **manual_dispatch_options,
             )
         else:
             celery_task = task_func.delay()
