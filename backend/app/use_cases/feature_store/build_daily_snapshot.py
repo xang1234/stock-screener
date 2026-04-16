@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Iterator, Sequence
@@ -120,6 +121,8 @@ class BuildDailySnapshotCommand:
     batch_only_prices: bool = False
     batch_only_fundamentals: bool = False
     require_bulk_prefetch: bool = False
+    static_parallel_workers: int = 1
+    static_chunk_size: int | None = None
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
@@ -127,6 +130,10 @@ class BuildDailySnapshotCommand:
     def __post_init__(self) -> None:
         if self.chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
+        if self.static_parallel_workers < 1:
+            raise ValueError("static_parallel_workers must be >= 1")
+        if self.static_chunk_size is not None and self.static_chunk_size < 1:
+            raise ValueError("static_chunk_size must be >= 1 when provided")
 
 
 # ── Result (output) ──────────────────────────────────────────────────────
@@ -310,6 +317,11 @@ class BuildDailyFeatureSnapshotUseCase:
         progress_state: _SnapshotRunProgress,
     ) -> BuildDailySnapshotResult:
         start_time = time.monotonic()
+        effective_chunk_size = (
+            cmd.static_chunk_size
+            if cmd.require_bulk_prefetch and cmd.static_chunk_size is not None
+            else cmd.chunk_size
+        )
 
         # ── 1. Resolve universe ─────────────────────────────────
         total = len(symbols)
@@ -360,7 +372,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     )
                 bulk_prefetch_enabled = False
 
-        for chunk in _chunked(symbols, cmd.chunk_size):
+        for chunk in _chunked(symbols, effective_chunk_size):
             # 3a — Cancellation gate
             if cancel.is_cancelled():
                 duration = time.monotonic() - start_time
@@ -423,7 +435,7 @@ class BuildDailyFeatureSnapshotUseCase:
                     pre_fetched_data = {}
 
             chunk_rows: list[FeatureRowWrite] = []
-            for symbol in chunk:
+            def _scan_symbol(symbol: str) -> tuple[str, FeatureRowWrite | None, bool]:
                 sym = symbol.upper()
                 try:
                     scan_kwargs: dict[str, object] = {}
@@ -442,11 +454,8 @@ class BuildDailyFeatureSnapshotUseCase:
                         row = _map_orchestrator_to_feature_row(
                             sym, cmd.as_of_date, result
                         )
-                        chunk_rows.append(row)
-                        if result.get("passes_template"):
-                            progress_state.passed_symbols += 1
-                    else:
-                        progress_state.failed_symbols += 1
+                        return sym, row, bool(result.get("passes_template"))
+                    return sym, None, False
                 except Exception:
                     logger.debug(
                         "Error scanning %s in run %d",
@@ -454,6 +463,34 @@ class BuildDailyFeatureSnapshotUseCase:
                         run_id,
                         exc_info=True,
                     )
+                    return sym, None, False
+
+            outcomes_by_symbol: dict[str, tuple[FeatureRowWrite | None, bool]] = {}
+            if (
+                cmd.require_bulk_prefetch
+                and cmd.static_parallel_workers > 1
+                and len(chunk) > 1
+            ):
+                max_workers = min(cmd.static_parallel_workers, len(chunk))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(_scan_symbol, symbol): symbol for symbol in chunk
+                    }
+                    for future in as_completed(futures):
+                        sym, row, passed = future.result()
+                        outcomes_by_symbol[sym] = (row, passed)
+            else:
+                for symbol in chunk:
+                    sym, row, passed = _scan_symbol(symbol)
+                    outcomes_by_symbol[sym] = (row, passed)
+
+            for symbol in chunk:
+                row, passed = outcomes_by_symbol.get(symbol.upper(), (None, False))
+                if row is not None:
+                    chunk_rows.append(row)
+                    if passed:
+                        progress_state.passed_symbols += 1
+                else:
                     progress_state.failed_symbols += 1
                 progress_state.attempted_symbols += 1
 

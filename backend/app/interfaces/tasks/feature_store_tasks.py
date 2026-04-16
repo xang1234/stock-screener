@@ -326,7 +326,7 @@ def build_daily_snapshot(
         date. Pass False to force a rebuild.
     """
     from app.database import SessionLocal
-    from app.domain.scanning.ports import NeverCancelledToken
+    from app.domain.scanning.ports import NeverCancelledToken, NullProgressSink
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.progress_sink import CeleryProgressSink
     from app.services.universe_resolver import normalize_universe_definition
@@ -445,13 +445,19 @@ def build_daily_snapshot(
         batch_only_prices=static_daily_mode,
         batch_only_fundamentals=static_daily_mode,
         require_bulk_prefetch=static_daily_mode,
+        static_chunk_size=(
+            settings.static_snapshot_chunk_size if static_daily_mode else None
+        ),
+        static_parallel_workers=(
+            settings.static_snapshot_parallel_workers if static_daily_mode else 1
+        ),
     )
 
     try:
         result = use_case.execute(
             uow=uow,
             cmd=cmd,
-            progress=CeleryProgressSink(self),
+            progress=NullProgressSink() if static_daily_mode else CeleryProgressSink(self),
             cancel=NeverCancelledToken(),
         )
     except SoftTimeLimitExceeded:

@@ -38,9 +38,10 @@ class _StubFundamentalsCache:
                 merged[key] = value
         return merged
 
-    def store(self, symbol, data, data_source="snapshot"):
+    def store(self, symbol, data, data_source="snapshot", market=None):
         payload = dict(data)
         payload["data_source"] = data_source
+        payload["market"] = market or payload.get("market")
         self.stored[symbol] = payload
 
 
@@ -730,10 +731,14 @@ def test_weekly_reference_bundle_round_trips_active_universe_and_enriched_snapsh
     assert import_stats["rows"] == 1
     assert import_stats["universe_rows"] == 1
     assert import_stats["market"] == "US"
+    assert import_stats["hydrate_cache"] is True
+    assert import_stats["hydrate_mode"] == "static"
+    assert import_stats["hydrated_symbols"] == 1
     assert imported_run.source_revision == "fundamentals_v1_us:20260402081000"
     assert imported_payload["ipo_date"] == "2020-01-02"
     assert imported_symbols == ["0700.HK", "AAPL"]
     assert imported_hk_row.market == "HK"
+    assert service.fundamentals_cache.stored["AAPL"]["data_source"] == "bundle_import"
     assert db.query(ProviderSnapshotRun).filter(
         ProviderSnapshotRun.snapshot_key == ProviderSnapshotService.SNAPSHOT_KEY_FUNDAMENTALS
     ).count() == 1
@@ -919,6 +924,58 @@ def test_import_legacy_weekly_reference_bundle_replaces_global_universe(tmp_path
     assert imported_symbols == ["0700.HK", "AAPL"]
     assert imported_run is not None
     assert imported_run.source_revision == "fundamentals_v1:20260411120000"
+    db.close()
+
+
+def test_import_weekly_reference_bundle_can_skip_cache_hydration(tmp_path):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    bundle_path = tmp_path / "weekly-reference-us.json.gz"
+    payload = {
+        "schema_version": service.WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION,
+        "market": "US",
+        "generated_at": "2026-04-11T12:00:00Z",
+        "as_of_date": "2026-04-11",
+        "snapshot": {
+            "snapshot_key": service.SNAPSHOT_KEY_FUNDAMENTALS,
+            "run_mode": "publish",
+            "status": "published",
+            "source_revision": "fundamentals_v1_us:20260411120000",
+            "created_at": "2026-04-11T12:00:00Z",
+            "published_at": "2026-04-11T12:00:00Z",
+            "rows": [
+                {
+                    "symbol": "AAPL",
+                    "exchange": "NASDAQ",
+                    "row_hash": "row-hash-aapl",
+                    "normalized_payload": {"symbol": "AAPL", "exchange": "NASDAQ", "market": "US"},
+                }
+            ],
+        },
+        "universe": [
+            {
+                "symbol": "AAPL",
+                "exchange": "NASDAQ",
+                "market": "US",
+                "is_active": True,
+                "status": UNIVERSE_STATUS_ACTIVE,
+            }
+        ],
+    }
+    with gzip.open(bundle_path, "wt", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+
+    stats = service.import_weekly_reference_bundle(
+        db,
+        input_path=bundle_path,
+        hydrate_cache=False,
+    )
+
+    assert stats["hydrate_cache"] is False
+    assert stats["hydrated_symbols"] == 0
+    assert service.fundamentals_cache.stored == {}
     db.close()
 
 

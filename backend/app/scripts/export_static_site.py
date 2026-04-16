@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func
 
@@ -34,6 +34,8 @@ STATIC_DAILY_PRICE_REFRESH_BATCH_SIZE = 250
 STATIC_GROUP_HISTORY_LOOKBACK_DAYS = 100
 STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
+STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
+STATIC_BUILD_MODE_FULL = "full"
 
 
 def _default_output_dir() -> Path:
@@ -294,6 +296,7 @@ def _run_daily_refresh(
     *,
     skip_universe_refresh: bool = False,
     skip_fundamentals_refresh: bool = False,
+    build_mode: Literal["price_delta", "full"] = STATIC_BUILD_MODE_PRICE_DELTA,
     hydrate_published_snapshot: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
@@ -321,7 +324,7 @@ def _run_daily_refresh(
         if not skip_fundamentals_refresh:
             results["fundamentals_refresh"] = refresh_all_fundamentals.run()
 
-        if hydrate_published_snapshot:
+        if build_mode == STATIC_BUILD_MODE_FULL and hydrate_published_snapshot:
             provider_snapshot_service = get_provider_snapshot_service()
             with SessionLocal() as db:
                 results["fundamentals_hydrate"] = provider_snapshot_service.hydrate_all_published_snapshots(
@@ -378,6 +381,12 @@ def main() -> int:
         help="Run the synchronous daily refresh/build steps before exporting.",
     )
     parser.add_argument(
+        "--build-mode",
+        choices=(STATIC_BUILD_MODE_PRICE_DELTA, STATIC_BUILD_MODE_FULL),
+        default=STATIC_BUILD_MODE_PRICE_DELTA,
+        help="Refresh mode to use before static export. price_delta is the optimized default.",
+    )
+    parser.add_argument(
         "--skip-universe-refresh",
         action="store_true",
         help="Do not refresh the live stock universe before exporting.",
@@ -406,6 +415,7 @@ def main() -> int:
         refresh_results, refresh_warnings = _run_daily_refresh(
             skip_universe_refresh=args.skip_universe_refresh,
             skip_fundamentals_refresh=args.skip_fundamentals_refresh,
+            build_mode=args.build_mode,
             hydrate_published_snapshot=args.hydrate_published_snapshot,
         )
         print("Daily refresh complete:")

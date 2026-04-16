@@ -137,16 +137,9 @@ def _build_us_bundle(
             f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
         )
 
-    print("Starting snapshot hydration (batched price enrichment + Yahoo-only fallback)...", flush=True)
-    hydrate_stats = provider_snapshot_service.hydrate_published_snapshot(
-        db,
-        snapshot_key=snapshot_key,
-        allow_yahoo_hydration=True,
-        progress_callback=_print_progress,
-    )
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if published_run is None:
-        raise RuntimeError("Published weekly fundamentals snapshot was not found after hydration")
+        raise RuntimeError("Published weekly fundamentals snapshot was not found after publish")
 
     resolved_bundle_name = bundle_name or _default_bundle_name(market, published_run)
     bundle_path = output_dir / resolved_bundle_name
@@ -166,7 +159,6 @@ def _build_us_bundle(
         "latest_manifest": latest_manifest_path,
         "universe_refresh": universe_stats,
         "snapshot_publish": snapshot_stats,
-        "snapshot_hydrate": hydrate_stats,
         "export": export_stats,
     }
 

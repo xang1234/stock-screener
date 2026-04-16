@@ -237,9 +237,9 @@ jobs:
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
             --refresh-daily \
+            --build-mode price_delta \
             --skip-universe-refresh \
-            --skip-fundamentals-refresh \
-            --hydrate-published-snapshot
+            --skip-fundamentals-refresh
 
       - name: Build static frontend
         env:
