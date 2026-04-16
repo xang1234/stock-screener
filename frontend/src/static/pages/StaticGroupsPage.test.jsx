@@ -90,7 +90,7 @@ describe('StaticGroupsPage', () => {
   it('renders 1W movers and the 1W rank-change column', async () => {
     renderPage();
 
-    expect(await screen.findByRole('heading', { name: 'Industry Group Rankings' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'US Group Rankings' })).toBeInTheDocument();
     expect(screen.getByText('Top Gainers (1W)')).toBeInTheDocument();
     expect(screen.getByText('Top Losers (1W)')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '1W' })).toBeInTheDocument();

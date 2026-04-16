@@ -310,6 +310,7 @@ def build_daily_snapshot(
     skip_if_published: bool = True,
     static_daily_mode: bool = False,
     market: str | None = None,
+    publish_pointer_key: str = "latest_published",
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -451,6 +452,7 @@ def build_daily_snapshot(
         static_parallel_workers=(
             settings.static_snapshot_parallel_workers if static_daily_mode else 1
         ),
+        publish_pointer_key=publish_pointer_key,
     )
 
     try:

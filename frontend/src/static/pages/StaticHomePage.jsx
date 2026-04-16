@@ -14,7 +14,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
 import PriceSparkline from '../../components/Scan/PriceSparkline';
 import RSSparkline from '../../components/Scan/RSSparkline';
@@ -23,6 +23,8 @@ import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import RankChangeCell from '../../components/shared/RankChangeCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
+import { formatLocalCurrency } from '../../utils/formatUtils';
+import { useStaticMarket } from '../StaticMarketContext';
 
 const EMPTY_RESULTS = [];
 
@@ -36,13 +38,18 @@ const formatNumber = (value, digits = 0) => {
 
 function StaticHomePage() {
   const manifestQuery = useStaticManifest();
+  const { selectedMarket } = useStaticMarket();
+  const marketEntry = useMemo(
+    () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
+    [manifestQuery.data, selectedMarket],
+  );
   const homeQuery = useQuery({
-    queryKey: ['staticHome', manifestQuery.data?.pages?.home?.path],
-    queryFn: () => fetchStaticJson(manifestQuery.data.pages.home.path),
-    enabled: Boolean(manifestQuery.data?.pages?.home?.path),
+    queryKey: ['staticHome', marketEntry.pages?.home?.path],
+    queryFn: () => fetchStaticJson(marketEntry.pages.home.path),
+    enabled: Boolean(marketEntry.pages?.home?.path),
     staleTime: Infinity,
   });
-  const chartIndexQuery = useStaticChartIndex(manifestQuery.data?.assets?.charts?.path);
+  const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
 
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
@@ -75,6 +82,7 @@ function StaticHomePage() {
 
   const home = homeQuery.data;
   const freshness = home?.freshness || {};
+  const marketDisplay = home?.market_display_name || marketEntry.display_name;
 
   const handleRowClick = (symbol) => {
     if (chartEnabledSymbols.has(symbol)) {
@@ -97,7 +105,7 @@ function StaticHomePage() {
         }}
       >
         <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px' }}>
-          Daily Market Snapshot
+          {marketDisplay} Snapshot
         </Typography>
         <Typography
           variant="caption"
@@ -124,7 +132,7 @@ function StaticHomePage() {
                   {item.display_name}
                 </Typography>
                 <Typography variant="body1" sx={{ mt: 0.5, fontFamily: 'monospace', fontWeight: 600 }}>
-                  {item.latest_close != null ? `$${formatNumber(item.latest_close, 2)}` : '-'}
+                  {formatLocalCurrency(item.latest_close, item.currency)}
                 </Typography>
                 <Box display="flex" alignItems="center" sx={{ mt: 0.5 }}>
                   {item.change_1d > 0 && <TrendingUpIcon sx={{ fontSize: 14, mr: 0.25, color: 'success.main' }} />}

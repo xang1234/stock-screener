@@ -4,10 +4,19 @@ import StaticHomePage from './pages/StaticHomePage';
 import StaticScanPage from './pages/StaticScanPage';
 import StaticBreadthPage from './pages/StaticBreadthPage';
 import StaticGroupsPage from './pages/StaticGroupsPage';
+import { StaticMarketProvider } from './StaticMarketContext';
+import { getStaticSupportedMarkets, useStaticManifest } from './dataClient';
 
-function StaticAppShell() {
+function StaticAppContent() {
+  const manifestQuery = useStaticManifest();
+  const supportedMarkets = getStaticSupportedMarkets(manifestQuery.data);
+  const defaultMarket = manifestQuery.data?.default_market || supportedMarkets[0] || 'US';
+
   return (
-    <Router>
+    <StaticMarketProvider
+      supportedMarkets={supportedMarkets}
+      defaultMarket={defaultMarket}
+    >
       <StaticLayout>
         <Routes>
           <Route path="/" element={<StaticHomePage />} />
@@ -17,6 +26,14 @@ function StaticAppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </StaticLayout>
+    </StaticMarketProvider>
+  );
+}
+
+function StaticAppShell() {
+  return (
+    <Router>
+      <StaticAppContent />
     </Router>
   );
 }

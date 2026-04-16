@@ -93,7 +93,11 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def publish_atomically(self, run_id: int) -> FeatureRunDomain:
+    def publish_atomically(
+        self,
+        run_id: int,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
         """Transition COMPLETED|QUARANTINED → PUBLISHED and update the pointer.
 
         Both the status change and the pointer swap happen in the same
@@ -107,8 +111,11 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def get_latest_published(self) -> FeatureRunDomain | None:
-        """Return the run pointed to by 'latest_published', or None."""
+    def get_latest_published(
+        self,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain | None:
+        """Return the run pointed to by *pointer_key*, or None."""
         ...
 
     @abc.abstractmethod

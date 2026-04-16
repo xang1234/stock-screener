@@ -187,15 +187,19 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     result = service.export(output_dir)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    scan = json.loads((output_dir / "scan" / "manifest.json").read_text(encoding="utf-8"))
-    breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
-    groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
-    home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
+    scan = json.loads((output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "markets" / "us" / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "markets" / "us" / "home.json").read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == STATIC_SITE_SCHEMA_VERSION
+    assert manifest["default_market"] == "US"
+    assert manifest["supported_markets"] == ["US"]
     assert manifest["features"]["charts"] is True
-    assert manifest["pages"]["scan"]["path"] == "scan/manifest.json"
+    assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
+    assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
+    assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert "themes" not in manifest["features"]
     assert "themes" not in manifest["pages"]
     assert manifest["warnings"] == []
@@ -346,13 +350,15 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     result = service.export(output_dir)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
-    groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
-    home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "markets" / "us" / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "markets" / "us" / "home.json").read_text(encoding="utf-8"))
 
     assert result.manifest == manifest
     assert manifest["features"]["breadth"] is False
     assert manifest["features"]["groups"] is False
+    assert manifest["markets"]["US"]["features"]["breadth"] is False
+    assert manifest["markets"]["US"]["features"]["groups"] is False
     assert len(manifest["warnings"]) == 2
     assert breadth["available"] is False
     assert breadth["expected_as_of_date"] == "2026-04-02"

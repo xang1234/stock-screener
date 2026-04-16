@@ -10,6 +10,7 @@ from typing import Any, Literal
 from sqlalchemy import func
 
 from app.database import SessionLocal
+from app.infra.db.models.feature_store import FeatureRunPointer
 from app.models.industry import IBDGroupRank
 from app.models.market_breadth import MarketBreadth
 from app.models.stock import StockPrice
@@ -36,6 +37,8 @@ STATIC_BREADTH_HISTORY_MIN_TRADING_DAYS = 20
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
 STATIC_BUILD_MODE_FULL = "full"
+STATIC_EXPORT_MARKETS = ("US", "HK", "JP", "TW")
+STATIC_DEFAULT_MARKET = "US"
 
 
 def _default_output_dir() -> Path:
@@ -53,6 +56,26 @@ def _resolve_latest_completed_us_trading_date() -> date:
 
 def _iter_chunks(items: list[str], chunk_size: int) -> list[list[str]]:
     return [items[index:index + chunk_size] for index in range(0, len(items), chunk_size)]
+
+
+def _market_pointer_key(market: str) -> str:
+    return f"latest_published_market:{market.upper()}"
+
+
+def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
+    with SessionLocal() as db:
+        if not hasattr(db, "query"):
+            return
+        pointer = (
+            db.query(FeatureRunPointer)
+            .filter(FeatureRunPointer.key == pointer_key)
+            .first()
+        )
+        if pointer is None:
+            db.add(FeatureRunPointer(key=pointer_key, run_id=run_id))
+        else:
+            pointer.run_id = run_id
+        db.commit()
 
 
 def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
@@ -301,17 +324,8 @@ def _run_daily_refresh(
 ) -> tuple[dict[str, Any], list[str]]:
     from app.interfaces.tasks.feature_store_tasks import (
         build_daily_snapshot,
-        _enrich_feature_run_with_ibd_metadata,
-    )
-    from app.tasks.breadth_tasks import (
-        allow_same_day_breadth_warmup_bypass,
-        calculate_daily_breadth,
     )
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
-    from app.tasks.group_rank_tasks import (
-        allow_same_day_group_rank_warmup_bypass,
-        calculate_daily_group_rankings,
-    )
     from app.tasks.universe_tasks import refresh_stock_universe
 
     warnings: list[str] = []
@@ -339,31 +353,32 @@ def _run_daily_refresh(
             }
 
         results["price_refresh"] = _refresh_static_daily_prices(as_of_date=as_of_date)
-        results["feature_snapshot"] = build_daily_snapshot.run(
-            as_of_date_str=as_of_date.isoformat(),
-            static_daily_mode=True,
+        feature_snapshots: dict[str, Any] = {}
+        for market in STATIC_EXPORT_MARKETS:
+            market_result = build_daily_snapshot.run(
+                as_of_date_str=as_of_date.isoformat(),
+                static_daily_mode=True,
+                universe_name=f"market:{market.lower()}",
+                market=market,
+                publish_pointer_key=_market_pointer_key(market),
+            )
+            feature_snapshots[market] = market_result
+
+        results["feature_snapshots"] = feature_snapshots
+        default_run_id = (
+            feature_snapshots.get(STATIC_DEFAULT_MARKET, {}).get("run_id")
+            or feature_snapshots.get(STATIC_DEFAULT_MARKET, {}).get("existing_run_id")
         )
-        with allow_same_day_breadth_warmup_bypass():
-            results["breadth_refresh"] = calculate_daily_breadth.run(
-                calculation_date=as_of_date.isoformat(),
-                force_cache_only=True,
+        if default_run_id is not None:
+            _upsert_feature_run_pointer(
+                pointer_key="latest_published",
+                run_id=default_run_id,
             )
-        results["breadth_history_refresh"] = _ensure_breadth_history(as_of_date=as_of_date)
-        results["groups_history_refresh"] = _ensure_group_rank_history(as_of_date=as_of_date)
-        with allow_same_day_group_rank_warmup_bypass():
-            results["groups_refresh"] = calculate_daily_group_rankings.run(
-                calculation_date=as_of_date.isoformat(),
-                force_cache_only=True,
-            )
-        feature_run_id = (
-            results.get("feature_snapshot", {}).get("run_id")
-            or results.get("feature_snapshot", {}).get("existing_run_id")
-        )
-        if feature_run_id is not None:
-            results["feature_metadata_refresh"] = _enrich_feature_run_with_ibd_metadata(
-                feature_run_id=feature_run_id,
-                ranking_date=as_of_date,
-            )
+            results["default_market_pointer"] = {
+                "market": STATIC_DEFAULT_MARKET,
+                "pointer_key": "latest_published",
+                "run_id": default_run_id,
+            }
 
     return results, warnings
 

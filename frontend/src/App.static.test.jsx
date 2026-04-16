@@ -46,25 +46,55 @@ vi.mock('./components/Charts/BreadthChart', () => ({
 
 const staticPayloads = {
   'manifest.json': {
-    schema_version: 'static-site-v1',
+    schema_version: 'static-site-v2',
     generated_at: '2026-03-31T22:00:00Z',
     as_of_date: '2026-03-31',
+    default_market: 'US',
+    supported_markets: ['US', 'HK'],
     features: {
       scan: true,
       breadth: true,
       groups: true,
     },
     pages: {
-      home: { path: 'home.json' },
-      scan: { path: 'scan/manifest.json' },
-      breadth: { path: 'breadth.json' },
-      groups: { path: 'groups.json' },
+      home: { path: 'markets/us/home.json' },
+      scan: { path: 'markets/us/scan/manifest.json' },
+      breadth: { path: 'markets/us/breadth.json' },
+      groups: { path: 'markets/us/groups.json' },
+    },
+    markets: {
+      US: {
+        display_name: 'United States',
+        pages: {
+          home: { path: 'markets/us/home.json' },
+          scan: { path: 'markets/us/scan/manifest.json' },
+          breadth: { path: 'markets/us/breadth.json' },
+          groups: { path: 'markets/us/groups.json' },
+        },
+        assets: {
+          charts: { path: 'markets/us/charts/index.json' },
+        },
+      },
+      HK: {
+        display_name: 'Hong Kong',
+        pages: {
+          home: { path: 'markets/hk/home.json' },
+          scan: { path: 'markets/hk/scan/manifest.json' },
+          breadth: { path: 'markets/hk/breadth.json' },
+          groups: { path: 'markets/hk/groups.json' },
+        },
+        assets: {
+          charts: { path: 'markets/hk/charts/index.json' },
+        },
+      },
     },
     warnings: [],
   },
-  'home.json': {
+  'markets/us/home.json': {
     generated_at: '2026-03-31T22:00:00Z',
     as_of_date: '2026-03-31',
+    market: 'US',
+    market_display_name: 'United States',
     freshness: {
       scan_as_of_date: '2026-03-31',
       scan_run_id: 7,
@@ -77,7 +107,24 @@ const staticPayloads = {
     },
     top_groups: [{ industry_group: 'Semiconductors', rank: 1, top_symbol: 'NVDA' }],
   },
-  'scan/manifest.json': {
+  'markets/hk/home.json': {
+    generated_at: '2026-03-31T22:00:00Z',
+    as_of_date: '2026-03-31',
+    market: 'HK',
+    market_display_name: 'Hong Kong',
+    freshness: {
+      scan_as_of_date: '2026-03-31',
+      scan_run_id: 17,
+      breadth_latest_date: '2026-03-31',
+      groups_latest_date: '2026-03-31',
+    },
+    key_markets: [],
+    scan_summary: {
+      top_results: [{ symbol: '0700.HK', composite_score: 91.2, current_price: 398.4, rating: 'Buy' }],
+    },
+    top_groups: [{ industry_group: 'Internet', rank: 1, top_symbol: '0700.HK' }],
+  },
+  'markets/us/scan/manifest.json': {
     generated_at: '2026-03-31T22:00:00Z',
     as_of_date: '2026-03-31',
     run_id: 7,
@@ -105,21 +152,49 @@ const staticPayloads = {
         sort_order: 'desc',
       },
     ],
-    chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+    chunks: [{ path: 'markets/us/scan/chunks/chunk-0001.json', count: 2 }],
     charts: {
-      path: 'charts/index.json',
+      path: 'markets/us/charts/index.json',
       limit: 200,
       symbols_total: 2,
       available: true,
     },
   },
-  'scan/chunks/chunk-0001.json': {
+  'markets/hk/scan/manifest.json': {
+    generated_at: '2026-03-31T22:00:00Z',
+    as_of_date: '2026-03-31',
+    run_id: 17,
+    sort: { field: 'composite_score', order: 'desc' },
+    default_page_size: 50,
+    rows_total: 1,
+    filter_options: {
+      ibd_industries: ['Internet'],
+      gics_sectors: ['Communication Services'],
+      ratings: ['Buy'],
+    },
+    initial_rows: [
+      { symbol: '0700.HK', company_name: 'Tencent Holdings', composite_score: 91.2, rating: 'Buy' },
+    ],
+    chunks: [{ path: 'markets/hk/scan/chunks/chunk-0001.json', count: 1 }],
+    charts: {
+      path: 'markets/hk/charts/index.json',
+      limit: 200,
+      symbols_total: 1,
+      available: true,
+    },
+  },
+  'markets/us/scan/chunks/chunk-0001.json': {
     rows: [
       { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, rating: 'Strong Buy' },
       { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, rating: 'Buy' },
     ],
   },
-  'charts/index.json': {
+  'markets/hk/scan/chunks/chunk-0001.json': {
+    rows: [
+      { symbol: '0700.HK', company_name: 'Tencent Holdings', composite_score: 91.2, rating: 'Buy' },
+    ],
+  },
+  'markets/us/charts/index.json': {
     schema_version: 'static-charts-v1',
     generated_at: '2026-03-31T22:00:00Z',
     as_of_date: '2026-03-31',
@@ -131,7 +206,18 @@ const staticPayloads = {
       { symbol: 'MSFT', rank: 2, path: 'charts/MSFT.json' },
     ],
   },
-  'breadth.json': {
+  'markets/hk/charts/index.json': {
+    schema_version: 'static-charts-v1',
+    generated_at: '2026-03-31T22:00:00Z',
+    as_of_date: '2026-03-31',
+    limit: 200,
+    symbols_total: 1,
+    skipped_symbols: [],
+    symbols: [
+      { symbol: '0700.HK', rank: 1, path: 'charts/0700.HK.json' },
+    ],
+  },
+  'markets/us/breadth.json': {
     generated_at: '2026-03-31T22:00:00Z',
     published_at: '2026-03-31T22:00:00Z',
     payload: {
@@ -146,7 +232,22 @@ const staticPayloads = {
       history_90d: [{ date: '2026-03-31', stocks_up_4pct: 123, stocks_down_4pct: 42, ratio_5day: 1.5, ratio_10day: 1.8 }],
     },
   },
-  'groups.json': {
+  'markets/hk/breadth.json': {
+    generated_at: '2026-03-31T22:00:00Z',
+    published_at: '2026-03-31T22:00:00Z',
+    payload: {
+      current: {
+        date: '2026-03-31',
+        stocks_up_4pct: 54,
+        stocks_down_4pct: 12,
+        ratio_10day: 2.4,
+      },
+      chart_data: [],
+      spy_overlay: [],
+      history_90d: [{ date: '2026-03-31', stocks_up_4pct: 54, stocks_down_4pct: 12, ratio_5day: 2.1, ratio_10day: 2.4 }],
+    },
+  },
+  'markets/us/groups.json': {
     available: true,
     payload: {
       movers_period: '1w',
@@ -157,6 +258,20 @@ const staticPayloads = {
       movers: {
         gainers: [{ industry_group: 'Semiconductors', rank: 1, rank_change_1w: 3 }],
         losers: [{ industry_group: 'Retail', rank: 197, rank_change_1w: -5 }],
+      },
+    },
+  },
+  'markets/hk/groups.json': {
+    available: true,
+    payload: {
+      movers_period: '1w',
+      rankings: {
+        date: '2026-03-31',
+        rankings: [{ industry_group: 'Internet', rank: 1, avg_rs_rating: 88.1, num_stocks: 9, rank_change_1w: 1, rank_change_1m: 3, rank_change_3m: 5 }],
+      },
+      movers: {
+        gainers: [{ industry_group: 'Internet', rank: 1, rank_change_1w: 2 }],
+        losers: [{ industry_group: 'Property', rank: 44, rank_change_1w: -4 }],
       },
     },
   },
@@ -195,6 +310,7 @@ const renderStaticAppAtHash = async (hash) => {
 describe('App static mode', () => {
   beforeEach(() => {
     window.location.hash = '#/';
+    window.localStorage.clear();
   });
 
   afterEach(() => {
@@ -202,14 +318,15 @@ describe('App static mode', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     window.location.hash = '#/';
+    window.localStorage.clear();
   });
 
   it.each([
-    ['#/', 'Daily Market Snapshot'],
+    ['#/', 'United States Snapshot'],
     ['#/scan', 'Daily Scan'],
-    ['#/breadth', 'Market Breadth'],
-    ['#/groups', 'Industry Group Rankings'],
-    ['#/themes', 'Daily Market Snapshot'],
+    ['#/breadth', 'United States Breadth'],
+    ['#/groups', 'United States Group Rankings'],
+    ['#/themes', 'United States Snapshot'],
   ])('renders the static hash route %s without any /api requests', async (hash, heading) => {
     await renderStaticAppAtHash(hash);
 
@@ -239,8 +356,28 @@ describe('App static mode', () => {
   it('offers 1M and 3M ranges on the breadth page in the static route', async () => {
     await renderStaticAppAtHash('#/breadth');
 
-    expect(await screen.findByRole('heading', { name: 'Market Breadth' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'United States Breadth' })).toBeInTheDocument();
     expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('1M');
     expect(screen.getByTestId('breadth-chart-ranges')).toHaveTextContent('3M');
+  }, 10000);
+
+  it('honors the market query parameter and loads market-scoped breadth assets', async () => {
+    await renderStaticAppAtHash('#/breadth?market=HK');
+
+    expect(await screen.findByRole('heading', { name: 'Hong Kong Breadth' })).toBeInTheDocument();
+    expect(window.location.hash).toContain('#/breadth');
+    expect(window.location.hash).toContain('market=HK');
+
+    const requestedUrls = globalThis.fetch.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls.some((url) => url.includes('/static-data/markets/hk/breadth.json'))).toBe(true);
+  }, 10000);
+
+  it('uses the persisted market selection when no query parameter is present', async () => {
+    window.localStorage.setItem('static-site:selected-market', 'HK');
+
+    await renderStaticAppAtHash('#/groups');
+
+    expect(await screen.findByRole('heading', { name: 'Hong Kong Group Rankings' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Static market selector' })).toHaveTextContent('Hong Kong');
   }, 10000);
 });

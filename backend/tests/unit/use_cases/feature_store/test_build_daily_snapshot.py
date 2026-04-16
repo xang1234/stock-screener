@@ -236,6 +236,9 @@ class TestHappyPath:
         assert run.universe_hash is not None
         assert run.config is not None
         assert run.config["signature_version"] == 1
+        assert run.config["signature"]["signature_version"] == 1
+        assert run.config["publish_pointer_key"] == "latest_published"
+        assert run.config["universe"] == {}
 
     @_PATCH_TRADING_DAY
     def test_run_stats_include_passed_symbols(self, _mock_td):
