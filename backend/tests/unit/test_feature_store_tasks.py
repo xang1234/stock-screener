@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.config import settings
 from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
@@ -336,8 +337,14 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
     assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is True
     assert fake_use_case.received_cmd.batch_only_prices is True
     assert fake_use_case.received_cmd.batch_only_fundamentals is True
-    assert fake_use_case.received_cmd.static_chunk_size is not None
-    assert fake_use_case.received_cmd.static_parallel_workers > 1
+    assert (
+        fake_use_case.received_cmd.static_chunk_size
+        == settings.static_snapshot_chunk_size
+    )
+    assert (
+        fake_use_case.received_cmd.static_parallel_workers
+        == settings.static_snapshot_parallel_workers
+    )
 
 
 def test_build_daily_snapshot_static_daily_mode_uses_null_progress_sink():

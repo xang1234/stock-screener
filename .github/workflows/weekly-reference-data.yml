@@ -108,13 +108,16 @@ jobs:
           fi
 
           if [ -n "$BUNDLE_ASSET_NAME" ]; then
-            gh release download weekly-reference-data \
+            if gh release download weekly-reference-data \
               --pattern "$BUNDLE_ASSET_NAME" \
-              --dir /tmp/weekly-reference-seed
-            cd backend
-            python -m app.scripts.import_weekly_reference_bundle \
-              --input "/tmp/weekly-reference-seed/${BUNDLE_ASSET_NAME}" \
-              --hydrate-mode full
+              --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+              cd backend
+              python -m app.scripts.import_weekly_reference_bundle \
+                --input "/tmp/weekly-reference-seed/${BUNDLE_ASSET_NAME}" \
+                --hydrate-mode full
+            else
+              echo "Unable to download prior bundle ${BUNDLE_ASSET_NAME} for ${{ matrix.market }}; continuing without seed."
+            fi
           else
             echo "No prior weekly reference bundle found for ${{ matrix.market }}; continuing without seed."
           fi
