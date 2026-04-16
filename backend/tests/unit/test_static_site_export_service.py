@@ -454,6 +454,44 @@ def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_an
     ]
 
 
+def test_get_market_run_series_normalizes_market_to_uppercase(service_and_session_factory):
+    service, session_factory = service_and_session_factory
+    run_us_latest = FeatureRun(
+        id=31,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    run_us_previous = FeatureRun(
+        id=30,
+        as_of_date=date(2026, 4, 2),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 2, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    run_hk = FeatureRun(
+        id=29,
+        as_of_date=date(2026, 4, 1),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 1, 21, 30, 0),
+        config_json={"universe": {"market": "HK"}},
+    )
+    _insert_runs(session_factory, run_us_latest, run_us_previous, run_hk)
+
+    with session_factory() as db:
+        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
+            db=db,
+            market="us",
+            latest_run=run_us_latest,
+        )
+
+    assert [run.id for run in market_runs] == [31, 30]
+
+
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
     service, session_factory = service_and_session_factory
 

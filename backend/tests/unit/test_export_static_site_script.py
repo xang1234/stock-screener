@@ -263,6 +263,53 @@ def test_run_daily_refresh_warns_when_default_market_run_id_is_missing(monkeypat
     assert warnings == ["No US feature snapshot produced a run id; 'latest_published' was not updated."]
 
 
+def test_run_daily_refresh_does_not_repoint_default_pointer_for_unpublished_us_run(monkeypatch):
+    pointer_calls: list[dict] = []
+
+    def build_snapshot(**kwargs):
+        if kwargs["market"] == export_script.STATIC_DEFAULT_MARKET:
+            return {"status": "failed", "run_id": 91}
+        return {"status": "published", "run_id": 77, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda: {"task": "universe_refresh"}))
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_upsert_feature_run_pointer",
+        lambda **kwargs: pointer_calls.append(kwargs),
+    )
+
+    results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    assert pointer_calls == []
+    assert "default_market_pointer" not in results
+    assert warnings == ["US feature snapshot returned status 'failed'; 'latest_published' was not updated."]
+
+
 def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     calls: list[tuple[str, bool]] = []
     state = {"lock_disabled": False}

@@ -937,6 +937,7 @@ class StaticSiteExportService:
         market: str,
         latest_run: FeatureRun,
     ) -> list[FeatureRun]:
+        normalized_market = market.upper()
         max_runs = max(STATIC_GROUP_HISTORY_RUNS, max(STATIC_GROUP_CHANGE_OFFSETS.values()) + 1)
         published_runs = (
             db.query(FeatureRun)
@@ -949,7 +950,7 @@ class StaticSiteExportService:
         )
         market_runs: list[FeatureRun] = []
         for run in published_runs:
-            if self._run_market(run) != market:
+            if self._run_market(run) != normalized_market:
                 continue
             market_runs.append(run)
             if len(market_runs) >= max_runs:
