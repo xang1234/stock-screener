@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
     yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
+    universe_source_timeout_seconds: int = 60
+    universe_source_user_agent: str = (
+        "StockScannerUniverseRefresh/1.0 (+https://github.com/xang1234/stock-screener)"
+    )
+    hk_universe_source_url: str = (
+        "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
+    )
+    jp_universe_source_url: str = (
+        "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+    )
+    tw_universe_source_twse_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2"
+    tw_universe_source_tpex_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4"
 
     # Per-market rate budget overrides. Each value is in requests-per-second
     # for that market specifically. None means "use universe-weighted division

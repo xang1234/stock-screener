@@ -75,3 +75,13 @@ class TestBeatScheduleFanout:
             assert queue != SHARED_DATA_FETCH_QUEUE, (
                 f"Market-scoped entry {name!r} incorrectly routes to shared queue"
             )
+
+    def test_weekly_universe_refresh_uses_market_appropriate_task(self):
+        schedule = celery_app.conf.beat_schedule or {}
+        assert schedule["weekly-universe-refresh-us"]["task"] == (
+            "app.tasks.universe_tasks.refresh_stock_universe"
+        )
+        for market in ("hk", "jp", "tw"):
+            assert schedule[f"weekly-universe-refresh-{market}"]["task"] == (
+                "app.tasks.universe_tasks.refresh_official_market_universe"
+            )

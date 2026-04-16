@@ -234,6 +234,7 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.fundamentals_tasks.refresh_fundamentals_yfinance_only',
     'app.tasks.fundamentals_tasks.refresh_symbols_hybrid',
     'app.tasks.universe_tasks.refresh_stock_universe',
+    'app.tasks.universe_tasks.refresh_official_market_universe',
     'app.tasks.universe_tasks.refresh_sp500_membership',
     'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
 )
@@ -339,7 +340,11 @@ if settings.cache_warmup_enabled:
 
         # Weekly stock universe refresh (Sunday 3 AM ET) — per market.
         beat_schedule[f'weekly-universe-refresh-{_m_lower}'] = {
-            'task': 'app.tasks.universe_tasks.refresh_stock_universe',
+            'task': (
+                'app.tasks.universe_tasks.refresh_stock_universe'
+                if _market == 'US'
+                else 'app.tasks.universe_tasks.refresh_official_market_universe'
+            ),
             'schedule': crontab(hour=3, minute=0, day_of_week=0),
             'options': {'queue': _qname},
             'kwargs': {'market': _market},
