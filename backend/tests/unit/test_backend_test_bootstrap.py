@@ -18,6 +18,7 @@ def _run_bootstrap(database_url: str | None) -> tuple[int, str]:
     else:
         env["DATABASE_URL"] = database_url
     env.pop("STOCKSCANNER_TEST_ALLOW_SQLITE", None)
+    env.pop("STOCKSCANNER_TEST_USE_DATABASE_URL", None)
 
     result = subprocess.run(
         [sys.executable, "-c", "import tests.conftest as c; print(c.engine.url)"],
@@ -37,8 +38,27 @@ def test_backend_test_bootstrap_defaults_to_sqlite_when_database_url_missing():
     assert stdout == "sqlite://"
 
 
-def test_backend_test_bootstrap_preserves_explicit_postgres_database_url():
+def test_backend_test_bootstrap_ignores_process_database_url_by_default():
     code, stdout = _run_bootstrap("postgresql://user:pass@localhost/testdb")
 
     assert code == 0
-    assert stdout == "postgresql://user:***@localhost/testdb"
+    assert stdout == "sqlite://"
+
+
+def test_backend_test_bootstrap_preserves_explicit_postgres_database_url_with_opt_in():
+    env = os.environ.copy()
+    env["DATABASE_URL"] = "postgresql://user:pass@localhost/testdb"
+    env["STOCKSCANNER_TEST_USE_DATABASE_URL"] = "1"
+    env.pop("STOCKSCANNER_TEST_ALLOW_SQLITE", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import tests.conftest as c; print(c.engine.url)"],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "postgresql://user:***@localhost/testdb"

@@ -12,12 +12,16 @@ from pathlib import Path
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-# Keep backend tests independent from a developer's local backend/.env.
-# Default to a shared in-memory SQLite harness, but let explicit Postgres
-# DATABASE_URL values pass through for callers that want real Postgres coverage.
-os.environ.setdefault("DATABASE_URL", "sqlite://")
+# Keep backend tests independent from a developer's local backend/.env and from
+# CI job-level DATABASE_URL placeholders. Tests default to the shared SQLite
+# harness unless a caller explicitly opts into using the supplied DATABASE_URL.
+if os.environ.get("STOCKSCANNER_TEST_USE_DATABASE_URL") == "1":
+    os.environ.setdefault("DATABASE_URL", "sqlite://")
+else:
+    os.environ["DATABASE_URL"] = "sqlite://"
+
 if os.environ["DATABASE_URL"].startswith("sqlite"):
-    os.environ.setdefault("STOCKSCANNER_TEST_ALLOW_SQLITE", "1")
+    os.environ["STOCKSCANNER_TEST_ALLOW_SQLITE"] = "1"
 
 import app.models  # noqa: F401
 from app.database import SessionLocal, engine, Base
