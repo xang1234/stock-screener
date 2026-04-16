@@ -5,6 +5,9 @@ from sqlalchemy.sql import func
 from ..database import Base
 
 
+JsonDocument = JSON().with_variant(JSONB(), "postgresql")
+
+
 class StockPrice(Base):
     """Historical price data for stocks (OHLCV)"""
 
@@ -165,9 +168,8 @@ class StockFundamental(Base):
     # Market-aware 0-100 score. Indexed for quality-tier filtering by
     # scanners/ranking logic. NULL means "not yet computed" — treat as unknown.
     field_completeness_score = Column(Integer, index=True)
-    # {field_name: provider_name} for every populated field. JSONB in the
-    # supported runtime so T4 can filter on key paths efficiently.
-    field_provenance = Column(JSONB().with_variant(JSON(), "sqlite"))
+    # {field_name: provider_name} for every populated field.
+    field_provenance = Column(JsonDocument)
 
     # USD normalisation (T3). Computed at storage time using the FX rate
     # captured in ``fx_metadata``; NULL when source currency or amount is
@@ -177,7 +179,7 @@ class StockFundamental(Base):
     # Per-row FX snapshot: {from_currency, to_currency, rate, as_of_date,
     # source}. Stored so a single row can be replayed without consulting
     # the fx_rates log.
-    fx_metadata = Column(JSONB().with_variant(JSON(), "sqlite"))
+    fx_metadata = Column(JsonDocument)
 
     # Metadata
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
