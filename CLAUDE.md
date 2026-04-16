@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Stock screening platform implementing CANSLIM (William O'Neil) and Minervini methodologies, with theme discovery, AI chatbot, and market analysis. Full-stack application with FastAPI backend, React frontend, SQLite database, Redis caching, and Celery for background tasks.
+Stock screening platform implementing CANSLIM (William O'Neil) and Minervini methodologies, with theme discovery, AI chatbot, and market analysis. Full-stack application with FastAPI backend, React frontend, PostgreSQL, Redis caching, and Celery for background tasks.
 
 ## Development Commands
 
@@ -140,7 +140,11 @@ python scripts/cache_diagnostic.py         # Trace cache flow (DB → Redis)
 python scripts/check_cache_status.py       # Check price cache status
 python scripts/clear_redis_price_cache.py  # Clear Redis cache after config change
 python scripts/force_full_cache_refresh.py # Force full cache refresh
-python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
+```
+
+Orphaned scan cleanup runs through Celery:
+```bash
+./venv/bin/celery -A app.celery_app call app.tasks.cache_tasks.cleanup_orphaned_scans
 ```
 
 ## Architecture
@@ -163,7 +167,7 @@ python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
 - Composite scoring via configurable aggregation (weighted_average, maximum, minimum)
 
 **Two-Queue Celery Architecture**:
-- `celery` queue: General compute tasks (4 workers local, 1 in Docker for SQLite safety)
+- `celery` queue: General compute tasks (4 workers local; Docker concurrency follows the deployed worker topology)
 - `data_fetch` queue: API calls (1 worker, serialized to respect rate limits)
 - All external API tasks route to `data_fetch` to prevent rate limit violations
 

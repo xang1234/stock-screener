@@ -431,7 +431,7 @@ class IBDGroupRankService:
         Batch fetch historical ranks for all groups and periods in ONE query.
 
         This replaces N*M individual queries (N groups × M periods) with a single
-        query, avoiding SQLite file-locking issues under heavy load.
+        query, reducing DB churn under heavy load.
 
         Args:
             db: Database session

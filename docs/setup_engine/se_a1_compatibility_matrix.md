@@ -15,7 +15,7 @@ This audit maps Setup Engine insertion points across scanner orchestration and q
 | Feature snapshot build | `backend/app/use_cases/feature_store/build_daily_snapshot.py` | Stores full orchestrator dict as `details` for feature store rows. | Setup Engine is naturally carried through if attached to orchestrator result. | Low: already pass-through JSON semantics. |
 | Feature store model | `backend/app/infra/db/models/feature_store.py` | Stores `details_json` blob in `stock_feature_daily`. | Keep Setup Engine nested under `details_json.setup_engine`; no schema migration required. | Low: JSON payload growth may impact row size/index strategy later. |
 | Feature store repository bridge | `backend/app/infra/db/repositories/feature_store_repo.py` | Maps feature rows back to scan-domain DTOs via JSON reads. | Use top-level `setup_engine` keys for bridge filters/exports; avoid deep nested metric trees for filter-critical fields. | Medium: bridge logic must mirror legacy naming exactly. |
-| Feature store query map | `backend/app/infra/query/feature_store_query.py` | SQL/json_extract filter and sort mapping for `details_json`. | Add Setup Engine JSON paths to `_JSON_FIELD_MAP` with numeric casting for sorting/filtering. | High: sqlite/json extraction sorts lexicographically unless numeric-cast rules are enforced. |
+| Feature store query map | `backend/app/infra/query/feature_store_query.py` | SQL/json_extract filter and sort mapping for `details_json`. | Add Setup Engine JSON paths to `_JSON_FIELD_MAP` with numeric casting for sorting/filtering. | High: numeric JSON extraction must be cast consistently or sorts/filters drift. |
 
 ## Runtime Assumptions
 1. Orchestrator output remains a JSON-serializable dict (no datetime/numpy objects after normalization).

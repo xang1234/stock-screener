@@ -165,9 +165,8 @@ class StockFundamental(Base):
     # Market-aware 0-100 score. Indexed for quality-tier filtering by
     # scanners/ranking logic. NULL means "not yet computed" — treat as unknown.
     field_completeness_score = Column(Integer, index=True)
-    # {field_name: provider_name} for every populated field. JSONB in
-    # production (PG) so T4 can filter on key paths efficiently; tests use
-    # SQLite which falls back to the JSON variant.
+    # {field_name: provider_name} for every populated field. JSONB in the
+    # supported runtime so T4 can filter on key paths efficiently.
     field_provenance = Column(JSONB().with_variant(JSON(), "sqlite"))
 
     # USD normalisation (T3). Computed at storage time using the FX rate
@@ -177,7 +176,7 @@ class StockFundamental(Base):
     adv_usd = Column(BigInteger, index=True)
     # Per-row FX snapshot: {from_currency, to_currency, rate, as_of_date,
     # source}. Stored so a single row can be replayed without consulting
-    # the fx_rates log. SQLite fallback for test schemas.
+    # the fx_rates log.
     fx_metadata = Column(JSONB().with_variant(JSON(), "sqlite"))
 
     # Metadata

@@ -13,7 +13,7 @@ The easiest way to get started. No development tools required.
 3. Open the DMG and drag **StockScanner** to your Applications folder
 4. Launch StockScanner from Applications
 
-The app opens a native window running the full platform locally. Everything runs on your machine with a bundled SQLite database.
+The app opens a native window running the full platform locally. This archived packaging path is historical and does not define the current supported Postgres-only deployment contract.
 
 **First launch:** The app seeds a starter universe from bundled data so you can start scanning immediately. A background refresh process gradually replaces starter data with live market data.
 
@@ -76,8 +76,8 @@ backend/desktop/launcher.py --background-refresh
 ## Desktop Runtime Notes
 
 ### Data Location
-- Database: `~/Library/Application Support/StockScanner/stockscanner.db`
-- The app creates this on first launch from bundled seed data
+- App state: `~/Library/Application Support/StockScanner/`
+- This archived bundle seeds local application state on first launch
 
 ### Starter Payload
 The desktop build includes a lightweight starter payload:

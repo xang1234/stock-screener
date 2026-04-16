@@ -15,7 +15,7 @@ from sqlalchemy.sql import func
 from ..database import Base
 
 
-# Use JSONB on Postgres (queryable, indexed) and fall back to JSON on SQLite for tests.
+# Use JSONB in the supported runtime, with JSON kept for test-only fallback engines.
 JsonType = JSON().with_variant(JSONB(), "postgresql")
 
 

@@ -155,7 +155,7 @@ Key files: `domain/feature_store/ports.py`, `domain/feature_store/models.py`, `i
 Two Celery queues prevent API rate limit violations:
 
 - **`celery`** queue: General compute tasks
-- **`data_fetch`** queue: External API calls and xui ingestion, kept at single-worker concurrency in Docker to preserve the shared `xui-reader` SQLite store as single-writer
+- **`data_fetch`** queue: External API calls and xui ingestion, kept conservatively serialized in Docker to avoid duplicate ingestion work and external rate-limit pressure
 
 | Task File | Description |
 |-----------|-------------|
@@ -276,7 +276,8 @@ Diagnostic utilities in `scripts/`:
 | `check_cache_status.py` | Check price cache status |
 | `clear_redis_price_cache.py` | Clear Redis cache after config change |
 | `force_full_cache_refresh.py` | Force full cache refresh |
-| `cleanup_orphaned_scans.py` | Clean up stale scans, VACUUM DB |
+
+Orphaned scan cleanup is exposed as the Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans`.
 
 ## Rate Limits
 

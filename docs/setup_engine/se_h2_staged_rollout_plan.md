@@ -423,7 +423,7 @@ The SE architecture stores all data as isolated JSON within existing `scan_resul
 2. Clean up any orphaned scans:
    ```bash
    cd backend && source venv/bin/activate
-   python scripts/cleanup_orphaned_scans.py
+   ./venv/bin/celery -A app.celery_app call app.tasks.cache_tasks.cleanup_orphaned_scans
    ```
 3. Re-scan with SE disabled
 

@@ -35,7 +35,7 @@ def _get_index_columns(conn, table_name: str) -> dict[str, tuple[str, ...]]:
 
 
 def _normalize_text(value) -> str | None:
-    """Normalize legacy text values without using SQLite string functions."""
+    """Normalize legacy text values without relying on dialect-specific SQL."""
     if value is None:
         return None
     normalized = str(value).strip()
@@ -74,7 +74,7 @@ def _ensure_index(
             raise
         logger.warning(
             "Universe lifecycle migration skipped optional index %s on %s while "
-            "inspecting existing indexes due to SQLite corruption signature: %s",
+            "inspecting existing indexes due to database corruption signature: %s",
             index_name,
             table_name,
             exc,
@@ -107,7 +107,7 @@ def _ensure_index(
         if not is_corruption_error(exc):
             raise
         logger.warning(
-            "Universe lifecycle migration skipped optional index %s on %s due to SQLite "
+            "Universe lifecycle migration skipped optional index %s on %s due to database "
             "corruption signature: %s",
             index_name,
             table_name,
@@ -125,8 +125,8 @@ def _derive_lifecycle_status(
         return "active" if legacy_is_active else "inactive_manual"
 
     # If a prior startup added the column but crashed before row backfill,
-    # SQLite surfaces the default 'active' for existing rows. When the row
-    # still lacks any backfill reason, fall back to the legacy active flag.
+    # some engines may surface the default 'active' for existing rows. When
+    # the row still lacks any backfill reason, fall back to the legacy active flag.
     if raw_status == "active" and not legacy_is_active and status_reason is None:
         return "inactive_manual"
 
@@ -244,7 +244,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
             if not is_corruption_error(exc):
                 raise
             logger.warning(
-                "Universe lifecycle batch backfill hit SQLite corruption signature; "
+                "Universe lifecycle batch backfill hit a database corruption signature; "
                 "retrying row-by-row for ids %s-%s: %s",
                 batch[0]["id"],
                 batch[-1]["id"],
@@ -263,7 +263,7 @@ def _backfill_stock_universe_rows(conn, columns: set[str]) -> None:
     if skipped_ids:
         logger.warning(
             "Universe lifecycle migration skipped %d stock_universe rows during backfill "
-            "because SQLite reported corruption signatures. Sample ids: %s",
+            "because the database reported corruption signatures. Sample ids: %s",
             len(skipped_ids),
             skipped_ids[:20],
         )

@@ -17,7 +17,7 @@ The app opens in your default browser at `http://127.0.0.1:8765`. Everything run
 
 **What gets installed:**
 - App files under `%LOCALAPPDATA%\StockScanner`
-- SQLite database at `%LOCALAPPDATA%\StockScanner\stockscanner.db`
+- Local application state under `%LOCALAPPDATA%\StockScanner`
 - No Redis or Celery required (desktop mode handles everything in-process)
 
 **First launch:** The app seeds a starter universe from bundled CSV data so you can start scanning immediately. Regular refresh runs replace the starter baseline with live data over time.
@@ -90,7 +90,7 @@ python -m playwright install chromium
 Copy-Item .\backend\.env.example .\backend\.env
 ```
 
-Edit `backend\.env` with your API keys and an absolute `DATABASE_URL`.
+Edit `backend\.env` with your API keys and a PostgreSQL `DATABASE_URL`.
 
 ### Start the Backend
 

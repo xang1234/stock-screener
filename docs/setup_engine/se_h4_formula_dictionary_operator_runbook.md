@@ -1028,8 +1028,8 @@ To diagnose a field value, trace upstream through the pipeline:
                         tail -f backend/celery_worker.log | grep "SE timing"
                         (Look for errors/timeouts)
 
-□ Database correct?   → Verify DATABASE_URL points to data/stockscanner.db
-                        (Wrong path = empty results)
+□ Database correct?   → Verify DATABASE_URL points to the intended PostgreSQL instance
+                        (Wrong target = empty results)
 ```
 
 **Cross-reference:** [SE-H2 §8 Emergency & Rollback Procedures](se_h2_staged_rollout_plan.md#8-emergency--rollback-procedures) for rollback instructions.
@@ -1083,7 +1083,7 @@ When adjusting multiple parameters simultaneously:
 | All stocks not-ready | Zero `setup_ready = True` results | Threshold too tight for current market conditions | Count ready stocks: `SELECT COUNT(*) FROM ... WHERE ... setup_ready = true` | Review [SE-H1 §6 Recalibration Guide](se_h1_parameter_catalog.md#6-recalibration-guide) |
 | Detector errors | `{detector}:error` in failed_checks | Exception in detector code | Check Celery logs for `SetupEngineScanner error` | Fix detector bug; errored detector is skipped, others still run |
 | Incomplete week | `current_week_incomplete_exclude_from_weekly` in flags | Running mid-week | Check `data_policy_result.requires_weekly_exclude_current` | Expected behavior — weekly features exclude partial week to avoid look-ahead bias |
-| SQLite locks | Backfill script hangs or fails | Concurrent write contention | Check for `OperationalError: database is locked` in logs | Run backfill during low-activity; use `--symbols` for smaller batches |
+| Database lock contention | Backfill script hangs or fails | Concurrent write contention | Check for lock/timeout errors in logs | Run backfill during low-activity; use `--symbols` for smaller batches |
 
 ---
 
@@ -1206,7 +1206,7 @@ When adjusting multiple parameters simultaneously:
    python scripts/inspect_redis.py
    (Look for price cache keys, check TTLs)
 
-3. If SQLite lock errors:
+3. If database lock or timeout errors appear:
    → Ensure no Celery workers are running scans
    → Use --symbols for smaller batches
    → Run during low-activity periods
@@ -1265,7 +1265,6 @@ When adjusting multiple parameters simultaneously:
 | `scripts/check_cache_status.py` | Check price cache status | `python scripts/check_cache_status.py` |
 | `scripts/clear_redis_price_cache.py` | Clear Redis cache after config change | `python scripts/clear_redis_price_cache.py` |
 | `scripts/force_full_cache_refresh.py` | Force full cache refresh | `python scripts/force_full_cache_refresh.py` |
-| `scripts/cleanup_orphaned_scans.py` | Clean up stale scans, VACUUM DB | `python scripts/cleanup_orphaned_scans.py` |
 | `scripts/backfill_setup_engine.py` | Backfill SE payloads into existing rows | `python scripts/backfill_setup_engine.py --help` |
 
 ---

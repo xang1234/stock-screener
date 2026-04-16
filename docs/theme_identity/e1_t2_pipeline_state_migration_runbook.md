@@ -48,15 +48,18 @@ python scripts/verify_theme_pipeline_state_migration.py --apply-migration --json
 ### 1) Table exists
 
 ```sql
-SELECT name
-FROM sqlite_master
-WHERE type='table' AND name='content_item_pipeline_state';
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name = 'content_item_pipeline_state';
 ```
 
 ### 2) Required columns exist
 
 ```sql
-PRAGMA table_info(content_item_pipeline_state);
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'content_item_pipeline_state'
+ORDER BY ordinal_position;
 ```
 
 Required column names:

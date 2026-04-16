@@ -1005,7 +1005,7 @@ def _track_symbol_failures(
             if not is_corruption_error(exc):
                 raise
             logger.warning(
-                "Skipping stock_universe fetch tracking commit for %d symbols due to SQLite "
+                "Skipping stock_universe fetch tracking commit for %d symbols due to database "
                 "corruption signature: %s",
                 len(successes) + len(failures),
                 exc,
@@ -1015,7 +1015,7 @@ def _track_symbol_failures(
 
         if skipped_corrupt_symbols:
             logger.warning(
-                "Skipped stock_universe fetch-tracking writes for %d symbols due to SQLite "
+                "Skipped stock_universe fetch-tracking writes for %d symbols due to database "
                 "corruption signatures. Sample symbols: %s",
                 len(skipped_corrupt_symbols),
                 skipped_corrupt_symbols[:10],
@@ -1695,7 +1695,11 @@ def cleanup_old_price_data(self, keep_years: int = 5):
 
     except Exception as e:
         if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in cleanup_old_price_data: %s — run scripts/check_db_integrity.py --repair", e)
+            logger.critical(
+                "DATABASE CORRUPTION in cleanup_old_price_data: %s — inspect the database "
+                "and restore from backup or rerun migrations as appropriate",
+                e,
+            )
         else:
             logger.error("Error in cleanup_old_price_data task: %s", e, exc_info=True)
         safe_rollback(db)
@@ -1907,7 +1911,11 @@ def cleanup_orphaned_scans(self):
 
     except Exception as e:
         if is_corruption_error(e):
-            logger.critical("DATABASE CORRUPTION in cleanup_orphaned_scans: %s — run scripts/check_db_integrity.py --repair", e)
+            logger.critical(
+                "DATABASE CORRUPTION in cleanup_orphaned_scans: %s — inspect the database "
+                "and restore from backup or rerun migrations as appropriate",
+                e,
+            )
         else:
             logger.error("Error in cleanup_orphaned_scans task: %s", e, exc_info=True)
         safe_rollback(db)

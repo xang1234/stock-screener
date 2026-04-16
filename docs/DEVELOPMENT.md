@@ -20,7 +20,7 @@ python -m playwright install chromium
 
 # Configure environment
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL (absolute path) and at least one LLM API key
+# Edit .env — at minimum set DATABASE_URL (PostgreSQL connection string) and at least one LLM API key
 ```
 
 ### Start Redis
@@ -160,7 +160,11 @@ python scripts/cache_diagnostic.py         # Trace cache flow (DB -> Redis)
 python scripts/check_cache_status.py       # Check price cache status
 python scripts/clear_redis_price_cache.py  # Clear Redis cache after config change
 python scripts/force_full_cache_refresh.py # Force full cache refresh
-python scripts/cleanup_orphaned_scans.py   # Clean up stale scans, VACUUM DB
+```
+
+Orphaned scan cleanup is a Celery task rather than a standalone maintenance script:
+```bash
+./venv/bin/celery -A app.celery_app call app.tasks.cache_tasks.cleanup_orphaned_scans
 ```
 
 ## Project Structure

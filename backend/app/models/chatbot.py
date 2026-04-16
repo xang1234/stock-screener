@@ -56,7 +56,7 @@ class Message(Base):
     thinking_traces = Column(JSON)  # List of thinking/reasoning traces
 
     # Source references (for citations in responses)
-    # Note: Using "source_references" instead of "references" to avoid SQLite reserved keyword
+    # Use "source_references" instead of "references" to avoid reserved-keyword collisions.
     source_references = Column(JSON)  # List of reference objects with type, title, url, section, snippet
 
     # Timestamps
