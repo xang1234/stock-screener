@@ -4,7 +4,8 @@ Handles CRUD operations and data retrieval for watchlists and items.
 """
 from __future__ import annotations
 
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -37,6 +38,7 @@ from ...services.watchlist_stewardship_service import WatchlistStewardshipServic
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+WATCHLIST_HISTORY_LOOKBACK_DAYS = 400
 
 
 def _get_watchlist_stewardship_service() -> WatchlistStewardshipService:
@@ -226,7 +228,8 @@ async def get_watchlist_stewardship(
 def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     """
     Fetch sparkline and price change data for a list of symbols.
-    Uses PriceCacheService for fresh data with automatic updates.
+    Uses stored database history so the watchlist page loads quickly without
+    kicking off live refresh work.
     Also fetches company name and IBD industry.
     """
     if not symbols:
@@ -236,7 +239,6 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
 
     from ...scanners.criteria.price_sparkline import PriceSparklineCalculator
     from ...scanners.criteria.rs_sparkline import RSSparklineCalculator
-    from ...wiring.bootstrap import get_price_cache
 
     result = {}
 
@@ -263,25 +265,18 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
         "12m": 252,
     }
 
-    # Use PriceCacheService for fresh data with automatic updates
-    price_cache = get_price_cache()
-
-    # Fetch SPY prices for RS calculation (with freshness check)
-    spy_df = price_cache.get_historical_data("SPY", period="2y")
+    price_frames = _load_price_frames_from_db([*symbols, "SPY"], db)
+    spy_df = price_frames.get("SPY")
     spy_close = spy_df['Close'].tolist() if spy_df is not None and not spy_df.empty else []
 
     if not spy_close:
         logger.warning("No SPY price data found for RS calculation")
 
-    # Bulk fetch all stock prices (with freshness check and auto-update)
-    all_symbols = list(symbols)
-    cached_prices = price_cache.get_many(all_symbols, period="2y")
-
     rs_calc = RSSparklineCalculator()
     price_calc = PriceSparklineCalculator()
 
     for symbol in symbols:
-        price_df = cached_prices.get(symbol)
+        price_df = price_frames.get(symbol)
 
         if price_df is None or price_df.empty:
             result[symbol] = {}
@@ -318,6 +313,51 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
         }
 
     return result
+
+
+def _load_price_frames_from_db(symbols: List[str], db: Session) -> Dict[str, "pd.DataFrame"]:
+    """Bulk load recent price history for watchlist rendering from the local DB."""
+    if not symbols:
+        return {}
+
+    import pandas as pd
+
+    unique_symbols = list(dict.fromkeys(symbols))
+    start_date = date.today() - timedelta(days=WATCHLIST_HISTORY_LOOKBACK_DAYS)
+    prices = (
+        db.query(StockPrice)
+        .filter(
+            StockPrice.symbol.in_(unique_symbols),
+            StockPrice.date >= start_date,
+        )
+        .order_by(StockPrice.symbol.asc(), StockPrice.date.asc())
+        .all()
+    )
+
+    grouped_prices: dict[str, list[StockPrice]] = defaultdict(list)
+    for price in prices:
+        grouped_prices[price.symbol].append(price)
+
+    frames: Dict[str, pd.DataFrame] = {}
+    for symbol in unique_symbols:
+        symbol_prices = grouped_prices.get(symbol)
+        if not symbol_prices:
+            continue
+        df = pd.DataFrame(
+            {
+                "Date": [price.date for price in symbol_prices],
+                "Open": [price.open for price in symbol_prices],
+                "High": [price.high for price in symbol_prices],
+                "Low": [price.low for price in symbol_prices],
+                "Close": [price.close for price in symbol_prices],
+                "Volume": [price.volume for price in symbol_prices],
+            }
+        )
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.set_index("Date", inplace=True)
+        frames[symbol] = df
+
+    return frames
 
 
 def _compute_price_change_bounds(stock_data_map: Dict) -> Dict[str, PriceChangeBounds]:
