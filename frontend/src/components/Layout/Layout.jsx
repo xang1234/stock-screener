@@ -6,11 +6,10 @@ import {
   Container,
   Drawer,
   Fab,
-  FormControl,
   InputBase,
-  InputLabel,
+  ListItemText,
+  Menu,
   MenuItem,
-  Select,
   Toolbar,
   Typography,
   IconButton,
@@ -21,6 +20,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
+import PersonIcon from '@mui/icons-material/Person';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
@@ -50,13 +50,13 @@ function TickerSearch() {
       value={tickerInput}
       onChange={(e) => setTickerInput(e.target.value)}
       onKeyDown={handleTickerSubmit}
-      placeholder="TICKER ↵"
+      placeholder="TICKER"
       size="small"
       inputProps={{ 'aria-label': 'Go to ticker' }}
       sx={{
         px: 1.5,
         py: 0.25,
-        width: 300,
+        width: 150,
         fontSize: '15px',
         backgroundColor: 'rgba(255,255,255,0.15)',
         borderRadius: 1,
@@ -64,7 +64,6 @@ function TickerSearch() {
         '& input::placeholder': {
           color: 'rgba(255,255,255,0.7)',
           opacity: 1,
-          fontStyle: 'italic',
           letterSpacing: '1px',
         },
       }}
@@ -93,15 +92,24 @@ function Layout({ children }) {
   const assistantAvailable = features.chatbot && (!auth?.required || auth?.authenticated);
 
   const navItems = [
-    { path: '/', label: 'Routine' },
-    { path: '/scan', label: 'Scanner' },
+    { path: '/', label: 'Daily' },
+    { path: '/scan', label: 'Scan' },
     { path: '/breadth', label: 'Breadth' },
-    { path: '/groups', label: 'Group Rankings' },
+    { path: '/groups', label: 'Groups' },
     { path: '/digest', label: 'Digest' },
-    { path: '/validation', label: 'Validation' },
+    { path: '/validation', label: 'Backtest' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),
   ];
+
+  const [profileMenuAnchor, setProfileMenuAnchor] = useState(null);
+  const profileMenuOpen = Boolean(profileMenuAnchor);
+  const profileOptions = profiles.length
+    ? profiles
+    : [{ profile: activeProfile, label: activeProfileDetail?.label || activeProfile }];
+  const activeProfileLabel = profileOptions.find((p) => p.profile === activeProfile)?.label
+    || activeProfileDetail?.label
+    || activeProfile;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -116,35 +124,6 @@ function Layout({ children }) {
           </Box>
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
-          <Box sx={{ ml: 1.5, minWidth: 150 }}>
-            <FormControl size="small" fullWidth variant="outlined">
-              <InputLabel id="strategy-profile-label" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                Profile
-              </InputLabel>
-              <Select
-                labelId="strategy-profile-label"
-                value={activeProfile}
-                label="Profile"
-                onChange={(event) => setActiveProfile(event.target.value)}
-                sx={{
-                  color: 'inherit',
-                  backgroundColor: 'rgba(255,255,255,0.12)',
-                  '& .MuiOutlinedInput-notchedOutline': {
-                    borderColor: 'rgba(255,255,255,0.35)',
-                  },
-                  '& .MuiSvgIcon-root': {
-                    color: 'inherit',
-                  },
-                }}
-              >
-                {(profiles.length ? profiles : [{ profile: activeProfile, label: activeProfileDetail?.label || activeProfile }]).map((profile) => (
-                  <MenuItem key={profile.profile} value={profile.profile}>
-                    {profile.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
           <Box sx={{ flexGrow: 1 }} />
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
@@ -172,9 +151,41 @@ function Layout({ children }) {
               </Button>
             );
           })}
+          <IconButton
+            sx={{ ml: 1 }}
+            onClick={(event) => setProfileMenuAnchor(event.currentTarget)}
+            color="inherit"
+            title={`Profile: ${activeProfileLabel}`}
+            aria-label="Select strategy profile"
+            aria-haspopup="menu"
+            aria-expanded={profileMenuOpen}
+            size="small"
+          >
+            <PersonIcon fontSize="small" />
+          </IconButton>
+          <Menu
+            anchorEl={profileMenuAnchor}
+            open={profileMenuOpen}
+            onClose={() => setProfileMenuAnchor(null)}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            {profileOptions.map((profile) => (
+              <MenuItem
+                key={profile.profile}
+                selected={profile.profile === activeProfile}
+                onClick={() => {
+                  setActiveProfile(profile.profile);
+                  setProfileMenuAnchor(null);
+                }}
+              >
+                <ListItemText primary={profile.label} />
+              </MenuItem>
+            ))}
+          </Menu>
           {features.tasks && (
             <IconButton
-              sx={{ ml: 1 }}
+              sx={{ ml: 0.5 }}
               onClick={() => setSettingsOpen(true)}
               color="inherit"
               title="Scheduled Tasks"
