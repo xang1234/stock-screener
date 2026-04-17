@@ -6,6 +6,7 @@ institutional ownership, margins, etc.) with weekly refresh to minimize API call
 Uses Redis for hot cache and database for persistence.
 """
 import logging
+import math
 import pickle
 from typing import Any, Optional, Dict, Callable
 from datetime import datetime, date
@@ -124,14 +125,22 @@ class FundamentalsCacheService:
         if value is None or value == "":
             return None
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
+            numeric = float(value)
+            if math.isfinite(numeric):
+                return numeric
+            logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
+            return None
 
         normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
         if normalized in _RECOMMENDATION_SCORE_BY_KEY:
             return _RECOMMENDATION_SCORE_BY_KEY[normalized]
 
         try:
-            return float(normalized)
+            numeric = float(normalized)
+            if math.isfinite(numeric):
+                return numeric
+            logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
+            return None
         except ValueError:
             logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
             return None
@@ -649,6 +658,8 @@ class FundamentalsCacheService:
                 f"Fetched {symbol} from {data_source}: "
                 f"{len([v for v in fundamentals.values() if v is not None])} fields populated"
             )
+
+            fundamentals = self._normalize_payload_for_storage(fundamentals)
 
             # Enrich with completeness/provenance so both Redis and DB writes
             # include the derived metadata (avoids warm-read staleness).

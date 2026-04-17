@@ -101,3 +101,39 @@ def test_store_all_caches_counts_false_store_as_failed(monkeypatch):
     assert stats["persisted_symbols"] == 0
     assert stats["failed_persistence_symbols"] == 1
     assert stats["failed"] == 1
+
+
+def test_store_all_caches_bulk_updates_only_persisted_symbols(monkeypatch):
+    import app.services.hybrid_fundamentals_service as module
+
+    ownership_service = MagicMock()
+    ownership_service.bulk_update.return_value = 1
+    ownership_ctor = MagicMock(return_value=ownership_service)
+    monkeypatch.setattr(module, "InstitutionalOwnershipService", ownership_ctor)
+    finviz_service = MagicMock()
+    finviz_service._rate_limiter = MagicMock()
+
+    service = module.HybridFundamentalsService(
+        price_cache=MagicMock(),
+        finviz_service=finviz_service,
+    )
+    fundamentals_cache = MagicMock()
+    fundamentals_cache.store.side_effect = [True, False]
+    fake_db = MagicMock()
+
+    stats = service.store_all_caches(
+        {
+            "AAPL": {"symbol": "AAPL", "market_cap": 1_000},
+            "MSFT": {"symbol": "MSFT", "market_cap": 2_000},
+        },
+        fundamentals_cache,
+        session_factory=lambda: fake_db,
+    )
+
+    ownership_service.bulk_update.assert_called_once_with(
+        [{"symbol": "AAPL", "market_cap": 1_000}],
+        data_source="hybrid",
+    )
+    assert stats["ownership_updated"] == 1
+    assert stats["persisted_symbols"] == 1
+    assert stats["failed_persistence_symbols"] == 1

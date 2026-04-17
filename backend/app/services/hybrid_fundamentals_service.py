@@ -457,7 +457,7 @@ class HybridFundamentalsService:
         session_factory: Callable[[], Session],
         include_quarterly: bool = True,  # kept for compatibility with existing task call sites
         market_by_symbol: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         """
         Store hybrid results in fundamentals cache.
 
@@ -475,7 +475,7 @@ class HybridFundamentalsService:
                 scoring is market-aware without a per-symbol DB lookup.
 
         Returns:
-            Dict with storage statistics
+            Dict with storage statistics, including nested provider error counts.
         """
         stats = {
             'fundamentals_stored': 0,
@@ -487,6 +487,7 @@ class HybridFundamentalsService:
             'provider_error_counts': {},
         }
         markets = market_by_symbol or {}
+        persisted_symbols: list[str] = []
 
         provider_error_counts: dict[str, int] = {}
 
@@ -520,6 +521,7 @@ class HybridFundamentalsService:
                 if persisted:
                     stats['fundamentals_stored'] += 1
                     stats['persisted_symbols'] += 1
+                    persisted_symbols.append(symbol)
                     if include_quarterly:
                         stats['quarterly_stored'] += 1
                 else:
@@ -539,9 +541,9 @@ class HybridFundamentalsService:
 
             # Convert results dict to list for bulk_update
             fundamentals_list = [
-                {**data, 'symbol': symbol}
-                for symbol, data in results.items()
-                if data and not data.get('has_error')
+                {**results[symbol], 'symbol': symbol}
+                for symbol in persisted_symbols
+                if results.get(symbol)
             ]
 
             ownership_updated = ownership_service.bulk_update(

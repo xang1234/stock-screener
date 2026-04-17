@@ -316,6 +316,22 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator(
+        'provider_snapshot_min_active_coverage_us',
+        'provider_snapshot_min_active_coverage_hk',
+        'provider_snapshot_min_active_coverage_jp',
+        'provider_snapshot_min_active_coverage_tw',
+        'provider_snapshot_max_missing_ratio_us',
+        'provider_snapshot_max_missing_ratio_hk',
+        'provider_snapshot_max_missing_ratio_jp',
+        'provider_snapshot_max_missing_ratio_tw',
+    )
+    @classmethod
+    def validate_provider_snapshot_ratios(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
+        return v
+
     @model_validator(mode="after")
     def apply_legacy_twitter_delay_fallback(self) -> "Settings":
         legacy_delay = os.getenv("SOTWE_REQUEST_DELAY")
