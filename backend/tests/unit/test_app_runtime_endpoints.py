@@ -99,8 +99,11 @@ async def test_runtime_bootstrap_status_endpoint_returns_persisted_state(client,
 @pytest.mark.asyncio
 async def test_runtime_bootstrap_start_persists_preferences_and_queues_orchestration(client, monkeypatch):
     from app.api.v1 import app_runtime as module
+    from app.services import server_auth
 
     saved = {}
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
 
     def _save(_db, *, primary_market, enabled_markets, bootstrap_state):
         saved["primary_market"] = primary_market
@@ -153,3 +156,99 @@ async def test_runtime_bootstrap_start_persists_preferences_and_queues_orchestra
     assert payload["primary_market"] == "HK"
     assert payload["enabled_markets"] == ["HK", "US"]
     assert payload["bootstrap_state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_runtime_bootstrap_mutations_require_auth(client, monkeypatch):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", True)
+    monkeypatch.setattr(server_auth.settings, "server_auth_password", "secret-pass")
+    monkeypatch.setattr(server_auth.settings, "server_auth_session_secret", "secret-signing-key")
+    monkeypatch.setattr(
+        module,
+        "save_runtime_preferences",
+        lambda _db, *, primary_market, enabled_markets, bootstrap_state: type(
+            "SavedPrefs",
+            (),
+            {
+                "primary_market": primary_market,
+                "enabled_markets": enabled_markets,
+                "bootstrap_state": bootstrap_state,
+            },
+        )(),
+    )
+    monkeypatch.setattr(module, "queue_local_runtime_bootstrap", lambda **_kwargs: "task-bootstrap-123")
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: _FakeBootstrapStatus())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        unauth_bootstrap = await client.post(
+            "/api/v1/runtime/bootstrap",
+            json={"primary_market": "US", "enabled_markets": ["US"]},
+        )
+        unauth_markets = await client.patch(
+            "/api/v1/runtime/markets",
+            json={"primary_market": "US", "enabled_markets": ["US"]},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert unauth_bootstrap.status_code == 401
+    assert unauth_markets.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_runtime_bootstrap_start_does_not_persist_running_state_when_queue_fails(client, monkeypatch):
+    from app.api.v1 import app_runtime as module
+    from app.services import server_auth
+
+    saved_states = []
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    current_status = type(
+        "BootstrapStatus",
+        (),
+        {
+            "bootstrap_required": True,
+            "empty_system": True,
+            "primary_market": "US",
+            "enabled_markets": ["US"],
+            "bootstrap_state": "not_started",
+            "supported_markets": ["US", "HK", "JP", "TW"],
+        },
+    )()
+
+    def _save(_db, *, primary_market, enabled_markets, bootstrap_state):
+        saved_states.append(bootstrap_state)
+        return type(
+            "SavedPrefs",
+            (),
+            {
+                "primary_market": primary_market,
+                "enabled_markets": enabled_markets,
+                "bootstrap_state": bootstrap_state,
+            },
+        )()
+
+    monkeypatch.setattr(module, "get_runtime_bootstrap_status", lambda _db: current_status)
+    monkeypatch.setattr(module, "save_runtime_preferences", _save)
+    monkeypatch.setattr(
+        module,
+        "queue_local_runtime_bootstrap",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            await client.post(
+                "/api/v1/runtime/bootstrap",
+                json={"primary_market": "US", "enabled_markets": ["US"]},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert "running" not in saved_states

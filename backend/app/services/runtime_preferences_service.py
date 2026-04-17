@@ -238,8 +238,12 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     elif empty_system and bootstrap_state == "ready":
         bootstrap_state = "not_started"
 
+    bootstrap_required = empty_system or (
+        bootstrap_state == "running" and not primary_ready
+    )
+
     return RuntimeBootstrapStatus(
-        bootstrap_required=not primary_ready,
+        bootstrap_required=bootstrap_required,
         empty_system=empty_system,
         primary_market=prefs.primary_market,
         enabled_markets=list(prefs.enabled_markets),
