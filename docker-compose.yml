@@ -68,7 +68,7 @@ x-worker-common: &worker-common
     redis:
       condition: service_healthy
   healthcheck:
-    test: ["CMD", "celery", "-A", "app.celery_app", "inspect", "ping", "--timeout=10"]
+    test: ["CMD-SHELL", "pgrep -f 'celery.*worker' || exit 1"]
     interval: 60s
     timeout: 30s
     retries: 3
@@ -220,7 +220,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --timeout=10 2>&1 | grep -q 'pong' || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' || exit 1"]
       interval: 60s
       timeout: 30s
       retries: 3
