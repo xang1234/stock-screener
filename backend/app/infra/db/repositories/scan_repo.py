@@ -4,10 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.domain.scanning.errors import SingleActiveScanViolation
 from app.domain.scanning.ports import ScanRepository
 from app.models.scan_result import Scan
+
+
+def _is_single_active_scan_integrity_error(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc))
+    return (
+        "uq_scans_single_active" in message
+        or "UNIQUE constraint failed: index 'uq_scans_single_active'" in message
+    )
 
 
 class SqlScanRepository(ScanRepository):
@@ -19,7 +29,14 @@ class SqlScanRepository(ScanRepository):
     def create(self, *, scan_id: str, **fields) -> Scan:
         scan = Scan(scan_id=scan_id, **fields)
         self._session.add(scan)
-        self._session.flush()  # assigns PK without committing
+        try:
+            self._session.flush()  # assigns PK without committing
+        except IntegrityError as exc:
+            if _is_single_active_scan_integrity_error(exc):
+                raise SingleActiveScanViolation(
+                    "A queued or running scan already exists."
+                ) from exc
+            raise
         return scan
 
     def get_by_scan_id(self, scan_id: str) -> Scan | None:

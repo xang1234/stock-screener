@@ -66,3 +66,9 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
 
     assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" in task_names
     assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" not in task_names
+
+
+def test_bootstrap_universe_name_uses_uppercase_market_code():
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    assert module._bootstrap_universe_name("us") == "market:US"

@@ -70,10 +70,14 @@ export default function BootstrapSetupScreen({
   };
 
   const handleStart = async () => {
-    await onStartBootstrap({
-      primaryMarket: selectedPrimary,
-      enabledMarkets: normalizedSelection,
-    });
+    try {
+      await onStartBootstrap({
+        primaryMarket: selectedPrimary,
+        enabledMarkets: normalizedSelection,
+      });
+    } catch {
+      // Mutation state already drives the visible error UI.
+    }
   };
 
   const running = bootstrapState === 'running';

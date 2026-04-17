@@ -90,6 +90,11 @@ def initialize_runtime() -> None:
     logger.info("Database schema ready", extra={"migration_action": action})
 
 
+async def trigger_ui_snapshot_rebuild_on_startup() -> None:
+    """Compatibility shim for tests that still monkeypatch the old startup hook."""
+    return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """

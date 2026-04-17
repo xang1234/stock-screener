@@ -9,6 +9,7 @@ from app.use_cases.scanning.create_scan import (
     CreateScanResult,
     CreateScanUseCase,
 )
+from app.domain.scanning.errors import SingleActiveScanViolation
 
 from tests.unit.use_cases.conftest import (
     FakeFeatureRunRepository,
@@ -149,6 +150,31 @@ class TestCreateScanUseCase:
 
         scan = uow.scans.rows[0]
         assert scan.status == "failed"
+
+    def test_unique_constraint_violation_maps_to_active_scan_conflict(self):
+        class _RaceyScanRepository(FakeScanRepository):
+            def create(self, *, scan_id: str, **fields):
+                super().create(
+                    scan_id="scan-active",
+                    status="queued",
+                    total_stocks=2,
+                    trigger_source="manual",
+                )
+                raise SingleActiveScanViolation("duplicate active scan")
+
+        uow = FakeUnitOfWork(
+            scans=_RaceyScanRepository(),
+            universe=FakeUniverseRepository(["AAPL", "MSFT"]),
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        with pytest.raises(ActiveScanConflictError) as exc_info:
+            uc.execute(uow, _make_command())
+
+        assert exc_info.value.active_scan.scan_id == "scan-active"
+        assert uow.rolled_back >= 1
+        assert len(dispatcher.dispatched) == 0
 
     def test_commits_at_least_twice_on_success(self):
         """First commit persists scan, second stores task_id."""

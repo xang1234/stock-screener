@@ -1,6 +1,6 @@
 """Scan and scan result models"""
 import logging
-from sqlalchemy import Column, Integer, String, Float, BigInteger, DateTime, JSON, Index, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, BigInteger, DateTime, JSON, Index, ForeignKey, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -65,6 +65,14 @@ class Scan(Base):
     # Timestamps
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index(
+            "uq_scans_single_active",
+            text("(CASE WHEN status IN ('queued', 'running') THEN 1 END)"),
+            unique=True,
+        ),
+    )
 
     def get_universe_definition(self):
         """Reconstruct a UniverseDefinition from the structured DB fields."""

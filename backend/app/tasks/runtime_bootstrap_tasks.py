@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _bootstrap_universe_name(market: str) -> str:
-    return f"market:{market.lower()}"
+    return f"market:{market.upper()}"
 
 
 def _build_market_bootstrap_signatures(
@@ -81,7 +81,10 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
     return task.id
 
 
-@celery_app.task(name="app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan")
+@celery_app.task(
+    name="app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan",
+    queue="celery",
+)
 def queue_market_bootstrap_scan(market: str) -> dict:
     from ..infra.db.uow import SqlUnitOfWork
     from ..schemas.universe import Market, UniverseDefinition, UniverseType
@@ -134,7 +137,10 @@ def queue_market_bootstrap_scan(market: str) -> dict:
     }
 
 
-@celery_app.task(name="app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap")
+@celery_app.task(
+    name="app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
+    queue="celery",
+)
 def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[str]) -> dict:
     from ..services.runtime_preferences_service import set_bootstrap_state
 

@@ -18,11 +18,13 @@ Zero-config local deployment:
 cp .env.docker.example .env
 # Edit .env: Set SERVER_AUTH_PASSWORD and add your API keys (GROQ_API_KEY, MINIMAX_API_KEY, etc.)
 
-# 2. Start all services
+# 2. Start the local-default stack
 docker-compose up
 ```
 
-This starts PostgreSQL, Redis, Backend API, Celery workers, backup service, and Frontend. Access at **http://localhost**.
+This starts PostgreSQL, Redis, the Backend API, the shared Celery workers, and the Frontend. Access at **http://localhost**.
+
+> **Note:** Local backups are now opt-in so the default laptop stack stays lighter. Start `db-backup` with `docker-compose --profile backup up` (or add the profile in a local override) when you want local `pg_dump` snapshots under `./data/backups`.
 
 > **Note:** Docker Compose reads environment variables from `.env` in the project root (not `.env.docker`). `SERVER_AUTH_PASSWORD` is required for server access, and LLM API keys are required for chatbot features.
 

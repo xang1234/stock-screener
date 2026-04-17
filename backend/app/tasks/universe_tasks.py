@@ -142,12 +142,13 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         logger.info("Exchange filter: %s", exchange_filter, extra=_log_extra)
     logger.info("=" * 60)
 
-    if _market is not None and not is_market_enabled_now(_market):
-        logger.info("Skipping universe refresh for disabled market %s", _market, extra=_log_extra)
+    effective_market = _market or "US"
+    if not is_market_enabled_now(effective_market):
+        logger.info("Skipping universe refresh for disabled market %s", effective_market, extra=_log_extra)
         return {
             'status': 'skipped',
-            'reason': f'market {_market} is disabled in local runtime preferences',
-            'market': _market,
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
 
@@ -168,7 +169,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
             'timestamp': datetime.now().isoformat(),
         }
 
-    prior_size = _count_active_universe(_market or "US")
+    prior_size = _count_active_universe(effective_market)
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -182,7 +183,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         logger.info(f"Total in finviz: {stats.get('total', 0)}")
         logger.info("=" * 60)
 
-        _emit_universe_drift(_market or "US", prior_size)
+        _emit_universe_drift(effective_market, prior_size)
 
         return {
             'status': 'success',

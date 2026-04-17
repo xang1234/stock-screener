@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ...domain.scanning.defaults import get_default_scan_profile
@@ -83,26 +83,39 @@ async def start_runtime_bootstrap(
 ) -> RuntimeBootstrapStartResponse:
     """Persist local bootstrap choices and queue the primary-market sync."""
     current_status = get_runtime_bootstrap_status(db)
+    if current_status.bootstrap_state == "running":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "bootstrap_already_running",
+                "message": "Local bootstrap is already running.",
+                "bootstrap_state": current_status.bootstrap_state,
+                "primary_market": current_status.primary_market,
+                "enabled_markets": current_status.enabled_markets,
+            },
+        )
     prefs = save_runtime_preferences(
         db,
         primary_market=request.primary_market,
         enabled_markets=request.enabled_markets,
-        bootstrap_state=current_status.bootstrap_state,
-    )
-    task_id = queue_local_runtime_bootstrap(
-        primary_market=prefs.primary_market,
-        enabled_markets=prefs.enabled_markets,
-    )
-    save_runtime_preferences(
-        db,
-        primary_market=prefs.primary_market,
-        enabled_markets=prefs.enabled_markets,
         bootstrap_state="running",
     )
+    try:
+        task_id = queue_local_runtime_bootstrap(
+            primary_market=prefs.primary_market,
+            enabled_markets=prefs.enabled_markets,
+        )
+    except Exception:
+        save_runtime_preferences(
+            db,
+            primary_market=prefs.primary_market,
+            enabled_markets=prefs.enabled_markets,
+            bootstrap_state=current_status.bootstrap_state,
+        )
+        raise
     status = get_runtime_bootstrap_status(db)
     payload = {
         **_bootstrap_status_payload(status),
-        "bootstrap_state": "running",
         "task_id": task_id,
     }
     return RuntimeBootstrapStartResponse(**payload)

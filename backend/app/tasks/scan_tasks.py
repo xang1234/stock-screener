@@ -325,7 +325,7 @@ def run_bulk_scan(self, scan_id: str, symbol_list: List[str], criteria: dict = N
     return _run_bulk_scan_via_use_case(self, scan_id, symbol_list, criteria)
 
 
-@celery_app.task(name='app.tasks.scan_tasks.finalize_scan_artifacts')
+@celery_app.task(name='app.tasks.scan_tasks.finalize_scan_artifacts', queue='celery')
 def finalize_scan_artifacts(scan_id: str):
     """Finalize scan artifacts on the general queue after the scan worker exits."""
     _run_post_scan_pipeline(scan_id, warm_chart_cache=True)

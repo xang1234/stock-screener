@@ -126,7 +126,7 @@ async def create_scan(
     try:
         result = use_case.execute(uow, cmd)
     except ActiveScanConflictError as e:
-        raise HTTPException(status_code=409, detail=e.to_dict())
+        raise HTTPException(status_code=409, detail=e.to_dict()) from e
     except DomainValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

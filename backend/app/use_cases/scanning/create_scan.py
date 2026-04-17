@@ -19,6 +19,7 @@ from datetime import datetime
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
+from app.domain.scanning.errors import SingleActiveScanViolation
 from app.domain.scanning.signature import (
     build_scan_signature_payload,
     hash_scan_signature,
@@ -117,6 +118,18 @@ class CreateScanUseCase:
     def __init__(self, dispatcher: TaskDispatcher) -> None:
         self._dispatcher = dispatcher
 
+    @staticmethod
+    def _raise_active_scan_conflict(active_scan: object) -> None:
+        raise ActiveScanConflictError(
+            ActiveScanConflict(
+                scan_id=active_scan.scan_id,
+                status=active_scan.status,
+                trigger_source=getattr(active_scan, "trigger_source", "manual") or "manual",
+                total_stocks=active_scan.total_stocks or 0,
+                started_at=getattr(active_scan, "started_at", None),
+            )
+        )
+
     def execute(self, uow: UnitOfWork, cmd: CreateScanCommand) -> CreateScanResult:
         """Run the use case.
 
@@ -138,15 +151,7 @@ class CreateScanUseCase:
 
             active_scan = uow.scans.get_active_scan()
             if active_scan is not None:
-                raise ActiveScanConflictError(
-                    ActiveScanConflict(
-                        scan_id=active_scan.scan_id,
-                        status=active_scan.status,
-                        trigger_source=getattr(active_scan, "trigger_source", "manual") or "manual",
-                        total_stocks=active_scan.total_stocks or 0,
-                        started_at=getattr(active_scan, "started_at", None),
-                    )
-                )
+                self._raise_active_scan_conflict(active_scan)
 
             # ── Resolve universe symbols ─────────────────────────────
             symbols = uow.universe.resolve_symbols(cmd.universe_def)
@@ -190,26 +195,33 @@ class CreateScanUseCase:
 
             # ── Create scan record ───────────────────────────────────
             scan_id = str(uuid.uuid4())
-            scan = uow.scans.create(
-                scan_id=scan_id,
-                criteria=cmd.criteria or {},
-                universe=cmd.universe_label,
-                universe_key=cmd.universe_key,
-                universe_type=cmd.universe_type,
-                universe_market=cmd.universe_market,
-                universe_exchange=cmd.universe_exchange,
-                universe_index=cmd.universe_index,
-                universe_symbols=cmd.universe_symbols,
-                screener_types=cmd.screeners,
-                composite_method=cmd.composite_method,
-                total_stocks=len(symbols),
-                passed_stocks=0,
-                status="queued",
-                trigger_source="manual",
-                task_id=None,
-                idempotency_key=cmd.idempotency_key,
-                feature_run_id=feature_run_id,
-            )
+            try:
+                scan = uow.scans.create(
+                    scan_id=scan_id,
+                    criteria=cmd.criteria or {},
+                    universe=cmd.universe_label,
+                    universe_key=cmd.universe_key,
+                    universe_type=cmd.universe_type,
+                    universe_market=cmd.universe_market,
+                    universe_exchange=cmd.universe_exchange,
+                    universe_index=cmd.universe_index,
+                    universe_symbols=cmd.universe_symbols,
+                    screener_types=cmd.screeners,
+                    composite_method=cmd.composite_method,
+                    total_stocks=len(symbols),
+                    passed_stocks=0,
+                    status="queued",
+                    trigger_source="manual",
+                    task_id=None,
+                    idempotency_key=cmd.idempotency_key,
+                    feature_run_id=feature_run_id,
+                )
+            except SingleActiveScanViolation:
+                uow.rollback()
+                active_scan = uow.scans.get_active_scan()
+                if active_scan is not None:
+                    self._raise_active_scan_conflict(active_scan)
+                raise
 
             if instant_match is not None:
                 uow.scans.update_status(
