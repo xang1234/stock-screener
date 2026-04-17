@@ -106,6 +106,7 @@ class MinerviniScanner(BaseStockScreener):
 
             price_data = data.price_data
             spy_data = data.benchmark_data
+            precomputed = data.precomputed_scan_context
 
             # Calculate ADR (Average Daily Range)
             adr_percent = None
@@ -125,9 +126,21 @@ class MinerviniScanner(BaseStockScreener):
             }
 
             # Extract price and volume series in chronological order
-            prices_chrono = price_data["Close"].reset_index(drop=True)
-            volumes_chrono = price_data["Volume"].reset_index(drop=True)
-            spy_prices_chrono = spy_data["Close"].reset_index(drop=True)
+            prices_chrono = (
+                precomputed.close_chrono
+                if precomputed is not None and precomputed.close_chrono is not None
+                else price_data["Close"].reset_index(drop=True)
+            )
+            volumes_chrono = (
+                precomputed.volume_chrono
+                if precomputed is not None and precomputed.volume_chrono is not None
+                else price_data["Volume"].reset_index(drop=True)
+            )
+            spy_prices_chrono = (
+                precomputed.benchmark_close_chrono
+                if precomputed is not None and precomputed.benchmark_close_chrono is not None
+                else spy_data["Close"].reset_index(drop=True)
+            )
 
             # Calculate RS Sparkline data (30-day stock/SPY ratio trend)
             rs_sparkline_result = self.rs_sparkline_calc.calculate_rs_sparkline(
@@ -141,22 +154,54 @@ class MinerviniScanner(BaseStockScreener):
             )
 
             # Current values (most recent = last in chronological series)
-            current_price = prices_chrono.iloc[-1]
+            current_price = (
+                float(precomputed.current_price)
+                if precomputed is not None and precomputed.current_price is not None
+                else float(prices_chrono.iloc[-1])
+            )
 
             # Calculate moving averages on chronological data
-            ma_50 = prices_chrono.rolling(window=50, min_periods=50).mean().iloc[-1]
-            ma_150 = prices_chrono.rolling(window=150, min_periods=150).mean().iloc[-1]
-            ma_200 = prices_chrono.rolling(window=200, min_periods=200).mean().iloc[-1]
+            ma_50 = (
+                float(precomputed.ma_50)
+                if precomputed is not None and precomputed.ma_50 is not None
+                else float(prices_chrono.rolling(window=50, min_periods=50).mean().iloc[-1])
+            )
+            ma_150 = (
+                float(precomputed.ma_150)
+                if precomputed is not None and precomputed.ma_150 is not None
+                else float(prices_chrono.rolling(window=150, min_periods=150).mean().iloc[-1])
+            )
+            ma_200 = (
+                float(precomputed.ma_200)
+                if precomputed is not None and precomputed.ma_200 is not None
+                else float(prices_chrono.rolling(window=200, min_periods=200).mean().iloc[-1])
+            )
             ma_200_month_ago = (
-                prices_chrono.rolling(window=200, min_periods=200).mean().iloc[-21]
-                if len(prices_chrono) > 220
-                else ma_200
+                float(precomputed.ma_200_month_ago)
+                if precomputed is not None and precomputed.ma_200_month_ago is not None
+                else (
+                    float(prices_chrono.rolling(window=200, min_periods=200).mean().iloc[-21])
+                    if len(prices_chrono) > 220
+                    else ma_200
+                )
             )
 
             # Calculate EMAs (for filtering)
-            ema_10 = prices_chrono.ewm(span=10, adjust=False).mean().iloc[-1]
-            ema_20 = prices_chrono.ewm(span=20, adjust=False).mean().iloc[-1]
-            ema_50 = prices_chrono.ewm(span=50, adjust=False).mean().iloc[-1]
+            ema_10 = (
+                float(precomputed.ema_10)
+                if precomputed is not None and precomputed.ema_10 is not None
+                else float(prices_chrono.ewm(span=10, adjust=False).mean().iloc[-1])
+            )
+            ema_20 = (
+                float(precomputed.ema_20)
+                if precomputed is not None and precomputed.ema_20 is not None
+                else float(prices_chrono.ewm(span=20, adjust=False).mean().iloc[-1])
+            )
+            ema_50 = (
+                float(precomputed.ema_50)
+                if precomputed is not None and precomputed.ema_50 is not None
+                else float(prices_chrono.ewm(span=50, adjust=False).mean().iloc[-1])
+            )
 
             # EMA distances (% above/below)
             ema_10_distance = ((current_price - ema_10) / ema_10) * 100 if ema_10 > 0 else None
@@ -207,20 +252,44 @@ class MinerviniScanner(BaseStockScreener):
                     volume_surge = today_volume / avg_volume_50d
 
             # Reverse for calculations that expect most recent first
-            prices = prices_chrono[::-1].reset_index(drop=True)
-            volumes = volumes_chrono[::-1].reset_index(drop=True)
-            spy_prices = spy_prices_chrono[::-1].reset_index(drop=True)
+            prices = (
+                precomputed.close_rev
+                if precomputed is not None and precomputed.close_rev is not None
+                else prices_chrono[::-1].reset_index(drop=True)
+            )
+            volumes = (
+                precomputed.volume_rev
+                if precomputed is not None and precomputed.volume_rev is not None
+                else volumes_chrono[::-1].reset_index(drop=True)
+            )
+            spy_prices = (
+                precomputed.benchmark_close_rev
+                if precomputed is not None and precomputed.benchmark_close_rev is not None
+                else spy_prices_chrono[::-1].reset_index(drop=True)
+            )
 
             # 52-week range
-            high_52w = prices.max()
-            low_52w = prices.min()
+            high_52w = (
+                float(precomputed.high_52w)
+                if precomputed is not None and precomputed.high_52w is not None
+                else float(prices.max())
+            )
+            low_52w = (
+                float(precomputed.low_52w)
+                if precomputed is not None and precomputed.low_52w is not None
+                else float(prices.min())
+            )
 
             # 1. Calculate RS Ratings (weighted + individual periods)
-            rs_ratings = self.rs_calc.calculate_all_rs_ratings(
-                symbol,
-                prices,
-                spy_prices,
-                data.rs_universe_performances,
+            rs_ratings = (
+                precomputed.rs_ratings
+                if precomputed is not None and precomputed.rs_ratings is not None
+                else self.rs_calc.calculate_all_rs_ratings(
+                    symbol,
+                    prices,
+                    spy_prices,
+                    data.rs_universe_performances,
+                )
             )
 
             # calculate_all_rs_ratings now surfaces relative_performance and

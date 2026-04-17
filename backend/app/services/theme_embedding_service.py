@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 SENTENCE_TRANSFORMERS_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
 SentenceTransformer = None
+_ENCODER_CACHE: dict[str, object | None] = {}
+_ENCODER_CACHE_MISS = object()
 
 
 class ThemeEmbeddingEngine:
@@ -33,6 +35,11 @@ class ThemeEmbeddingEngine:
         if self._encoder is not None:
             return self._encoder
 
+        cached_encoder = _ENCODER_CACHE.get(self.model_name, _ENCODER_CACHE_MISS)
+        if cached_encoder is not _ENCODER_CACHE_MISS:
+            self._encoder = cached_encoder
+            return self._encoder
+
         global SentenceTransformer
         try:
             if SentenceTransformer is None:
@@ -40,20 +47,42 @@ class ThemeEmbeddingEngine:
 
                 SentenceTransformer = _SentenceTransformer
             self._encoder = SentenceTransformer(self.model_name, device="cpu")
+            _ENCODER_CACHE[self.model_name] = self._encoder
             return self._encoder
         except Exception as exc:
             logger.warning("Embedding encoder unavailable for model %s: %s", self.model_name, exc)
             self._encoder = None
+            _ENCODER_CACHE[self.model_name] = None
             return None
 
     def encode(self, text: str) -> Optional[np.ndarray]:
+        vectors = self.encode_many([text], batch_size=1, normalize_embeddings=True)
+        if vectors is None or len(vectors) == 0:
+            return None
+        return np.asarray(vectors[0], dtype=np.float32)
+
+    def encode_many(
+        self,
+        texts: list[str],
+        *,
+        batch_size: int = 32,
+        normalize_embeddings: bool = True,
+    ) -> Optional[np.ndarray]:
         encoder = self.get_encoder()
         if encoder is None:
             return None
+        if not texts:
+            return np.empty((0, 0), dtype=np.float32)
         try:
-            return np.array(encoder.encode(text, convert_to_numpy=True))
+            vectors = encoder.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                normalize_embeddings=normalize_embeddings,
+            )
+            return np.atleast_2d(np.asarray(vectors, dtype=np.float32))
         except Exception as exc:
-            logger.warning("Failed to encode embedding text for model %s: %s", self.model_name, exc)
+            logger.warning("Failed to encode embedding batch for model %s: %s", self.model_name, exc)
             return None
 
     @staticmethod

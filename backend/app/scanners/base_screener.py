@@ -90,6 +90,29 @@ class ScreenerResult:
 
 
 @dataclass
+class PrecomputedScanContext:
+    """Shared derived series and indicators for multi-screener scans."""
+
+    close_chrono: pd.Series
+    close_rev: pd.Series
+    volume_chrono: Optional[pd.Series]
+    volume_rev: Optional[pd.Series]
+    benchmark_close_chrono: Optional[pd.Series]
+    benchmark_close_rev: Optional[pd.Series]
+    current_price: Optional[float]
+    ma_50: Optional[float]
+    ma_150: Optional[float]
+    ma_200: Optional[float]
+    ma_200_month_ago: Optional[float]
+    ema_10: Optional[float]
+    ema_20: Optional[float]
+    ema_50: Optional[float]
+    high_52w: Optional[float]
+    low_52w: Optional[float]
+    rs_ratings: Optional[Dict[str, float]] = None
+
+
+@dataclass
 class StockData:
     """
     Container for all fetched stock data.
@@ -115,6 +138,7 @@ class StockData:
     timezone: Optional[str] = None
     local_code: Optional[str] = None
     rs_universe_performances: Optional[Dict[int | str, list[float]]] = None
+    precomputed_scan_context: Optional[PrecomputedScanContext] = None
     # See app.domain.scanning.mixed_market_policy.
     is_mixed_market: bool = False
     fetch_errors: Dict[str, str] = field(default_factory=dict)  # Any errors during fetch

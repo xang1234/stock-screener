@@ -401,6 +401,175 @@ class ThemeMergingService:
         text = self._get_theme_text(theme)
         return self.embedding_engine.encode(text)
 
+    def _prepare_embedding_refresh_candidates(
+        self,
+        themes: list[ThemeCluster],
+    ) -> tuple[list[dict[str, object]], int]:
+        if not themes:
+            return [], 0
+
+        existing_by_cluster = self.embedding_repo.get_by_cluster_ids(
+            [theme.id for theme in themes if theme.id is not None],
+            include_stale=True,
+        )
+        candidates: list[dict[str, object]] = []
+        skipped = 0
+
+        for theme in themes:
+            content_hash = self.embedding_repo.build_theme_content_hash(theme)
+            existing = existing_by_cluster.get(theme.id)
+            if not self.embedding_repo.embedding_needs_refresh(
+                existing,
+                content_hash=content_hash,
+                embedding_model=self.EMBEDDING_MODEL,
+                model_version=self.EMBEDDING_MODEL_VERSION,
+            ):
+                skipped += 1
+                continue
+
+            candidates.append(
+                {
+                    "theme": theme,
+                    "embedding_text": self._get_theme_text(theme),
+                    "content_hash": content_hash,
+                }
+            )
+
+        return candidates, skipped
+
+    def _refresh_embeddings_for_themes(
+        self,
+        themes: list[ThemeCluster],
+        *,
+        batch_size: int = 32,
+    ) -> dict[str, object]:
+        candidates, skipped = self._prepare_embedding_refresh_candidates(themes)
+        if not candidates:
+            return {
+                "updated": 0,
+                "skipped": skipped,
+                "errors": 0,
+                "failed_themes": [],
+            }
+
+        if len(candidates) == 1:
+            theme = candidates[0]["theme"]
+            try:
+                record, refreshed = self.update_theme_embedding(theme)
+                if record and refreshed:
+                    return {
+                        "updated": 1,
+                        "skipped": skipped,
+                        "errors": 0,
+                        "failed_themes": [],
+                    }
+                if record:
+                    return {
+                        "updated": 0,
+                        "skipped": skipped + 1,
+                        "errors": 0,
+                        "failed_themes": [],
+                    }
+                return {
+                    "updated": 0,
+                    "skipped": skipped,
+                    "errors": 1,
+                    "failed_themes": [
+                        {
+                            "theme_cluster_id": theme.id,
+                            "theme": theme.name,
+                        }
+                    ],
+                }
+            except Exception as exc:
+                self.db.rollback()
+                return {
+                    "updated": 0,
+                    "skipped": skipped,
+                    "errors": 1,
+                    "failed_themes": [
+                        {
+                            "theme_cluster_id": theme.id,
+                            "theme": theme.name,
+                            "error": str(exc),
+                        }
+                    ],
+                }
+
+        try:
+            vectors = self.embedding_engine.encode_many(
+                [str(item["embedding_text"]) for item in candidates],
+                batch_size=batch_size,
+                normalize_embeddings=True,
+            )
+            if vectors is None:
+                raise RuntimeError("Embedding model not available")
+            if len(vectors) != len(candidates):
+                raise RuntimeError(
+                    f"Embedding batch size mismatch: expected {len(candidates)}, got {len(vectors)}"
+                )
+
+            for item, vector in zip(candidates, vectors):
+                theme = item["theme"]
+                embedding_json = ThemeEmbeddingEngine.serialize(np.asarray(vector, dtype=np.float32))
+                self.embedding_repo.upsert_for_theme(
+                    theme,
+                    embedding_json=embedding_json,
+                    embedding_text=str(item["embedding_text"]),
+                    embedding_model=self.EMBEDDING_MODEL,
+                    content_hash=str(item["content_hash"]),
+                    model_version=self.EMBEDDING_MODEL_VERSION,
+                    is_stale=False,
+                )
+
+            self.db.commit()
+            return {
+                "updated": len(candidates),
+                "skipped": skipped,
+                "errors": 0,
+                "failed_themes": [],
+            }
+        except Exception as exc:
+            self.db.rollback()
+            logger.error("Error refreshing embedding batch: %s", exc, exc_info=True)
+            failed_themes: list[dict[str, object]] = []
+            updated = 0
+            errors = 0
+
+            for item in candidates:
+                theme = item["theme"]
+                try:
+                    record, refreshed = self.update_theme_embedding(theme)
+                    if record and refreshed:
+                        updated += 1
+                    elif record:
+                        skipped += 1
+                    else:
+                        errors += 1
+                        failed_themes.append(
+                            {
+                                "theme_cluster_id": theme.id,
+                                "theme": theme.name,
+                            }
+                        )
+                except Exception as item_exc:
+                    self.db.rollback()
+                    errors += 1
+                    failed_themes.append(
+                        {
+                            "theme_cluster_id": theme.id,
+                            "theme": theme.name,
+                            "error": str(item_exc),
+                        }
+                    )
+
+            return {
+                "updated": updated,
+                "skipped": skipped,
+                "errors": errors,
+                "failed_themes": failed_themes,
+            }
+
     def update_theme_embedding(self, theme: ThemeCluster) -> tuple[Optional[ThemeEmbedding], bool]:
         """Update or create embedding for a theme."""
         content_hash = self.embedding_repo.build_theme_content_hash(theme)
@@ -446,18 +615,10 @@ class ThemeMergingService:
         skipped = 0
         errors = 0
 
-        for theme in themes:
-            try:
-                result, refreshed = self.update_theme_embedding(theme)
-                if result and refreshed:
-                    updated += 1
-                elif result:
-                    skipped += 1
-                else:
-                    errors += 1
-            except Exception as e:
-                logger.error(f"Error updating embedding for {theme.name}: {e}")
-                errors += 1
+        batch_result = self._refresh_embeddings_for_themes(themes, batch_size=32)
+        updated = int(batch_result["updated"])
+        skipped = int(batch_result["skipped"])
+        errors = int(batch_result["errors"])
 
         return {
             "total_themes": len(themes),
@@ -519,36 +680,36 @@ class ThemeMergingService:
             batches_processed += 1
             for cluster in clusters:
                 attempted_cluster_ids.add(cluster.id)
-                processed += 1
-                try:
-                    record, was_refreshed = self.update_theme_embedding(cluster)
-                    if record is None:
-                        failed += 1
-                        failed_clusters.append({"theme_cluster_id": cluster.id, "theme": cluster.name})
-                    elif was_refreshed:
-                        refreshed += 1
-                    else:
-                        unchanged += 1
-                except Exception as exc:
-                    self.db.rollback()
-                    failed += 1
-                    failed_clusters.append(
-                        {
-                            "theme_cluster_id": cluster.id,
-                            "theme": cluster.name,
-                            "error": str(exc),
-                        }
-                    )
-                    # Cross-run fairness: failed rows should not monopolize oldest-first batches.
-                    # Keep row stale, but move its ordering timestamp forward.
+
+            batch_result = self._refresh_embeddings_for_themes(
+                clusters,
+                batch_size=bounded_batch_size,
+            )
+            processed += len(clusters)
+            refreshed += int(batch_result["updated"])
+            unchanged += int(batch_result["skipped"])
+            failed += int(batch_result["errors"])
+            failed_details = list(batch_result["failed_themes"])
+            failed_clusters.extend(failed_details)
+
+            if failed_details:
+                failed_ids = [
+                    int(item["theme_cluster_id"])
+                    for item in failed_details
+                    if item.get("theme_cluster_id") is not None
+                ]
+                if failed_ids:
                     self.db.query(ThemeEmbedding).filter(
-                        ThemeEmbedding.theme_cluster_id == cluster.id
+                        ThemeEmbedding.theme_cluster_id.in_(failed_ids)
                     ).update(
                         {ThemeEmbedding.updated_at: datetime.utcnow()},
                         synchronize_session=False,
                     )
                     self.db.commit()
-                    logger.error("Failed stale embedding recompute for cluster %s: %s", cluster.id, exc)
+                    logger.error(
+                        "Failed stale embedding recompute for clusters: %s",
+                        failed_ids,
+                    )
 
             stale_remaining = self.db.query(func.count(ThemeEmbedding.id)).join(
                 ThemeCluster, ThemeCluster.id == ThemeEmbedding.theme_cluster_id

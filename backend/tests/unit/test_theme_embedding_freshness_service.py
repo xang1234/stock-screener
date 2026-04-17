@@ -19,6 +19,7 @@ from app.services.theme_merging_service import ThemeMergingService
 class _StubEmbeddingEngine:
     def __init__(self):
         self.calls = 0
+        self.batch_calls = 0
 
     def get_encoder(self):
         return object()
@@ -26,6 +27,19 @@ class _StubEmbeddingEngine:
     def encode(self, text: str):
         self.calls += 1
         return np.array([float(len(text) % 11), 1.0])
+
+    def encode_many(self, texts: list[str], batch_size: int = 32, normalize_embeddings: bool = True):
+        del batch_size
+        self.batch_calls += 1
+        rows = []
+        for text in texts:
+            vector = np.array([float(len(text) % 11), 1.0])
+            if normalize_embeddings:
+                norm = np.linalg.norm(vector)
+                if norm != 0:
+                    vector = vector / norm
+            rows.append(vector)
+        return np.vstack(rows)
 
 
 @pytest.fixture
@@ -431,6 +445,62 @@ def test_recompute_stale_embeddings_prevents_cross_run_starvation(db_session):
     refreshed_b = db_session.query(ThemeEmbedding).filter(ThemeEmbedding.theme_cluster_id == theme_b.id).one()
     assert refreshed_a.is_stale is True
     assert refreshed_b.is_stale is False
+
+
+def test_update_all_embeddings_batches_encoder_calls(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    _make_theme(db_session)
+    db_session.add(
+        ThemeCluster(
+            canonical_key="power_semiconductors",
+            display_name="Power Semiconductors",
+            name="Power Semiconductors",
+            aliases=["Power Chips"],
+            description="Power-management silicon",
+            category="technology",
+            pipeline="technical",
+            is_active=True,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    db_session.commit()
+
+    result = service.update_all_embeddings()
+
+    assert result["updated"] == 2
+    assert engine.batch_calls == 1
+    assert engine.calls == 0
+
+
+def test_recompute_stale_embeddings_batches_encoder_calls(db_session):
+    engine = _StubEmbeddingEngine()
+    service = _make_service(db_session, engine)
+    first_theme = _make_theme(db_session)
+    second_theme = ThemeCluster(
+        canonical_key="ai_power_supply",
+        display_name="AI Power Supply",
+        name="AI Power Supply",
+        aliases=["Power Supply AI"],
+        description="Power systems for AI servers",
+        category="technology",
+        pipeline="technical",
+        is_active=True,
+        first_seen_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db_session.add(second_theme)
+    db_session.commit()
+    _make_embedding(db_session, first_theme.id, stale=True)
+    _make_embedding(db_session, second_theme.id, stale=True)
+
+    result = service.recompute_stale_embeddings(batch_size=2, max_batches=1)
+
+    assert result["processed"] == 2
+    assert result["refreshed"] == 2
+    assert engine.batch_calls == 1
+    assert engine.calls == 0
 
 
 def test_run_embedding_refresh_campaign_meets_coverage_and_freshness_gates(db_session):

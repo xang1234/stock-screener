@@ -202,6 +202,7 @@ class SetupEngineScanner(BaseStockScreener):
             price_data, spy_close, symbol,
             self._ma_analyzer, self._rs_calc,
             data.rs_universe_performances,
+            precomputed_context=data.precomputed_scan_context,
         )
 
         # ── Phase C: readiness + payload assembly ──
@@ -303,14 +304,31 @@ class SetupEngineScanner(BaseStockScreener):
         ma_analyzer: MovingAverageAnalyzer,
         rs_calc: RelativeStrengthCalculator,
         rs_universe_performances: Optional[Dict[int | str, list[float]]] = None,
+        precomputed_context=None,
     ) -> dict:
         """Compute stage, MA alignment, and RS rating from price data."""
-        prices_chrono = price_data["Close"].reset_index(drop=True)
+        prices_chrono = (
+            precomputed_context.close_chrono
+            if precomputed_context is not None and precomputed_context.close_chrono is not None
+            else price_data["Close"].reset_index(drop=True)
+        )
 
         ma_200_series = prices_chrono.rolling(200, min_periods=200).mean()
-        ma_50 = prices_chrono.rolling(50, min_periods=50).mean().iloc[-1]
-        ma_150 = prices_chrono.rolling(150, min_periods=150).mean().iloc[-1]
-        ma_200 = ma_200_series.iloc[-1]
+        ma_50 = (
+            float(precomputed_context.ma_50)
+            if precomputed_context is not None and precomputed_context.ma_50 is not None
+            else float(prices_chrono.rolling(50, min_periods=50).mean().iloc[-1])
+        )
+        ma_150 = (
+            float(precomputed_context.ma_150)
+            if precomputed_context is not None and precomputed_context.ma_150 is not None
+            else float(prices_chrono.rolling(150, min_periods=150).mean().iloc[-1])
+        )
+        ma_200 = (
+            float(precomputed_context.ma_200)
+            if precomputed_context is not None and precomputed_context.ma_200 is not None
+            else float(ma_200_series.iloc[-1])
+        )
 
         if pd.isna(ma_200) or pd.isna(ma_150) or pd.isna(ma_50):
             return {
@@ -318,11 +336,19 @@ class SetupEngineScanner(BaseStockScreener):
                 "_current_price": None, "_ma_50": None,
             }
 
-        current_price = float(prices_chrono.iloc[-1])
+        current_price = (
+            float(precomputed_context.current_price)
+            if precomputed_context is not None and precomputed_context.current_price is not None
+            else float(prices_chrono.iloc[-1])
+        )
         ma_200_month_ago = (
-            float(ma_200_series.iloc[-21])
-            if len(ma_200_series) > 220
-            else float(ma_200)
+            float(precomputed_context.ma_200_month_ago)
+            if precomputed_context is not None and precomputed_context.ma_200_month_ago is not None
+            else (
+                float(ma_200_series.iloc[-21])
+                if len(ma_200_series) > 220
+                else float(ma_200)
+            )
         )
 
         stage = quick_stage_check(
@@ -336,11 +362,29 @@ class SetupEngineScanner(BaseStockScreener):
         )
         ma_alignment_score = float(ma_result["minervini_ma_score"])
 
-        rs_rating = None
-        if spy_close is not None and not spy_close.empty:
-            prices_rev = prices_chrono[::-1].reset_index(drop=True)
-            spy_chrono = spy_close.reset_index(drop=True)
-            spy_rev = spy_chrono[::-1].reset_index(drop=True)
+        rs_rating = (
+            float(precomputed_context.rs_ratings["rs_rating"])
+            if precomputed_context is not None
+            and precomputed_context.rs_ratings is not None
+            and precomputed_context.rs_ratings.get("rs_rating") is not None
+            else None
+        )
+        if rs_rating is None and spy_close is not None and not spy_close.empty:
+            prices_rev = (
+                precomputed_context.close_rev
+                if precomputed_context is not None and precomputed_context.close_rev is not None
+                else prices_chrono[::-1].reset_index(drop=True)
+            )
+            spy_chrono = (
+                precomputed_context.benchmark_close_chrono
+                if precomputed_context is not None and precomputed_context.benchmark_close_chrono is not None
+                else spy_close.reset_index(drop=True)
+            )
+            spy_rev = (
+                precomputed_context.benchmark_close_rev
+                if precomputed_context is not None and precomputed_context.benchmark_close_rev is not None
+                else spy_chrono[::-1].reset_index(drop=True)
+            )
             rs_result = rs_calc.calculate_rs_rating(
                 symbol,
                 prices_rev,
