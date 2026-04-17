@@ -153,6 +153,8 @@ class StockUniverseService:
 
     @staticmethod
     def _bulk_insert_records(db: Session, objects: list[Any]) -> None:
+        # bulk_save_objects skips Python-side Column(default=...) values, so
+        # callers must populate any required non-server defaults up front.
         if objects:
             db.bulk_save_objects(objects)
 
@@ -1189,8 +1191,6 @@ class StockUniverseService:
 
         added_count = 0
         updated_count = 0
-        new_rows: list[StockUniverse] = []
-        new_events: list[StockUniverseStatusEvent] = []
         new_rows: list[StockUniverse] = []
         new_events: list[StockUniverseStatusEvent] = []
 
