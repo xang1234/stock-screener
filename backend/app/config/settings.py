@@ -244,8 +244,14 @@ class Settings(BaseSettings):
     provider_snapshot_ingestion_enabled: bool = False
     provider_snapshot_cutover_enabled: bool = False
     provider_snapshot_on_demand_fallback_enabled: bool = True
-    provider_snapshot_min_active_coverage: float = 0.98
-    provider_snapshot_max_missing_active_symbols: int = 50
+    provider_snapshot_min_active_coverage_us: float = 0.98
+    provider_snapshot_min_active_coverage_hk: float = 0.70
+    provider_snapshot_min_active_coverage_jp: float = 0.60
+    provider_snapshot_min_active_coverage_tw: float = 0.70
+    provider_snapshot_max_missing_ratio_us: float = 0.005
+    provider_snapshot_max_missing_ratio_hk: float = 0.30
+    provider_snapshot_max_missing_ratio_jp: float = 0.40
+    provider_snapshot_max_missing_ratio_tw: float = 0.30
 
     # Hermes / MCP integration
     hermes_api_base: str = "http://127.0.0.1:8642/v1"

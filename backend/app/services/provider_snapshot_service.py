@@ -337,7 +337,9 @@ class ProviderSnapshotService:
     def _coverage_gate(
         self,
         coverage_stats: Dict[str, Any],
-    ) -> tuple[bool, list[str]]:
+        *,
+        market: str | None = None,
+    ) -> tuple[bool, list[str], dict[str, Any]]:
         active_symbols = coverage_stats.get("active_symbols", 0) or 0
         covered_active_symbols = coverage_stats.get("covered_active_symbols", 0) or 0
         missing_active_symbols = coverage_stats.get("missing_active_symbols", 0) or 0
@@ -345,21 +347,46 @@ class ProviderSnapshotService:
             covered_active_symbols / active_symbols
             if active_symbols > 0 else 1.0
         )
+        missing_ratio = (
+            missing_active_symbols / active_symbols
+            if active_symbols > 0 else 0.0
+        )
+        normalized_market = str(market or "US").strip().upper() or "US"
+        if normalized_market not in WEEKLY_REFERENCE_MARKETS:
+            normalized_market = "US"
+        min_active_coverage = getattr(
+            settings,
+            f"provider_snapshot_min_active_coverage_{normalized_market.lower()}",
+        )
+        max_missing_ratio = getattr(
+            settings,
+            f"provider_snapshot_max_missing_ratio_{normalized_market.lower()}",
+        )
         warnings: list[str] = []
 
-        if active_coverage < settings.provider_snapshot_min_active_coverage:
+        if active_coverage < min_active_coverage:
             warnings.append(
                 "Active snapshot coverage "
                 f"{active_coverage:.2%} below minimum "
-                f"{settings.provider_snapshot_min_active_coverage:.2%}"
+                f"{min_active_coverage:.2%}"
             )
-        if missing_active_symbols > settings.provider_snapshot_max_missing_active_symbols:
+        if missing_ratio > max_missing_ratio:
             warnings.append(
-                "Missing active symbols "
-                f"{missing_active_symbols} above maximum "
-                f"{settings.provider_snapshot_max_missing_active_symbols}"
+                "Missing active symbol ratio "
+                f"{missing_ratio:.2%} above maximum "
+                f"{max_missing_ratio:.2%}"
             )
-        return (not warnings), warnings
+        return (
+            not warnings,
+            warnings,
+            {
+                "market": normalized_market,
+                "min_active_coverage": min_active_coverage,
+                "max_missing_ratio": max_missing_ratio,
+                "active_coverage": active_coverage,
+                "missing_ratio": missing_ratio,
+            },
+        )
 
     @staticmethod
     def _replace_snapshot_key_runs(db: Session, *, snapshot_key: str) -> None:
@@ -432,7 +459,10 @@ class ProviderSnapshotService:
             "market": normalized_market,
             "missing_active_symbols": [],
         }
-        coverage_ok, coverage_warnings = self._coverage_gate(coverage_stats)
+        coverage_ok, coverage_warnings, coverage_thresholds = self._coverage_gate(
+            coverage_stats,
+            market=normalized_market,
+        )
         all_warnings = list(warnings or [])
         all_warnings.extend(coverage_warnings)
 
@@ -506,6 +536,7 @@ class ProviderSnapshotService:
             "published": published,
             "warnings": all_warnings,
             "market": normalized_market,
+            "coverage_thresholds": coverage_thresholds,
         }
 
     def _fetch_yahoo_only_fields(self, symbol: str) -> Dict[str, Any]:
@@ -601,7 +632,10 @@ class ProviderSnapshotService:
         parity_stats = {
             "missing_active_symbols": missing_active[:100],
         }
-        coverage_ok, coverage_warnings = self._coverage_gate(coverage_stats)
+        coverage_ok, coverage_warnings, coverage_thresholds = self._coverage_gate(
+            coverage_stats,
+            market=market or self.market_for_snapshot_key(snapshot_key),
+        )
 
         rows = [
             ProviderSnapshotRow(
@@ -653,6 +687,7 @@ class ProviderSnapshotService:
             "parity": parity_stats,
             "published": published,
             "warnings": coverage_warnings,
+            "coverage_thresholds": coverage_thresholds,
         }
 
     def get_published_run(self, db: Session, snapshot_key: str = SNAPSHOT_KEY_FUNDAMENTALS) -> Optional[ProviderSnapshotRun]:

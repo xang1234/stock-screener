@@ -481,28 +481,55 @@ class HybridFundamentalsService:
             'fundamentals_stored': 0,
             'quarterly_stored': 0,
             'ownership_updated': 0,
-            'failed': 0
+            'failed': 0,
+            'persisted_symbols': 0,
+            'failed_persistence_symbols': 0,
+            'provider_error_counts': {},
         }
         markets = market_by_symbol or {}
+
+        provider_error_counts: dict[str, int] = {}
+
+        def _record_provider_error(data: Dict | None) -> None:
+            if not data:
+                provider_error_counts["empty_payload"] = provider_error_counts.get("empty_payload", 0) + 1
+                return
+            error = str(data.get("error") or "").lower()
+            if "404" in error or "quote not found" in error:
+                key = "yahoo_quote_not_found"
+            elif "no price data found" in error or "no data found" in error:
+                key = "yahoo_price_missing"
+            elif error:
+                key = "provider_fetch_error"
+            else:
+                key = "provider_fetch_error"
+            provider_error_counts[key] = provider_error_counts.get(key, 0) + 1
 
         for symbol, data in results.items():
             if not data or data.get('has_error'):
                 stats['failed'] += 1
+                _record_provider_error(data)
                 continue
 
             try:
                 # Store in fundamentals cache (includes quarterly growth fields)
-                fundamentals_cache.store(
+                persisted = fundamentals_cache.store(
                     symbol, data, data_source='hybrid',
                     market=markets.get(symbol),
                 )
-                stats['fundamentals_stored'] += 1
-                if include_quarterly:
-                    stats['quarterly_stored'] += 1
+                if persisted:
+                    stats['fundamentals_stored'] += 1
+                    stats['persisted_symbols'] += 1
+                    if include_quarterly:
+                        stats['quarterly_stored'] += 1
+                else:
+                    stats['failed'] += 1
+                    stats['failed_persistence_symbols'] += 1
 
             except Exception as e:
                 logger.warning(f"Error storing {symbol}: {e}")
                 stats['failed'] += 1
+                stats['failed_persistence_symbols'] += 1
 
         # Bulk update institutional ownership history (SCD2)
         db = None
@@ -530,4 +557,5 @@ class HybridFundamentalsService:
             if db is not None:
                 db.close()
 
+        stats['provider_error_counts'] = provider_error_counts
         return stats
