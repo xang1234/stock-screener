@@ -6,13 +6,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, timedelta
+import logging
+from typing import List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+import pandas as pd
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from typing import List, Dict
-import logging
 
 from ...database import get_db
 from ...models.user_watchlist import UserWatchlist, WatchlistItem
@@ -235,8 +236,6 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     if not symbols:
         return {}
 
-    import pandas as pd
-
     from ...scanners.criteria.price_sparkline import PriceSparklineCalculator
     from ...scanners.criteria.rs_sparkline import RSSparklineCalculator
 
@@ -315,12 +314,10 @@ def _fetch_stock_market_data(symbols: List[str], db: Session) -> Dict:
     return result
 
 
-def _load_price_frames_from_db(symbols: List[str], db: Session) -> Dict[str, "pd.DataFrame"]:
+def _load_price_frames_from_db(symbols: List[str], db: Session) -> Dict[str, pd.DataFrame]:
     """Bulk load recent price history for watchlist rendering from the local DB."""
     if not symbols:
         return {}
-
-    import pandas as pd
 
     unique_symbols = list(dict.fromkeys(symbols))
     start_date = date.today() - timedelta(days=WATCHLIST_HISTORY_LOOKBACK_DAYS)

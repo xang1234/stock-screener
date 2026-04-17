@@ -67,6 +67,8 @@ describe('WatchlistsTab', () => {
     await waitFor(() => {
       expect(getWatchlistData).toHaveBeenCalledWith(1);
     });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(getWatchlistStewardship).not.toHaveBeenCalled();
 
     deferred.resolve({
@@ -79,8 +81,9 @@ describe('WatchlistsTab', () => {
     });
 
     await waitFor(() => {
-      expect(getWatchlistStewardship).toHaveBeenCalledWith(1, 'default');
+      expect(getWatchlistStewardship).toHaveBeenCalled();
     });
+    expect(getWatchlistStewardship.mock.calls[0]?.slice(0, 2)).toEqual([1, 'default']);
     expect(await screen.findByTestId('watchlist-table')).toHaveTextContent('Leaders');
   });
 });

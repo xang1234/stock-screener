@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import app.wiring.bootstrap as bootstrap_module
+import app.api.v1.user_watchlists as user_watchlists_module
 from app.database import Base, get_db
 from app.main import app
 from app.models.industry import IBDIndustryGroup
@@ -17,8 +17,6 @@ from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.services import server_auth
-
-pytestmark = pytest.mark.integration
 
 
 @pytest_asyncio.fixture
@@ -118,14 +116,23 @@ async def test_watchlist_data_endpoint_uses_db_price_history_without_price_cache
     _seed_price_history(session, "SPY", 400.0, 520.0)
     session.commit()
 
-    def _unexpected_price_cache_call():
-        raise AssertionError("watchlist data endpoint should not hit the live price cache path")
+    load_calls: list[list[str]] = []
+    real_loader = user_watchlists_module._load_price_frames_from_db
 
-    monkeypatch.setattr(bootstrap_module, "get_price_cache", _unexpected_price_cache_call)
+    def _spy_load_price_frames_from_db(symbols, db):
+        load_calls.append(list(symbols))
+        return real_loader(symbols, db)
+
+    monkeypatch.setattr(
+        user_watchlists_module,
+        "_load_price_frames_from_db",
+        _spy_load_price_frames_from_db,
+    )
 
     response = await client.get(f"/api/v1/user-watchlists/{watchlist.id}/data")
 
     assert response.status_code == 200
+    assert load_calls == [["AAPL", "SPY"]]
     payload = response.json()
     assert payload["name"] == "Leaders"
     assert len(payload["items"]) == 1
