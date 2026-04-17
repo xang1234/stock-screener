@@ -132,6 +132,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         Dict with refresh statistics
     """
     from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
     _market = normalize_market(market) if market is not None else None
     logger.info("=" * 60)
@@ -140,6 +141,15 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
     if exchange_filter:
         logger.info("Exchange filter: %s", exchange_filter, extra=_log_extra)
     logger.info("=" * 60)
+
+    if _market is not None and not is_market_enabled_now(_market):
+        logger.info("Skipping universe refresh for disabled market %s", _market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {_market} is disabled in local runtime preferences',
+            'market': _market,
+            'timestamp': datetime.now().isoformat(),
+        }
 
     # Non-US universe refreshes use dedicated CSV/provider-specific ingestion
     # tasks (see ingest_hk_universe_csv). Skip the finviz path for non-US
@@ -197,10 +207,19 @@ def refresh_official_market_universe(self, market: str):
     from ..services.official_market_universe_source_service import (
         OfficialMarketUniverseSourceService,
     )
+    from ..services.runtime_preferences_service import is_market_enabled_now
     from ..wiring.bootstrap import get_data_fetch_lock
     from .market_queues import log_extra, market_tag, normalize_market
 
     _market = normalize_market(market)
+    if not is_market_enabled_now(_market):
+        logger.info("Skipping official universe refresh for disabled market %s", _market)
+        return {
+            "status": "skipped",
+            "reason": f"market {_market} is disabled in local runtime preferences",
+            "market": _market,
+            "timestamp": datetime.now().isoformat(),
+        }
     if _market not in _OFFICIAL_SOURCE_MARKETS:
         raise ValueError(
             f"refresh_official_market_universe only supports {sorted(_OFFICIAL_SOURCE_MARKETS)}, "

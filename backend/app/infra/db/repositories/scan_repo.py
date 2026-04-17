@@ -36,6 +36,14 @@ class SqlScanRepository(ScanRepository):
             .first()
         )
 
+    def get_active_scan(self) -> Scan | None:
+        return (
+            self._session.query(Scan)
+            .filter(Scan.status.in_(("queued", "running")))
+            .order_by(Scan.started_at.desc())
+            .first()
+        )
+
     def update_status(self, scan_id: str, status: str, **fields) -> None:
         scan = self.get_by_scan_id(scan_id)
         if scan is None:

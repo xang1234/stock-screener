@@ -39,6 +39,11 @@ class ScanRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def get_active_scan(self) -> object | None:
+        """Return the most recent queued/running scan, or None when idle."""
+        ...
+
+    @abc.abstractmethod
     def update_status(self, scan_id: str, status: str, **fields) -> None:
         """Update scan status and optional fields (total_stocks, passed_stocks, etc.)."""
         ...

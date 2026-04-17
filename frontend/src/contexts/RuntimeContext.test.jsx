@@ -8,12 +8,16 @@ const {
   getAppCapabilities,
   loginServer,
   logoutServer,
+  startRuntimeBootstrap,
   setUnauthorizedResponseHandler,
+  updateRuntimeMarkets,
 } = vi.hoisted(() => ({
   getAppCapabilities: vi.fn(),
   loginServer: vi.fn(),
   logoutServer: vi.fn(),
+  startRuntimeBootstrap: vi.fn(),
   setUnauthorizedResponseHandler: vi.fn(),
+  updateRuntimeMarkets: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
@@ -22,6 +26,8 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../api/appRuntime', () => ({
   getAppCapabilities: (...args) => getAppCapabilities(...args),
+  startRuntimeBootstrap: (...args) => startRuntimeBootstrap(...args),
+  updateRuntimeMarkets: (...args) => updateRuntimeMarkets(...args),
 }));
 
 vi.mock('../api/auth', () => ({
@@ -30,12 +36,15 @@ vi.mock('../api/auth', () => ({
 }));
 
 function RuntimeProbe() {
-  const { auth, runtimeReady } = useRuntime();
+  const { auth, runtimeReady, bootstrapRequired, primaryMarket, enabledMarkets } = useRuntime();
 
   return (
     <>
       <div data-testid="runtime-ready">{String(runtimeReady)}</div>
       <div data-testid="auth-required">{String(auth.required)}</div>
+      <div data-testid="bootstrap-required">{String(bootstrapRequired)}</div>
+      <div data-testid="primary-market">{primaryMarket}</div>
+      <div data-testid="enabled-markets">{enabledMarkets.join(',')}</div>
     </>
   );
 }
@@ -65,7 +74,9 @@ describe('RuntimeProvider', () => {
     getAppCapabilities.mockReset();
     loginServer.mockReset();
     logoutServer.mockReset();
+    startRuntimeBootstrap.mockReset();
     setUnauthorizedResponseHandler.mockReset();
+    updateRuntimeMarkets.mockReset();
   });
 
   it('marks runtime ready after app capabilities errors out', async () => {
@@ -81,5 +92,30 @@ describe('RuntimeProvider', () => {
 
     expect(screen.getByTestId('auth-required')).toHaveTextContent('false');
     expect(getAppCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  it('exposes bootstrap metadata from app capabilities', async () => {
+    getAppCapabilities.mockResolvedValue({
+      features: { themes: true, chatbot: true, tasks: true },
+      auth: { required: false, configured: true, authenticated: true, mode: 'session_cookie', message: null },
+      ui_snapshots: { enabled: false, scan: false, breadth: false, groups: false, themes: false },
+      scan_defaults: { universe: 'all', screeners: ['minervini'], composite_method: 'weighted_average', criteria: {} },
+      bootstrap_required: true,
+      primary_market: 'HK',
+      enabled_markets: ['HK', 'US'],
+      bootstrap_state: 'running',
+      supported_markets: ['US', 'HK', 'JP', 'TW'],
+      api_base_path: '/api',
+    });
+
+    renderRuntime();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
+    });
+
+    expect(screen.getByTestId('bootstrap-required')).toHaveTextContent('true');
+    expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
+    expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
   });
 });

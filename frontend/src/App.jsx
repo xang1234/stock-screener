@@ -11,6 +11,7 @@ import ScanPage from './pages/ScanPage';
 import MarketScanPage from './pages/MarketScanPage';
 import StockDetails from './components/Stock/StockDetails';
 import Layout from './components/Layout/Layout';
+import BootstrapSetupScreen from './components/App/BootstrapSetupScreen';
 import ServerLoginScreen from './components/App/ServerLoginScreen';
 import { AssistantChatProvider } from './contexts/AssistantChatContext';
 import { PipelineProvider } from './contexts/PipelineContext';
@@ -243,11 +244,19 @@ function App() {
 function AppShell() {
   const {
     auth,
+    bootstrapRequired,
+    bootstrapState,
+    enabledMarkets,
     features,
     isLoggingIn,
+    isStartingBootstrap,
     login,
+    primaryMarket,
     loginError,
     runtimeReady,
+    startBootstrap,
+    supportedMarkets,
+    bootstrapError,
   } = useRuntime();
 
   if (!runtimeReady) {
@@ -265,6 +274,26 @@ function AppShell() {
     );
   }
 
+  if (bootstrapRequired) {
+    return (
+      <BootstrapSetupScreen
+        primaryMarket={primaryMarket}
+        enabledMarkets={enabledMarkets}
+        supportedMarkets={supportedMarkets}
+        bootstrapState={bootstrapState}
+        isStartingBootstrap={isStartingBootstrap}
+        bootstrapError={bootstrapError}
+        onStartBootstrap={startBootstrap}
+      />
+    );
+  }
+
+  const assistantChatbotRoute = (
+    <AssistantChatProvider>
+      <ChatbotPage />
+    </AssistantChatProvider>
+  );
+
   const appRoutes = (
     <Router>
       <Layout>
@@ -277,7 +306,7 @@ function AppShell() {
             <Route path="/digest" element={<DigestPage />} />
             <Route path="/validation" element={<ValidationPage />} />
             {features.themes && <Route path="/themes" element={<ThemesPage />} />}
-            {features.chatbot && <Route path="/chatbot" element={<ChatbotPage />} />}
+            {features.chatbot && <Route path="/chatbot" element={assistantChatbotRoute} />}
             <Route path="/stocks/:ticker" element={<StockDetails />} />
             <Route path="/operations" element={<OperationsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -289,9 +318,7 @@ function AppShell() {
 
   const routedApp = (
     <StrategyProfileProvider>
-      <AssistantChatProvider>
-        {appRoutes}
-      </AssistantChatProvider>
+      {appRoutes}
     </StrategyProfileProvider>
   );
 

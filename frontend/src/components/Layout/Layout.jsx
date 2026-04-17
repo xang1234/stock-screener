@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import {
   AppBar,
   Box,
@@ -28,7 +28,7 @@ import { AssistantChat } from '../AssistantChat';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
 import CacheStatus from '../Scan/CacheStatus';
-import { useAssistantChat } from '../../contexts/AssistantChatContext';
+import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
@@ -78,15 +78,19 @@ function Layout({ children }) {
   const colorMode = useContext(ColorModeContext);
   const { auth, features, isLoggingOut, logout } = useRuntime();
   const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
-  const { assistantHealth } = useAssistantChat();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [cacheStatusEnabled, setCacheStatusEnabled] = useState(false);
 
-  const assistantAvailable = (
-    features.chatbot
-    && assistantHealth.available
-    && (!auth?.required || auth?.authenticated)
-  );
+  useEffect(() => {
+    setCacheStatusEnabled(false);
+    const timer = window.setTimeout(() => {
+      setCacheStatusEnabled(true);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [location.pathname]);
+
+  const assistantAvailable = features.chatbot && (!auth?.required || auth?.authenticated);
 
   const navItems = [
     { path: '/', label: 'Routine' },
@@ -108,7 +112,7 @@ function Layout({ children }) {
             STOCK SCANNER
           </Typography>
           <Box sx={{ ml: 2 }}>
-            <CacheStatus />
+            <CacheStatus enabled={cacheStatusEnabled} />
           </Box>
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
@@ -247,7 +251,11 @@ function Layout({ children }) {
               },
             }}
           >
-            <AssistantChat mode="drawer" onClose={() => setAssistantOpen(false)} />
+            {assistantOpen && (
+              <AssistantChatProvider>
+                <AssistantChat mode="drawer" onClose={() => setAssistantOpen(false)} />
+              </AssistantChatProvider>
+            )}
           </Drawer>
         </>
       )}

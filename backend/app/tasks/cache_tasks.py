@@ -453,6 +453,7 @@ def weekly_full_refresh(self, market: str | None = None):
     from ..wiring.bootstrap import get_price_cache
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
 
     _log_extra = log_extra(market)
     price_cache = get_price_cache()
@@ -460,6 +461,15 @@ def weekly_full_refresh(self, market: str | None = None):
     logger.info("TASK: Weekly Full Cache Refresh %s", market_tag(market), extra=_log_extra)
     logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 80)
+
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping weekly full refresh for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
+            'market': normalize_market(market),
+            'timestamp': datetime.now().isoformat(),
+        }
 
     db = SessionLocal()
     refreshed = 0
@@ -1425,6 +1435,7 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..models.stock_universe import StockUniverse
     from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
 
     _market_label = normalize_market(market).lower()
     _log_extra = log_extra(market)
@@ -1436,6 +1447,16 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     logger.info("Market status: %s", format_market_status(), extra=_log_extra)
     logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 80)
+
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping smart refresh for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
+            'market': normalize_market(market),
+            'mode': mode,
+            'timestamp': datetime.now().isoformat(),
+        }
 
     # Time-window guard: reject Beat-scheduled full mode outside expected windows.
     # This prevents catchup storms (Beat replaying missed schedules on restart).

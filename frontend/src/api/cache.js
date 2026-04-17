@@ -164,8 +164,8 @@ export const getCacheHealth = async () => {
  *   - task_id: Celery task ID for tracking
  *   - message: Human-readable status
  */
-export const refreshCache = async (mode = 'auto') => {
-  const response = await apiClient.post('/v1/cache/refresh', { mode });
+export const refreshCache = async (mode = 'auto', market = null) => {
+  const response = await apiClient.post('/v1/cache/refresh', { mode, market });
   return response.data;
 };
 

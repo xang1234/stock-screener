@@ -59,6 +59,7 @@ class SmartRefreshRequest(BaseModel):
     """Request model for smart refresh."""
 
     mode: Literal["auto", "full"] = "auto"
+    market: Optional[str] = None
 
 
 class CacheHealthResponse(BaseModel):

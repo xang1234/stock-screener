@@ -3,7 +3,11 @@
 import { createContext, useContext, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { setUnauthorizedResponseHandler } from '../api/client';
-import { getAppCapabilities } from '../api/appRuntime';
+import {
+  getAppCapabilities,
+  startRuntimeBootstrap,
+  updateRuntimeMarkets,
+} from '../api/appRuntime';
 import { loginServer, logoutServer } from '../api/auth';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
 
@@ -28,6 +32,11 @@ export const DEFAULT_CAPABILITIES = {
     themes: false,
   },
   scan_defaults: DEFAULT_SCAN_DEFAULTS,
+  bootstrap_required: false,
+  primary_market: 'US',
+  enabled_markets: ['US'],
+  bootstrap_state: 'not_started',
+  supported_markets: ['US', 'HK', 'JP', 'TW'],
   api_base_path: '/api',
 };
 
@@ -51,6 +60,14 @@ export function RuntimeProvider({ children }) {
     placeholderData: DEFAULT_CAPABILITIES,
     retry: 1,
     staleTime: 60_000,
+    refetchInterval: (query) => {
+      const bootstrapRequired = Boolean(query.state.data?.bootstrap_required);
+      const bootstrapState = query.state.data?.bootstrap_state;
+      if (bootstrapRequired || bootstrapState === 'running') {
+        return 15_000;
+      }
+      return false;
+    },
   });
 
   const loginMutation = useMutation({
@@ -62,6 +79,24 @@ export function RuntimeProvider({ children }) {
 
   const logoutMutation = useMutation({
     mutationFn: logoutServer,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    },
+  });
+
+  const bootstrapMutation = useMutation({
+    mutationFn: ({ primaryMarket, enabledMarkets }) => (
+      startRuntimeBootstrap({ primaryMarket, enabledMarkets })
+    ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+    },
+  });
+
+  const updateMarketsMutation = useMutation({
+    mutationFn: ({ primaryMarket, enabledMarkets }) => (
+      updateRuntimeMarkets({ primaryMarket, enabledMarkets })
+    ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
     },
@@ -85,17 +120,33 @@ export function RuntimeProvider({ children }) {
       runtimeReady,
       uiSnapshots: capabilities.ui_snapshots ?? DEFAULT_CAPABILITIES.ui_snapshots,
       scanDefaults: capabilities.scan_defaults ?? DEFAULT_SCAN_DEFAULTS,
+      bootstrapRequired: Boolean(capabilities.bootstrap_required),
+      primaryMarket: capabilities.primary_market ?? 'US',
+      enabledMarkets: capabilities.enabled_markets ?? ['US'],
+      bootstrapState: capabilities.bootstrap_state ?? 'not_started',
+      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'JP', 'TW'],
       login: (password) => loginMutation.mutateAsync({ password }),
       logout: () => logoutMutation.mutateAsync(),
+      startBootstrap: ({ primaryMarket, enabledMarkets }) => (
+        bootstrapMutation.mutateAsync({ primaryMarket, enabledMarkets })
+      ),
+      updateMarkets: ({ primaryMarket, enabledMarkets }) => (
+        updateMarketsMutation.mutateAsync({ primaryMarket, enabledMarkets })
+      ),
       isLoggingIn: loginMutation.isPending,
       loginError: loginMutation.error?.response?.data?.detail || loginMutation.error?.message || null,
       isLoggingOut: logoutMutation.isPending,
+      isStartingBootstrap: bootstrapMutation.isPending,
+      bootstrapError: bootstrapMutation.error?.response?.data?.detail || bootstrapMutation.error?.message || null,
+      isUpdatingMarkets: updateMarketsMutation.isPending,
     };
   }, [
+    bootstrapMutation,
     capabilities,
     loginMutation,
     logoutMutation,
     runtimeReady,
+    updateMarketsMutation,
   ]);
 
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;

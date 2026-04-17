@@ -1,6 +1,10 @@
 x-backend-build: &backend-build
   context: .
   dockerfile: backend/Dockerfile
+  args:
+    INSTALL_THEME_ML: ${INSTALL_THEME_ML:-false}
+    INSTALL_XUI: ${INSTALL_XUI:-false}
+    INSTALL_PLAYWRIGHT: ${INSTALL_PLAYWRIGHT:-false}
 
 x-app-env: &app-env
   DATABASE_URL: postgresql://${POSTGRES_USER:-stockscanner}:${POSTGRES_PASSWORD:-stockscanner}@postgres:5432/${POSTGRES_DB:-stockscanner}
@@ -68,6 +72,8 @@ x-worker-common: &worker-common
     redis:
       condition: service_healthy
   stop_grace_period: 30s
+  healthcheck:
+    disable: true
   restart: unless-stopped
 
 services:
@@ -151,53 +157,17 @@ services:
     stop_grace_period: 30s
     restart: unless-stopped
 
-  celery-worker:
+  celery-general:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q celery -n general@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 --without-mingle --without-gossip -Q celery -n general@%h
 
-  # Shared data-fetch worker: market-agnostic tasks + safety-net route.
-  celery-datafetch-shared:
+  celery-datafetch:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_shared -n datafetch-shared@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared -n datafetch-shared@%h
 
-  # Per-market data-fetch workers (bead StockScreenClaude-asia.9.1).
-  # One worker per market, concurrency=1, each holding its own Redis lock key.
-  celery-datafetch-us:
+  celery-userscans:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_us -n datafetch-us@%h
-
-  celery-datafetch-hk:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_hk -n datafetch-hk@%h
-
-  celery-datafetch-jp:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_jp -n datafetch-jp@%h
-
-  celery-datafetch-tw:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 -Q data_fetch_tw -n datafetch-tw@%h
-
-  # User scans — shared safety-net + per-market isolation.
-  celery-userscans-shared:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_shared -n userscans-shared@%h
-
-  celery-userscans-us:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_us -n userscans-us@%h
-
-  celery-userscans-hk:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_hk -n userscans-hk@%h
-
-  celery-userscans-jp:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_jp -n userscans-jp@%h
-
-  celery-userscans-tw:
-    <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=2 -Q user_scans_tw -n userscans-tw@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_shared -n userscans-shared@%h
 
   celery-beat:
     build: *backend-build
@@ -214,10 +184,13 @@ services:
       redis:
         condition: service_healthy
     stop_grace_period: 15s
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   db-backup:
     image: postgres:16-alpine
+    profiles: ["backup"]
     entrypoint: /bin/sh
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-stockscanner}

@@ -137,6 +137,15 @@ class FakeScanRepository(ScanRepository):
                 return s
         return None
 
+    def get_active_scan(self) -> FakeScan | None:
+        active = [
+            scan for scan in self.rows
+            if getattr(scan, "status", None) in {"queued", "running"}
+        ]
+        if not active:
+            return None
+        return sorted(active, key=lambda scan: scan.started_at or datetime.min, reverse=True)[0]
+
     def update_status(self, scan_id: str, status: str, **fields) -> None:
         scan = self.scans.get(scan_id)
         if scan is None:

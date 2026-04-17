@@ -109,12 +109,21 @@ def calculate_daily_group_rankings(
     Returns:
         Dict with calculation results
     """
-    from .market_queues import market_tag, log_extra
+    from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
     logger.info("=" * 60)
     logger.info(
         "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
     )
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping group rankings for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
+            'market': normalize_market(market),
+            'timestamp': datetime.now().isoformat(),
+        }
     # Group-rank computation aggregates across markets; however, same-day
     # warmup completeness validation is market-scoped via warmup metadata.
     if market is not None:

@@ -8,8 +8,13 @@ import pytest_asyncio
 from unittest.mock import patch
 
 from app.main import app
+from app.services import server_auth
 from app.wiring.bootstrap import get_create_scan_use_case, get_uow
-from app.use_cases.scanning.create_scan import CreateScanResult
+from app.use_cases.scanning.create_scan import (
+    ActiveScanConflict,
+    ActiveScanConflictError,
+    CreateScanResult,
+)
 
 
 class _FakeUoW:
@@ -38,8 +43,24 @@ class _FakeCreateScanUseCase:
         return self.result
 
 
+class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
+    def execute(self, uow, cmd):
+        self.received_uow = uow
+        self.received_cmd = cmd
+        raise ActiveScanConflictError(
+            ActiveScanConflict(
+                scan_id="scan-active",
+                status="running",
+                trigger_source="manual",
+                total_stocks=42,
+                started_at=None,
+            )
+        )
+
+
 @pytest_asyncio.fixture
-async def client():
+async def client(monkeypatch):
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -234,3 +255,33 @@ async def test_create_scan_does_not_record_counter_for_typed_requests(client):
 
     assert response.status_code == 200
     mock_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_when_another_scan_is_active(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _ConflictCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-conflict",
+            status="queued",
+            total_stocks=0,
+            is_duplicate=False,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe": "all"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "scan_already_active"
+    assert payload["detail"]["active_scan"]["scan_id"] == "scan-active"
+    assert payload["detail"]["active_scan"]["status"] == "running"

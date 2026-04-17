@@ -239,8 +239,8 @@ def _log_setup_engine_distribution(db: Session, scan_id: str) -> None:
         logger.debug("SE distribution telemetry skipped: %s", e)
 
 
-def _run_post_scan_pipeline(scan_id: str) -> None:
-    """Post-scan: peer metrics, retention cleanup, chart cache warming, SE telemetry."""
+def _run_post_scan_pipeline(scan_id: str, *, warm_chart_cache: bool = True) -> None:
+    """Post-scan: peer metrics, retention cleanup, snapshot publish, optional chart warmup."""
     db = SessionLocal()
     try:
         compute_industry_peer_metrics(db, scan_id)
@@ -249,17 +249,19 @@ def _run_post_scan_pipeline(scan_id: str) -> None:
         if scan and scan.universe_key:
             cleanup_old_scans(db, scan.universe_key)
         try:
-            from .cache_tasks import prewarm_chart_cache_for_scan
-            prewarm_chart_cache_for_scan.delay(scan_id, top_n=50)
-        except Exception as e:
-            logger.warning("Chart cache warming failed: %s", e)
-        try:
             from ..services.ui_snapshot_service import safe_publish_scan_bootstrap
 
             safe_publish_scan_bootstrap(scan_id)
             safe_publish_scan_bootstrap()
         except Exception as e:
             logger.warning("Scan snapshot publish failed: %s", e)
+        if warm_chart_cache:
+            try:
+                from .cache_tasks import prewarm_chart_cache_for_scan
+
+                prewarm_chart_cache_for_scan.delay(scan_id, top_n=50)
+            except Exception as e:
+                logger.warning("Chart cache warming failed: %s", e)
     except Exception as e:
         logger.error("Post-scan pipeline error for %s: %s", scan_id, e, exc_info=True)
     finally:
@@ -301,7 +303,11 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
         cancel.close()
 
     if result.status == "completed":
-        _run_post_scan_pipeline(scan_id)
+        try:
+            finalize_scan_artifacts.delay(scan_id)
+        except Exception:
+            logger.warning("Falling back to inline post-scan finalization for %s", scan_id, exc_info=True)
+            _run_post_scan_pipeline(scan_id)
 
     return {
         "scan_id": result.scan_id,
@@ -317,6 +323,13 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
 def run_bulk_scan(self, scan_id: str, symbol_list: List[str], criteria: dict = None):
     """Scan multiple stocks in background via RunBulkScanUseCase."""
     return _run_bulk_scan_via_use_case(self, scan_id, symbol_list, criteria)
+
+
+@celery_app.task(name='app.tasks.scan_tasks.finalize_scan_artifacts')
+def finalize_scan_artifacts(scan_id: str):
+    """Finalize scan artifacts on the general queue after the scan worker exits."""
+    _run_post_scan_pipeline(scan_id, warm_chart_cache=True)
+    return {"scan_id": scan_id, "status": "queued_post_scan_finalization"}
 
 
 @celery_app.task(name='app.tasks.scan_tasks.test_celery')

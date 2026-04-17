@@ -105,11 +105,21 @@ def refresh_all_fundamentals(self, market: str | None = None):
         }
     """
     from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
     logger.info("=" * 60)
     logger.info("TASK: Weekly Fundamental Data Refresh %s", market_tag(market), extra=_log_extra)
     logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 60)
+
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping fundamentals refresh for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
+            'market': normalize_market(market),
+            'timestamp': datetime.now().isoformat(),
+        }
 
     db = SessionLocal()
     start_time = time.time()

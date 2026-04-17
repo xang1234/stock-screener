@@ -1,7 +1,6 @@
 """Main FastAPI application entry point."""
 
 import asyncio
-import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -26,7 +25,6 @@ from .wiring.bootstrap import (
 )
 
 logger = logging.getLogger(__name__)
-_startup_background_tasks: list[asyncio.Task[Any]] = []
 
 
 def _log_critical_error(
@@ -58,109 +56,6 @@ def _log_critical_error(
 
 
 from .utils.db_url import redacted_database_url as _redacted_database_url  # noqa: E402
-
-
-async def trigger_gapfill_on_startup():
-    """
-    Trigger gap-fill as a background Celery task.
-
-    This is non-blocking - the server starts immediately while
-    the gap-fill runs in the background via Celery.
-
-    Uses a small delay to let any scheduled tasks get priority,
-    and explicitly routes to the data_fetch queue for serialization.
-    """
-    import asyncio
-
-    try:
-        from .tasks.group_rank_tasks import gapfill_group_rankings
-
-        max_days = getattr(settings, 'group_rank_gapfill_max_days', 365)
-        startup_delay = getattr(settings, 'data_fetch_startup_delay', 5)
-
-        # Small delay to let scheduled tasks get priority
-        await asyncio.sleep(startup_delay)
-
-        # Dispatch to data_fetch queue (serialized with other data-fetching tasks)
-        task = gapfill_group_rankings.apply_async(
-            kwargs={'max_days': max_days},
-            queue='data_fetch'
-        )
-        logger.info(
-            "IBD Group Rankings gap-fill task dispatched",
-            extra={"task_id": task.id, "max_days": max_days, "queue": "data_fetch"},
-        )
-
-    except (ImportError, AttributeError, RuntimeError, OSError) as exc:
-        # Don't block startup if gap-fill dispatch fails
-        _log_critical_error(
-            message="Failed to dispatch IBD group rankings gap-fill task during startup",
-            exc=exc,
-            event="startup_gapfill_dispatch_failed",
-            path="main.trigger_gapfill_on_startup",
-            error_code="gapfill_dispatch_failed",
-            level=logging.WARNING,
-        )
-    except Exception as exc:
-        # Keep startup resilient even when Celery broker/client raises unexpected errors.
-        _log_critical_error(
-            message="Unexpected error dispatching IBD group rankings gap-fill task during startup",
-            exc=exc,
-            event="startup_gapfill_dispatch_failed",
-            path="main.trigger_gapfill_on_startup",
-            error_code="gapfill_dispatch_unexpected",
-            level=logging.WARNING,
-        )
-
-
-async def trigger_ui_snapshot_rebuild_on_startup():
-    """Publish default UI bootstrap snapshots in the background on startup."""
-    try:
-        from .services.ui_snapshot_service import safe_publish_all_bootstraps
-
-        await asyncio.sleep(0)
-        await asyncio.to_thread(safe_publish_all_bootstraps)
-        logger.info("UI snapshot bootstrap rebuild dispatched")
-    except (ImportError, RuntimeError, OSError) as exc:
-        _log_critical_error(
-            message="Failed to rebuild UI snapshots during startup",
-            exc=exc,
-            event="startup_ui_snapshot_rebuild_failed",
-            path="main.trigger_ui_snapshot_rebuild_on_startup",
-            error_code="ui_snapshot_rebuild_failed",
-            level=logging.WARNING,
-        )
-    except Exception as exc:
-        _log_critical_error(
-            message="Unexpected error rebuilding UI snapshots during startup",
-            exc=exc,
-            event="startup_ui_snapshot_rebuild_failed",
-            path="main.trigger_ui_snapshot_rebuild_on_startup",
-            error_code="ui_snapshot_rebuild_unexpected",
-            level=logging.WARNING,
-        )
-
-
-def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
-    if task.cancelled():
-        return
-    try:
-        exc = task.exception()
-    except Exception:
-        logger.exception("Background startup task failed while retrieving exception")
-        return
-    if exc is not None:
-        logger.error("Background startup task failed", exc_info=exc)
-
-
-async def _drain_startup_background_tasks() -> None:
-    """Cancel/await startup background tasks before tearing down process resources."""
-    pending_tasks = [task for task in _startup_background_tasks if not task.done()]
-    for task in pending_tasks:
-        task.cancel()
-    if pending_tasks:
-        await asyncio.gather(*pending_tasks, return_exceptions=True)
-    _startup_background_tasks.clear()
 
 
 def _bind_runtime_to_response_background(
@@ -209,19 +104,11 @@ async def lifespan(app: FastAPI):
 
         app.state.mcp_server = create_mcp_http_server(session_factory=SessionLocal)
 
-    # Trigger non-blocking gap-fill for IBD group rankings
-    if getattr(settings, 'group_rank_gapfill_enabled', True):
-        await trigger_gapfill_on_startup()
-    snapshot_task = asyncio.create_task(trigger_ui_snapshot_rebuild_on_startup())
-    snapshot_task.add_done_callback(_log_background_task_exception)
-    _startup_background_tasks.append(snapshot_task)
-
     try:
         yield
     finally:
         # Shutdown
         logger.info("Shutting down Stock Scanner API")
-        await _drain_startup_background_tasks()
         clear_runtime_services()
         if hasattr(app.state, "runtime_services"):
             delattr(app.state, "runtime_services")

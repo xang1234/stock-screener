@@ -60,7 +60,7 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  celery-worker:
+  celery-general:
     env_file:
       - .env.docker
     deploy:
@@ -71,7 +71,7 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.celery_app", "inspect", "ping", "-d", "celery@general"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d general@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -93,7 +93,29 @@ services:
         reservations:
           memory: 128M
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.celery_app", "inspect", "ping", "-d", "celery@datafetch"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d datafetch-shared@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-userscans:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-shared@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3

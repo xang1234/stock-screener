@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
@@ -71,6 +72,42 @@ class CreateScanResult:
     feature_run_id: int | None = None
 
 
+@dataclass(frozen=True)
+class ActiveScanConflict:
+    """Structured metadata describing the active scan blocking a new request."""
+
+    scan_id: str
+    status: str
+    trigger_source: str
+    total_stocks: int
+    started_at: datetime | None
+
+
+class ActiveScanConflictError(RuntimeError):
+    """Raised when a user tries to queue a second scan while one is active."""
+
+    def __init__(self, active_scan: ActiveScanConflict) -> None:
+        super().__init__(f"Scan {active_scan.scan_id} is already {active_scan.status}")
+        self.active_scan = active_scan
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "code": "scan_already_active",
+            "message": "Another scan is already queued or running.",
+            "active_scan": {
+                "scan_id": self.active_scan.scan_id,
+                "status": self.active_scan.status,
+                "trigger_source": self.active_scan.trigger_source,
+                "total_stocks": self.active_scan.total_stocks,
+                "started_at": (
+                    self.active_scan.started_at.isoformat()
+                    if self.active_scan.started_at is not None
+                    else None
+                ),
+            },
+        }
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
@@ -98,6 +135,18 @@ class CreateScanUseCase:
                         is_duplicate=True,
                         feature_run_id=getattr(existing, "feature_run_id", None),
                     )
+
+            active_scan = uow.scans.get_active_scan()
+            if active_scan is not None:
+                raise ActiveScanConflictError(
+                    ActiveScanConflict(
+                        scan_id=active_scan.scan_id,
+                        status=active_scan.status,
+                        trigger_source=getattr(active_scan, "trigger_source", "manual") or "manual",
+                        total_stocks=active_scan.total_stocks or 0,
+                        started_at=getattr(active_scan, "started_at", None),
+                    )
+                )
 
             # ── Resolve universe symbols ─────────────────────────────
             symbols = uow.universe.resolve_symbols(cmd.universe_def)

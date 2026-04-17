@@ -40,6 +40,7 @@ from ...wiring.bootstrap import (
     get_ui_snapshot_service,
 )
 from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
+from ...use_cases.scanning.create_scan import ActiveScanConflictError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -124,6 +125,8 @@ async def create_scan(
     )
     try:
         result = use_case.execute(uow, cmd)
+    except ActiveScanConflictError as e:
+        raise HTTPException(status_code=409, detail=e.to_dict())
     except DomainValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

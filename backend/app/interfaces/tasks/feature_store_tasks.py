@@ -362,6 +362,7 @@ def build_daily_snapshot(
     from app.domain.scanning.ports import NeverCancelledToken, NullProgressSink
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.progress_sink import CeleryProgressSink
+    from app.services.runtime_preferences_service import is_market_enabled_now
     from app.services.universe_resolver import normalize_universe_definition
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
@@ -389,6 +390,14 @@ def build_daily_snapshot(
     from app.tasks.market_queues import log_extra
     _log_extra = log_extra(market)
     if market is not None:
+        if not is_market_enabled_now(market):
+            logger.info("Skipping feature snapshot for disabled market %s", market, extra=_log_extra)
+            return {
+                "status": "skipped",
+                "reason": f"market {market.upper()} is disabled in local runtime preferences",
+                "market": market.upper(),
+                "timestamp": datetime.now().isoformat(),
+            }
         logger.debug("build_daily_snapshot market label=%s", market, extra=_log_extra)
 
     logger.info(

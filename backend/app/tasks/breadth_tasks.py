@@ -472,7 +472,8 @@ def calculate_daily_breadth_with_gapfill(
             'timestamp': str
         }
     """
-    from .market_queues import market_tag, log_extra
+    from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
     logger.info("=" * 60)
     logger.info(
@@ -480,6 +481,14 @@ def calculate_daily_breadth_with_gapfill(
         extra=_log_extra,
     )
     logger.info("=" * 60)
+    if market is not None and not is_market_enabled_now(normalize_market(market)):
+        logger.info("Skipping breadth calculation for disabled market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
+            'market': normalize_market(market),
+            'timestamp': datetime.now().isoformat(),
+        }
     # Breadth calculator aggregates across markets; the `market` kwarg is a
     # routing/log label here. Deep per-market scoping moves with 9.2.
     if market is not None:
