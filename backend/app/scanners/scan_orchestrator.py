@@ -9,7 +9,14 @@ import logging
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .base_screener import BaseStockScreener, ScreenerResult, StockData, DataRequirements
+from .base_screener import (
+    BaseStockScreener,
+    DataRequirements,
+    PrecomputedScanContext,
+    ScreenerResult,
+    StockData,
+)
+from .criteria.relative_strength import RelativeStrengthCalculator
 from .screener_registry import ScreenerRegistry
 
 from app.config import settings
@@ -22,6 +29,88 @@ from app.domain.scanning.scoring import (
 from app.domain.scanning.ports import StockDataProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _series_last_float(series) -> float | None:
+    if series is None or len(series) == 0:
+        return None
+    value = series.iloc[-1]
+    if value is None:
+        return None
+    try:
+        if value != value:
+            return None
+    except Exception:
+        pass
+    return float(value)
+
+
+def _build_precomputed_scan_context(stock_data: StockData) -> PrecomputedScanContext | None:
+    """Build shared derived scan metrics once per symbol."""
+    price_data = stock_data.price_data
+    if price_data is None or price_data.empty or "Close" not in price_data.columns:
+        return None
+
+    close_chrono = price_data["Close"].reset_index(drop=True)
+    close_rev = close_chrono[::-1].reset_index(drop=True)
+
+    volume_chrono = None
+    volume_rev = None
+    if "Volume" in price_data.columns:
+        volume_chrono = price_data["Volume"].reset_index(drop=True)
+        volume_rev = volume_chrono[::-1].reset_index(drop=True)
+
+    benchmark_close_chrono = None
+    benchmark_close_rev = None
+    if (
+        stock_data.benchmark_data is not None
+        and not stock_data.benchmark_data.empty
+        and "Close" in stock_data.benchmark_data.columns
+    ):
+        benchmark_close_chrono = stock_data.benchmark_data["Close"].reset_index(drop=True)
+        benchmark_close_rev = benchmark_close_chrono[::-1].reset_index(drop=True)
+
+    ma_50_series = close_chrono.rolling(window=50, min_periods=50).mean()
+    ma_150_series = close_chrono.rolling(window=150, min_periods=150).mean()
+    ma_200_series = close_chrono.rolling(window=200, min_periods=200).mean()
+    ema_10_series = close_chrono.ewm(span=10, adjust=False).mean()
+    ema_20_series = close_chrono.ewm(span=20, adjust=False).mean()
+    ema_50_series = close_chrono.ewm(span=50, adjust=False).mean()
+
+    ma_200_month_ago = None
+    if len(ma_200_series) > 220:
+        ma_200_month_ago = _series_last_float(ma_200_series.iloc[:-20])
+    if ma_200_month_ago is None:
+        ma_200_month_ago = _series_last_float(ma_200_series)
+
+    rs_ratings = None
+    if benchmark_close_rev is not None and not benchmark_close_rev.empty:
+        rs_ratings = RelativeStrengthCalculator().calculate_all_rs_ratings(
+            stock_data.symbol,
+            close_rev,
+            benchmark_close_rev,
+            stock_data.rs_universe_performances,
+        )
+
+    return PrecomputedScanContext(
+        close_chrono=close_chrono,
+        close_rev=close_rev,
+        volume_chrono=volume_chrono,
+        volume_rev=volume_rev,
+        benchmark_close_chrono=benchmark_close_chrono,
+        benchmark_close_rev=benchmark_close_rev,
+        current_price=_series_last_float(close_chrono),
+        ma_50=_series_last_float(ma_50_series),
+        ma_150=_series_last_float(ma_150_series),
+        ma_200=_series_last_float(ma_200_series),
+        ma_200_month_ago=ma_200_month_ago,
+        ema_10=_series_last_float(ema_10_series),
+        ema_20=_series_last_float(ema_20_series),
+        ema_50=_series_last_float(ema_50_series),
+        high_52w=float(close_rev.max()) if not close_rev.empty else None,
+        low_52w=float(close_rev.min()) if not close_rev.empty else None,
+        rs_ratings=rs_ratings,
+    )
 
 
 def _to_domain_output(name: str, result: ScreenerResult) -> ScreenerOutputDomain:
@@ -152,6 +241,9 @@ class ScanOrchestrator:
                     symbol,
                     stock_data.get_error_summary() or "Insufficient data"
                 )
+
+            if stock_data.precomputed_scan_context is None:
+                stock_data.precomputed_scan_context = _build_precomputed_scan_context(stock_data)
 
             # 5. Run all screeners in parallel on the same data
             screener_results: Dict[str, ScreenerResult] = {}

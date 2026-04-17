@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 SessionFactory = Callable[[], Session]
 
 
+def _bulk_delete_scans(db: Session, scan_ids: list[str]) -> tuple[int, int]:
+    if not scan_ids:
+        return 0, 0
+    deleted_results = db.query(ScanResult).filter(
+        ScanResult.scan_id.in_(scan_ids)
+    ).delete(synchronize_session=False)
+    deleted_scans = db.query(Scan).filter(
+        Scan.scan_id.in_(scan_ids)
+    ).delete(synchronize_session=False)
+    return deleted_scans, deleted_results
+
+
 def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> None:
     """Delete stale and old scans while keeping recent completed history."""
     from datetime import timedelta
@@ -24,45 +36,43 @@ def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> No
         total_deleted_scans = 0
         total_deleted_results = 0
 
-        cancelled_scans = db.query(Scan).filter(
+        cancelled_scan_ids = [
+            scan.scan_id
+            for scan in db.query(Scan).filter(
             Scan.universe_key == universe_key,
             Scan.status == "cancelled",
-        ).all()
+            ).all()
+        ]
 
-        if cancelled_scans:
+        if cancelled_scan_ids:
             logger.info(
                 "Cleaning up %d cancelled scans for universe_key '%s'",
-                len(cancelled_scans),
+                len(cancelled_scan_ids),
                 universe_key,
             )
-            for scan in cancelled_scans:
-                deleted_results = db.query(ScanResult).filter(
-                    ScanResult.scan_id == scan.scan_id
-                ).delete()
-                db.delete(scan)
-                total_deleted_results += deleted_results
-                total_deleted_scans += 1
+            deleted_scans, deleted_results = _bulk_delete_scans(db, cancelled_scan_ids)
+            total_deleted_results += deleted_results
+            total_deleted_scans += deleted_scans
 
         stale_cutoff = datetime.utcnow() - timedelta(hours=1)
-        stale_scans = db.query(Scan).filter(
+        stale_scan_ids = [
+            scan.scan_id
+            for scan in db.query(Scan).filter(
             Scan.universe_key == universe_key,
             Scan.status.in_(["running", "queued"]),
             Scan.started_at < stale_cutoff,
-        ).all()
+            ).all()
+        ]
 
-        if stale_scans:
+        if stale_scan_ids:
             logger.info(
                 "Cleaning up %d stale running/queued scans for universe_key '%s'",
-                len(stale_scans),
+                len(stale_scan_ids),
                 universe_key,
             )
-            for scan in stale_scans:
-                deleted_results = db.query(ScanResult).filter(
-                    ScanResult.scan_id == scan.scan_id
-                ).delete()
-                db.delete(scan)
-                total_deleted_results += deleted_results
-                total_deleted_scans += 1
+            deleted_scans, deleted_results = _bulk_delete_scans(db, stale_scan_ids)
+            total_deleted_results += deleted_results
+            total_deleted_scans += deleted_scans
 
         completed_scans = db.query(Scan).filter(
             Scan.universe_key == universe_key,
@@ -76,13 +86,12 @@ def cleanup_old_scans(db: Session, universe_key: str, keep_count: int = 3) -> No
                 len(scans_to_delete),
                 universe_key,
             )
-            for scan in scans_to_delete:
-                deleted_results = db.query(ScanResult).filter(
-                    ScanResult.scan_id == scan.scan_id
-                ).delete()
-                db.delete(scan)
-                total_deleted_results += deleted_results
-                total_deleted_scans += 1
+            deleted_scans, deleted_results = _bulk_delete_scans(
+                db,
+                [scan.scan_id for scan in scans_to_delete],
+            )
+            total_deleted_results += deleted_results
+            total_deleted_scans += deleted_scans
 
         if total_deleted_scans > 0:
             db.commit()

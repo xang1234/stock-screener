@@ -122,15 +122,41 @@ class StockUniverseService:
         payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         db.add(
-            StockUniverseStatusEvent(
+            self._build_status_event_record(
                 symbol=symbol,
                 old_status=old_status,
                 new_status=new_status,
                 trigger_source=trigger_source,
                 reason=reason,
-                payload_json=json.dumps(payload, sort_keys=True) if payload else None,
+                payload=payload,
             )
         )
+
+    @staticmethod
+    def _build_status_event_record(
+        *,
+        symbol: str,
+        old_status: Optional[str],
+        new_status: str,
+        trigger_source: str,
+        reason: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> StockUniverseStatusEvent:
+        return StockUniverseStatusEvent(
+            symbol=symbol,
+            old_status=old_status,
+            new_status=new_status,
+            trigger_source=trigger_source,
+            reason=reason,
+            payload_json=json.dumps(payload, sort_keys=True) if payload else None,
+        )
+
+    @staticmethod
+    def _bulk_insert_records(db: Session, objects: list[Any]) -> None:
+        # bulk_save_objects skips Python-side Column(default=...) values, so
+        # callers must populate any required non-server defaults up front.
+        if objects:
+            db.bulk_save_objects(objects)
 
     def _apply_status_transition(
         self,
@@ -942,6 +968,8 @@ class StockUniverseService:
 
         added_count = 0
         updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
 
         for row in canonicalized.canonical_rows:
             event_payload = {
@@ -983,7 +1011,7 @@ class StockUniverseService:
                 updated_count += 1
                 continue
 
-            db.add(
+            new_rows.append(
                 StockUniverse(
                     symbol=row.symbol,
                     name=row.name,
@@ -999,22 +1027,27 @@ class StockUniverseService:
                     status=UNIVERSE_STATUS_ACTIVE,
                     status_reason=reason,
                     source="hk_ingest",
+                    consecutive_fetch_failures=0,
                     added_at=now,
                     first_seen_at=now,
                     last_seen_in_source_at=now,
                     updated_at=now,
                 )
             )
-            self._add_status_event(
-                db,
+            new_events.append(
+                self._build_status_event_record(
                 symbol=row.symbol,
                 old_status=None,
                 new_status=UNIVERSE_STATUS_ACTIVE,
                 trigger_source="hk_ingest",
                 reason=reason,
                 payload=event_payload,
+                )
             )
             added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
 
         reconciliation = self._record_market_reconciliation_run(
             db,
@@ -1159,6 +1192,8 @@ class StockUniverseService:
 
         added_count = 0
         updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
 
         for row in canonicalized.canonical_rows:
             event_payload = {
@@ -1200,7 +1235,7 @@ class StockUniverseService:
                 updated_count += 1
                 continue
 
-            db.add(
+            new_rows.append(
                 StockUniverse(
                     symbol=row.symbol,
                     name=row.name,
@@ -1216,22 +1251,27 @@ class StockUniverseService:
                     status=UNIVERSE_STATUS_ACTIVE,
                     status_reason=reason,
                     source="jp_ingest",
+                    consecutive_fetch_failures=0,
                     added_at=now,
                     first_seen_at=now,
                     last_seen_in_source_at=now,
                     updated_at=now,
                 )
             )
-            self._add_status_event(
-                db,
+            new_events.append(
+                self._build_status_event_record(
                 symbol=row.symbol,
                 old_status=None,
                 new_status=UNIVERSE_STATUS_ACTIVE,
                 trigger_source="jp_ingest",
                 reason=reason,
                 payload=event_payload,
+                )
             )
             added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
 
         reconciliation = self._record_market_reconciliation_run(
             db,
@@ -1376,6 +1416,8 @@ class StockUniverseService:
 
         added_count = 0
         updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
 
         for row in canonicalized.canonical_rows:
             event_payload = {
@@ -1417,7 +1459,7 @@ class StockUniverseService:
                 updated_count += 1
                 continue
 
-            db.add(
+            new_rows.append(
                 StockUniverse(
                     symbol=row.symbol,
                     name=row.name,
@@ -1433,22 +1475,27 @@ class StockUniverseService:
                     status=UNIVERSE_STATUS_ACTIVE,
                     status_reason=reason,
                     source="tw_ingest",
+                    consecutive_fetch_failures=0,
                     added_at=now,
                     first_seen_at=now,
                     last_seen_in_source_at=now,
                     updated_at=now,
                 )
             )
-            self._add_status_event(
-                db,
+            new_events.append(
+                self._build_status_event_record(
                 symbol=row.symbol,
                 old_status=None,
                 new_status=UNIVERSE_STATUS_ACTIVE,
                 trigger_source="tw_ingest",
                 reason=reason,
                 payload=event_payload,
+                )
             )
             added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
 
         reconciliation = self._record_market_reconciliation_run(
             db,
@@ -1547,6 +1594,8 @@ class StockUniverseService:
             added_count = 0
             updated_count = 0
             now = datetime.utcnow()
+            new_rows: list[StockUniverse] = []
+            new_events: list[StockUniverseStatusEvent] = []
             resolved_rows: list[tuple[dict[str, Any], Any, str, str]] = []
             lookup_symbols: set[str] = set()
             for stock_data in stocks:
@@ -1594,7 +1643,7 @@ class StockUniverseService:
                     )
                     updated_count += 1
                 else:
-                    new_stock = StockUniverse(
+                    new_rows.append(StockUniverse(
                         symbol=canonical_symbol,
                         name=stock_data["name"],
                         market=identity.market,
@@ -1609,22 +1658,23 @@ class StockUniverseService:
                         status=UNIVERSE_STATUS_ACTIVE,
                         status_reason="Imported from CSV",
                         source="csv",
+                        consecutive_fetch_failures=0,
                         added_at=now,
                         first_seen_at=now,
                         updated_at=now,
-                    )
-                    db.add(new_stock)
-                    self._add_status_event(
-                        db,
+                    ))
+                    new_events.append(self._build_status_event_record(
                         symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="csv_import",
                         reason="Imported from CSV",
                         payload={"source": "csv"},
-                    )
+                    ))
                     added_count += 1
 
+            self._bulk_insert_records(db, new_rows)
+            self._bulk_insert_records(db, new_events)
             db.commit()
 
             logger.info(f"CSV import completed: {added_count} added, {updated_count} updated")
@@ -1710,6 +1760,8 @@ class StockUniverseService:
             now = datetime.utcnow()
             added_count = 0
             updated_count = 0
+            new_rows: list[StockUniverse] = []
+            new_events: list[StockUniverseStatusEvent] = []
 
             existing_stocks = {
                 stock.symbol: stock
@@ -1731,7 +1783,7 @@ class StockUniverseService:
                     existing.symbol = canonical_symbol
                     existing_stocks[canonical_symbol] = existing
                 if existing is None:
-                    new_stock = StockUniverse(
+                    new_rows.append(StockUniverse(
                         symbol=canonical_symbol,
                         name=stock_data["name"],
                         market=identity.market,
@@ -1746,21 +1798,20 @@ class StockUniverseService:
                         status=UNIVERSE_STATUS_ACTIVE,
                         status_reason="Present in Finviz universe sync",
                         source="finviz",
+                        consecutive_fetch_failures=0,
                         added_at=now,
                         first_seen_at=now,
                         last_seen_in_source_at=now,
                         updated_at=now,
-                    )
-                    db.add(new_stock)
-                    self._add_status_event(
-                        db,
+                    ))
+                    new_events.append(self._build_status_event_record(
                         symbol=canonical_symbol,
                         old_status=None,
                         new_status=UNIVERSE_STATUS_ACTIVE,
                         trigger_source="finviz_sync",
                         reason="New symbol discovered in Finviz universe sync",
                         payload={"exchange": stock_data["exchange"]},
-                    )
+                    ))
                     added_count += 1
                     continue
 
@@ -1786,6 +1837,9 @@ class StockUniverseService:
                     seen_in_source=True,
                 )
                 updated_count += 1
+
+            self._bulk_insert_records(db, new_rows)
+            self._bulk_insert_records(db, new_events)
 
             # Deactivate symbols that no longer exist in finviz
             # ONLY when refreshing ALL exchanges (no filter)

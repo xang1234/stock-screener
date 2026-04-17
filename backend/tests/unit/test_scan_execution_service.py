@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+from app.models.scan_result import Scan, ScanResult
 
 
 def test_run_post_scan_pipeline_uses_session_factory_and_closes(monkeypatch):
@@ -89,3 +96,86 @@ def test_run_bulk_scan_via_use_case_threads_session_factory(monkeypatch):
         "status": "completed",
         "scan_path": "use_case",
     }
+
+
+def test_cleanup_old_scans_uses_bulk_delete_for_scan_rows(monkeypatch):
+    import app.services.scan_execution as module
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[Scan.__table__, ScanResult.__table__])
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    try:
+        db.add_all(
+            [
+                Scan(
+                    scan_id="cancelled-scan",
+                    universe_key="all",
+                    status="cancelled",
+                    screener_types=["minervini"],
+                ),
+                Scan(
+                    scan_id="stale-running-scan",
+                    universe_key="all",
+                    status="running",
+                    started_at=datetime.utcnow() - timedelta(hours=2),
+                    screener_types=["minervini"],
+                ),
+                Scan(
+                    scan_id="completed-1",
+                    universe_key="all",
+                    status="completed",
+                    completed_at=datetime.utcnow() - timedelta(days=3),
+                    screener_types=["minervini"],
+                ),
+                Scan(
+                    scan_id="completed-2",
+                    universe_key="all",
+                    status="completed",
+                    completed_at=datetime.utcnow() - timedelta(days=2),
+                    screener_types=["minervini"],
+                ),
+                Scan(
+                    scan_id="completed-3",
+                    universe_key="all",
+                    status="completed",
+                    completed_at=datetime.utcnow() - timedelta(days=1),
+                    screener_types=["minervini"],
+                ),
+                Scan(
+                    scan_id="completed-4",
+                    universe_key="all",
+                    status="completed",
+                    completed_at=datetime.utcnow(),
+                    screener_types=["minervini"],
+                ),
+            ]
+        )
+        db.add_all(
+            [
+                ScanResult(scan_id="cancelled-scan", symbol="A"),
+                ScanResult(scan_id="stale-running-scan", symbol="B"),
+                ScanResult(scan_id="completed-1", symbol="C"),
+            ]
+        )
+        db.commit()
+
+        original_delete = db.delete
+
+        def _guard_delete(obj):
+            if isinstance(obj, Scan):
+                raise AssertionError("expected Scan rows to be deleted in bulk")
+            return original_delete(obj)
+
+        monkeypatch.setattr(db, "delete", _guard_delete)
+
+        module.cleanup_old_scans(db, "all", keep_count=3)
+
+        remaining_scan_ids = {scan.scan_id for scan in db.query(Scan).all()}
+        remaining_result_scan_ids = {row.scan_id for row in db.query(ScanResult).all()}
+
+        assert remaining_scan_ids == {"completed-2", "completed-3", "completed-4"}
+        assert remaining_result_scan_ids == set()
+    finally:
+        db.close()
+        engine.dispose()

@@ -53,32 +53,17 @@ class ADRCalculator:
                 return None
 
             # Get most recent 'period' days
-            recent_data = price_data.tail(period).copy()
+            recent_data = price_data.tail(period)
 
-            # Calculate daily range as percentage of close
-            # Formula: (High - Low) / Close * 100
-            daily_ranges_pct = []
-
-            for idx, row in recent_data.iterrows():
-                high = row['High']
-                low = row['Low']
-                close = row['Close']
-
-                # Validate data
-                if pd.isna(high) or pd.isna(low) or pd.isna(close):
-                    continue
-
-                if close <= 0:
-                    logger.warning(f"Invalid close price {close} at index {idx}")
-                    continue
-
-                if high < low:
-                    logger.warning(f"Invalid high/low: High={high} < Low={low} at index {idx}")
-                    continue
-
-                # Calculate daily range percentage
-                daily_range_pct = ((high - low) / close) * 100
-                daily_ranges_pct.append(daily_range_pct)
+            valid_rows = (
+                recent_data[required_cols].notna().all(axis=1)
+                & (recent_data["Close"] > 0)
+                & (recent_data["High"] >= recent_data["Low"])
+            )
+            daily_ranges_pct = (
+                (recent_data.loc[valid_rows, "High"] - recent_data.loc[valid_rows, "Low"])
+                / recent_data.loc[valid_rows, "Close"]
+            ) * 100
 
             # Return None if we don't have enough valid days
             if len(daily_ranges_pct) < period * 0.8:  # Allow 20% missing data

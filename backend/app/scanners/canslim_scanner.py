@@ -89,19 +89,53 @@ class CANSLIMScanner(BaseStockScreener):
             benchmark_data = data.benchmark_data
             quarterly_growth = data.quarterly_growth
             fundamentals = data.fundamentals
+            precomputed = data.precomputed_scan_context
 
             # Prepare price series (chronological order)
-            prices_chrono = price_data["Close"].reset_index(drop=True)
-            volumes_chrono = price_data["Volume"].reset_index(drop=True)
-            spy_prices_chrono = benchmark_data["Close"].reset_index(drop=True)
+            prices_chrono = (
+                precomputed.close_chrono
+                if precomputed is not None and precomputed.close_chrono is not None
+                else price_data["Close"].reset_index(drop=True)
+            )
+            volumes_chrono = (
+                precomputed.volume_chrono
+                if precomputed is not None and precomputed.volume_chrono is not None
+                else price_data["Volume"].reset_index(drop=True)
+            )
+            spy_prices_chrono = (
+                precomputed.benchmark_close_chrono
+                if precomputed is not None and precomputed.benchmark_close_chrono is not None
+                else benchmark_data["Close"].reset_index(drop=True)
+            )
 
             # Current price
-            current_price = float(prices_chrono.iloc[-1])
+            current_price = (
+                float(precomputed.current_price)
+                if precomputed is not None and precomputed.current_price is not None
+                else float(prices_chrono.iloc[-1])
+            )
 
             # Reverse for calculations expecting most recent first
-            prices = prices_chrono[::-1].reset_index(drop=True)
-            volumes = volumes_chrono[::-1].reset_index(drop=True)
-            spy_prices = spy_prices_chrono[::-1].reset_index(drop=True)
+            prices = (
+                precomputed.close_rev
+                if precomputed is not None and precomputed.close_rev is not None
+                else prices_chrono[::-1].reset_index(drop=True)
+            )
+            volumes = (
+                precomputed.volume_rev
+                if precomputed is not None and precomputed.volume_rev is not None
+                else volumes_chrono[::-1].reset_index(drop=True)
+            )
+            spy_prices = (
+                precomputed.benchmark_close_rev
+                if precomputed is not None and precomputed.benchmark_close_rev is not None
+                else spy_prices_chrono[::-1].reset_index(drop=True)
+            )
+            rs_ratings = (
+                precomputed.rs_ratings
+                if precomputed is not None and precomputed.rs_ratings is not None
+                else None
+            )
 
             # Calculate all CANSLIM criteria
             c_result = self._check_current_earnings(quarterly_growth)
@@ -115,6 +149,11 @@ class CANSLIMScanner(BaseStockScreener):
                 (
                     data.rs_universe_performances.get("weighted")
                     if data.rs_universe_performances
+                    else None
+                ),
+                precomputed_rs_rating=(
+                    rs_ratings.get("rs_rating")
+                    if rs_ratings is not None
                     else None
                 ),
             )
@@ -136,12 +175,13 @@ class CANSLIMScanner(BaseStockScreener):
             }
 
             # Calculate all RS ratings for comprehensive analysis
-            rs_ratings = self.rs_calc.calculate_all_rs_ratings(
-                symbol,
-                prices,
-                spy_prices,
-                data.rs_universe_performances,
-            )
+            if rs_ratings is None:
+                rs_ratings = self.rs_calc.calculate_all_rs_ratings(
+                    symbol,
+                    prices,
+                    spy_prices,
+                    data.rs_universe_performances,
+                )
 
             # Build details
             details = {
@@ -381,6 +421,7 @@ class CANSLIMScanner(BaseStockScreener):
         prices: pd.Series,
         spy_prices: pd.Series,
         universe_performances: Optional[list[float]] = None,
+        precomputed_rs_rating: Optional[float] = None,
     ) -> Dict:
         """
         L - Leader (20 points).
@@ -394,13 +435,16 @@ class CANSLIMScanner(BaseStockScreener):
         - RS < 70: proportional
         """
         try:
-            rs_result = self.rs_calc.calculate_rs_rating(
-                symbol,
-                prices,
-                spy_prices,
-                universe_performances=universe_performances,
-            )
-            rs_rating = rs_result["rs_rating"]
+            if precomputed_rs_rating is not None:
+                rs_rating = precomputed_rs_rating
+            else:
+                rs_result = self.rs_calc.calculate_rs_rating(
+                    symbol,
+                    prices,
+                    spy_prices,
+                    universe_performances=universe_performances,
+                )
+                rs_rating = rs_result["rs_rating"]
 
             # Calculate points
             if rs_rating >= 90:
