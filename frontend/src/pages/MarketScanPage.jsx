@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Tabs, Tab, Paper } from '@mui/material';
 import KeyMarketsTab from '../components/MarketScan/KeyMarketsTab';
+import DailyMarketSnapshotTab from '../components/MarketScan/DailyMarketSnapshotTab';
+import DigestTab from '../components/MarketScan/DigestTab';
 import ThemesTab from '../components/MarketScan/ThemesTab';
 import WatchlistsTab from '../components/MarketScan/WatchlistsTab';
 import StockbeeMmTab from '../components/MarketScan/StockbeeMmTab';
@@ -14,6 +16,8 @@ function MarketScanPage() {
   const [selectedTab, setSelectedTab] = useState(0);
   const subTabs = useMemo(() => ([
     { id: 'key_markets', label: 'Key Markets', render: () => <KeyMarketsTab /> },
+    { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => <DailyMarketSnapshotTab /> },
+    { id: 'digest', label: 'Digest', render: () => <DigestTab /> },
     ...(features.themes
       ? [{ id: 'themes', label: 'Themes', render: () => <ThemesTab /> }]
       : []),
