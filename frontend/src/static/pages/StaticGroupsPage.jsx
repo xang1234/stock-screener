@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -14,9 +14,10 @@ import {
   TableRow,
   Typography,
 } from '@mui/material';
-import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import StaticGroupDetailModal from '../StaticGroupDetailModal';
 import RankChangeCell from '../../components/shared/RankChangeCell';
+import { useStaticMarket } from '../StaticMarketContext';
 
 function MoversCard({ title, rows }) {
   return (
@@ -52,10 +53,15 @@ function MoversCard({ title, rows }) {
 
 function StaticGroupsPage() {
   const manifestQuery = useStaticManifest();
+  const { selectedMarket } = useStaticMarket();
+  const marketEntry = useMemo(
+    () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
+    [manifestQuery.data, selectedMarket],
+  );
   const groupsQuery = useQuery({
-    queryKey: ['staticGroups', manifestQuery.data?.pages?.groups?.path],
-    queryFn: () => fetchStaticJson(manifestQuery.data.pages.groups.path),
-    enabled: Boolean(manifestQuery.data?.pages?.groups?.path),
+    queryKey: ['staticGroups', marketEntry.pages?.groups?.path],
+    queryFn: () => fetchStaticJson(marketEntry.pages.groups.path),
+    enabled: Boolean(marketEntry.pages?.groups?.path),
     staleTime: Infinity,
   });
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -85,7 +91,7 @@ function StaticGroupsPage() {
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
-        Industry Group Rankings
+        {marketEntry.display_name} Group Rankings
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
         Latest ranking date: {payload.rankings?.date || '-'}.

@@ -24,8 +24,6 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
 
     monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
-    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
-    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(
         feature_store_tasks,
         "build_daily_snapshot",
@@ -41,16 +39,6 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     )
     monkeypatch.setattr(
         export_script,
-        "_ensure_breadth_history",
-        lambda *, as_of_date: calls.append("breadth_history_refresh") or {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date: calls.append("groups_history_refresh") or {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
         "_resolve_latest_completed_us_trading_date",
         lambda: date(2026, 4, 2),
     )
@@ -60,41 +48,39 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
         lambda db, csv_path=None: 10105,
     )
     monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda *, feature_run_id, ranking_date: calls.append("feature_metadata_refresh")
-        or {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
+        export_script,
+        "_upsert_feature_run_pointer",
+        lambda *, pointer_key, run_id: calls.append(f"pointer:{pointer_key}:{run_id}"),
     )
 
     results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    expected_markets = list(export_script.STATIC_EXPORT_MARKETS)
 
     assert warnings == []
     assert calls == [
         "universe_refresh",
         "fundamentals_refresh",
         "price_refresh",
-        "feature_snapshot",
-        "breadth_refresh",
-        "breadth_history_refresh",
-        "groups_history_refresh",
-        "groups_refresh",
-        "feature_metadata_refresh",
+        *(["feature_snapshot"] * len(expected_markets)),
+        "pointer:latest_published:77",
     ]
     assert results["universe_refresh"]["task"] == "universe_refresh"
     assert results["ibd_seed_refresh"]["loaded"] == 10105
-    assert results["feature_snapshot"]["kwargs"] == {
-        "as_of_date_str": "2026-04-02",
-        "static_daily_mode": True,
+    assert set(results["feature_snapshots"]) == set(expected_markets)
+    for market in expected_markets:
+        assert results["feature_snapshots"][market]["kwargs"] == {
+            "as_of_date_str": "2026-04-02",
+            "static_daily_mode": True,
+            "universe_name": f"market:{market.lower()}",
+            "market": market,
+            "publish_pointer_key": f"latest_published_market:{market}",
+        }
+    assert results["default_market_pointer"] == {
+        "market": "US",
+        "pointer_key": "latest_published",
+        "run_id": 77,
     }
-    assert results["breadth_refresh"]["kwargs"] == {
-        "calculation_date": "2026-04-02",
-        "force_cache_only": True,
-    }
-    assert results["groups_refresh"]["kwargs"] == {
-        "calculation_date": "2026-04-02",
-        "force_cache_only": True,
-    }
-    assert results["feature_metadata_refresh"]["run_id"] == 77
 
 
 def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamentals(monkeypatch):
@@ -113,8 +99,6 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
 
     monkeypatch.setattr(export_script, "SessionLocal", fake_session)
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
-    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
-    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(
         feature_store_tasks,
         "build_daily_snapshot",
@@ -127,16 +111,6 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: calls.append("price_refresh") or {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_breadth_history",
-        lambda *, as_of_date: calls.append("breadth_history_refresh") or {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date: calls.append("groups_history_refresh") or {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -157,10 +131,9 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
         ),
     )
     monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda *, feature_run_id, ranking_date: calls.append("feature_metadata_refresh")
-        or {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
+        export_script,
+        "_upsert_feature_run_pointer",
+        lambda *, pointer_key, run_id: calls.append(f"pointer:{pointer_key}:{run_id}"),
     )
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
@@ -173,12 +146,8 @@ def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamenta
     assert warnings == []
     assert calls == [
         "price_refresh",
-        "feature_snapshot",
-        "breadth_refresh",
-        "breadth_history_refresh",
-        "groups_history_refresh",
-        "groups_refresh",
-        "feature_metadata_refresh",
+        *(["feature_snapshot"] * len(export_script.STATIC_EXPORT_MARKETS)),
+        "pointer:latest_published:77",
     ]
     assert hydrate_calls == [("db-session", False)]
     assert "universe_refresh" not in results
@@ -201,8 +170,6 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
     hydrate_calls: list[tuple[object, bool]] = []
 
     monkeypatch.setattr(export_script, "SessionLocal", fake_session)
-    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
-    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(
         feature_store_tasks,
         "build_daily_snapshot",
@@ -215,16 +182,6 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: calls.append("price_refresh") or {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_breadth_history",
-        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date: {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -244,11 +201,7 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
             or {"task": "fundamentals_hydrate"},
         ),
     )
-    monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda *, feature_run_id, ranking_date: {"run_id": feature_run_id, "ranking_date": ranking_date.isoformat(), "updated_rows": 2},
-    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
 
     results, warnings = export_script._run_daily_refresh(  # noqa: SLF001 - intentional unit test coverage
         skip_universe_refresh=True,
@@ -260,6 +213,101 @@ def test_run_daily_refresh_price_delta_mode_skips_snapshot_hydration(monkeypatch
     assert warnings == []
     assert hydrate_calls == []
     assert "fundamentals_hydrate" not in results
+
+
+def test_run_daily_refresh_warns_when_default_market_run_id_is_missing(monkeypatch):
+    calls: list[str] = []
+
+    def build_snapshot(**kwargs):
+        calls.append(kwargs["market"])
+        if kwargs["market"] == export_script.STATIC_DEFAULT_MARKET:
+            return {"status": "completed"}
+        return {"run_id": 77, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda: {"task": "universe_refresh"}))
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_upsert_feature_run_pointer",
+        lambda **_kwargs: calls.append("pointer"),
+    )
+
+    results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    assert calls == list(export_script.STATIC_EXPORT_MARKETS)
+    assert "default_market_pointer" not in results
+    assert warnings == ["No US feature snapshot produced a run id; 'latest_published' was not updated."]
+
+
+def test_run_daily_refresh_does_not_repoint_default_pointer_for_unpublished_us_run(monkeypatch):
+    pointer_calls: list[dict] = []
+
+    def build_snapshot(**kwargs):
+        if kwargs["market"] == export_script.STATIC_DEFAULT_MARKET:
+            return {"status": "failed", "run_id": 91}
+        return {"status": "published", "run_id": 77, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda: {"task": "universe_refresh"}))
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_upsert_feature_run_pointer",
+        lambda **kwargs: pointer_calls.append(kwargs),
+    )
+
+    results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    assert pointer_calls == []
+    assert "default_market_pointer" not in results
+    assert warnings == ["US feature snapshot returned status 'failed'; 'latest_published' was not updated."]
 
 
 def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
@@ -287,23 +335,11 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
     monkeypatch.setattr(export_script, "disable_serialized_data_fetch_lock", fake_disable_lock)
     monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
-    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
-    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_breadth_history",
-        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date: {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -315,11 +351,7 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
         "load_from_csv",
         lambda db, csv_path=None: 10105,
     )
-    monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda **_kwargs: {"run_id": 1, "ranking_date": "2026-04-02", "updated_rows": 0},
-    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
@@ -328,53 +360,22 @@ def test_run_daily_refresh_disables_serialized_lock_during_export(monkeypatch):
 
 
 def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypatch):
-    calls: list[tuple[str, dict, bool, bool]] = []
-    state = {"group_bypass": False, "breadth_bypass": False}
-
-    @contextmanager
-    def fake_group_bypass():
-        state["group_bypass"] = True
-        try:
-            yield
-        finally:
-            state["group_bypass"] = False
-
-    @contextmanager
-    def fake_breadth_bypass():
-        state["breadth_bypass"] = True
-        try:
-            yield
-        finally:
-            state["breadth_bypass"] = False
+    calls: list[tuple[str, dict]] = []
 
     def make_task(name: str):
         def run(**kwargs):
-            calls.append((name, kwargs, state["group_bypass"], state["breadth_bypass"]))
+            calls.append((name, kwargs))
             return {"task": name, "kwargs": kwargs}
 
         return SimpleNamespace(run=run)
 
-    monkeypatch.setattr(group_rank_tasks, "allow_same_day_group_rank_warmup_bypass", fake_group_bypass)
-    monkeypatch.setattr(breadth_tasks, "allow_same_day_breadth_warmup_bypass", fake_breadth_bypass)
     monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
     monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
-    monkeypatch.setattr(breadth_tasks, "calculate_daily_breadth", make_task("breadth_refresh"))
-    monkeypatch.setattr(group_rank_tasks, "calculate_daily_group_rankings", make_task("groups_refresh"))
     monkeypatch.setattr(feature_store_tasks, "build_daily_snapshot", make_task("feature_snapshot"))
     monkeypatch.setattr(
         export_script,
         "_refresh_static_daily_prices",
         lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_breadth_history",
-        lambda *, as_of_date: {"task": "breadth_history_refresh", "as_of_date": as_of_date.isoformat()},
-    )
-    monkeypatch.setattr(
-        export_script,
-        "_ensure_group_rank_history",
-        lambda *, as_of_date: {"task": "groups_history_refresh", "as_of_date": as_of_date.isoformat()},
     )
     monkeypatch.setattr(
         export_script,
@@ -386,30 +387,18 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
         "load_from_csv",
         lambda db, csv_path=None: 10105,
     )
-    monkeypatch.setattr(
-        feature_store_tasks,
-        "_enrich_feature_run_with_ibd_metadata",
-        lambda **_kwargs: {"run_id": 1, "ranking_date": "2026-04-02", "updated_rows": 0},
-    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
 
     export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
 
-    groups_call = next(call for call in calls if call[0] == "groups_refresh")
-    breadth_call = next(call for call in calls if call[0] == "breadth_refresh")
-    feature_call = next(call for call in calls if call[0] == "feature_snapshot")
-    assert groups_call[2] is True
-    assert breadth_call[3] is True
-    assert feature_call[1] == {
+    feature_calls = [call for call in calls if call[0] == "feature_snapshot"]
+    assert len(feature_calls) == len(export_script.STATIC_EXPORT_MARKETS)
+    assert feature_calls[0][1] == {
         "as_of_date_str": "2026-04-02",
         "static_daily_mode": True,
-    }
-    assert groups_call[1] == {
-        "calculation_date": "2026-04-02",
-        "force_cache_only": True,
-    }
-    assert breadth_call[1] == {
-        "calculation_date": "2026-04-02",
-        "force_cache_only": True,
+        "universe_name": "market:us",
+        "market": "US",
+        "publish_pointer_key": "latest_published_market:US",
     }
 
 

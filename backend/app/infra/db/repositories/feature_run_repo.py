@@ -119,7 +119,11 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         self._session.flush()
         return self._to_domain(row)
 
-    def publish_atomically(self, run_id) -> FeatureRunDomain:
+    def publish_atomically(
+        self,
+        run_id,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain:
         row = self._get_or_raise(run_id)
         validate_transition(RunStatus(row.status), RunStatus.PUBLISHED)
 
@@ -130,11 +134,11 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         # Upsert the pointer in the same flush
         pointer = (
             self._session.query(FeatureRunPointer)
-            .filter(FeatureRunPointer.key == "latest_published")
+            .filter(FeatureRunPointer.key == pointer_key)
             .first()
         )
         if pointer is None:
-            pointer = FeatureRunPointer(key="latest_published", run_id=run_id)
+            pointer = FeatureRunPointer(key=pointer_key, run_id=run_id)
             self._session.add(pointer)
         else:
             pointer.run_id = run_id
@@ -142,10 +146,13 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         self._session.flush()
         return self._to_domain(row)
 
-    def get_latest_published(self) -> FeatureRunDomain | None:
+    def get_latest_published(
+        self,
+        pointer_key: str = "latest_published",
+    ) -> FeatureRunDomain | None:
         pointer = (
             self._session.query(FeatureRunPointer)
-            .filter(FeatureRunPointer.key == "latest_published")
+            .filter(FeatureRunPointer.key == pointer_key)
             .first()
         )
         if pointer is None:

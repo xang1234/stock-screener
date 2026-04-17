@@ -39,6 +39,7 @@ class PublishRunCommand:
     run_id: int
     dq_inputs: DQInputs | None = None  # None → load from DB
     force_publish: bool = False
+    pointer_key: str = "latest_published"
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
 
 
@@ -82,7 +83,10 @@ class PublishFeatureRunUseCase:
                     f"Force-publish requires QUARANTINED status, "
                     f"got {run.status.value}"
                 )
-            uow.feature_runs.publish_atomically(cmd.run_id)
+            if cmd.pointer_key == "latest_published":
+                uow.feature_runs.publish_atomically(cmd.run_id)
+            else:
+                uow.feature_runs.publish_atomically(cmd.run_id, pointer_key=cmd.pointer_key)
             uow.commit()
             logger.info("Run %d force-published by admin", cmd.run_id)
             return PublishRunResult(
@@ -120,7 +124,10 @@ class PublishFeatureRunUseCase:
         dq_warnings = tuple(r.message for r in dq_results if not r.passed)
 
         if decision.allowed:
-            uow.feature_runs.publish_atomically(cmd.run_id)
+            if cmd.pointer_key == "latest_published":
+                uow.feature_runs.publish_atomically(cmd.run_id)
+            else:
+                uow.feature_runs.publish_atomically(cmd.run_id, pointer_key=cmd.pointer_key)
             uow.commit()
             logger.info("Run %d published", cmd.run_id)
             return PublishRunResult(

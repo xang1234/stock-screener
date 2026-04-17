@@ -9,7 +9,7 @@ import {
 } from '@mui/material';
 import FilterPanel from '../../components/Scan/FilterPanel';
 import ResultsTable from '../../components/Scan/ResultsTable';
-import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import { useStaticChartIndex } from '../chartClient';
 import {
   applyScanFilterDefaults,
@@ -25,15 +25,21 @@ import {
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import ScreenSelector from '../components/ScreenSelector';
 import { usePresetScreens, buildFiltersFromPreset } from '../hooks/usePresetScreens';
+import { useStaticMarket } from '../StaticMarketContext';
 
 const HYDRATION_BATCH_SIZE = 2;
 
 function StaticScanPage() {
   const manifestQuery = useStaticManifest();
+  const { selectedMarket } = useStaticMarket();
+  const marketEntry = useMemo(
+    () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
+    [manifestQuery.data, selectedMarket],
+  );
   const scanManifestQuery = useQuery({
-    queryKey: ['staticScanManifest', manifestQuery.data?.pages?.scan?.path],
-    queryFn: () => fetchStaticJson(manifestQuery.data.pages.scan.path),
-    enabled: Boolean(manifestQuery.data?.pages?.scan?.path),
+    queryKey: ['staticScanManifest', marketEntry.pages?.scan?.path],
+    queryFn: () => fetchStaticJson(marketEntry.pages.scan.path),
+    enabled: Boolean(marketEntry.pages?.scan?.path),
     staleTime: Infinity,
   });
   const chartIndexQuery = useStaticChartIndex(scanManifestQuery.data?.charts?.path);

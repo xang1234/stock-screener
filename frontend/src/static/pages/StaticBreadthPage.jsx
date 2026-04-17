@@ -15,7 +15,8 @@ import {
   Typography,
 } from '@mui/material';
 import BreadthChart from '../../components/Charts/BreadthChart';
-import { useStaticManifest, fetchStaticJson } from '../dataClient';
+import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
+import { useStaticMarket } from '../StaticMarketContext';
 
 const RANGE_DAYS = { '1M': 31, '3M': 90 };
 
@@ -34,15 +35,21 @@ function MetricCard({ label, value }) {
 
 function StaticBreadthPage() {
   const manifestQuery = useStaticManifest();
+  const { selectedMarket } = useStaticMarket();
+  const marketEntry = useMemo(
+    () => resolveStaticMarketEntry(manifestQuery.data, selectedMarket),
+    [manifestQuery.data, selectedMarket],
+  );
   const breadthQuery = useQuery({
-    queryKey: ['staticBreadth', manifestQuery.data?.pages?.breadth?.path],
-    queryFn: () => fetchStaticJson(manifestQuery.data.pages.breadth.path),
-    enabled: Boolean(manifestQuery.data?.pages?.breadth?.path),
+    queryKey: ['staticBreadth', marketEntry.pages?.breadth?.path],
+    queryFn: () => fetchStaticJson(marketEntry.pages.breadth.path),
+    enabled: Boolean(marketEntry.pages?.breadth?.path),
     staleTime: Infinity,
   });
   const [timeRange, setTimeRange] = useState('1M');
 
   const payload = breadthQuery.data?.payload || {};
+  const displayName = marketEntry.display_name;
   const filteredChartData = useMemo(() => {
     const allData = payload.chart_data || payload.history_90d || [];
     return allData.slice(-(RANGE_DAYS[timeRange] || 31));
@@ -74,7 +81,7 @@ function StaticBreadthPage() {
   return (
     <Box>
       <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px', mb: 0.5 }}>
-        Market Breadth
+        {displayName} Breadth
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '12px' }}>
         Breadth snapshot published {breadthQuery.data.published_at || breadthQuery.data.generated_at}.

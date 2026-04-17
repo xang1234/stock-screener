@@ -41,11 +41,16 @@ def service_and_session_factory():
         engine.dispose()
 
 
-def _insert_runs(session_factory, *runs: FeatureRun, pointer_run_id: int | None = None) -> None:
+def _insert_runs(
+    session_factory,
+    *runs: FeatureRun,
+    pointer_run_id: int | None = None,
+    pointer_key: str = "latest_published",
+) -> None:
     with session_factory() as db:
         db.add_all(runs)
         if pointer_run_id is not None:
-            db.add(FeatureRunPointer(key="latest_published", run_id=pointer_run_id))
+            db.add(FeatureRunPointer(key=pointer_key, run_id=pointer_run_id))
         db.commit()
 
 
@@ -114,6 +119,42 @@ def test_get_latest_published_run_falls_back_to_latest_published_when_pointer_is
     assert run.id == 2
 
 
+def test_get_latest_published_run_ignores_market_pointer_for_wrong_market(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=4,
+            as_of_date=date(2026, 3, 30),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 30, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
+        ),
+        FeatureRun(
+            id=5,
+            as_of_date=date(2026, 3, 31),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "HK"}},
+        ),
+        pointer_run_id=5,
+        pointer_key="latest_published_market:US",
+    )
+
+    with session_factory() as db:
+        run = service._get_latest_published_run(  # noqa: SLF001 - intentional unit test coverage
+            db,
+            market="US",
+        )
+
+    assert run is not None
+    assert run.id == 4
+
+
 def test_export_writes_serializable_manifest_and_page_bundles(
     service_and_session_factory,
     monkeypatch,
@@ -128,6 +169,7 @@ def test_export_writes_serializable_manifest_and_page_bundles(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
         ),
         pointer_run_id=7,
     )
@@ -187,15 +229,19 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     result = service.export(output_dir)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    scan = json.loads((output_dir / "scan" / "manifest.json").read_text(encoding="utf-8"))
-    breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
-    groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
-    home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
+    scan = json.loads((output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "markets" / "us" / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "markets" / "us" / "home.json").read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == STATIC_SITE_SCHEMA_VERSION
+    assert manifest["default_market"] == "US"
+    assert manifest["supported_markets"] == ["US"]
     assert manifest["features"]["charts"] is True
-    assert manifest["pages"]["scan"]["path"] == "scan/manifest.json"
+    assert manifest["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
     assert manifest["assets"]["charts"]["path"] == "charts/index.json"
+    assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
+    assert manifest["markets"]["US"]["assets"]["charts"]["path"] == "charts/index.json"
     assert "themes" not in manifest["features"]
     assert "themes" not in manifest["pages"]
     assert manifest["warnings"] == []
@@ -296,6 +342,7 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
             run_type="daily_snapshot",
             status="published",
             published_at=datetime(2026, 4, 2, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
         ),
         pointer_run_id=12,
     )
@@ -346,13 +393,15 @@ def test_export_marks_optional_sections_unavailable_without_aborting(
     result = service.export(output_dir)
 
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-    breadth = json.loads((output_dir / "breadth.json").read_text(encoding="utf-8"))
-    groups = json.loads((output_dir / "groups.json").read_text(encoding="utf-8"))
-    home = json.loads((output_dir / "home.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "markets" / "us" / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "markets" / "us" / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "markets" / "us" / "home.json").read_text(encoding="utf-8"))
 
     assert result.manifest == manifest
     assert manifest["features"]["breadth"] is False
     assert manifest["features"]["groups"] is False
+    assert manifest["markets"]["US"]["features"]["breadth"] is False
+    assert manifest["markets"]["US"]["features"]["groups"] is False
     assert len(manifest["warnings"]) == 2
     assert breadth["available"] is False
     assert breadth["expected_as_of_date"] == "2026-04-02"
@@ -387,6 +436,153 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
             generated_at="2026-04-02T22:00:00Z",
             expected_as_of_date=date(2026, 4, 2),
         )
+
+
+def test_export_rejects_legacy_unscoped_run_for_market_bundle(
+    service_and_session_factory,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=21,
+            as_of_date=date(2026, 4, 3),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 3, 21, 30, 0),
+        ),
+        pointer_run_id=21,
+    )
+
+    with pytest.raises(RuntimeError, match="No market-scoped published feature runs"):
+        service.export(tmp_path / "static-data")
+
+
+def test_serialize_history_bars_clamps_to_end_date_and_skips_nan_rows(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, float("nan"), 104.0],
+            "High": [101.0, 102.0, 104.0, 105.0],
+            "Low": [99.0, 100.0, 102.0, 103.0],
+            "Close": [100.5, 101.5, 103.5, 104.5],
+            "Volume": [1000, 1100, 1200, 1300],
+        },
+        index=pd.to_datetime(["2026-03-01", "2026-04-01", "2026-04-02", "2026-04-03"]),
+    )
+
+    payload = service._serialize_history_bars(  # noqa: SLF001 - intentional unit test coverage
+        frame,
+        period_days=10,
+        end_date=date(2026, 4, 2),
+    )
+
+    assert payload == [
+        {
+            "date": "2026-04-01",
+            "open": 101.0,
+            "high": 102.0,
+            "low": 100.0,
+            "close": 101.5,
+            "volume": 1100,
+        },
+    ]
+
+
+def test_get_market_run_series_normalizes_market_to_uppercase(service_and_session_factory):
+    service, session_factory = service_and_session_factory
+    run_us_latest = FeatureRun(
+        id=31,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    run_us_previous = FeatureRun(
+        id=30,
+        as_of_date=date(2026, 4, 2),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 2, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    run_hk = FeatureRun(
+        id=29,
+        as_of_date=date(2026, 4, 1),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 1, 21, 30, 0),
+        config_json={"universe": {"market": "HK"}},
+    )
+    _insert_runs(session_factory, run_us_latest, run_us_previous, run_hk)
+
+    with session_factory() as db:
+        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
+            db=db,
+            market="us",
+            latest_run=run_us_latest,
+        )
+
+    assert [run.id for run in market_runs] == [31, 30]
+
+
+def test_get_market_run_series_deduplicates_same_day_reruns(service_and_session_factory):
+    service, session_factory = service_and_session_factory
+    latest_us_run = FeatureRun(
+        id=41,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 22, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    rerun_same_day = FeatureRun(
+        id=40,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    previous_day = FeatureRun(
+        id=39,
+        as_of_date=date(2026, 4, 2),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 2, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    _insert_runs(session_factory, latest_us_run, rerun_same_day, previous_day)
+
+    with session_factory() as db:
+        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
+            db=db,
+            market="US",
+            latest_run=latest_us_run,
+        )
+
+    assert [run.id for run in market_runs] == [41, 39]
+
+
+def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
+    all_dates = pd.date_range("2025-10-01", periods=200, freq="D")
+    canonical_dates = [ts.date() for ts in all_dates[-120:]]
+    closes = [100.0 + index for index, _ in enumerate(all_dates)]
+    price_data = {
+        "AAA": pd.DataFrame({"Close": closes}, index=all_dates),
+    }
+
+    metrics = service._compute_breadth_metrics_by_date(  # noqa: SLF001 - intentional unit test coverage
+        canonical_dates,
+        price_data,
+    )
+
+    oldest_history_date = canonical_dates[30]
+    assert metrics[oldest_history_date]["stocks_up_25pct_quarter"] == 1
+    assert metrics[oldest_history_date]["stocks_up_25pct_month"] == 1
 
 
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):

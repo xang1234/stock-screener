@@ -102,6 +102,21 @@ def _map_orchestrator_to_feature_row(
     )
 
 
+def _serialize_universe_definition(universe_def: object) -> dict[str, object]:
+    """Best-effort JSON-safe snapshot of the requested universe definition."""
+    model_dump = getattr(universe_def, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+
+    result: dict[str, object] = {}
+    for key in ("type", "market", "exchange", "index", "symbols", "allow_inactive_symbols"):
+        value = getattr(universe_def, key, None)
+        if value is None:
+            continue
+        result[key] = getattr(value, "value", value)
+    return result
+
+
 # ── Command (input) ──────────────────────────────────────────────────────
 
 
@@ -123,6 +138,7 @@ class BuildDailySnapshotCommand:
     require_bulk_prefetch: bool = False
     static_parallel_workers: int = 1
     static_chunk_size: int | None = None
+    publish_pointer_key: str = "latest_published"
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
@@ -226,6 +242,12 @@ class BuildDailyFeatureSnapshotUseCase:
                 composite_method=cmd.composite_method,
                 criteria=cmd.criteria,
             )
+            run_config = {
+                **signature_payload,
+                "signature": signature_payload,
+                "universe": _serialize_universe_definition(cmd.universe_def),
+                "publish_pointer_key": cmd.publish_pointer_key,
+            }
 
             # Start run BEFORE the try-except so run_id is available
             # for best-effort error handling.
@@ -235,7 +257,7 @@ class BuildDailyFeatureSnapshotUseCase:
                 code_version=cmd.code_version,
                 universe_hash=hash_universe_symbols(symbols),
                 input_hash=hash_scan_signature(signature_payload),
-                config_json=signature_payload,
+                config_json=run_config,
                 correlation_id=cmd.correlation_id,
             )
             run_id = run.id
@@ -567,6 +589,7 @@ class BuildDailyFeatureSnapshotUseCase:
         publish_cmd = PublishRunCommand(
             run_id=run_id,
             dq_inputs=dq_inputs,
+            pointer_key=cmd.publish_pointer_key,
             dq_thresholds=cmd.dq_thresholds,
         )
         pub_result = PublishFeatureRunUseCase().execute(uow, publish_cmd)
