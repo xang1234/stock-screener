@@ -346,8 +346,9 @@ class StaticSiteExportService:
         }
 
     def _get_latest_published_run(self, db: Session, market: str | None = None) -> FeatureRun | None:
+        normalized_market = market.upper() if market is not None else None
         pointer_key = (
-            f"latest_published_market:{market.upper()}"
+            f"latest_published_market:{normalized_market}"
             if market is not None
             else "latest_published"
         )
@@ -358,7 +359,11 @@ class StaticSiteExportService:
         )
         if pointer is not None:
             run = db.query(FeatureRun).filter(FeatureRun.id == pointer.run_id).first()
-            if run is not None and run.status == "published":
+            if (
+                run is not None
+                and run.status == "published"
+                and (normalized_market is None or self._run_market(run) == normalized_market)
+            ):
                 return run
 
         query = (
@@ -369,7 +374,7 @@ class StaticSiteExportService:
         if market is None:
             return query.first()
         for run in query.all():
-            if self._run_market(run) == market.upper():
+            if self._run_market(run) == normalized_market:
                 return run
         return None
 
@@ -949,10 +954,14 @@ class StaticSiteExportService:
             .all()
         )
         market_runs: list[FeatureRun] = []
+        seen_dates: set[date] = set()
         for run in published_runs:
             if self._run_market(run) != normalized_market:
                 continue
+            if run.as_of_date in seen_dates:
+                continue
             market_runs.append(run)
+            seen_dates.add(run.as_of_date)
             if len(market_runs) >= max_runs:
                 break
         return market_runs

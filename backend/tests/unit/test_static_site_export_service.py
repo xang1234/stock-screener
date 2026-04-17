@@ -119,6 +119,42 @@ def test_get_latest_published_run_falls_back_to_latest_published_when_pointer_is
     assert run.id == 2
 
 
+def test_get_latest_published_run_ignores_market_pointer_for_wrong_market(
+    service_and_session_factory,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=4,
+            as_of_date=date(2026, 3, 30),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 30, 21, 30, 0),
+            config_json={"universe": {"market": "US"}},
+        ),
+        FeatureRun(
+            id=5,
+            as_of_date=date(2026, 3, 31),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "HK"}},
+        ),
+        pointer_run_id=5,
+        pointer_key="latest_published_market:US",
+    )
+
+    with session_factory() as db:
+        run = service._get_latest_published_run(  # noqa: SLF001 - intentional unit test coverage
+            db,
+            market="US",
+        )
+
+    assert run is not None
+    assert run.id == 4
+
+
 def test_export_writes_serializable_manifest_and_page_bundles(
     service_and_session_factory,
     monkeypatch,
@@ -490,6 +526,44 @@ def test_get_market_run_series_normalizes_market_to_uppercase(service_and_sessio
         )
 
     assert [run.id for run in market_runs] == [31, 30]
+
+
+def test_get_market_run_series_deduplicates_same_day_reruns(service_and_session_factory):
+    service, session_factory = service_and_session_factory
+    latest_us_run = FeatureRun(
+        id=41,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 22, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    rerun_same_day = FeatureRun(
+        id=40,
+        as_of_date=date(2026, 4, 3),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 3, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    previous_day = FeatureRun(
+        id=39,
+        as_of_date=date(2026, 4, 2),
+        run_type="daily_snapshot",
+        status="published",
+        published_at=datetime(2026, 4, 2, 21, 30, 0),
+        config_json={"universe": {"market": "US"}},
+    )
+    _insert_runs(session_factory, latest_us_run, rerun_same_day, previous_day)
+
+    with session_factory() as db:
+        market_runs = service._get_market_run_series(  # noqa: SLF001 - intentional unit test coverage
+            db=db,
+            market="US",
+            latest_run=latest_us_run,
+        )
+
+    assert [run.id for run in market_runs] == [41, 39]
 
 
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
