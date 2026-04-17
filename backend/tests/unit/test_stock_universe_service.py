@@ -28,6 +28,11 @@ def _make_session():
     return TestingSessionLocal
 
 
+def _assert_bulk_universe_rows_prepopulate_required_defaults(objects):
+    for row in objects:
+        assert row.consecutive_fetch_failures == 0
+
+
 def test_get_active_symbols_uses_is_active_over_stale_active_status():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -185,6 +190,8 @@ def test_populate_from_csv_batches_new_universe_rows_and_status_events(monkeypat
         objects = list(objects)
         if objects:
             bulk_calls.append((type(objects[0]).__name__, len(objects)))
+            if isinstance(objects[0], StockUniverse):
+                _assert_bulk_universe_rows_prepopulate_required_defaults(objects)
         return original_bulk_save(objects, **kwargs)
 
     def _guard_add(obj):
@@ -355,6 +362,8 @@ def test_market_ingest_batches_new_universe_rows_and_status_events(
         objects = list(objects)
         if objects:
             bulk_calls.append((type(objects[0]).__name__, len(objects)))
+            if isinstance(objects[0], StockUniverse):
+                _assert_bulk_universe_rows_prepopulate_required_defaults(objects)
         return original_bulk_save(objects, **kwargs)
 
     def _guard_add(obj):
@@ -375,6 +384,59 @@ def test_market_ingest_batches_new_universe_rows_and_status_events(
     assert stats["added"] == expected_added
     assert ("StockUniverse", expected_added) in bulk_calls
     assert ("StockUniverseStatusEvent", expected_added) in bulk_calls
+    db.close()
+
+
+def test_populate_universe_batches_new_rows_with_required_defaults(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    bulk_calls: list[tuple[str, int]] = []
+    original_bulk_save = db.bulk_save_objects
+    original_add = db.add
+
+    def _record_bulk(objects, **kwargs):
+        objects = list(objects)
+        if objects:
+            bulk_calls.append((type(objects[0]).__name__, len(objects)))
+            if isinstance(objects[0], StockUniverse):
+                _assert_bulk_universe_rows_prepopulate_required_defaults(objects)
+        return original_bulk_save(objects, **kwargs)
+
+    def _guard_add(obj):
+        if isinstance(obj, (StockUniverse, StockUniverseStatusEvent)):
+            raise AssertionError("expected populate_universe inserts to be batched")
+        return original_add(obj)
+
+    monkeypatch.setattr(db, "bulk_save_objects", _record_bulk)
+    monkeypatch.setattr(db, "add", _guard_add)
+    monkeypatch.setattr(
+        stock_universe_service,
+        "fetch_from_finviz",
+        lambda exchange_filter=None: [
+            {
+                "symbol": "AAPL",
+                "name": "Apple",
+                "exchange": "NASDAQ",
+                "sector": "Technology",
+                "industry": "Consumer Electronics",
+                "market_cap": 3_000_000_000_000.0,
+            },
+            {
+                "symbol": "MSFT",
+                "name": "Microsoft",
+                "exchange": "NASDAQ",
+                "sector": "Technology",
+                "industry": "Software",
+                "market_cap": 2_800_000_000_000.0,
+            },
+        ],
+    )
+
+    stats = stock_universe_service.populate_universe(db, exchange_filter="NASDAQ")
+
+    assert stats["added"] == 2
+    assert ("StockUniverse", 2) in bulk_calls
+    assert ("StockUniverseStatusEvent", 2) in bulk_calls
     db.close()
 
 
