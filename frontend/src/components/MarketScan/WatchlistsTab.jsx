@@ -37,6 +37,7 @@ function WatchlistsTab() {
   const {
     data: watchlistsData,
     isLoading: watchlistsLoading,
+    error: watchlistsError,
     refetch: refetchWatchlists,
   } = useQuery({
     queryKey: ['userWatchlists'],
@@ -54,6 +55,7 @@ function WatchlistsTab() {
   const {
     data: watchlistData,
     isLoading: dataLoading,
+    error: dataError,
     refetch: refetchData,
   } = useQuery({
     queryKey: ['userWatchlistData', selectedWatchlistId],
@@ -69,7 +71,7 @@ function WatchlistsTab() {
   } = useQuery({
     queryKey: ['userWatchlistStewardship', selectedWatchlistId, activeProfile],
     queryFn: () => getWatchlistStewardship(selectedWatchlistId, activeProfile),
-    enabled: !!selectedWatchlistId,
+    enabled: !!selectedWatchlistId && !!watchlistData,
   });
 
   const stewardshipBySymbol = useMemo(
@@ -139,6 +141,10 @@ function WatchlistsTab() {
         <CircularProgress />
       </Box>
     );
+  }
+
+  if (watchlistsError) {
+    return <Alert severity="error">Unable to load watchlists: {watchlistsError.message}</Alert>;
   }
 
   return (
@@ -212,6 +218,8 @@ function WatchlistsTab() {
           <Box display="flex" justifyContent="center" py={4}>
             <CircularProgress />
           </Box>
+        ) : dataError ? (
+          <Alert severity="error">Unable to load watchlist data: {dataError.message}</Alert>
         ) : watchlistData ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {stewardshipError && (
