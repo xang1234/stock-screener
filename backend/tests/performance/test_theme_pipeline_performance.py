@@ -57,6 +57,64 @@ def _p95(values: list[float]) -> float:
     return float(ordered[idx])
 
 
+def _aggregate_round_metrics(rounds: list[dict[str, float]]) -> dict[str, float | list[dict[str, float]]]:
+    """Summarize repeated perf rounds using median central tendency.
+
+    Median keeps the regression gate sensitive to sustained slowdowns while
+    filtering a single scheduler or CI-load outlier.
+    """
+    assert rounds, "round aggregation requires at least one round"
+    p95_values = sorted(float(round_["p95_ms"]) for round_ in rounds)
+    throughput_values = sorted(float(round_["throughput"]) for round_ in rounds)
+    processed_values = [float(round_.get("processed", 0.0)) for round_ in rounds]
+    return {
+        "median_p95_ms": float(np.median(p95_values)),
+        "median_throughput": float(np.median(throughput_values)),
+        "worst_p95_ms": float(max(p95_values)),
+        "lowest_throughput": float(min(throughput_values)),
+        "min_processed": float(min(processed_values)) if processed_values else 0.0,
+        "rounds": rounds,
+    }
+
+
+def _format_rounds(rounds: list[dict[str, float]]) -> str:
+    return ", ".join(
+        (
+            f"r{int(round_['round'])}:"
+            f"p95={float(round_['p95_ms']):.2f}ms/"
+            f"thr={float(round_['throughput']):.2f}"
+        )
+        for round_ in rounds
+    )
+
+
+def test_aggregate_round_metrics_uses_median_to_filter_single_outlier():
+    summary = _aggregate_round_metrics(
+        [
+            {"p95_ms": 210.0, "throughput": 18.5},
+            {"p95_ms": 225.0, "throughput": 18.0},
+            {"p95_ms": 602.0, "throughput": 17.7},
+        ]
+    )
+
+    assert summary["median_p95_ms"] == pytest.approx(225.0)
+    assert summary["median_throughput"] == pytest.approx(18.0)
+    assert summary["worst_p95_ms"] == pytest.approx(602.0)
+
+
+def test_aggregate_round_metrics_preserves_sustained_regression_signal():
+    summary = _aggregate_round_metrics(
+        [
+            {"p95_ms": 305.0, "throughput": 14.5},
+            {"p95_ms": 318.0, "throughput": 14.2},
+            {"p95_ms": 330.0, "throughput": 13.9},
+        ]
+    )
+
+    assert summary["median_p95_ms"] == pytest.approx(318.0)
+    assert summary["median_throughput"] == pytest.approx(14.2)
+
+
 def _make_session_factory():
     engine = create_engine(
         "sqlite://",
@@ -245,36 +303,6 @@ def test_consolidation_pair_generation_p95_and_throughput(monkeypatch):
 @pytest.mark.performance
 @pytest.mark.asyncio
 async def test_extraction_api_response_time_and_throughput(monkeypatch):
-    SessionLocal = _make_session_factory()
-    seed_session = SessionLocal()
-
-    source = ContentSource(
-        name="Perf Source",
-        source_type="news",
-        url="https://example.com/perf",
-        is_active=True,
-        pipelines=["technical"],
-    )
-    seed_session.add(source)
-    seed_session.flush()
-
-    # Use enough requests that p95 is not effectively the single worst sample.
-    for i in range(110):
-        seed_session.add(
-            ContentItem(
-                source_id=source.id,
-                source_type="news",
-                source_name=source.name,
-                external_id=f"perf-{i}",
-                title=f"Title {i}",
-                content=f"Body {i}",
-                published_at=datetime.utcnow() - timedelta(minutes=i),
-                is_processed=False,
-            )
-        )
-    seed_session.commit()
-    seed_session.close()
-
     monkeypatch.setattr(ThemeExtractionService, "_load_configured_model", lambda self: None)
     monkeypatch.setattr(ThemeExtractionService, "_init_client", lambda self: None)
     monkeypatch.setattr(
@@ -308,67 +336,92 @@ async def test_extraction_api_response_time_and_throughput(monkeypatch):
         _noop_startup_rebuild,
     )
     _disable_server_auth_for_perf(monkeypatch)
+    round_metrics: list[dict[str, float]] = []
+    for round_idx in range(3):
+        SessionLocal = _make_session_factory()
+        seed_session = SessionLocal()
 
-    def _override_get_db():
-        db = SessionLocal()
+        source = ContentSource(
+            name="Perf Source",
+            source_type="news",
+            url="https://example.com/perf",
+            is_active=True,
+            pipelines=["technical"],
+        )
+        seed_session.add(source)
+        seed_session.flush()
+
+        # Use enough requests that p95 is not effectively the single worst sample.
+        for i in range(110):
+            seed_session.add(
+                ContentItem(
+                    source_id=source.id,
+                    source_type="news",
+                    source_name=source.name,
+                    external_id=f"perf-{round_idx}-{i}",
+                    title=f"Title {i}",
+                    content=f"Body {i}",
+                    published_at=datetime.utcnow() - timedelta(minutes=i),
+                    is_processed=False,
+                )
+            )
+        seed_session.commit()
+        seed_session.close()
+
+        def _override_get_db():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = _override_get_db
         try:
-            yield db
+            transport = httpx.ASGITransport(app=app)
+            latencies_ms: list[float] = []
+            total_processed = 0
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                warmup_response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=1")
+                assert warmup_response.status_code == 200
+
+                started = time.perf_counter()
+                for _ in range(20):
+                    t0 = time.perf_counter()
+                    response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=5")
+                    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                    latencies_ms.append(elapsed_ms)
+                    assert response.status_code == 200
+                    payload = response.json()
+                    total_processed += int(payload.get("processed", 0))
+            elapsed_s = time.perf_counter() - started
+            round_metrics.append(
+                {
+                    "round": float(round_idx + 1),
+                    "p95_ms": _p95(latencies_ms),
+                    "throughput": float(total_processed) / max(elapsed_s, 1e-9),
+                    "processed": float(total_processed),
+                }
+            )
         finally:
-            db.close()
+            app.dependency_overrides.pop(get_db, None)
 
-    app.dependency_overrides[get_db] = _override_get_db
-    try:
-        transport = httpx.ASGITransport(app=app)
-        latencies_ms: list[float] = []
-        total_processed = 0
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            warmup_response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=1")
-            assert warmup_response.status_code == 200
-
-            started = time.perf_counter()
-            for _ in range(20):
-                t0 = time.perf_counter()
-                response = await client.post("/api/v1/themes/extract?pipeline=technical&limit=5")
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
-                latencies_ms.append(elapsed_ms)
-                assert response.status_code == 200
-                payload = response.json()
-                total_processed += int(payload.get("processed", 0))
-        elapsed_s = time.perf_counter() - started
-
-        p95 = _p95(latencies_ms)
-        throughput = float(total_processed) / max(elapsed_s, 1e-9)
-        assert total_processed >= 95, f"Unexpected low extraction volume in benchmark: {total_processed}"
-        assert p95 <= API_EXTRACT_P95_BUDGET_MS, (
-            f"/themes/extract p95 {p95:.2f}ms exceeded {API_EXTRACT_P95_BUDGET_MS:.2f}ms"
-        )
-        assert throughput >= API_EXTRACT_MIN_THROUGHPUT_ITEMS, (
-            f"/themes/extract throughput {throughput:.2f} items/s below {API_EXTRACT_MIN_THROUGHPUT_ITEMS:.2f}"
-        )
-    finally:
-        app.dependency_overrides.pop(get_db, None)
+    summary = _aggregate_round_metrics(round_metrics)
+    assert summary["min_processed"] >= 95, (
+        f"Unexpected low extraction volume across perf rounds: {round_metrics}"
+    )
+    assert summary["median_p95_ms"] <= API_EXTRACT_P95_BUDGET_MS, (
+        f"/themes/extract median-round p95 {summary['median_p95_ms']:.2f}ms exceeded "
+        f"{API_EXTRACT_P95_BUDGET_MS:.2f}ms; rounds={_format_rounds(round_metrics)}"
+    )
+    assert summary["median_throughput"] >= API_EXTRACT_MIN_THROUGHPUT_ITEMS, (
+        f"/themes/extract median-round throughput {summary['median_throughput']:.2f} items/s below "
+        f"{API_EXTRACT_MIN_THROUGHPUT_ITEMS:.2f}; rounds={_format_rounds(round_metrics)}"
+    )
 
 
 @pytest.mark.performance
 @pytest.mark.asyncio
 async def test_consolidation_api_response_time_and_throughput(monkeypatch):
-    SessionLocal = _make_session_factory()
-    seed_session = SessionLocal()
-    _seed_theme_clusters(seed_session, count=60, pipeline="technical")
-    cluster_ids = [row[0] for row in seed_session.query(ThemeCluster.id).order_by(ThemeCluster.id.asc()).all()]
-    synthetic_pairs = []
-    for idx in range(0, min(len(cluster_ids) - 1, 24)):
-        synthetic_pairs.append(
-            {
-                "theme1_id": cluster_ids[idx],
-                "theme2_id": cluster_ids[idx + 1],
-                "similarity": 0.91,
-                "pipeline": "technical",
-            }
-        )
-    assert synthetic_pairs
-    seed_session.close()
-
     monkeypatch.setattr(ThemeMergingService, "_init_llm_client", lambda self: None)
     monkeypatch.setattr(ThemeEmbeddingEngine, "get_encoder", lambda self: object())
     monkeypatch.setattr(
@@ -387,50 +440,88 @@ async def test_consolidation_api_response_time_and_throughput(monkeypatch):
             "canonical_name": None,
         },
     )
-    monkeypatch.setattr(
-        ThemeMergingService,
-        "find_all_similar_pairs",
-        lambda self, threshold=None, pipeline=None, top_k=None, recall_sample_size=0: synthetic_pairs,
-    )
     _disable_server_auth_for_perf(monkeypatch)
 
-    def _override_get_db():
-        db = SessionLocal()
+    round_metrics: list[dict[str, float]] = []
+    for round_idx in range(3):
+        SessionLocal = _make_session_factory()
+        seed_session = SessionLocal()
+        _seed_theme_clusters(seed_session, count=60, pipeline="technical")
+        cluster_ids = [
+            row[0] for row in seed_session.query(ThemeCluster.id).order_by(ThemeCluster.id.asc()).all()
+        ]
+        synthetic_pairs = []
+        for idx in range(0, min(len(cluster_ids) - 1, 24)):
+            synthetic_pairs.append(
+                {
+                    "theme1_id": cluster_ids[idx],
+                    "theme2_id": cluster_ids[idx + 1],
+                    "similarity": 0.91,
+                    "pipeline": "technical",
+                }
+        )
+        assert synthetic_pairs
+        seed_session.close()
+        monkeypatch.setattr(
+            ThemeMergingService,
+            "find_all_similar_pairs",
+            lambda self,
+            threshold=None,
+            pipeline=None,
+            top_k=None,
+            recall_sample_size=0,
+            pairs=synthetic_pairs: pairs,
+        )
+
+        def _override_get_db():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = _override_get_db
         try:
-            yield db
+            transport = httpx.ASGITransport(app=app)
+            latencies_ms: list[float] = []
+            pairs_found_total = 0
+            started = time.perf_counter()
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                ThemeMergingService._perf_test_synthetic_pairs = synthetic_pairs
+
+                # Warmup to avoid one-time routing/import/cache effects in p95.
+                warmup_response = await client.post("/api/v1/themes/consolidate?dry_run=true")
+                assert warmup_response.status_code == 200
+
+                for _ in range(20):
+                    t0 = time.perf_counter()
+                    response = await client.post("/api/v1/themes/consolidate?dry_run=true")
+                    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                    latencies_ms.append(elapsed_ms)
+                    assert response.status_code == 200
+                    payload = response.json()
+                    pairs_found_total += int(payload.get("pairs_found", 0))
+            elapsed_s = time.perf_counter() - started
+            round_metrics.append(
+                {
+                    "round": float(round_idx + 1),
+                    "p95_ms": _p95(latencies_ms),
+                    "throughput": float(pairs_found_total) / max(elapsed_s, 1e-9),
+                    "processed": float(pairs_found_total),
+                }
+            )
         finally:
-            db.close()
+            app.dependency_overrides.pop(get_db, None)
 
-    app.dependency_overrides[get_db] = _override_get_db
-    try:
-        transport = httpx.ASGITransport(app=app)
-        latencies_ms: list[float] = []
-        pairs_found_total = 0
-        started = time.perf_counter()
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            # Warmup to avoid one-time routing/import/cache effects in p95.
-            warmup_response = await client.post("/api/v1/themes/consolidate?dry_run=true")
-            assert warmup_response.status_code == 200
-
-            for _ in range(20):
-                t0 = time.perf_counter()
-                response = await client.post("/api/v1/themes/consolidate?dry_run=true")
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
-                latencies_ms.append(elapsed_ms)
-                assert response.status_code == 200
-                payload = response.json()
-                pairs_found_total += int(payload.get("pairs_found", 0))
-        elapsed_s = time.perf_counter() - started
-
-        p95 = _p95(latencies_ms)
-        throughput = float(pairs_found_total) / max(elapsed_s, 1e-9)
-        assert pairs_found_total > 0, "Expected non-zero consolidation pair throughput sample"
-        assert p95 <= API_CONSOLIDATE_P95_BUDGET_MS, (
-            f"/themes/consolidate p95 {p95:.2f}ms exceeded {API_CONSOLIDATE_P95_BUDGET_MS:.2f}ms"
-        )
-        assert throughput >= API_CONSOLIDATE_MIN_THROUGHPUT_PAIRS, (
-            f"/themes/consolidate throughput {throughput:.2f} pairs/s "
-            f"below {API_CONSOLIDATE_MIN_THROUGHPUT_PAIRS:.2f}"
-        )
-    finally:
-        app.dependency_overrides.pop(get_db, None)
+    summary = _aggregate_round_metrics(round_metrics)
+    assert summary["min_processed"] > 0, (
+        f"Expected non-zero consolidation throughput across perf rounds: {round_metrics}"
+    )
+    assert summary["median_p95_ms"] <= API_CONSOLIDATE_P95_BUDGET_MS, (
+        f"/themes/consolidate median-round p95 {summary['median_p95_ms']:.2f}ms exceeded "
+        f"{API_CONSOLIDATE_P95_BUDGET_MS:.2f}ms; rounds={_format_rounds(round_metrics)}"
+    )
+    assert summary["median_throughput"] >= API_CONSOLIDATE_MIN_THROUGHPUT_PAIRS, (
+        f"/themes/consolidate median-round throughput {summary['median_throughput']:.2f} pairs/s "
+        f"below {API_CONSOLIDATE_MIN_THROUGHPUT_PAIRS:.2f}; rounds={_format_rounds(round_metrics)}"
+    )
