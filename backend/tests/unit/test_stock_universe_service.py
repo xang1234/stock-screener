@@ -174,6 +174,43 @@ def test_populate_from_csv_uses_tpex_two_suffix_for_unsuffixed_symbols():
     db.close()
 
 
+def test_populate_from_csv_batches_new_universe_rows_and_status_events(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    bulk_calls: list[tuple[str, int]] = []
+    original_bulk_save = db.bulk_save_objects
+    original_add = db.add
+
+    def _record_bulk(objects, **kwargs):
+        objects = list(objects)
+        if objects:
+            bulk_calls.append((type(objects[0]).__name__, len(objects)))
+        return original_bulk_save(objects, **kwargs)
+
+    def _guard_add(obj):
+        if isinstance(obj, (StockUniverse, StockUniverseStatusEvent)):
+            raise AssertionError("expected StockUniverse inserts to be batched")
+        return original_add(obj)
+
+    monkeypatch.setattr(db, "bulk_save_objects", _record_bulk)
+    monkeypatch.setattr(db, "add", _guard_add)
+
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange,sector,industry,market_cap",
+            "700,Tencent,SEHK,Technology,Internet,500B",
+            "3008,Largan,TPEX,Technology,Electronics,120B",
+        ]
+    )
+
+    stats = stock_universe_service.populate_from_csv(db, csv_content)
+
+    assert stats["added"] == 2
+    assert ("StockUniverse", 2) in bulk_calls
+    assert ("StockUniverseStatusEvent", 2) in bulk_calls
+    db.close()
+
+
 def test_ingest_hk_from_csv_normalizes_variants_with_zero_padding_and_lineage():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -253,6 +290,91 @@ def test_ingest_hk_from_csv_reactivates_existing_inactive_symbol():
     assert row.status == UNIVERSE_STATUS_ACTIVE
     assert row.exchange == "XHKG"
     assert row.local_code == "0700"
+    db.close()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "source_name", "snapshot_id", "csv_content", "expected_added"),
+    [
+        (
+            "ingest_hk_from_csv",
+            "sehk_official",
+            "hk-20260412",
+            "\n".join(
+                [
+                    "symbol,name,exchange,sector,industry,market_cap",
+                    "700,Tencent,SEHK,Technology,Internet,500B",
+                    "1299,AIA,SEHK,Financial,Insurance,100B",
+                ]
+            ),
+            2,
+        ),
+        (
+            "ingest_jp_from_csv",
+            "jpx_official",
+            "jp-20260412",
+            "\n".join(
+                [
+                    "symbol,name,exchange,sector,industry,market_cap",
+                    "7203,Toyota,TSE,Consumer Cyclical,Auto Manufacturers,300B",
+                    "6758,Sony,TSE,Technology,Consumer Electronics,150B",
+                ]
+            ),
+            2,
+        ),
+        (
+            "ingest_tw_from_csv",
+            "tw_reference_bundle",
+            "tw-20260412",
+            "\n".join(
+                [
+                    "symbol,name,exchange,sector,industry,market_cap",
+                    "2330,TSMC,TWSE,Technology,Semiconductors,800B",
+                    "3008,Largan,TPEX,Technology,Electronics,120B",
+                ]
+            ),
+            2,
+        ),
+    ],
+)
+def test_market_ingest_batches_new_universe_rows_and_status_events(
+    monkeypatch,
+    method_name,
+    source_name,
+    snapshot_id,
+    csv_content,
+    expected_added,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    bulk_calls: list[tuple[str, int]] = []
+    original_bulk_save = db.bulk_save_objects
+    original_add = db.add
+
+    def _record_bulk(objects, **kwargs):
+        objects = list(objects)
+        if objects:
+            bulk_calls.append((type(objects[0]).__name__, len(objects)))
+        return original_bulk_save(objects, **kwargs)
+
+    def _guard_add(obj):
+        if isinstance(obj, (StockUniverse, StockUniverseStatusEvent)):
+            raise AssertionError("expected market ingest inserts to be batched")
+        return original_add(obj)
+
+    monkeypatch.setattr(db, "bulk_save_objects", _record_bulk)
+    monkeypatch.setattr(db, "add", _guard_add)
+
+    stats = getattr(stock_universe_service, method_name)(
+        db,
+        csv_content,
+        source_name=source_name,
+        snapshot_id=snapshot_id,
+    )
+
+    assert stats["added"] == expected_added
+    assert ("StockUniverse", expected_added) in bulk_calls
+    assert ("StockUniverseStatusEvent", expected_added) in bulk_calls
     db.close()
 
 
