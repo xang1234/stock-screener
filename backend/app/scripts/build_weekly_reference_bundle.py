@@ -138,6 +138,19 @@ def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
         handle.write("\n".join(lines))
 
 
+def _raise_publish_blocked(
+    *,
+    market: str,
+    summary: dict[str, Any],
+    snapshot_stats: dict[str, Any],
+) -> None:
+    _write_step_summary(market, summary)
+    raise RuntimeError(
+        "Weekly fundamentals snapshot did not publish: "
+        f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+    )
+
+
 def _ingest_official_market_snapshot(db, stock_universe_service, snapshot) -> dict[str, Any]:
     if snapshot.market == "HK":
         return stock_universe_service.ingest_hk_snapshot_rows(
@@ -195,10 +208,16 @@ def _build_us_bundle(
         progress_callback=_print_progress,
         show_finviz_progress=True,
     )
+    summary = {
+        "output_dir": output_dir,
+        "universe_refresh": universe_stats,
+        "snapshot_publish": snapshot_stats,
+    }
     if not snapshot_stats.get("published"):
-        raise RuntimeError(
-            "Weekly fundamentals snapshot did not publish: "
-            f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+        _raise_publish_blocked(
+            market=market,
+            summary=summary,
+            snapshot_stats=snapshot_stats,
         )
     _print_snapshot_publish_summary(snapshot_stats)
 
@@ -218,14 +237,14 @@ def _build_us_bundle(
         market=market,
     )
 
-    return {
-        "output_dir": output_dir,
-        "bundle": bundle_path,
-        "latest_manifest": latest_manifest_path,
-        "universe_refresh": universe_stats,
-        "snapshot_publish": snapshot_stats,
-        "export": export_stats,
-    }
+    summary.update(
+        {
+            "bundle": bundle_path,
+            "latest_manifest": latest_manifest_path,
+            "export": export_stats,
+        }
+    )
+    return summary
 
 
 def _build_asia_bundle(
@@ -326,10 +345,17 @@ def _build_asia_bundle(
         coverage_stats=coverage_stats,
         warnings=warnings,
     )
+    summary = {
+        "output_dir": output_dir,
+        "universe_refresh": universe_stats,
+        "fundamentals_refresh": fundamentals_stats,
+        "snapshot_publish": snapshot_stats,
+    }
     if not snapshot_stats.get("published"):
-        raise RuntimeError(
-            "Weekly fundamentals snapshot did not publish: "
-            f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+        _raise_publish_blocked(
+            market=market,
+            summary=summary,
+            snapshot_stats=snapshot_stats,
         )
     _print_snapshot_publish_summary(snapshot_stats)
 
@@ -349,15 +375,14 @@ def _build_asia_bundle(
         market=market,
     )
 
-    return {
-        "output_dir": output_dir,
-        "bundle": bundle_path,
-        "latest_manifest": latest_manifest_path,
-        "universe_refresh": universe_stats,
-        "fundamentals_refresh": fundamentals_stats,
-        "snapshot_publish": snapshot_stats,
-        "export": export_stats,
-    }
+    summary.update(
+        {
+            "bundle": bundle_path,
+            "latest_manifest": latest_manifest_path,
+            "export": export_stats,
+        }
+    )
+    return summary
 
 
 def main() -> int:

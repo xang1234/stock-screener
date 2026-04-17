@@ -122,6 +122,60 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
     assert "Weekly reference bundle complete for US:" in stdout
 
 
+def test_build_weekly_reference_bundle_writes_summary_when_us_publish_is_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
+    summary_path = tmp_path / "github-step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    stock_universe_service = SimpleNamespace(
+        populate_universe=lambda db: {"added": 10},
+    )
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=lambda db, run_mode, publish, snapshot_key, market, **kwargs: {
+            "published": False,
+            "warnings": ["Active snapshot coverage 80.00% below minimum 98.00%"],
+            "source_revision": "fundamentals_v1_us:20260404121000",
+            "snapshot_key": snapshot_key,
+            "market": market,
+            "coverage": {
+                "snapshot_symbols": 8,
+                "active_symbols": 10,
+            },
+            "coverage_thresholds": {
+                "market": market,
+                "active_coverage": 0.8,
+                "min_active_coverage": 0.98,
+                "missing_ratio": 0.2,
+                "max_missing_ratio": 0.005,
+            },
+        },
+    )
+    monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "US",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Weekly fundamentals snapshot did not publish"):
+        build_script.main()
+
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "## Weekly Reference Bundle: US" in summary_text
+    assert "| Active coverage | 80.00% |" in summary_text
+    assert "| Minimum coverage | 98.00% |" in summary_text
+    assert "| Bundle rows exported | 0 |" in summary_text
+
+
 def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_path, capsys):
     published_at = datetime(2026, 4, 4, 12, 10, 0)
     active_rows = [
