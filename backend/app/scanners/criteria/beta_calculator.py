@@ -69,8 +69,8 @@ class BetaCalculator:
             bench_slice = bench_slice.iloc[-min_len:]
 
             # Calculate daily returns
-            stock_returns = stock_slice.pct_change().dropna()
-            bench_returns = bench_slice.pct_change().dropna()
+            stock_returns = stock_slice.pct_change(fill_method=None).dropna()
+            bench_returns = bench_slice.pct_change(fill_method=None).dropna()
 
             # Align series (in case of any NaN differences)
             min_len = min(len(stock_returns), len(bench_returns))

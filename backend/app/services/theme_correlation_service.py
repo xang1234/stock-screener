@@ -75,7 +75,7 @@ class ThemeCorrelationService:
 
     def _calculate_returns(self, price_df: pd.DataFrame) -> pd.DataFrame:
         """Calculate daily returns from prices"""
-        return price_df.pct_change().dropna()
+        return price_df.pct_change(fill_method=None).dropna()
 
     def calculate_pairwise_correlations(
         self,

@@ -327,7 +327,7 @@ def _pullback_orderliness(frame: pd.DataFrame, *, end_idx: int) -> dict[str, flo
     ).dropna()
     avg_range_pct = float(range_pct.mean()) if not range_pct.empty else 0.0
 
-    close_changes = segment["Close"].pct_change().dropna()
+    close_changes = segment["Close"].pct_change(fill_method=None).dropna()
     close_volatility_pct = (
         float(close_changes.std(ddof=0) * 100.0)
         if not close_changes.empty

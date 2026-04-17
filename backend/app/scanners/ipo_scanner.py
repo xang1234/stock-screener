@@ -329,7 +329,7 @@ class IPOScanner(BaseStockScreener):
         """
         try:
             # Calculate daily returns
-            returns = prices.pct_change().dropna()
+            returns = prices.pct_change(fill_method=None).dropna()
 
             # Calculate volatility (annualized standard deviation)
             daily_volatility = returns.std()

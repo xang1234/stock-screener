@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import warnings
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.models.stock import StockPrice
 from app.models.theme import (
     ContentItem,
     ContentSource,
@@ -112,6 +114,27 @@ def _add_mention(
         mentioned_at=published_at,
     )
     db_session.add(mention)
+
+
+def _add_stock_price(
+    db_session,
+    *,
+    symbol: str,
+    trade_date: datetime,
+    close: float | None,
+) -> None:
+    db_session.add(
+        StockPrice(
+            symbol=symbol,
+            date=trade_date.date(),
+            open=close,
+            high=close,
+            low=close,
+            close=close,
+            adj_close=close,
+            volume=1_000_000,
+        )
+    )
 
 
 def test_candidate_promotion_policy_promotes_theme_with_persistent_diverse_evidence(db_session):
@@ -221,6 +244,52 @@ def test_calculate_mention_metrics_batch_matches_single_theme_metrics(db_session
     single_metrics = service.calculate_mention_metrics(theme.id, as_of_date=now)
 
     assert batch_metrics[theme.id] == single_metrics
+
+
+def test_calculate_price_metrics_tolerates_sparse_prices_without_futurewarning(db_session):
+    now = datetime(2026, 2, 24, 16, 30, 0)
+    theme = _make_theme(
+        db_session,
+        name="Sparse Grid Demand",
+        canonical_key="sparse_grid_demand",
+        state="active",
+        now=now,
+    )
+    db_session.add(
+        ThemeConstituent(
+            theme_cluster_id=theme.id,
+            symbol="AAPL",
+            source="manual",
+            confidence=1.0,
+            is_active=True,
+        )
+    )
+    prices = [100.0, None, 101.0, 103.0, 104.0, 105.0]
+    spy_prices = [400.0, None, 401.0, 402.0, 403.0, 404.0]
+    for index, close in enumerate(prices):
+        _add_stock_price(
+            db_session,
+            symbol="AAPL",
+            trade_date=now - timedelta(days=5 - index),
+            close=close,
+        )
+    for index, close in enumerate(spy_prices):
+        _add_stock_price(
+            db_session,
+            symbol="SPY",
+            trade_date=now - timedelta(days=5 - index),
+            close=close,
+        )
+    db_session.commit()
+
+    service = ThemeDiscoveryService(db_session, pipeline="technical")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        metrics = service.calculate_price_metrics(theme.id, as_of_date=now)
+
+    assert metrics["num_constituents"] == 1
+    assert metrics["basket_rs_vs_spy"] >= 0
 
 
 def test_relationship_inference_writes_merge_and_overlap_edges(db_session):

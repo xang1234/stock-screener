@@ -231,7 +231,7 @@ class TechnicalCalculatorService:
 
         try:
             # Daily returns
-            returns = close.pct_change().dropna()
+            returns = close.pct_change(fill_method=None).dropna()
 
             if len(returns) >= 5:
                 # Weekly volatility (last 5 trading days)

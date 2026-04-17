@@ -299,7 +299,7 @@ class ThemeDiscoveryService:
                 continue
 
             df = pd.DataFrame(prices).sort_values("date")
-            df["return"] = df["close"].pct_change()
+            df["return"] = df["close"].pct_change(fill_method=None)
 
             current_price = df.iloc[-1]["close"]
             current_prices[symbol] = current_price
@@ -335,7 +335,7 @@ class ThemeDiscoveryService:
         spy_df = pd.DataFrame([{"date": p.date, "close": p.close} for p in spy_prices])
         if len(spy_df) > 0:
             spy_df = spy_df.sort_values("date")
-            spy_df["return"] = spy_df["close"].pct_change()
+            spy_df["return"] = spy_df["close"].pct_change(fill_method=None)
             spy_returns = spy_df.set_index("date")["return"]
         else:
             spy_returns = pd.Series(dtype=float)
