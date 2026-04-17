@@ -179,7 +179,7 @@ const getCacheChipProps = (health) => {
   }
 };
 
-export default function CacheStatus() {
+export default function CacheStatus({ enabled = true }) {
   const queryClient = useQueryClient();
 
   // State for dropdown menu
@@ -205,6 +205,7 @@ export default function CacheStatus() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['cacheStats'],
     queryFn: getCacheStats,
+    enabled,
     refetchInterval: 60000,
     staleTime: 30000,
     retry: 2
@@ -215,6 +216,7 @@ export default function CacheStatus() {
   const { data: health, isLoading: healthLoading, error: healthError } = useQuery({
     queryKey: ['cacheHealth'],
     queryFn: getCacheHealth,
+    enabled,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (status === 'updating' || status === 'stuck') return 5000;
@@ -392,6 +394,10 @@ export default function CacheStatus() {
   const handleNotificationClose = () => {
     setNotification({ ...notification, open: false });
   };
+
+  if (!enabled) {
+    return <Chip size="small" label="Cache" variant="outlined" />;
+  }
 
   // Loading state
   if (statsLoading && healthLoading) {

@@ -46,6 +46,7 @@ celery_app = Celery(
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
         'app.tasks.universe_tasks',  # Stock universe management tasks
         'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
+        'app.tasks.runtime_bootstrap_tasks',  # Local-default first-run bootstrap orchestration
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
     ]
 )
@@ -191,25 +192,14 @@ def _graceful_db_shutdown(sender=None, **kwargs):
         _logger.warning("Worker shutdown DB cleanup failed (non-fatal): %s", e)
 
 
-# Task routing: route background tasks to dedicated per-market queues.
+# Task routing: default background tasks to shared local-default queues.
 #
-# Market-scoped tasks (refresh/cache/fundamentals/breadth/group_rank/universe/feature_store/scan)
-# MUST be enqueued with an explicit `queue=` in apply_async/.options(queue=...)/beat options,
-# because the queue depends on the runtime `market` kwarg. Static task_routes below only
-# provide a safety-net default that lands on the shared queue — picking up any task enqueued
-# without explicit routing, so nothing gets lost.
-#
-# Run one worker per market queue (see start_celery.sh / docker-compose.yml):
-#   datafetch-us     -Q data_fetch_us
-#   datafetch-hk     -Q data_fetch_hk
-#   datafetch-jp     -Q data_fetch_jp
-#   datafetch-tw     -Q data_fetch_tw
-#   datafetch-shared -Q data_fetch_shared    (legacy + market-agnostic)
-#   userscans-{us,hk,jp,tw,shared} -Q user_scans_*
+# Market-scoped tasks keep the `market` kwarg for sequencing/logging, but the
+# local-default runtime routes them all to the single shared data-fetch queue.
 from .tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
     SHARED_USER_SCANS_QUEUE,
-    data_fetch_queue_for_market as _dfq,
+    SUPPORTED_MARKETS,
 )
 
 _MARKET_SCOPED_DATA_FETCH_TASKS = (
@@ -246,7 +236,7 @@ celery_app.conf.task_routes = {
     for task_name in _MARKET_SCOPED_DATA_FETCH_TASKS
 }
 
-# User scans: same default-to-shared pattern; API layer sets queue explicitly per market.
+# User scans: same default-to-shared pattern; API layer sets the queue explicitly.
 celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
     'queue': SHARED_USER_SCANS_QUEUE
 }
@@ -255,18 +245,17 @@ celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
 celery_app.conf.result_expires = 86400  # Results expire after 24 hours
 
 # Celery Beat Schedule - Periodic Tasks
-# Data-fetching tasks fan out per market: one beat entry per enabled market,
-# each routed to that market's dedicated queue (e.g. data_fetch_hk) with
-# kwargs={"market": "HK"}. This lets markets run in parallel (e.g. US refresh
-# and HK refresh simultaneously) since each has its own worker and Redis
-# lock key. See tasks/market_queues.py for the queue topology.
+# Local-default uses one shared data-fetch lane, so beat always enqueues
+# market-scoped refreshes onto ``data_fetch_shared``. Runtime preferences are
+# checked inside the tasks so disabled markets skip cheaply without requiring a
+# beat restart.
 if settings.cache_warmup_enabled:
-    _enabled_markets = settings.enabled_markets_list
+    _enabled_markets = list(SUPPORTED_MARKETS)
     beat_schedule: dict = {}
 
     for _market in _enabled_markets:
         _warm_h, _warm_m = settings.cache_warm_schedule_for(_market)
-        _qname = _dfq(_market)
+        _qname = SHARED_DATA_FETCH_QUEUE
         _m_lower = _market.lower()
 
         # Daily smart cache refresh after local market close.
@@ -391,19 +380,6 @@ if settings.cache_warmup_enabled:
             'kwargs': {'keep_years': 5},
         },
 
-        # Weekly theme consolidation - identifies and merges duplicate themes
-        # Runs Sunday at 4 AM ET (after weekly-universe-refresh)
-        # Uses embedding similarity + LLM verification for high-quality merges
-        'weekly-theme-consolidation': {
-            'task': 'app.tasks.theme_discovery_tasks.consolidate_themes',
-            'schedule': crontab(
-                hour=4,  # 4 AM ET
-                minute=0,
-                day_of_week=0  # Sunday
-            ),
-            'kwargs': {'dry_run': False},
-        },
-
         # Daily candidate promotion pass for theme lifecycle state machine.
         # Runs at 4:30 AM ET after nightly data refresh jobs.
         'daily-theme-candidate-promotion': {
@@ -421,27 +397,6 @@ if settings.cache_warmup_enabled:
             'schedule': crontab(
                 hour=4,
                 minute=45,
-            ),
-        },
-
-        # Incremental stale embedding refresh to avoid full-table recomputes.
-        # Runs after lifecycle updates so freshness catches identity transitions quickly.
-        'daily-theme-stale-embedding-recompute': {
-            'task': 'app.tasks.theme_discovery_tasks.recompute_stale_theme_embeddings',
-            'schedule': crontab(
-                hour=5,
-                minute=10,
-            ),
-            'kwargs': {'batch_size': 100, 'max_batches': 20},
-        },
-
-        # Daily semantic relationship edge inference for theme analysis UX.
-        # Runs after lifecycle updates and merge suggestion generation windows.
-        'daily-theme-relationship-inference': {
-            'task': 'app.tasks.theme_discovery_tasks.infer_theme_relationships',
-            'schedule': crontab(
-                hour=5,
-                minute=0,
             ),
         },
 
@@ -477,41 +432,9 @@ if settings.cache_warmup_enabled:
             'schedule': crontab(minute='20,50'),
         },
 
-        # L1 Taxonomy: recompute centroid embeddings from children
-        # Run after stale L2 embedding refresh (5:10 AM), before L1 metrics
-        'daily-l1-centroid-embeddings': {
-            'task': 'app.tasks.theme_discovery_tasks.recompute_l1_centroid_embeddings',
-            'schedule': crontab(
-                hour=5,
-                minute=20,
-            ),
-        },
-
-        # L1 Taxonomy: aggregate L2 metrics → L1 metrics
-        # Run after centroid embeddings (5:20 AM)
-        'daily-l1-metrics': {
-            'task': 'app.tasks.theme_discovery_tasks.compute_l1_metrics',
-            'schedule': crontab(
-                hour=5,
-                minute=30,
-            ),
-        },
-
-        # L1 Taxonomy: weekly full assignment pipeline
-        # Run before weekly consolidation (Sunday 4 AM)
-        'weekly-taxonomy-assignment': {
-            'task': 'app.tasks.theme_discovery_tasks.run_taxonomy_assignment',
-            'schedule': crontab(
-                hour=3,
-                minute=30,
-                day_of_week=0,  # Sunday
-            ),
-        },
-
         # Weekly telemetry governance audit (bead asia.10.4).
-        # Sunday 5 AM ET — after weekly-full-refresh (2 AM), universe refresh
-        # (3 AM), taxonomy (3:30 AM), and consolidation (4 AM) have emitted
-        # their final telemetry for the week. Produces a signed report at
+        # Sunday 5 AM ET — after weekly-full-refresh (2 AM) and universe refresh
+        # (3 AM) have emitted their final telemetry for the week. Produces a signed report at
         # data/governance/telemetry_audit/YYYY-MM-DD.{json,md,sha256}.
         'weekly-telemetry-governance-audit': {
             'task': 'app.tasks.telemetry_tasks.weekly_telemetry_audit',

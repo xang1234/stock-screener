@@ -57,14 +57,18 @@ def _get_running_refresh_response() -> SmartRefreshResponse | None:
     )
 
 
-def _queue_manual_smart_refresh(mode: str) -> SmartRefreshResponse:
+def _queue_manual_smart_refresh(mode: str, market: str | None = None) -> SmartRefreshResponse:
     """Queue a smart refresh after rejecting duplicate active refreshes."""
     running_response = _get_running_refresh_response()
     if running_response is not None:
         return running_response
 
+    task_kwargs = {"mode": mode}
+    if market is not None:
+        task_kwargs["market"] = market
+
     task = smart_refresh_cache.apply_async(
-        kwargs={"mode": mode},
+        kwargs=task_kwargs,
         headers={"origin": "manual"},
     )
     mode_desc = (
@@ -449,7 +453,7 @@ async def smart_refresh(request: SmartRefreshRequest):
         SmartRefreshResponse with status and task_id
     """
     try:
-        return _queue_manual_smart_refresh(mode=request.mode)
+        return _queue_manual_smart_refresh(mode=request.mode, market=request.market)
 
     except Exception as e:
         raise HTTPException(

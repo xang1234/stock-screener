@@ -132,6 +132,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         Dict with refresh statistics
     """
     from .market_queues import market_tag, log_extra, normalize_market
+    from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
     _market = normalize_market(market) if market is not None else None
     logger.info("=" * 60)
@@ -140,6 +141,16 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
     if exchange_filter:
         logger.info("Exchange filter: %s", exchange_filter, extra=_log_extra)
     logger.info("=" * 60)
+
+    effective_market = _market or "US"
+    if not is_market_enabled_now(effective_market):
+        logger.info("Skipping universe refresh for disabled market %s", effective_market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
+            'timestamp': datetime.now().isoformat(),
+        }
 
     # Non-US universe refreshes use dedicated CSV/provider-specific ingestion
     # tasks (see ingest_hk_universe_csv). Skip the finviz path for non-US
@@ -158,7 +169,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
             'timestamp': datetime.now().isoformat(),
         }
 
-    prior_size = _count_active_universe(_market or "US")
+    prior_size = _count_active_universe(effective_market)
     db = SessionLocal()
     try:
         stock_universe_service = get_stock_universe_service()
@@ -172,7 +183,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         logger.info(f"Total in finviz: {stats.get('total', 0)}")
         logger.info("=" * 60)
 
-        _emit_universe_drift(_market or "US", prior_size)
+        _emit_universe_drift(effective_market, prior_size)
 
         return {
             'status': 'success',
@@ -197,10 +208,19 @@ def refresh_official_market_universe(self, market: str):
     from ..services.official_market_universe_source_service import (
         OfficialMarketUniverseSourceService,
     )
+    from ..services.runtime_preferences_service import is_market_enabled_now
     from ..wiring.bootstrap import get_data_fetch_lock
     from .market_queues import log_extra, market_tag, normalize_market
 
     _market = normalize_market(market)
+    if not is_market_enabled_now(_market):
+        logger.info("Skipping official universe refresh for disabled market %s", _market)
+        return {
+            "status": "skipped",
+            "reason": f"market {_market} is disabled in local runtime preferences",
+            "market": _market,
+            "timestamp": datetime.now().isoformat(),
+        }
     if _market not in _OFFICIAL_SOURCE_MARKETS:
         raise ValueError(
             f"refresh_official_market_universe only supports {sorted(_OFFICIAL_SOURCE_MARKETS)}, "

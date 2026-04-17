@@ -4,10 +4,12 @@ import pytest
 
 from app.domain.common.errors import ValidationError
 from app.use_cases.scanning.create_scan import (
+    ActiveScanConflictError,
     CreateScanCommand,
     CreateScanResult,
     CreateScanUseCase,
 )
+from app.domain.scanning.errors import SingleActiveScanViolation
 
 from tests.unit.use_cases.conftest import (
     FakeFeatureRunRepository,
@@ -121,6 +123,23 @@ class TestCreateScanUseCase:
 
         assert len(dispatcher.dispatched) == 0
 
+    def test_rejects_second_active_scan(self):
+        uow = _make_uow(["AAPL", "MSFT"])
+        uow.scans.create(
+            scan_id="scan-active",
+            status="running",
+            total_stocks=2,
+            trigger_source="manual",
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        with pytest.raises(ActiveScanConflictError) as exc_info:
+            uc.execute(uow, _make_command())
+
+        assert exc_info.value.active_scan.scan_id == "scan-active"
+        assert len(dispatcher.dispatched) == 0
+
     def test_dispatch_failure_marks_scan_failed(self):
         uow = _make_uow(["AAPL"])
         dispatcher = FakeTaskDispatcher(should_fail=True)
@@ -131,6 +150,31 @@ class TestCreateScanUseCase:
 
         scan = uow.scans.rows[0]
         assert scan.status == "failed"
+
+    def test_unique_constraint_violation_maps_to_active_scan_conflict(self):
+        class _RaceyScanRepository(FakeScanRepository):
+            def create(self, *, scan_id: str, **fields):
+                super().create(
+                    scan_id="scan-active",
+                    status="queued",
+                    total_stocks=2,
+                    trigger_source="manual",
+                )
+                raise SingleActiveScanViolation("duplicate active scan")
+
+        uow = FakeUnitOfWork(
+            scans=_RaceyScanRepository(),
+            universe=FakeUniverseRepository(["AAPL", "MSFT"]),
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        with pytest.raises(ActiveScanConflictError) as exc_info:
+            uc.execute(uow, _make_command())
+
+        assert exc_info.value.active_scan.scan_id == "scan-active"
+        assert uow.rolled_back >= 1
+        assert len(dispatcher.dispatched) == 0
 
     def test_commits_at_least_twice_on_success(self):
         """First commit persists scan, second stores task_id."""
@@ -168,6 +212,7 @@ class TestIdempotency:
         uc = CreateScanUseCase(dispatcher=dispatcher)
 
         result1 = uc.execute(uow, _make_command(idempotency_key="key-1"))
+        uow.scans.update_status(result1.scan_id, "completed")
         result2 = uc.execute(uow, _make_command(idempotency_key="key-2"))
 
         assert result1.scan_id != result2.scan_id
@@ -180,6 +225,7 @@ class TestIdempotency:
         uc = CreateScanUseCase(dispatcher=dispatcher)
 
         result1 = uc.execute(uow, _make_command(idempotency_key=None))
+        uow.scans.update_status(result1.scan_id, "completed")
         result2 = uc.execute(uow, _make_command(idempotency_key=None))
 
         assert result1.scan_id != result2.scan_id

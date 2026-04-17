@@ -42,13 +42,13 @@ class Settings(BaseSettings):
     groq_api_key: str = ""  # For LLM via Groq (single key, backward compatible)
     groq_api_keys: str = ""  # For LLM via Groq (multiple keys, comma-separated)
     twitter_bearer_token: str = ""  # Legacy Twitter/X API token (unused for XUI ingestion)
-    xui_enabled: bool = True  # Enable xui-reader ingestion for twitter sources
+    xui_enabled: bool = False  # Browser-driven X ingestion is opt-in for local runtimes
     xui_config_path: str = str(_PROJECT_ROOT / "data" / "xui-reader" / "config.toml")
     xui_profile: str = "default"
     xui_limit_per_source: int = 50
     xui_new_only: bool = True
     xui_checkpoint_mode: str = "auto"
-    xui_bridge_enabled: bool = True
+    xui_bridge_enabled: bool = False
     xui_bridge_allowed_origins: str = (
         "http://localhost:80,http://127.0.0.1:80,"
         "http://localhost:5173,http://127.0.0.1:5173"
@@ -153,7 +153,7 @@ class Settings(BaseSettings):
     use_bulk_fetching: bool = True  # Use shared yf.download() batch fetching for scheduled jobs
 
     # Scan use-case configuration
-    scan_usecase_chunk_size: int = 25  # Chunk size for use-case path (smaller for cancellation responsiveness)
+    scan_usecase_chunk_size: int = 50  # Larger local-default chunks improve scan throughput on the shared worker
     static_snapshot_chunk_size: int = 100  # Larger chunk size for CI/static batch processing
     static_snapshot_parallel_workers: int = 8  # Bounded symbol-level parallelism for static batch processing
     feature_snapshot_soft_time_limit_seconds: int = 10800  # 3h budget for full ALL-universe daily snapshot in Docker/Postgres
@@ -201,7 +201,7 @@ class Settings(BaseSettings):
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
-    enabled_markets: str = "US,HK,JP,TW"  # comma-separated
+    enabled_markets: str = "US"  # legacy env fallback; runtime preferences own the local-default market set
 
     # Fundamental Data Caching
     fundamental_cache_enabled: bool = True  # Enable fundamental data caching

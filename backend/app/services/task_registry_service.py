@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
-from ..tasks.market_queues import data_fetch_queue_for_market
+from ..tasks.market_queues import SHARED_DATA_FETCH_QUEUE, SUPPORTED_MARKETS
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
 def _weekly_universe_task_definitions() -> Dict[str, Dict]:
     """Build task-registry entries that match the per-market beat fanout."""
     entries: Dict[str, Dict] = {}
-    for market in settings.enabled_markets_list:
+    for market in SUPPORTED_MARKETS:
         entries[f'weekly-universe-refresh-{market.lower()}'] = {
             'task_function': (
                 'app.tasks.universe_tasks.refresh_stock_universe'
@@ -45,7 +45,7 @@ def _weekly_universe_task_definitions() -> Dict[str, Dict]:
             'schedule_description': f'Sunday 3:00 AM ET ({market})',
             'manual_dispatch_kwargs': {'market': market},
             'manual_dispatch_headers': {'origin': 'manual'},
-            'manual_dispatch_options': {'queue': data_fetch_queue_for_market(market)},
+            'manual_dispatch_options': {'queue': SHARED_DATA_FETCH_QUEUE},
         }
     return entries
 
@@ -65,19 +65,6 @@ SCHEDULED_TASKS = {
         'description': 'Clears all Redis caches and re-fetches fresh data',
         'schedule_description': f'Sunday {settings.cache_weekly_hour}:00 AM ET',
     },
-    'weekly-theme-consolidation': {
-        'task_function': 'app.tasks.theme_discovery_tasks.consolidate_themes',
-        'display_name': 'Weekly Theme Consolidation',
-        'description': 'Merges duplicate themes via embeddings + LLM',
-        'schedule_description': 'Sunday 4:00 AM ET',
-    },
-    'daily-theme-stale-embedding-recompute': {
-        'task_function': 'app.tasks.theme_discovery_tasks.recompute_stale_theme_embeddings',
-        'display_name': 'Daily Stale Embedding Refresh',
-        'description': 'Incrementally recomputes stale theme embeddings in bounded batches',
-        'schedule_description': 'Daily 5:10 AM ET',
-    },
-
     # ===== WEEKDAYS (After Market Close) =====
     'daily-smart-refresh': {
         'task_function': 'app.tasks.cache_tasks.smart_refresh_cache',
@@ -87,6 +74,7 @@ SCHEDULED_TASKS = {
         'history_task_names': ['daily-smart-refresh', 'daily-cache-warmup'],
         'manual_dispatch_kwargs': {'mode': 'full'},
         'manual_dispatch_headers': {'origin': 'manual'},
+        'manual_dispatch_options': {'queue': SHARED_DATA_FETCH_QUEUE},
     },
     'daily-breadth-calculation': {
         'task_function': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',

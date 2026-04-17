@@ -28,7 +28,7 @@ services:
     image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
-  celery-worker:
+  celery-general:
     build: !reset null
     image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always

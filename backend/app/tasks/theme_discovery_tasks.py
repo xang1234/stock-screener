@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _THEME_STALE_EMBED_LOCK_KEY = "theme:stale_embedding_recompute:lock"
 _THEME_STALE_EMBED_LOCK_TTL_SECONDS = 3600
+_THEME_METRICS_LAST_RUN_KEY_PREFIX = "theme.metrics.last_success."
 _LOCK_RELEASE_LUA = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -52,6 +53,57 @@ def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
 
 def _default_pipeline_order(pipeline: str | None) -> list[str]:
     return [pipeline] if pipeline else ["fundamental", "technical"]
+
+
+def _theme_metrics_last_run_key(pipeline: str) -> str:
+    return f"{_THEME_METRICS_LAST_RUN_KEY_PREFIX}{pipeline}"
+
+
+def _get_theme_metrics_last_success(db, pipeline: str) -> datetime | None:
+    from ..models.app_settings import AppSetting
+
+    setting = db.query(AppSetting).filter(
+        AppSetting.key == _theme_metrics_last_run_key(pipeline)
+    ).first()
+    if setting is None or not setting.value:
+        return None
+    try:
+        return datetime.fromisoformat(setting.value)
+    except ValueError:
+        return None
+
+
+def _set_theme_metrics_last_success(db, pipeline: str, completed_at: datetime) -> None:
+    from ..models.app_settings import AppSetting
+
+    key = _theme_metrics_last_run_key(pipeline)
+    setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+    value = completed_at.isoformat()
+    if setting is None:
+        setting = AppSetting(
+            key=key,
+            value=value,
+            category="theme",
+            description="Last successful automatic theme metrics run for a pipeline.",
+        )
+        db.add(setting)
+    else:
+        setting.value = value
+        setting.category = "theme"
+        setting.description = "Last successful automatic theme metrics run for a pipeline."
+
+
+def _theme_metrics_work_pending(db, pipeline: str) -> bool:
+    from ..models.theme import ContentItemPipelineState
+
+    last_success = _get_theme_metrics_last_success(db, pipeline)
+    query = db.query(ContentItemPipelineState.id).filter(
+        ContentItemPipelineState.pipeline == pipeline,
+        ContentItemPipelineState.processed_at.isnot(None),
+    )
+    if last_success is not None:
+        query = query.filter(ContentItemPipelineState.processed_at > last_success)
+    return query.limit(1).first() is not None
 
 
 def _acquire_theme_stale_embedding_lock(task_id: str) -> tuple[object | None, str | None]:
@@ -214,13 +266,14 @@ def extract_themes(limit: int = 50, pipeline: str = None):
 
         logger.info("=" * 60)
 
-        try:
-            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+        if result['processed'] > 0:
+            try:
+                from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 
-            for pipeline_name in pipelines:
-                safe_publish_themes_bootstrap_variants(pipeline_name)
-        except Exception as snapshot_error:
-            logger.warning("Theme snapshot publish failed after extraction: %s", snapshot_error)
+                for pipeline_name in pipelines:
+                    safe_publish_themes_bootstrap_variants(pipeline_name)
+            except Exception as snapshot_error:
+                logger.warning("Theme snapshot publish failed after extraction: %s", snapshot_error)
 
         return {
             'processed': result['processed'],
@@ -313,13 +366,14 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
         logger.info(f"  Silent failures reset: {combined_result['silent_failures_reset']}")
         logger.info("=" * 60)
 
-        try:
-            from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
+        if combined_result['processed'] > 0:
+            try:
+                from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 
-            for pipeline_name in pipelines:
-                safe_publish_themes_bootstrap_variants(pipeline_name)
-        except Exception as snapshot_error:
-            logger.warning("Theme snapshot publish failed after failed-item reprocessing: %s", snapshot_error)
+                for pipeline_name in pipelines:
+                    safe_publish_themes_bootstrap_variants(pipeline_name)
+            except Exception as snapshot_error:
+                logger.warning("Theme snapshot publish failed after failed-item reprocessing: %s", snapshot_error)
 
         return {
             'reprocessed_count': combined_result['reprocessed_count'],
@@ -385,13 +439,22 @@ def calculate_theme_metrics(pipeline: str = None):
         'errors': 0,
         'rankings': [],
         'pipelines': pipelines,
+        'skipped_pipelines': [],
     }
 
     try:
+        completed_at = datetime.now(timezone.utc)
+        pipelines_with_work: list[str] = []
         for p in pipelines:
+            if not _theme_metrics_work_pending(db, p):
+                logger.info("Skipping theme metrics for pipeline %s; no new processed content", p)
+                combined_result['skipped_pipelines'].append(p)
+                continue
+
             logger.info(f"Calculating metrics for pipeline: {p}")
             service = ThemeDiscoveryService(db, pipeline=p)
             result = service.update_all_theme_metrics()
+            pipelines_with_work.append(p)
 
             # Aggregate results
             combined_result['themes_updated'] += result.get('themes_updated', 0)
@@ -419,10 +482,26 @@ def calculate_theme_metrics(pipeline: str = None):
 
         logger.info("=" * 60)
 
+        if not pipelines_with_work:
+            return {
+                'themes_updated': 0,
+                'errors': 0,
+                'top_themes': [],
+                'skipped': True,
+                'reason': 'no_changed_content',
+                'skipped_pipelines': combined_result['skipped_pipelines'],
+                'duration_seconds': round(duration, 2),
+                'timestamp': datetime.now().isoformat()
+            }
+
+        for pipeline_name in pipelines_with_work:
+            _set_theme_metrics_last_success(db, pipeline_name, completed_at)
+        db.commit()
+
         try:
             from ..services.ui_snapshot_service import safe_publish_themes_bootstrap_variants
 
-            for pipeline_name in pipelines:
+            for pipeline_name in pipelines_with_work:
                 safe_publish_themes_bootstrap_variants(pipeline_name)
         except Exception as snapshot_error:
             logger.warning("Theme snapshot publish failed after metrics calculation: %s", snapshot_error)
@@ -431,6 +510,7 @@ def calculate_theme_metrics(pipeline: str = None):
             'themes_updated': result['themes_updated'],
             'errors': result['errors'],
             'top_themes': result.get('rankings', [])[:10],
+            'skipped_pipelines': combined_result['skipped_pipelines'],
             'duration_seconds': round(duration, 2),
             'timestamp': datetime.now().isoformat()
         }

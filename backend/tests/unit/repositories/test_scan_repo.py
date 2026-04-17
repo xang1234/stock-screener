@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.domain.scanning.errors import SingleActiveScanViolation
 from app.models.scan_result import Scan
 from app.infra.db.repositories.scan_repo import SqlScanRepository
 
@@ -62,16 +63,26 @@ class TestCreate:
 
     def test_unique_scan_id_constraint(self, repo: SqlScanRepository, session: Session):
         sid = _make_scan_id()
-        repo.create(scan_id=sid, status="running")
+        repo.create(scan_id=sid, status="completed")
 
         with pytest.raises(IntegrityError):
-            repo.create(scan_id=sid, status="running")
+            repo.create(scan_id=sid, status="completed")
 
     def test_unique_idempotency_key_constraint(self, repo: SqlScanRepository, session: Session):
-        repo.create(scan_id=_make_scan_id(), status="running", idempotency_key="key-dup")
+        repo.create(scan_id=_make_scan_id(), status="completed", idempotency_key="key-dup")
 
         with pytest.raises(IntegrityError):
-            repo.create(scan_id=_make_scan_id(), status="running", idempotency_key="key-dup")
+            repo.create(scan_id=_make_scan_id(), status="completed", idempotency_key="key-dup")
+
+    def test_partial_unique_active_status_constraint(self, repo: SqlScanRepository):
+        repo.create(scan_id=_make_scan_id(), status="queued")
+
+        with pytest.raises(SingleActiveScanViolation):
+            repo.create(scan_id=_make_scan_id(), status="running")
+
+    def test_completed_scans_do_not_hit_active_status_constraint(self, repo: SqlScanRepository):
+        repo.create(scan_id=_make_scan_id(), status="completed")
+        repo.create(scan_id=_make_scan_id(), status="completed")
 
 
 # ---------------------------------------------------------------------------

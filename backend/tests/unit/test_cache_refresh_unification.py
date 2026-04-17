@@ -376,6 +376,7 @@ def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
     fake_task.apply_async.assert_called_once_with(
         kwargs={"mode": "full"},
         headers={"origin": "manual"},
+        queue="data_fetch_shared",
     )
     assert result["task_id"] == "task-123"
     assert result["task_name"] == "daily-smart-refresh"
@@ -402,14 +403,14 @@ def test_task_registry_triggers_hk_weekly_universe_refresh_on_hk_queue(monkeypat
     fake_task.apply_async.assert_called_once_with(
         kwargs={"market": "HK"},
         headers={"origin": "manual"},
-        queue="data_fetch_hk",
+        queue="data_fetch_shared",
     )
     assert result["task_id"] == "task-hk-123"
     assert result["task_name"] == "weekly-universe-refresh-hk"
     assert result["execution_id"] == 101
 
 
-def test_task_registry_omits_disabled_market_universe_entries(monkeypatch):
+def test_task_registry_includes_supported_market_universe_entries(monkeypatch):
     import importlib
     import app.services.task_registry_service as task_registry_module
 
@@ -419,10 +420,11 @@ def test_task_registry_omits_disabled_market_universe_entries(monkeypatch):
         importlib.reload(task_registry_module)
 
         names = set(task_registry_module.SCHEDULED_TASKS)
-        assert "weekly-universe-refresh-us" in names
-        assert "weekly-universe-refresh-hk" in names
-        assert "weekly-universe-refresh-jp" not in names
-        assert "weekly-universe-refresh-tw" not in names
+        expected = {
+            f"weekly-universe-refresh-{market.lower()}"
+            for market in task_registry_module.SUPPORTED_MARKETS
+        }
+        assert expected.issubset(names)
     finally:
         task_registry_module.settings.enabled_markets = original_enabled_markets
         importlib.reload(task_registry_module)
