@@ -52,11 +52,10 @@ class ThemeEmbeddingEngine:
         except Exception as exc:
             logger.warning("Embedding encoder unavailable for model %s: %s", self.model_name, exc)
             self._encoder = None
-            _ENCODER_CACHE[self.model_name] = None
             return None
 
     def encode(self, text: str) -> Optional[np.ndarray]:
-        vectors = self.encode_many([text], batch_size=1, normalize_embeddings=True)
+        vectors = self.encode_many([text], batch_size=32, normalize_embeddings=True)
         if vectors is None or len(vectors) == 0:
             return None
         return np.asarray(vectors[0], dtype=np.float32)

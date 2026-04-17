@@ -70,3 +70,54 @@ def test_encode_many_preserves_order_and_normalizes_vectors(monkeypatch):
         vectors[1],
         np.array([6.0, 1.0], dtype=np.float32) / np.linalg.norm(np.array([6.0, 1.0], dtype=np.float32)),
     )
+
+
+def test_encode_delegates_with_batch_wrapper_defaults(monkeypatch):
+    engine = theme_embedding_service.ThemeEmbeddingEngine("all-MiniLM-L6-v2")
+    seen: dict[str, object] = {}
+
+    def _fake_encode_many(texts, *, batch_size, normalize_embeddings):
+        seen["texts"] = texts
+        seen["batch_size"] = batch_size
+        seen["normalize_embeddings"] = normalize_embeddings
+        return np.array([[1.0, 2.0]], dtype=np.float32)
+
+    monkeypatch.setattr(engine, "encode_many", _fake_encode_many)
+
+    vector = engine.encode("hello")
+
+    assert np.allclose(vector, np.array([1.0, 2.0], dtype=np.float32))
+    assert seen == {
+        "texts": ["hello"],
+        "batch_size": 32,
+        "normalize_embeddings": True,
+    }
+
+
+def test_failed_encoder_load_does_not_poison_process_cache(monkeypatch):
+    attempts = {"count": 0}
+
+    class _FlakySentenceTransformer:
+        def __init__(self, model_name: str, device: str = "cpu"):
+            del model_name, device
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("temporary load failure")
+
+    _FakeSentenceTransformer.init_calls.clear()
+    monkeypatch.setattr(theme_embedding_service, "SENTENCE_TRANSFORMERS_AVAILABLE", True)
+    monkeypatch.setattr(theme_embedding_service, "SentenceTransformer", _FlakySentenceTransformer)
+    monkeypatch.setattr(theme_embedding_service, "_ENCODER_CACHE", {}, raising=False)
+
+    first = theme_embedding_service.ThemeEmbeddingEngine("all-MiniLM-L6-v2")
+    assert first.get_encoder() is None
+    assert theme_embedding_service._ENCODER_CACHE == {}
+
+    monkeypatch.setattr(theme_embedding_service, "SentenceTransformer", _FakeSentenceTransformer)
+
+    second = theme_embedding_service.ThemeEmbeddingEngine("all-MiniLM-L6-v2")
+    encoder = second.get_encoder()
+
+    assert encoder is not None
+    assert attempts["count"] == 1
+    assert _FakeSentenceTransformer.init_calls == [("all-MiniLM-L6-v2", "cpu")]
