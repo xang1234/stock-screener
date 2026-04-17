@@ -1273,12 +1273,18 @@ class StaticSiteExportService:
                 history["Close"].to_numpy(),
                 index=[ts.date() for ts in pd.to_datetime(history.index)],
             )
-            close_series = close_series[~close_series.index.duplicated(keep="last")].reindex(date_index)
-            valid = close_series.notna().to_numpy()
+            close_series = close_series[~close_series.index.duplicated(keep="last")].sort_index()
             pct_1d = ((close_series / close_series.shift(1)) - 1.0) * 100.0
             pct_21d = ((close_series / close_series.shift(21)) - 1.0) * 100.0
             pct_34d = ((close_series / close_series.shift(34)) - 1.0) * 100.0
             pct_63d = ((close_series / close_series.shift(63)) - 1.0) * 100.0
+
+            close_series = close_series.reindex(date_index)
+            pct_1d = pct_1d.reindex(date_index)
+            pct_21d = pct_21d.reindex(date_index)
+            pct_34d = pct_34d.reindex(date_index)
+            pct_63d = pct_63d.reindex(date_index)
+            valid = close_series.notna().to_numpy()
 
             for index, is_valid in enumerate(valid):
                 if is_valid:

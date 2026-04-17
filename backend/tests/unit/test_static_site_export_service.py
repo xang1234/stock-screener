@@ -566,6 +566,25 @@ def test_get_market_run_series_deduplicates_same_day_reruns(service_and_session_
     assert [run.id for run in market_runs] == [41, 39]
 
 
+def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
+    all_dates = pd.date_range("2025-10-01", periods=200, freq="D")
+    canonical_dates = [ts.date() for ts in all_dates[-120:]]
+    closes = [100.0 + index for index, _ in enumerate(all_dates)]
+    price_data = {
+        "AAA": pd.DataFrame({"Close": closes}, index=all_dates),
+    }
+
+    metrics = service._compute_breadth_metrics_by_date(  # noqa: SLF001 - intentional unit test coverage
+        canonical_dates,
+        price_data,
+    )
+
+    oldest_history_date = canonical_dates[30]
+    assert metrics[oldest_history_date]["stocks_up_25pct_quarter"] == 1
+    assert metrics[oldest_history_date]["stocks_up_25pct_month"] == 1
+
+
 def test_build_groups_payload_requires_target_date(service_and_session_factory, monkeypatch):
     service, session_factory = service_and_session_factory
 
