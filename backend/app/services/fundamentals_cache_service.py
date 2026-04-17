@@ -6,6 +6,7 @@ institutional ownership, margins, etc.) with weekly refresh to minimize API call
 Uses Redis for hot cache and database for persistence.
 """
 import logging
+import math
 import pickle
 from typing import Any, Optional, Dict, Callable
 from datetime import datetime, date
@@ -30,6 +31,16 @@ from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 
 logger = logging.getLogger(__name__)
+
+_RECOMMENDATION_SCORE_BY_KEY: dict[str, float | None] = {
+    "strong_buy": 1.0,
+    "buy": 2.0,
+    "hold": 3.0,
+    "underperform": 4.0,
+    "sell": 4.0,
+    "strong_sell": 5.0,
+    "none": None,
+}
 
 
 class FundamentalsCacheService:
@@ -102,7 +113,37 @@ class FundamentalsCacheService:
         normalized = dict(data)
         if "ipo_date" in normalized:
             normalized["ipo_date"] = self._coerce_date(normalized.get("ipo_date"))
+        if "recommendation" in normalized:
+            normalized["recommendation"] = self._normalize_recommendation(
+                normalized.get("recommendation")
+            )
         return normalized
+
+    @staticmethod
+    def _normalize_recommendation(value: Any) -> float | None:
+        """Coerce provider recommendation strings into the numeric DB contract."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if math.isfinite(numeric):
+                return numeric
+            logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
+            return None
+
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in _RECOMMENDATION_SCORE_BY_KEY:
+            return _RECOMMENDATION_SCORE_BY_KEY[normalized]
+
+        try:
+            numeric = float(normalized)
+            if math.isfinite(numeric):
+                return numeric
+            logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
+            return None
+        except ValueError:
+            logger.warning("Unsupported analyst recommendation value %r; storing NULL", value)
+            return None
 
     def __init__(
         self,
@@ -617,6 +658,8 @@ class FundamentalsCacheService:
                 f"Fetched {symbol} from {data_source}: "
                 f"{len([v for v in fundamentals.values() if v is not None])} fields populated"
             )
+
+            fundamentals = self._normalize_payload_for_storage(fundamentals)
 
             # Enrich with completeness/provenance so both Redis and DB writes
             # include the derived metadata (avoids warm-read staleness).

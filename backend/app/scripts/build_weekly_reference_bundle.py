@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,82 @@ def _print_progress(event: dict[str, object]) -> None:
         )
 
 
+def _print_snapshot_publish_summary(snapshot_stats: dict[str, Any]) -> None:
+    thresholds = snapshot_stats.get("coverage_thresholds") or {}
+    coverage = snapshot_stats.get("coverage") or {}
+    if not thresholds or not coverage:
+        return
+    print(
+        "[publish] "
+        f"market={thresholds.get('market')} "
+        f"coverage={thresholds.get('active_coverage', 0.0):.2%} "
+        f"(min={thresholds.get('min_active_coverage', 0.0):.2%}) "
+        f"missing_ratio={thresholds.get('missing_ratio', 0.0):.2%} "
+        f"(max={thresholds.get('max_missing_ratio', 0.0):.2%}) "
+        f"snapshot_rows={coverage.get('snapshot_symbols', 0)} "
+        f"active_symbols={coverage.get('active_symbols', 0)}",
+        flush=True,
+    )
+
+
+def _write_step_summary(market: str, summary: dict[str, Any]) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    snapshot_stats = summary.get("snapshot_publish") or {}
+    thresholds = snapshot_stats.get("coverage_thresholds") or {}
+    coverage = snapshot_stats.get("coverage") or {}
+    fundamentals_stats = summary.get("fundamentals_refresh") or {}
+    export_stats = summary.get("export") or {}
+    provider_error_counts = fundamentals_stats.get("provider_error_counts") or {}
+
+    lines = [
+        f"## Weekly Reference Bundle: {market}",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+        f"| Coverage gate market | {thresholds.get('market', market)} |",
+        f"| Active coverage | {thresholds.get('active_coverage', 0.0):.2%} |",
+        f"| Minimum coverage | {thresholds.get('min_active_coverage', 0.0):.2%} |",
+        f"| Missing ratio | {thresholds.get('missing_ratio', 0.0):.2%} |",
+        f"| Maximum missing ratio | {thresholds.get('max_missing_ratio', 0.0):.2%} |",
+        f"| Snapshot rows | {coverage.get('snapshot_symbols', 0)} |",
+        f"| Active symbols | {coverage.get('active_symbols', 0)} |",
+        f"| Persisted symbols | {fundamentals_stats.get('persisted_symbols', 'n/a')} |",
+        f"| Failed persistence symbols | {fundamentals_stats.get('failed_persistence_symbols', 0)} |",
+        f"| Failed fetch/store symbols | {fundamentals_stats.get('failed', 0)} |",
+        f"| Bundle rows exported | {export_stats.get('rows', 0)} |",
+    ]
+    if provider_error_counts:
+        lines.extend(
+            [
+                "",
+                "| Provider error bucket | Count |",
+                "| --- | --- |",
+            ]
+        )
+        for key, value in sorted(provider_error_counts.items()):
+            lines.append(f"| `{key}` | {value} |")
+    lines.extend(["", ""])
+
+    with Path(summary_path).open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+
+
+def _raise_publish_blocked(
+    *,
+    market: str,
+    summary: dict[str, Any],
+    snapshot_stats: dict[str, Any],
+) -> None:
+    _write_step_summary(market, summary)
+    raise RuntimeError(
+        "Weekly fundamentals snapshot did not publish: "
+        f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+    )
+
+
 def _ingest_official_market_snapshot(db, stock_universe_service, snapshot) -> dict[str, Any]:
     if snapshot.market == "HK":
         return stock_universe_service.ingest_hk_snapshot_rows(
@@ -131,11 +208,18 @@ def _build_us_bundle(
         progress_callback=_print_progress,
         show_finviz_progress=True,
     )
+    summary = {
+        "output_dir": output_dir,
+        "universe_refresh": universe_stats,
+        "snapshot_publish": snapshot_stats,
+    }
     if not snapshot_stats.get("published"):
-        raise RuntimeError(
-            "Weekly fundamentals snapshot did not publish: "
-            f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+        _raise_publish_blocked(
+            market=market,
+            summary=summary,
+            snapshot_stats=snapshot_stats,
         )
+    _print_snapshot_publish_summary(snapshot_stats)
 
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if published_run is None:
@@ -153,14 +237,14 @@ def _build_us_bundle(
         market=market,
     )
 
-    return {
-        "output_dir": output_dir,
-        "bundle": bundle_path,
-        "latest_manifest": latest_manifest_path,
-        "universe_refresh": universe_stats,
-        "snapshot_publish": snapshot_stats,
-        "export": export_stats,
-    }
+    summary.update(
+        {
+            "bundle": bundle_path,
+            "latest_manifest": latest_manifest_path,
+            "export": export_stats,
+        }
+    )
+    return summary
 
 
 def _build_asia_bundle(
@@ -212,6 +296,7 @@ def _build_asia_bundle(
         include_quarterly=True,
         market_by_symbol=market_by_symbol,
     )
+    print(f"Fundamentals refresh complete: {fundamentals_stats}", flush=True)
 
     cached_fundamentals = fundamentals_cache.get_many(symbols)
     snapshot_rows = []
@@ -244,6 +329,11 @@ def _build_asia_bundle(
         warnings.append(
             f"{fundamentals_stats['failed']} symbols failed during {market} hybrid fundamentals refresh"
         )
+    if fundamentals_stats.get("failed_persistence_symbols"):
+        warnings.append(
+            f"{fundamentals_stats['failed_persistence_symbols']} symbols failed to persist during "
+            f"{market} hybrid fundamentals refresh"
+        )
 
     source_revision = f"{snapshot_key}:{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     snapshot_stats = provider_snapshot_service.publish_market_snapshot_run(
@@ -255,11 +345,19 @@ def _build_asia_bundle(
         coverage_stats=coverage_stats,
         warnings=warnings,
     )
+    summary = {
+        "output_dir": output_dir,
+        "universe_refresh": universe_stats,
+        "fundamentals_refresh": fundamentals_stats,
+        "snapshot_publish": snapshot_stats,
+    }
     if not snapshot_stats.get("published"):
-        raise RuntimeError(
-            "Weekly fundamentals snapshot did not publish: "
-            f"{snapshot_stats.get('warnings') or 'coverage gate blocked publish'}"
+        _raise_publish_blocked(
+            market=market,
+            summary=summary,
+            snapshot_stats=snapshot_stats,
         )
+    _print_snapshot_publish_summary(snapshot_stats)
 
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if published_run is None:
@@ -277,15 +375,14 @@ def _build_asia_bundle(
         market=market,
     )
 
-    return {
-        "output_dir": output_dir,
-        "bundle": bundle_path,
-        "latest_manifest": latest_manifest_path,
-        "universe_refresh": universe_stats,
-        "fundamentals_refresh": fundamentals_stats,
-        "snapshot_publish": snapshot_stats,
-        "export": export_stats,
-    }
+    summary.update(
+        {
+            "bundle": bundle_path,
+            "latest_manifest": latest_manifest_path,
+            "export": export_stats,
+        }
+    )
+    return summary
 
 
 def main() -> int:
@@ -344,6 +441,7 @@ def main() -> int:
                 latest_manifest_name=latest_manifest_name,
             )
 
+    _write_step_summary(market, summary)
     print(f"Weekly reference bundle complete for {market}:")
     for key, value in summary.items():
         print(f"  - {key}: {value}")

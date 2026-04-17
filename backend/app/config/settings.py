@@ -244,8 +244,14 @@ class Settings(BaseSettings):
     provider_snapshot_ingestion_enabled: bool = False
     provider_snapshot_cutover_enabled: bool = False
     provider_snapshot_on_demand_fallback_enabled: bool = True
-    provider_snapshot_min_active_coverage: float = 0.98
-    provider_snapshot_max_missing_active_symbols: int = 50
+    provider_snapshot_min_active_coverage_us: float = 0.98
+    provider_snapshot_min_active_coverage_hk: float = 0.70
+    provider_snapshot_min_active_coverage_jp: float = 0.60
+    provider_snapshot_min_active_coverage_tw: float = 0.70
+    provider_snapshot_max_missing_ratio_us: float = 0.005
+    provider_snapshot_max_missing_ratio_hk: float = 0.30
+    provider_snapshot_max_missing_ratio_jp: float = 0.40
+    provider_snapshot_max_missing_ratio_tw: float = 0.30
 
     # Hermes / MCP integration
     hermes_api_base: str = "http://127.0.0.1:8642/v1"
@@ -308,6 +314,22 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"universe_source_timeout_seconds must be > 0, got {v}"
             )
+        return v
+
+    @field_validator(
+        'provider_snapshot_min_active_coverage_us',
+        'provider_snapshot_min_active_coverage_hk',
+        'provider_snapshot_min_active_coverage_jp',
+        'provider_snapshot_min_active_coverage_tw',
+        'provider_snapshot_max_missing_ratio_us',
+        'provider_snapshot_max_missing_ratio_hk',
+        'provider_snapshot_max_missing_ratio_jp',
+        'provider_snapshot_max_missing_ratio_tw',
+    )
+    @classmethod
+    def validate_provider_snapshot_ratios(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
         return v
 
     @model_validator(mode="after")

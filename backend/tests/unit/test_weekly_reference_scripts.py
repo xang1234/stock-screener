@@ -55,6 +55,17 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
                 "source_revision": "fundamentals_v1_us:20260404121000",
                 "snapshot_key": snapshot_key,
                 "market": market,
+                "coverage": {
+                    "snapshot_symbols": 20,
+                    "active_symbols": 20,
+                },
+                "coverage_thresholds": {
+                    "market": market,
+                    "active_coverage": 1.0,
+                    "min_active_coverage": 0.98,
+                    "missing_ratio": 0.0,
+                    "max_missing_ratio": 0.005,
+                },
             }
         ),
         get_published_run=lambda db, snapshot_key: type(
@@ -107,7 +118,62 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
     stdout = capsys.readouterr().out
     assert "Starting stock universe refresh from Finviz..." in stdout
     assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
+    assert "[publish] market=US coverage=100.00% (min=98.00%) missing_ratio=0.00% (max=0.50%)" in stdout
     assert "Weekly reference bundle complete for US:" in stdout
+
+
+def test_build_weekly_reference_bundle_writes_summary_when_us_publish_is_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(build_script, "SessionLocal", _fake_session)
+    summary_path = tmp_path / "github-step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    stock_universe_service = SimpleNamespace(
+        populate_universe=lambda db: {"added": 10},
+    )
+    provider_snapshot_service = SimpleNamespace(
+        create_snapshot_run=lambda db, run_mode, publish, snapshot_key, market, **kwargs: {
+            "published": False,
+            "warnings": ["Active snapshot coverage 80.00% below minimum 98.00%"],
+            "source_revision": "fundamentals_v1_us:20260404121000",
+            "snapshot_key": snapshot_key,
+            "market": market,
+            "coverage": {
+                "snapshot_symbols": 8,
+                "active_symbols": 10,
+            },
+            "coverage_thresholds": {
+                "market": market,
+                "active_coverage": 0.8,
+                "min_active_coverage": 0.98,
+                "missing_ratio": 0.2,
+                "max_missing_ratio": 0.005,
+            },
+        },
+    )
+    monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
+    monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_weekly_reference_bundle",
+            "--market",
+            "US",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Weekly fundamentals snapshot did not publish"):
+        build_script.main()
+
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "## Weekly Reference Bundle: US" in summary_text
+    assert "| Active coverage | 80.00% |" in summary_text
+    assert "| Minimum coverage | 98.00% |" in summary_text
+    assert "| Bundle rows exported | 0 |" in summary_text
 
 
 def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_path, capsys):
@@ -130,6 +196,8 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
 
     monkeypatch.setattr(build_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(build_script, "SessionLocal", lambda: _fake_session(fake_db))
+    summary_path = tmp_path / "github-step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
 
     fetch_calls: list[str] = []
     official_service = SimpleNamespace(
@@ -165,7 +233,13 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
             {"symbols": symbols, **kwargs}
         )
         or {"0700.HK": {"market_cap": 456.0, "sector": "Technology"}},
-        store_all_caches=lambda *args, **kwargs: {"fundamentals_stored": 1, "failed": 0},
+        store_all_caches=lambda *args, **kwargs: {
+            "fundamentals_stored": 1,
+            "persisted_symbols": 1,
+            "failed_persistence_symbols": 0,
+            "failed": 0,
+            "provider_error_counts": {"yahoo_quote_not_found": 2},
+        },
     )
     monkeypatch.setattr(build_script, "get_hybrid_fundamentals_service", lambda: hybrid_service)
     monkeypatch.setattr(
@@ -189,6 +263,17 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
             "published": True,
             "source_revision": "fundamentals_v1_hk:20260404121000",
             "snapshot_key": kwargs["snapshot_key"],
+            "coverage": {
+                "snapshot_symbols": 1,
+                "active_symbols": 1,
+            },
+            "coverage_thresholds": {
+                "market": "HK",
+                "active_coverage": 1.0,
+                "min_active_coverage": 0.70,
+                "missing_ratio": 0.0,
+                "max_missing_ratio": 0.30,
+            },
         },
         get_published_run=lambda db, snapshot_key: type(
             "Run",
@@ -229,7 +314,15 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     stdout = capsys.readouterr().out
     assert "Starting official universe refresh for HK..." in stdout
     assert "Starting hybrid fundamentals refresh for HK..." in stdout
+    assert "Fundamentals refresh complete:" in stdout
+    assert "[publish] market=HK coverage=100.00% (min=70.00%) missing_ratio=0.00% (max=30.00%)" in stdout
     assert "Weekly reference bundle complete for HK:" in stdout
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "## Weekly Reference Bundle: HK" in summary_text
+    assert "| Coverage gate market | HK |" in summary_text
+    assert "| Minimum coverage | 70.00% |" in summary_text
+    assert "| Failed persistence symbols | 0 |" in summary_text
+    assert "| `yahoo_quote_not_found` | 2 |" in summary_text
 
 
 def test_import_weekly_reference_bundle_script_calls_service(monkeypatch, tmp_path, capsys):

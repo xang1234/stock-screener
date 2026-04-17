@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -129,14 +130,15 @@ def test_create_snapshot_run_blocks_publish_when_coverage_below_threshold(monkey
             }
         },
     )
-    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage", 0.98)
-    monkeypatch.setattr(settings, "provider_snapshot_max_missing_active_symbols", 50)
+    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage_us", 0.98)
+    monkeypatch.setattr(settings, "provider_snapshot_max_missing_ratio_us", 0.005)
 
     result = service.create_snapshot_run(db, run_mode="publish", publish=True)
 
     blocked_run = db.query(ProviderSnapshotRun).filter(ProviderSnapshotRun.id == result["run_id"]).one()
     assert result["published"] is False
     assert result["warnings"]
+    assert result["coverage_thresholds"]["market"] == "US"
     assert blocked_run.status == "publish_blocked"
     assert db.query(ProviderSnapshotPointer).count() == 0
     db.close()
@@ -180,8 +182,8 @@ def test_create_snapshot_run_market_scope_ignores_other_markets(monkeypatch):
             }
         },
     )
-    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage", 0.98)
-    monkeypatch.setattr(settings, "provider_snapshot_max_missing_active_symbols", 50)
+    monkeypatch.setattr(settings, "provider_snapshot_min_active_coverage_us", 0.98)
+    monkeypatch.setattr(settings, "provider_snapshot_max_missing_ratio_us", 0.005)
 
     result = service.create_snapshot_run(
         db,
@@ -194,6 +196,57 @@ def test_create_snapshot_run_market_scope_ignores_other_markets(monkeypatch):
     assert result["coverage"]["active_symbols"] == 1
     assert result["coverage"]["covered_active_symbols"] == 1
     assert result["coverage"]["missing_active_symbols"] == 0
+    assert result["coverage_thresholds"]["market"] == "US"
+    db.close()
+
+
+def test_create_snapshot_run_uses_market_specific_thresholds_for_hk(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol=f"{code:04d}.HK",
+                market="HK",
+                exchange="XHKG",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            )
+            for code in range(1, 11)
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None, **kwargs: {
+            f"{code:04d}.HK": {
+                "exchange": "XHKG",
+                "row_hash": f"hash-{code:04d}",
+                "normalized_payload": {"symbol": f"{code:04d}.HK", "exchange": "XHKG"},
+                "raw_payload": {"overview": {"Ticker": f"{code:04d}.HK"}},
+            }
+            for code in range(1, 8)
+        },
+    )
+
+    result = service.create_snapshot_run(
+        db,
+        run_mode="publish",
+        snapshot_key=ProviderSnapshotService.snapshot_key_for_market("HK"),
+        market="HK",
+        publish=True,
+    )
+
+    assert result["published"] is True
+    assert result["coverage"]["active_symbols"] == 10
+    assert result["coverage"]["covered_active_symbols"] == 7
+    assert result["coverage_thresholds"]["market"] == "HK"
+    assert result["coverage_thresholds"]["active_coverage"] == pytest.approx(0.7)
+    assert result["coverage_thresholds"]["missing_ratio"] == pytest.approx(0.3)
     db.close()
 
 
@@ -1295,6 +1348,106 @@ def test_get_fundamentals_fetches_on_demand_when_fresh_cache_is_missing_required
 
     assert result == enriched
     assert fetch_calls == ["AAPL"]
+
+
+def test_fundamentals_cache_store_normalizes_recommendation_strings(monkeypatch):
+    TestingSessionLocal = _make_session()
+    monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
+    service = FundamentalsCacheService(
+        redis_client=None,
+        session_factory=TestingSessionLocal,
+    )
+
+    assert service.store(
+        "0700.HK",
+        {
+            "symbol": "0700.HK",
+            "market": "HK",
+            "exchange": "XHKG",
+            "recommendation": "strong_buy",
+        },
+        data_source="hybrid",
+        market="HK",
+    )
+
+    db = TestingSessionLocal()
+    stored = db.query(StockFundamental).filter(StockFundamental.symbol == "0700.HK").one()
+    assert stored.recommendation == 1.0
+    db.close()
+
+
+def test_fundamentals_cache_rejects_nonfinite_recommendation_values(monkeypatch):
+    TestingSessionLocal = _make_session()
+    monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
+    service = FundamentalsCacheService(
+        redis_client=None,
+        session_factory=TestingSessionLocal,
+    )
+
+    assert service.store(
+        "9999.HK",
+        {
+            "symbol": "9999.HK",
+            "market": "HK",
+            "exchange": "XHKG",
+            "recommendation": "nan",
+        },
+        data_source="hybrid",
+        market="HK",
+    )
+
+    db = TestingSessionLocal()
+    stored = db.query(StockFundamental).filter(StockFundamental.symbol == "9999.HK").one()
+    assert stored.recommendation is None
+    db.close()
+
+
+def test_fetch_and_cache_normalizes_recommendation_before_writes(monkeypatch):
+    monkeypatch.setattr(fundamentals_cache_module, "get_redis_client", lambda: None)
+    fake_db = MagicMock()
+    service = FundamentalsCacheService(
+        redis_client=None,
+        session_factory=lambda: fake_db,
+    )
+
+    captured_redis = {}
+    captured_db = {}
+
+    monkeypatch.setattr(
+        fundamentals_cache_module,
+        "get_data_source_service",
+        lambda: None,
+        raising=False,
+    )
+
+    import app.wiring.bootstrap as bootstrap_module
+
+    bootstrap_module.get_data_source_service = lambda: SimpleNamespace(
+        get_fundamentals=lambda symbol, market=None: {
+            "market_cap": 1000,
+            "recommendation": "strong_buy",
+            "data_source": "yfinance",
+        }
+    )
+    monkeypatch.setattr(service, "record_on_demand_fallback", lambda: None)
+    monkeypatch.setattr(service, "_resolve_market", lambda symbol: "HK")
+    monkeypatch.setattr(service, "_enrich_with_quality_metadata", lambda symbol, fundamentals, market: market)
+    monkeypatch.setattr(service, "_enrich_with_fx_normalization", lambda fundamentals, market: None)
+    monkeypatch.setattr(service, "_store_in_redis", lambda symbol, data: captured_redis.update({symbol: dict(data)}))
+    monkeypatch.setattr(
+        service,
+        "_store_in_database",
+        lambda symbol, data, data_source="unknown", market=None: captured_db.update(
+            {symbol: {"data": dict(data), "data_source": data_source, "market": market}}
+        ),
+    )
+
+    result = service._fetch_and_cache("0700.HK", market="HK")
+
+    assert result is not None
+    assert captured_redis["0700.HK"]["recommendation"] == 1.0
+    assert captured_db["0700.HK"]["data"]["recommendation"] == 1.0
+    assert result["recommendation"] == 1.0
 
 
 def test_deserialize_universe_row_infers_hk_from_xhkg_exchange():
