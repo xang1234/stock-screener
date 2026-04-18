@@ -15,6 +15,7 @@ SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "JP", "TW")
 SHARED_SENTINEL = "SHARED"
 
 DATA_FETCH_BASE = "data_fetch"
+MARKET_JOBS_BASE = "market_jobs"
 USER_SCANS_BASE = "user_scans"
 
 SHARED_DATA_FETCH_QUEUE = f"{DATA_FETCH_BASE}_shared"
@@ -74,10 +75,22 @@ def user_scans_queue_for_market(market: Optional[str]) -> str:
     return queue_for_market(market, USER_SCANS_BASE)
 
 
+def market_jobs_queue_for_market(market: Optional[str]) -> str:
+    normalized = normalize_market(market)
+    if normalized == SHARED_SENTINEL:
+        raise ValueError("market_jobs queues require an explicit market")
+    return queue_for_market(normalized, MARKET_JOBS_BASE)
+
+
 def all_data_fetch_queues(markets: Optional[Iterable[str]] = None) -> List[str]:
     """Return all data_fetch queues for the given (or default) market set."""
     ms = list(markets) if markets is not None else list(SUPPORTED_MARKETS)
     return [queue_for_market(m, DATA_FETCH_BASE) for m in ms] + [SHARED_DATA_FETCH_QUEUE]
+
+
+def all_market_job_queues(markets: Optional[Iterable[str]] = None) -> List[str]:
+    ms = list(markets) if markets is not None else list(SUPPORTED_MARKETS)
+    return [market_jobs_queue_for_market(m) for m in ms]
 
 
 def all_user_scans_queues(markets: Optional[Iterable[str]] = None) -> List[str]:

@@ -163,11 +163,43 @@ services:
 
   celery-datafetch:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared -n datafetch-shared@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_jp,data_fetch_tw -n datafetch-global@%h
+
+  celery-marketjobs-us:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_us -n marketjobs-us@%h
+
+  celery-marketjobs-hk:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_hk -n marketjobs-hk@%h
+
+  celery-marketjobs-jp:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_jp -n marketjobs-jp@%h
+
+  celery-marketjobs-tw:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_tw -n marketjobs-tw@%h
 
   celery-userscans:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_shared -n userscans-shared@%h
+
+  celery-userscans-us:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_us -n userscans-us@%h
+
+  celery-userscans-hk:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_hk -n userscans-hk@%h
+
+  celery-userscans-jp:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_jp -n userscans-jp@%h
+
+  celery-userscans-tw:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_tw -n userscans-tw@%h
 
   celery-beat:
     build: *backend-build

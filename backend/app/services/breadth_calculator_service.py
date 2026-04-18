@@ -31,7 +31,7 @@ class BreadthCalculatorService:
     - 34-day 13% movers (IBD-style)
     """
 
-    def __init__(self, db: Session, price_cache: PriceCacheService):
+    def __init__(self, db: Session, price_cache: PriceCacheService, market: str | None = None):
         """
         Initialize breadth calculator service.
 
@@ -40,6 +40,7 @@ class BreadthCalculatorService:
         """
         self.db = db
         self.price_cache = price_cache
+        self.market = (market or "US").upper()
 
     @staticmethod
     def _empty_metrics() -> Dict:
@@ -97,7 +98,8 @@ class BreadthCalculatorService:
 
         # Get all active stocks from universe
         active_stocks = self.db.query(StockUniverse).filter(
-            StockUniverse.is_active == True
+            StockUniverse.is_active == True,
+            StockUniverse.market == self.market,
         ).all()
 
         logger.info(f"Found {len(active_stocks)} active stocks in universe")
@@ -197,7 +199,8 @@ class BreadthCalculatorService:
 
         start_time = datetime.now()
         active_stocks = self.db.query(StockUniverse).filter(
-            StockUniverse.is_active == True
+            StockUniverse.is_active == True,
+            StockUniverse.market == self.market,
         ).all()
         logger.info(
             "Backfilling breadth for %s trading days across %s active stocks",

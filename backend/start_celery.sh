@@ -2,12 +2,13 @@
 #
 # Start Celery workers for stock scanner background tasks.
 #
-# Per-market queue topology (bead StockScreenClaude-asia.9.1):
-#   - One dedicated datafetch-<market> worker per enabled market. Each holds
-#     its own Redis lock key so one market's refresh can't stall another's.
-#   - One datafetch-shared worker for market-agnostic jobs and backward-compat
-#     safety-net routing.
-#   - Same split for user_scans queues.
+# Coordinated queue topology:
+#   - One global datafetch worker subscribed to all data_fetch_* queues with
+#     concurrency 1 so external-provider fetches are serialized across markets.
+#   - One marketjobs-<market> worker per enabled market for breadth, group
+#     rankings, and feature snapshots.
+#   - One userscans-<market> worker per enabled market plus a shared safety-net
+#     worker for any scan task dispatched without an explicit market.
 #
 # Usage: ./start_celery.sh
 # Override enabled markets: ENABLED_MARKETS="US,HK" ./start_celery.sh
@@ -40,14 +41,14 @@ echo "  Enabled markets: $ENABLED_MARKETS"
     -Q celery \
     -n general@%h &
 
-# Shared data-fetch worker: handles market-agnostic jobs (theme tasks,
-# orphan cleanup) and acts as safety-net for any task enqueued without an
-# explicit queue.
+# Global data-fetch worker: handles all external fetch queues under a single
+# concurrency-1 worker so yfinance-bound jobs never overlap across markets.
 ./venv/bin/celery -A app.celery_app worker \
     --loglevel=info \
     --pool="$POOL" \
-    -Q data_fetch_shared \
-    -n datafetch-shared@%h &
+    --concurrency=1 \
+    -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_jp,data_fetch_tw \
+    -n datafetch-global@%h &
 
 # Shared user-scans worker — same safety-net pattern for user-initiated scans.
 ./venv/bin/celery -A app.celery_app worker \
@@ -56,9 +57,7 @@ echo "  Enabled markets: $ENABLED_MARKETS"
     -Q user_scans_shared \
     -n userscans-shared@%h &
 
-# One worker per enabled market. Concurrency stays at 1 per market (solo pool)
-# so rate limits hold intra-market; cross-market parallelism comes from having
-# separate worker processes on separate lock keys.
+# One worker per enabled market for market compute/write jobs and market scans.
 IFS=',' read -ra MARKET_ARRAY <<< "$ENABLED_MARKETS"
 for RAW_MARKET in "${MARKET_ARRAY[@]}"; do
     MARKET_UPPER="$(echo "$RAW_MARKET" | tr '[:lower:]' '[:upper:]' | xargs)"
@@ -72,13 +71,13 @@ for RAW_MARKET in "${MARKET_ARRAY[@]}"; do
             ;;
     esac
 
-    echo "  Starting datafetch-$MARKET_LOWER and userscans-$MARKET_LOWER workers"
+    echo "  Starting marketjobs-$MARKET_LOWER and userscans-$MARKET_LOWER workers"
 
     ./venv/bin/celery -A app.celery_app worker \
         --loglevel=info \
         --pool="$POOL" \
-        -Q "data_fetch_${MARKET_LOWER}" \
-        -n "datafetch-${MARKET_LOWER}@%h" &
+        -Q "market_jobs_${MARKET_LOWER}" \
+        -n "marketjobs-${MARKET_LOWER}@%h" &
 
     ./venv/bin/celery -A app.celery_app worker \
         --loglevel=info \

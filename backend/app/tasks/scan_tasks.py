@@ -16,6 +16,7 @@ from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..models.scan_result import Scan, ScanResult
 from ..config import settings
+from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,14 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
 
 
 @celery_app.task(bind=True, name='app.tasks.scan_tasks.run_bulk_scan')
-def run_bulk_scan(self, scan_id: str, symbol_list: List[str], criteria: dict = None):
+@serialized_market_workload("run_bulk_scan")
+def run_bulk_scan(
+    self,
+    scan_id: str,
+    symbol_list: List[str],
+    criteria: dict = None,
+    market: str | None = None,
+):
     """Scan multiple stocks in background via RunBulkScanUseCase."""
     return _run_bulk_scan_via_use_case(self, scan_id, symbol_list, criteria)
 

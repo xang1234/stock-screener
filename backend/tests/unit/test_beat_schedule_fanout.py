@@ -10,44 +10,47 @@ import pytest
 
 from app.celery_app import celery_app
 from app.tasks.market_queues import (
-    SHARED_DATA_FETCH_QUEUE,
     SUPPORTED_MARKETS,
     data_fetch_queue_for_market,
+    market_jobs_queue_for_market,
 )
 
 
-# Beat entry name prefixes that MUST be fanned out per market.
-MARKET_SCOPED_PREFIXES = (
+# Beat entry name prefixes that MUST be fanned out per market onto the
+# external-fetch lane.
+EXTERNAL_FETCH_PREFIXES = (
     "daily-smart-refresh-",
-    "daily-breadth-calculation-",
-    "daily-group-ranking-calculation-",
-    "daily-feature-snapshot-",
     "weekly-full-refresh-",
     "weekly-fundamental-refresh-",
     "weekly-universe-refresh-",
 )
 
+# Per-market compute/write tasks run on market_jobs_<market>, not data_fetch.
+MARKET_JOB_PREFIXES = (
+    "daily-feature-snapshot-",
+)
 
-def _market_entries():
+
+def _market_entries(prefixes):
     schedule = celery_app.conf.beat_schedule or {}
     for name, entry in schedule.items():
-        for prefix in MARKET_SCOPED_PREFIXES:
+        for prefix in prefixes:
             if name.startswith(prefix):
                 suffix = name[len(prefix):]  # e.g. "us"
                 yield name, entry, suffix.upper()
 
 
 class TestBeatScheduleFanout:
-    def test_each_market_scoped_entry_has_market_kwarg(self):
-        for name, entry, expected_market in _market_entries():
+    def test_each_external_fetch_entry_has_market_kwarg(self):
+        for name, entry, expected_market in _market_entries(EXTERNAL_FETCH_PREFIXES):
             kwargs = entry.get("kwargs", {})
             assert kwargs.get("market") == expected_market, (
                 f"beat entry {name!r} missing/mismatched market kwarg "
                 f"(got {kwargs.get('market')!r}, expected {expected_market!r})"
             )
 
-    def test_each_market_scoped_entry_has_explicit_queue(self):
-        for name, entry, expected_market in _market_entries():
+    def test_each_external_fetch_entry_has_explicit_market_queue(self):
+        for name, entry, expected_market in _market_entries(EXTERNAL_FETCH_PREFIXES):
             opts = entry.get("options") or {}
             queue = opts.get("queue")
             expected_queue = data_fetch_queue_for_market(expected_market)
@@ -55,9 +58,9 @@ class TestBeatScheduleFanout:
                 f"beat entry {name!r} routes to {queue!r}, expected {expected_queue!r}"
             )
 
-    def test_every_market_is_covered_for_each_prefix(self):
+    def test_every_market_is_covered_for_external_fetch_prefixes(self):
         schedule = celery_app.conf.beat_schedule or {}
-        for prefix in MARKET_SCOPED_PREFIXES:
+        for prefix in EXTERNAL_FETCH_PREFIXES:
             present = {
                 name[len(prefix):].upper()
                 for name in schedule
@@ -69,11 +72,12 @@ class TestBeatScheduleFanout:
                     f"Fan-out gap: got {sorted(present)}"
                 )
 
-    def test_no_market_entry_routes_to_shared_queue(self):
-        for name, entry, _ in _market_entries():
+    def test_feature_snapshots_run_on_market_job_queue(self):
+        for name, entry, expected_market in _market_entries(MARKET_JOB_PREFIXES):
             queue = (entry.get("options") or {}).get("queue")
-            assert queue != SHARED_DATA_FETCH_QUEUE, (
-                f"Market-scoped entry {name!r} incorrectly routes to shared queue"
+            expected_queue = market_jobs_queue_for_market(expected_market)
+            assert queue == expected_queue, (
+                f"Market job entry {name!r} routes to {queue!r}, expected {expected_queue!r}"
             )
 
     def test_weekly_universe_refresh_uses_market_appropriate_task(self):
@@ -85,3 +89,17 @@ class TestBeatScheduleFanout:
             assert schedule[f"weekly-universe-refresh-{market}"]["task"] == (
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )
+
+    def test_breadth_and_group_rankings_run_only_for_us(self):
+        schedule = celery_app.conf.beat_schedule or {}
+        assert "daily-breadth-calculation-us" in schedule
+        assert "daily-group-ranking-calculation-us" in schedule
+        assert schedule["daily-breadth-calculation-us"]["options"]["queue"] == (
+            market_jobs_queue_for_market("US")
+        )
+        assert schedule["daily-group-ranking-calculation-us"]["options"]["queue"] == (
+            market_jobs_queue_for_market("US")
+        )
+        for market in (m.lower() for m in SUPPORTED_MARKETS if m != "US"):
+            assert f"daily-breadth-calculation-{market}" not in schedule
+            assert f"daily-group-ranking-calculation-{market}" not in schedule

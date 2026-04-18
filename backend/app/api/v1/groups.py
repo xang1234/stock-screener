@@ -172,7 +172,7 @@ async def trigger_calculation(request: CalculationRequest):
     try:
         from ...tasks.group_rank_tasks import calculate_daily_group_rankings
 
-        task = calculate_daily_group_rankings.delay(date_str)
+        task = calculate_daily_group_rankings.delay(date_str, market="US")
         logger.info(f"Group ranking calculation task dispatched: {task.id}")
 
         return TaskResponse(
@@ -300,7 +300,7 @@ async def trigger_backfill(
 
     # Dispatch to Celery (non-blocking)
     try:
-        task = backfill_group_rankings.delay(request.start_date, request.end_date)
+        task = backfill_group_rankings.delay(request.start_date, request.end_date, market="US")
         logger.info(f"Backfill task dispatched: {task.id}")
 
         return {
@@ -413,7 +413,7 @@ async def trigger_gapfill(
 
     try:
         # Dispatch as Celery task
-        task = gapfill_group_rankings.delay(max_days=max_days)
+        task = gapfill_group_rankings.delay(max_days=max_days, market="US")
         logger.info(f"Gap-fill task dispatched: {task.id}")
 
         return {

@@ -424,13 +424,15 @@ def serialized_data_fetch(task_name: str):
                 )
                 return func(*args, **kwargs)
 
-            from ..wiring.bootstrap import get_data_fetch_lock
+            from ..wiring.bootstrap import get_data_fetch_lock, get_workload_coordination
 
             lock = get_data_fetch_lock()
+            coordination = get_workload_coordination()
 
             task_id = 'unknown'
             if args and hasattr(args[0], 'request'):
                 task_id = args[0].request.id or 'unknown'
+            task_instance = args[0] if args and hasattr(args[0], "request") else None
 
             acquired, is_reentrant = lock.acquire(task_name, task_id, market=market_value)
             if not acquired:
@@ -448,7 +450,63 @@ def serialized_data_fetch(task_name: str):
                 payload["market"] = market_label
                 return payload
 
+            workload_acquired = False
+            workload_reentrant = False
+            external_acquired = False
+            external_reentrant = False
+
             try:
+                workload_acquired, workload_reentrant = coordination.acquire_market_workload(
+                    task_name,
+                    task_id,
+                    market=market_value,
+                )
+                if not workload_acquired:
+                    current = coordination.get_market_workload_holder(market_value) or {}
+                    message = (
+                        f"waiting_for_market_workload:{normalize_market(market_value)} "
+                        f"({current.get('task_name', 'unknown')})"
+                    )
+                    if task_instance is not None and hasattr(task_instance, "retry"):
+                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
+                        countdown = min(15 * (2 ** retries), 300)
+                        raise task_instance.retry(
+                            exc=RuntimeError(message),
+                            countdown=countdown,
+                            max_retries=None,
+                        )
+                    return {
+                        "status": "waiting",
+                        "wait_reason": f"waiting_for_market_workload:{normalize_market(market_value)}",
+                        "running_task_name": current.get("task_name"),
+                        "running_task_id": current.get("task_id"),
+                    }
+
+                external_acquired, external_reentrant = coordination.acquire_external_fetch(
+                    task_name,
+                    task_id,
+                )
+                if not external_acquired:
+                    current = coordination.get_external_fetch_holder() or {}
+                    message = (
+                        "waiting_for_external_fetch_global "
+                        f"({current.get('task_name', 'unknown')})"
+                    )
+                    if task_instance is not None and hasattr(task_instance, "retry"):
+                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
+                        countdown = min(15 * (2 ** retries), 300)
+                        raise task_instance.retry(
+                            exc=RuntimeError(message),
+                            countdown=countdown,
+                            max_retries=None,
+                        )
+                    return {
+                        "status": "waiting",
+                        "wait_reason": "waiting_for_external_fetch_global",
+                        "running_task_name": current.get("task_name"),
+                        "running_task_id": current.get("task_id"),
+                    }
+
                 logger.info(
                     "Starting data fetch task: %s (task_id=%s, market=%s)",
                     task_name, task_id, market_label,
@@ -471,6 +529,10 @@ def serialized_data_fetch(task_name: str):
                 )
                 raise
             finally:
+                if external_acquired and not external_reentrant:
+                    coordination.release_external_fetch(task_id)
+                if workload_acquired and not workload_reentrant:
+                    coordination.release_market_workload(task_id, market=market_value)
                 if acquired and not is_reentrant:
                     lock.release(task_id, market=market_value)
 

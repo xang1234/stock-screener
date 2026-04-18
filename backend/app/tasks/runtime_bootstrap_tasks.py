@@ -10,7 +10,10 @@ from celery import chain
 from ..domain.scanning.defaults import get_default_scan_profile
 from ..database import SessionLocal
 from ..services.market_activity_service import mark_market_activity_queued
-from ..tasks.market_queues import SHARED_DATA_FETCH_QUEUE
+from ..tasks.market_queues import (
+    data_fetch_queue_for_market,
+    market_jobs_queue_for_market,
+)
 from ..celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -62,25 +65,28 @@ def _build_market_bootstrap_signatures(
                 market=market,
                 activity_lifecycle="bootstrap",
             )
-        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        ).set(queue=data_fetch_queue_for_market(market)),
         smart_refresh_cache.si(
             mode="full",
             market=market,
             activity_lifecycle="bootstrap",
-        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        ).set(queue=data_fetch_queue_for_market(market)),
         refresh_all_fundamentals.si(
             market=market,
             activity_lifecycle="bootstrap",
-        ).set(queue=SHARED_DATA_FETCH_QUEUE),
-        calculate_daily_breadth_with_gapfill.si(
-            market=market,
-            activity_lifecycle="bootstrap",
-        ).set(queue=SHARED_DATA_FETCH_QUEUE),
-        calculate_daily_group_rankings.si(
-            market=market,
-            activity_lifecycle="bootstrap",
-        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        ).set(queue=data_fetch_queue_for_market(market)),
     ]
+    if market == "US":
+        signatures.extend([
+            calculate_daily_breadth_with_gapfill.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            ).set(queue=market_jobs_queue_for_market(market)),
+            calculate_daily_group_rankings.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            ).set(queue=market_jobs_queue_for_market(market)),
+        ])
     if market == "US":
         signatures.append(
             build_daily_snapshot.si(
@@ -88,7 +94,7 @@ def _build_market_bootstrap_signatures(
                 universe_name=_bootstrap_universe_name(market),
                 publish_pointer_key=f"latest_published_market:{market}",
                 activity_lifecycle="bootstrap",
-            ).set(queue=SHARED_DATA_FETCH_QUEUE)
+            ).set(queue=market_jobs_queue_for_market(market))
         )
     elif include_initial_scan:
         signatures.append(

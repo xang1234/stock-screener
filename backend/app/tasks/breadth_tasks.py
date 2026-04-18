@@ -6,8 +6,8 @@ Provides background tasks for:
 - Historical backfill of breadth data
 - On-demand breadth calculation
 
-All data-fetching tasks use the @serialized_data_fetch decorator
-to ensure only one task fetches external data at a time.
+Breadth tasks mutate market-derived data and therefore use the
+market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -28,7 +28,7 @@ from ..services.market_activity_service import (
 )
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
-from .data_fetch_lock import serialized_data_fetch
+from .workload_coordination import serialized_market_workload
 from ..wiring.bootstrap import get_price_cache
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
 
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.calculate_daily_breadth')
-@serialized_data_fetch('calculate_daily_breadth')
+@serialized_market_workload('calculate_daily_breadth')
 def calculate_daily_breadth(
     self,
     calculation_date: str | None = None,
@@ -180,6 +180,13 @@ def calculate_daily_breadth(
     """
     logger.info("=" * 60)
     logger.info("TASK: Calculate Daily Market Breadth")
+    if market is not None and market.upper() != "US":
+        return {
+            'status': 'skipped',
+            'reason': 'breadth_calculation_is_us_only',
+            'market': market.upper(),
+            'timestamp': datetime.now().isoformat(),
+        }
 
     # Parse date
     from ..utils.market_hours import is_trading_day, get_eastern_now
@@ -354,9 +361,19 @@ def calculate_daily_breadth(
         db.close()
 
 
+def _calculate_daily_breadth_in_process(*, market: str | None = None):
+    """Run breadth logic without reacquiring the market workload lease."""
+    task = calculate_daily_breadth
+    if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
+        return task(market=market)
+    if hasattr(task, "request") and callable(getattr(task, "run", None)):
+        return task.run(market=market)
+    return task(market=market)
+
+
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
-@serialized_data_fetch('backfill_breadth_data')
-def backfill_breadth_data(self, start_date: str, end_date: str):
+@serialized_market_workload('backfill_breadth_data')
+def backfill_breadth_data(self, start_date: str, end_date: str, market: str = "US"):
     """
     Backfill market breadth data for historical date range.
 
@@ -467,7 +484,7 @@ def backfill_breadth_data(self, start_date: str, end_date: str):
     soft_time_limit=3600,
     max_retries=2,
 )
-@serialized_data_fetch('calculate_daily_breadth_with_gapfill')
+@serialized_market_workload('calculate_daily_breadth_with_gapfill')
 def calculate_daily_breadth_with_gapfill(
     self,
     max_gap_days: int | None = None,
@@ -504,6 +521,14 @@ def calculate_daily_breadth_with_gapfill(
         extra=_log_extra,
     )
     logger.info("=" * 60)
+    if market is not None and normalize_market(market) != "US":
+        logger.info("Skipping breadth calculation for unsupported market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': 'breadth_calculation_is_us_only',
+            'market': effective_market,
+            'timestamp': datetime.now().isoformat(),
+        }
     if market is not None and not is_market_enabled_now(normalize_market(market)):
         logger.info("Skipping breadth calculation for disabled market %s", market, extra=_log_extra)
         return {
@@ -512,14 +537,6 @@ def calculate_daily_breadth_with_gapfill(
             'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
-    # Breadth calculator aggregates across markets; the `market` kwarg is a
-    # routing/log label here. Deep per-market scoping moves with 9.2.
-    if market is not None:
-        logger.debug(
-            "Breadth market-scoping is label-only; calculator aggregates all markets.",
-            extra=_log_extra,
-        )
-
     # Use config value if not specified
     if max_gap_days is None:
         max_gap_days = settings.breadth_gapfill_max_days
@@ -583,7 +600,7 @@ def calculate_daily_breadth_with_gapfill(
 
         if is_trading_day(today):
             logger.info(f"Calculating breadth for today ({today})...")
-            today_result = calculate_daily_breadth(market=market)
+            today_result = _calculate_daily_breadth_in_process(market=market)
             result['today'] = today_result
         else:
             last_trading = get_last_trading_day(today)

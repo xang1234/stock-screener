@@ -5,6 +5,7 @@ Handles async bulk scanning of stocks and cache warming.
 """
 import logging
 import os
+from datetime import datetime, timezone
 
 # Disable MPS/Metal before any PyTorch imports to avoid fork() issues on macOS
 # Must be set at the very start before any libraries that use PyTorch are imported
@@ -67,6 +68,7 @@ celery_app.conf.update(
 
 _logger = logging.getLogger(__name__)
 _default_scan_profile = get_default_scan_profile()
+_STARTUP_STALE_HEARTBEAT_SECONDS = 30 * 60
 
 
 def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
@@ -83,6 +85,64 @@ def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
     return runtime_services
 
 
+def _startup_heartbeat_is_stale(last_heartbeat: str | None) -> bool:
+    if not last_heartbeat:
+        return False
+    try:
+        parsed = datetime.fromisoformat(last_heartbeat)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() >= _STARTUP_STALE_HEARTBEAT_SECONDS
+
+
+def _clear_startup_lock_if_stale(lock, *, market: str | None) -> bool:
+    from .tasks.market_queues import normalize_market
+
+    current_task = lock.get_current_task(market=market) or lock.get_current_holder(market=market)
+    market_label = normalize_market(market).lower()
+    if not current_task:
+        _logger.info("No stale data fetch lock found on startup (market=%s)", market_label)
+        return False
+    if not isinstance(current_task, dict):
+        _logger.warning(
+            "Ignoring malformed data fetch lock state on startup (market=%s)",
+            market_label,
+        )
+        return False
+
+    last_heartbeat = current_task.get("last_heartbeat")
+    if not last_heartbeat:
+        _logger.info(
+            "Leaving data fetch lock in place on startup without heartbeat evidence "
+            "(market=%s, task_id=%s)",
+            market_label,
+            current_task.get("task_id", "unknown"),
+        )
+        return False
+
+    if not _startup_heartbeat_is_stale(last_heartbeat):
+        _logger.info(
+            "Leaving active data fetch lock in place on startup (market=%s, task_id=%s)",
+            market_label,
+            current_task.get("task_id", "unknown"),
+        )
+        return False
+
+    _logger.warning(
+        "Clearing stale data fetch lock on worker startup "
+        "(market=%s, was held by %s, task_id=%s)",
+        market_label,
+        current_task.get("task_name", "unknown"),
+        current_task.get("task_id", "unknown"),
+    )
+    lock.force_release(market=market)
+    return True
+
+
 @celery_app.on_after_configure.connect
 def _log_timezone(sender, **kwargs):
     _logger.info("Celery timezone: %s (enable_utc=%s)", settings.celery_timezone, True)
@@ -92,12 +152,12 @@ def _log_timezone(sender, **kwargs):
 
 @worker_ready.connect
 def _clear_stale_data_fetch_lock(sender, **kwargs):
-    """Clear stale per-market data fetch lock when the matching worker starts.
+    """Clear stale data fetch locks when a data-fetch worker starts.
 
-    Worker hostnames follow the pattern ``datafetch-<market>@host`` or
-    ``datafetch-shared@host``. On startup each worker clears only its own
-    market's lock (plus the legacy unsuffixed key for the shared worker),
-    so a restart of the US worker can never clobber a live HK task.
+    ``datafetch-global@host`` clears all per-market lock keys because it is the
+    only worker allowed to consume external-fetch queues. Legacy
+    ``datafetch-<market>@host`` or ``datafetch-shared@host`` names still clear
+    only their scoped lock so older local setups remain safe.
 
     When containers restart, Python finally blocks don't execute,
     leaving the Redis lock key with its 2-hour TTL. This blocks all
@@ -110,18 +170,22 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
             return
 
         from .wiring.bootstrap import get_data_fetch_lock
-        from .tasks.market_queues import SUPPORTED_MARKETS, normalize_market
+        from .tasks.market_queues import SUPPORTED_MARKETS
 
-        # Parse "datafetch-hk@host" -> market="HK"; "datafetch-shared@host" -> None
+        # Parse "datafetch-hk@host" -> market="HK"; "datafetch-shared@host" -> None;
+        # "datafetch-global@host" clears every market lock.
         prefix = hostname.split('@', 1)[0]  # e.g. "datafetch-hk"
         parts = prefix.split('-', 1)
         worker_market: str | None = None
+        clear_all_markets = False
         if len(parts) == 2:
             suffix = parts[1].upper()
             if suffix in SUPPORTED_MARKETS:
                 worker_market = suffix
             elif suffix == "SHARED":
                 worker_market = None
+            elif suffix == "GLOBAL":
+                clear_all_markets = True
             else:
                 # Unknown suffix — treat as shared to be safe (legacy "datafetch" name).
                 worker_market = None
@@ -130,29 +194,18 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
             worker_market = None
 
         lock = get_data_fetch_lock()
-        holder = lock.get_current_holder(market=worker_market)
-        if holder:
-            _logger.warning(
-                "Clearing stale data fetch lock on worker startup "
-                "(market=%s, was held by %s, task_id=%s)",
-                normalize_market(worker_market).lower(),
-                holder.get('task_name', 'unknown'),
-                holder.get('task_id', 'unknown'),
-            )
-            lock.force_release(market=worker_market)
+        if clear_all_markets:
+            released = 0
+            for market_code in [*SUPPORTED_MARKETS, None]:
+                if _clear_startup_lock_if_stale(lock, market=market_code):
+                    released += 1
+            if released:
+                _logger.warning(
+                    "Cleared %s stale data fetch lock key(s) on global worker startup",
+                    released,
+                )
         else:
-            _logger.info(
-                "No stale data fetch lock found on startup (market=%s)",
-                normalize_market(worker_market).lower(),
-            )
-
-        # Also clear the unsuffixed legacy key on the shared worker only,
-        # so old pre-9.1 deployments upgrading in place don't leave it stuck.
-        if worker_market is None:
-            from .tasks.data_fetch_lock import LOCK_KEY as _LEGACY_LOCK_KEY
-            if lock.redis.exists(_LEGACY_LOCK_KEY) > 0:
-                lock.redis.delete(_LEGACY_LOCK_KEY)
-                _logger.warning("Cleared legacy unsuffixed %s key on startup", _LEGACY_LOCK_KEY)
+            _clear_startup_lock_if_stale(lock, market=worker_market)
     except Exception as e:
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
 
@@ -192,14 +245,15 @@ def _graceful_db_shutdown(sender=None, **kwargs):
         _logger.warning("Worker shutdown DB cleanup failed (non-fatal): %s", e)
 
 
-# Task routing: default background tasks to shared local-default queues.
-#
-# Market-scoped tasks keep the `market` kwarg for sequencing/logging, but the
-# local-default runtime routes them all to the single shared data-fetch queue.
+# Task routing: set conservative defaults so any caller that omits an explicit
+# queue still lands on a safe shared lane. Beat entries and runtime bootstrap
+# override these defaults with market-specific queues.
 from .tasks.market_queues import (
     SHARED_DATA_FETCH_QUEUE,
     SHARED_USER_SCANS_QUEUE,
     SUPPORTED_MARKETS,
+    data_fetch_queue_for_market,
+    market_jobs_queue_for_market,
 )
 
 _MARKET_SCOPED_DATA_FETCH_TASKS = (
@@ -211,12 +265,6 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.cache_tasks.smart_refresh_cache',
     'app.tasks.cache_tasks.daily_cache_warmup',
     'app.tasks.cache_tasks.auto_refresh_after_close',
-    'app.tasks.breadth_tasks.calculate_daily_breadth',
-    'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-    'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
-    'app.tasks.group_rank_tasks.gapfill_group_rankings',
-    'app.tasks.group_rank_tasks.backfill_group_rankings',
-    'app.tasks.group_rank_tasks.backfill_group_rankings_1year',
     'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
     'app.tasks.fundamentals_tasks.refresh_all_fundamentals_hybrid',
     'app.tasks.fundamentals_tasks.refresh_symbol_fundamentals',
@@ -226,6 +274,15 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.universe_tasks.refresh_stock_universe',
     'app.tasks.universe_tasks.refresh_official_market_universe',
     'app.tasks.universe_tasks.refresh_sp500_membership',
+)
+
+_MARKET_JOB_TASKS = (
+    'app.tasks.breadth_tasks.calculate_daily_breadth',
+    'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
+    'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+    'app.tasks.group_rank_tasks.gapfill_group_rankings',
+    'app.tasks.group_rank_tasks.backfill_group_rankings',
+    'app.tasks.group_rank_tasks.backfill_group_rankings_1year',
     'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
 )
 
@@ -235,6 +292,10 @@ celery_app.conf.task_routes = {
     task_name: {'queue': SHARED_DATA_FETCH_QUEUE}
     for task_name in _MARKET_SCOPED_DATA_FETCH_TASKS
 }
+celery_app.conf.task_routes.update({
+    task_name: {'queue': market_jobs_queue_for_market("US")}
+    for task_name in _MARKET_JOB_TASKS
+})
 
 # User scans: same default-to-shared pattern; API layer sets the queue explicitly.
 celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
@@ -245,17 +306,13 @@ celery_app.conf.task_routes['app.tasks.scan_tasks.run_bulk_scan'] = {
 celery_app.conf.result_expires = 86400  # Results expire after 24 hours
 
 # Celery Beat Schedule - Periodic Tasks
-# Local-default uses one shared data-fetch lane, so beat always enqueues
-# market-scoped refreshes onto ``data_fetch_shared``. Runtime preferences are
-# checked inside the tasks so disabled markets skip cheaply without requiring a
-# beat restart.
 if settings.cache_warmup_enabled:
     _enabled_markets = list(SUPPORTED_MARKETS)
     beat_schedule: dict = {}
 
     for _market in _enabled_markets:
         _warm_h, _warm_m = settings.cache_warm_schedule_for(_market)
-        _qname = SHARED_DATA_FETCH_QUEUE
+        _qname = data_fetch_queue_for_market(_market)
         _m_lower = _market.lower()
 
         # Daily smart cache refresh after local market close.
@@ -270,30 +327,12 @@ if settings.cache_warmup_enabled:
             'kwargs': {'mode': 'full', 'market': _market},
         }
 
-        # Daily breadth calculation with automatic gap-fill (close +5m).
-        _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
-        beat_schedule[f'daily-breadth-calculation-{_m_lower}'] = {
-            'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-            'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
-            'options': {'queue': _qname},
-            'kwargs': {'market': _market},
-        }
-
-        # Daily IBD group ranking calculation (close +10m).
-        _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
-        beat_schedule[f'daily-group-ranking-calculation-{_m_lower}'] = {
-            'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
-            'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
-            'options': {'queue': _qname},
-            'kwargs': {'market': _market},
-        }
-
         # Daily feature snapshot (close +15m).
         _fh, _fm = _offset_schedule(_warm_h, _warm_m, 15)
         beat_schedule[f'daily-feature-snapshot-{_m_lower}'] = {
             'task': 'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
             'schedule': crontab(hour=_fh, minute=_fm, day_of_week='1-5'),
-            'options': {'queue': _qname},
+            'options': {'queue': market_jobs_queue_for_market(_market)},
             'kwargs': {
                 'screener_names': _default_scan_profile['screeners'],
                 'criteria': _default_scan_profile['criteria'],
@@ -338,6 +377,22 @@ if settings.cache_warmup_enabled:
             'options': {'queue': _qname},
             'kwargs': {'market': _market},
         }
+
+    _warm_h, _warm_m = settings.cache_warm_schedule_for("US")
+    _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
+    beat_schedule['daily-breadth-calculation-us'] = {
+        'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
+        'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
+        'options': {'queue': market_jobs_queue_for_market("US")},
+        'kwargs': {'market': 'US'},
+    }
+    _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
+    beat_schedule['daily-group-ranking-calculation-us'] = {
+        'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+        'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
+        'options': {'queue': market_jobs_queue_for_market("US")},
+        'kwargs': {'market': 'US'},
+    }
 
     # --- Market-agnostic / shared beat entries below ---
     # These tasks are not market-scoped (theme discovery, cleanup jobs, etc.)
