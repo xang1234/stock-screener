@@ -348,6 +348,7 @@ def build_daily_snapshot(
     static_daily_mode: bool = False,
     market: str | None = None,
     publish_pointer_key: str = "latest_published",
+    ignore_runtime_market_gate: bool = False,
     activity_lifecycle: str | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
@@ -415,7 +416,8 @@ def build_daily_snapshot(
     from app.tasks.market_queues import log_extra
     _log_extra = log_extra(market)
     if market is not None:
-        if not is_market_enabled_now(market):
+        bypass_runtime_market_gate = static_daily_mode and ignore_runtime_market_gate
+        if not bypass_runtime_market_gate and not is_market_enabled_now(market):
             logger.info("Skipping feature snapshot for disabled market %s", market, extra=_log_extra)
             return {
                 "status": "skipped",

@@ -330,6 +330,17 @@ def _run_daily_refresh(
 
     warnings: list[str] = []
     as_of_date = _resolve_latest_completed_us_trading_date()
+
+    def _snapshot_ready(snapshot: dict[str, Any]) -> bool:
+        status = snapshot.get("status")
+        if status == "published":
+            return True
+        if status == "skipped" and snapshot.get("reason") == "already_published":
+            return True
+        if status is None and (snapshot.get("run_id") is not None or snapshot.get("existing_run_id") is not None):
+            return True
+        return False
+
     with disable_serialized_data_fetch_lock():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:
@@ -361,16 +372,28 @@ def _run_daily_refresh(
                 universe_name=f"market:{market.lower()}",
                 market=market,
                 publish_pointer_key=_market_pointer_key(market),
+                ignore_runtime_market_gate=True,
             )
             feature_snapshots[market] = market_result
 
         results["feature_snapshots"] = feature_snapshots
+        for market, snapshot in feature_snapshots.items():
+            if market == STATIC_DEFAULT_MARKET:
+                continue
+            if _snapshot_ready(snapshot):
+                continue
+            status = snapshot.get("status")
+            reason = snapshot.get("reason")
+            message = f"Static export market {market} snapshot returned status {status!r}"
+            if reason:
+                message += f" ({reason})."
+            else:
+                message += "."
+            warnings.append(message)
+
         default_snapshot = feature_snapshots.get(STATIC_DEFAULT_MARKET, {})
         default_snapshot_status = default_snapshot.get("status")
-        default_snapshot_ready = default_snapshot_status == "published" or (
-            default_snapshot_status == "skipped"
-            and default_snapshot.get("reason") == "already_published"
-        )
+        default_snapshot_ready = _snapshot_ready(default_snapshot)
         default_run_id = (
             default_snapshot.get("run_id")
             or default_snapshot.get("existing_run_id")

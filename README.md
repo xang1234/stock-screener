@@ -14,7 +14,7 @@ The static page is for demo purposes only. It is a read-only daily snapshot with
 
 Scan and track four markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **Japan** (Nikkei 225), and **Taiwan** (TAIEX). Each market runs on its own exchange calendar (XNYS / XHKG / XTKS / XTAI) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
 
-![Market selector](docs/screenshots/market-selector.png)
+![Market selector](docs/screenshots/market-selector.jpg)
 *Market picker in the scan control bar — pick US, HK, JP, or TW and scope to an exchange or index*
 
 ![Market badges](docs/screenshots/market-badges.png)
@@ -87,7 +87,7 @@ See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend
 
 On first launch the app boots into a setup screen — no pre-seeded database required. Pick a **primary market** (the one that opens first) and any additional **enabled markets** to hydrate in the background, then click **Start bootstrap**.
 
-![Bootstrap setup](docs/screenshots/bootstrap-setup.png)
+![Bootstrap setup](docs/screenshots/bootstrap-setup.jpg)
 *Primary-market dropdown and enabled-markets checkboxes on first launch*
 
 The orchestrator runs a staged Celery pipeline for the primary market:
@@ -100,8 +100,8 @@ The orchestrator runs a staged Celery pipeline for the primary market:
 6. **Feature snapshot** (US only) — daily feature rollup used by the Setup Engine.
 7. **Initial autoscan** — seeds a first scan with the default profile so you land on populated results.
 
-![Bootstrap progress](docs/gifs/bootstrap-progress.gif)
-*Live per-stage progress with per-market queue status*
+![Bootstrap progress](docs/screenshots/bootstrap-progress.jpg)
+*Per-stage progress with per-market queue status while the pipeline is running*
 
 The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,jp,tw}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
 
