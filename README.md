@@ -1,6 +1,6 @@
 # Stock Scanner
 
-A professional stock screening platform with multi-methodology scans, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
+A stock screening platform with multi-methodology scans across **US, Hong Kong, Japan, and Taiwan** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
 
@@ -9,6 +9,18 @@ Static demo: [https://xang1234.github.io/stock-screener/](https://xang1234.githu
 The static page is for demo purposes only. It is a read-only daily snapshot with reduced functionality compared with the full application, which includes live workflows such as chatbot, themes pipeline, watchlists, and the full interactive backend.
 
 ## Highlights
+
+### Multi-Market Coverage
+
+Scan and track four markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **Japan** (Nikkei 225), and **Taiwan** (TAIEX). Each market runs on its own exchange calendar (XNYS / XHKG / XTKS / XTAI) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
+
+![Market selector](docs/screenshots/market-selector.png)
+*Market picker in the scan control bar — pick US, HK, JP, or TW and scope to an exchange or index*
+
+![Market badges](docs/screenshots/market-badges.png)
+*Results rows tagged with per-market badges (HK / JP / TW / US) for mixed-universe scans*
+
+Deep-dive: **[ASIA v2 ADRs & runbooks](docs/asia/README.md)**
 
 ### Multi-Strategy Screening
 
@@ -63,11 +75,37 @@ docker-compose up
 # Open http://localhost
 ```
 
+After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+
 Full guide with homelab, VPS, and GHCR deployment options: **[Docker Deployment](docs/INSTALL_DOCKER.md)**
 
 ### From Source (Contributors)
 
 See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend + Celery setup.
+
+## First-Run Bootstrap
+
+On first launch the app boots into a setup screen — no pre-seeded database required. Pick a **primary market** (the one that opens first) and any additional **enabled markets** to hydrate in the background, then click **Start bootstrap**.
+
+![Bootstrap setup](docs/screenshots/bootstrap-setup.png)
+*Primary-market dropdown and enabled-markets checkboxes on first launch*
+
+The orchestrator runs a staged Celery pipeline for the primary market:
+
+1. **Universe refresh** — seeds the market's symbol list (S&P 500 / Russell / NDX for US via `refresh_stock_universe`; official exchange feeds for HK / JP / TW via `refresh_official_market_universe`).
+2. **Benchmark + price refresh** — 5y OHLCV cached in Redis with PostgreSQL fallback.
+3. **Fundamentals refresh** — quarterly and annual financials.
+4. **Breadth calculation** — StockBee-style advance/decline with gap-fill.
+5. **Group rankings** — IBD-style relative strength across 197 industry groups.
+6. **Feature snapshot** (US only) — daily feature rollup used by the Setup Engine.
+7. **Initial autoscan** — seeds a first scan with the default profile so you land on populated results.
+
+![Bootstrap progress](docs/gifs/bootstrap-progress.gif)
+*Live per-stage progress with per-market queue status*
+
+The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,jp,tw}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
+
+State is persisted in `AppSetting` under `runtime.primary_market`, `runtime.enabled_markets`, and `runtime.bootstrap_state` (`not_started` → `running` → `ready`). To re-run the wizard, reset `runtime.bootstrap_state` to `not_started`.
 
 ## Configuration
 
@@ -89,7 +127,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | Routine | Market dashboard with Key Markets, Themes, Watchlists, Stockbee tabs |
-| `/scan` | Bulk Scanner | Multi-screener scanning with 80+ filters and CSV export |
+| `/scan` | Bulk Scanner | Multi-market scanning (US / HK / JP / TW) with 80+ filters, per-market badges, and CSV export |
 | `/breadth` | Market Breadth | StockBee-style breadth indicators and trends |
 | `/groups` | Group Rankings | IBD industry group rankings with movers |
 | `/themes` | Themes | AI-powered theme discovery with trending/emerging detection |
@@ -98,6 +136,8 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 ## Key Capabilities
 
+- **4 supported markets** — US, Hong Kong, Japan, Taiwan — with per-market exchange calendars, independent refresh queues, and scan-time freshness guards
+- **First-run bootstrap wizard** with live staged progress and background hydration of secondary markets
 - **6 screening methodologies** with composite scoring (Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, Custom)
 - **80+ configurable filters** with saved presets across fundamental, technical, and rating categories
 - **AI chatbot** with Groq-first routing, web search research mode, and persistent conversations
@@ -123,6 +163,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 | [Backend API & Architecture](backend/README.md) | Backend developers |
 | [Frontend Components](frontend/README.md) | Frontend developers |
 | [Contributing](CONTRIBUTING.md) | Getting started as a contributor |
+| [ASIA v2 (HK/JP/TW) ADRs & Runbooks](docs/asia/README.md) | Multi-market operators, auditors |
 
 ## Tech Stack
 
