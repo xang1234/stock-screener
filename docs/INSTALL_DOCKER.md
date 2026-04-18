@@ -56,7 +56,7 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.2.3
+#   APP_IMAGE_TAG=v1.0.0
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   CORS_ORIGINS=https://stocks.yourdomain.com
 
@@ -76,8 +76,8 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 ### Release and Rollback
 
 - Push to `main` to publish rolling `main`, `sha-*`, and `latest` image tags to GHCR
-- Push a git tag like `v1.2.3` to publish immutable release tags
-- **Deploy:** Set `APP_IMAGE_TAG=v1.2.3` in `.env.docker`, run `pull` + `up -d --no-build`
+- Push a git tag like `v1.0.0` to publish immutable release tags
+- **Deploy:** Set `APP_IMAGE_TAG=v1.0.0` in `.env.docker`, run `pull` + `up -d --no-build`
 - **Roll back:** Change `APP_IMAGE_TAG` to the previous tag and redeploy
 
 If the repository or package is private, authenticate first:

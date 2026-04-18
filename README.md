@@ -69,13 +69,27 @@ Visual performance tracking with RS and price sparklines (30-day trends), price 
 ### Docker (Recommended for Servers)
 
 ```bash
-cp .env.docker.example .env
-# Edit .env: set SERVER_AUTH_PASSWORD and add at least one LLM API key (e.g., GROQ_API_KEY)
-docker-compose up
+cp .env.docker.example .env.docker
+# Edit .env.docker:
+#   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
+#   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
+#   APP_IMAGE_TAG=v1.0.0
+#   SERVER_AUTH_PASSWORD=choose-a-long-random-password
+#   GROQ_API_KEY=...
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml up -d --no-build
 # Open http://localhost
 ```
 
-After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+This path deploys the tagged `v1.0.0` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+
+For local development or contributor laptops, use the default local compose stack instead:
+
+```bash
+cp .env.docker.example .env
+# Edit .env: set SERVER_AUTH_PASSWORD and add at least one LLM API key (e.g., GROQ_API_KEY)
+docker-compose up
+```
 
 Full guide with homelab, VPS, and GHCR deployment options: **[Docker Deployment](docs/INSTALL_DOCKER.md)**
 
