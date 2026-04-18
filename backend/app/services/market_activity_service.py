@@ -129,8 +129,25 @@ def _save_market_activity(
     return payload
 
 
-def _progress_mode(status: str | None, percent: float | None) -> str:
-    if percent is not None or status in {"completed", "idle"}:
+def _resolve_progress_percent(
+    percent: float | None,
+    current: int | None,
+    total: int | None,
+) -> float | None:
+    if percent is not None:
+        return float(percent)
+    if current is None or total in (None, 0):
+        return None
+    return round((float(current) / float(total)) * 100.0, 1)
+
+
+def _progress_mode(
+    status: str | None,
+    percent: float | None,
+    current: int | None = None,
+    total: int | None = None,
+) -> str:
+    if _resolve_progress_percent(percent, current, total) is not None or status in {"completed", "idle"}:
         return "determinate"
     return "indeterminate"
 
@@ -151,6 +168,7 @@ def _activity_payload(
     stage_label = _stage_label(stage_key)
     resolved_lifecycle = lifecycle or _default_lifecycle(stage_key)
     resolved_message = message
+    resolved_percent = _resolve_progress_percent(percent, current, total)
     if not resolved_message and stage_label:
         action = {
             "queued": "Queued",
@@ -165,8 +183,8 @@ def _activity_payload(
         "stage_key": stage_key,
         "stage_label": stage_label,
         "status": status,
-        "progress_mode": _progress_mode(status, percent),
-        "percent": percent,
+        "progress_mode": _progress_mode(status, resolved_percent, current, total),
+        "percent": resolved_percent,
         "current": current,
         "total": total,
         "message": resolved_message,
@@ -367,7 +385,17 @@ def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any
         merged["total"] = current_task["total"]
     if current_task.get("last_heartbeat") is not None:
         merged["updated_at"] = current_task["last_heartbeat"]
-    merged["progress_mode"] = _progress_mode(merged.get("status"), merged.get("percent"))
+    merged["percent"] = _resolve_progress_percent(
+        merged.get("percent"),
+        merged.get("current"),
+        merged.get("total"),
+    )
+    merged["progress_mode"] = _progress_mode(
+        merged.get("status"),
+        merged.get("percent"),
+        merged.get("current"),
+        merged.get("total"),
+    )
     return merged
 
 
@@ -432,7 +460,17 @@ def _idle_market_payload(market: str, record: dict[str, Any] | None) -> dict[str
     payload = dict(record)
     if payload.get("status") == "completed":
         payload["lifecycle"] = "idle"
-    payload["progress_mode"] = _progress_mode(payload.get("status"), payload.get("percent"))
+    payload["percent"] = _resolve_progress_percent(
+        payload.get("percent"),
+        payload.get("current"),
+        payload.get("total"),
+    )
+    payload["progress_mode"] = _progress_mode(
+        payload.get("status"),
+        payload.get("percent"),
+        payload.get("current"),
+        payload.get("total"),
+    )
     return payload
 
 

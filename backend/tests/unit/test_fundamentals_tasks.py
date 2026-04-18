@@ -305,6 +305,107 @@ def test_refresh_all_fundamentals_publishes_running_progress(monkeypatch):
     assert any(update["percent"] > 0 for update in progress_updates)
 
 
+def test_refresh_all_fundamentals_snapshot_cutover_publishes_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", True)
+    monkeypatch.setattr(
+        module,
+        "_run_snapshot_pipeline",
+        lambda db, publish: {
+            "snapshot": {"published": True},
+            "universe": {"active_symbols": 2},
+            "hydrate": {"symbols_hydrated": 2},
+        },
+    )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US", activity_lifecycle="bootstrap")
+
+    assert result["snapshot"]["published"] is True
+    assert progress_updates[0]["current"] == 0
+    assert progress_updates[0]["total"] == 2
+    assert progress_updates[0]["percent"] == 0
+    assert completed[0]["current"] == 2
+    assert completed[0]["total"] == 2
+
+
+def test_refresh_all_fundamentals_hybrid_snapshot_cutover_publishes_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", True)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "_run_snapshot_pipeline",
+        lambda db, publish: {
+            "snapshot": {
+                "published": True,
+                "coverage": {"active_symbols": 2},
+            },
+            "hydrate": {"symbols_hydrated": 2},
+        },
+    )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals_hybrid.run(
+        include_finviz=False,
+        market="US",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["snapshot"]["published"] is True
+    assert progress_updates[0]["current"] == 0
+    assert progress_updates[0]["total"] == 2
+    assert progress_updates[0]["percent"] == 0
+    assert completed[0]["current"] == 2
+    assert completed[0]["total"] == 2
+
+
 def test_refresh_all_fundamentals_hybrid_publishes_running_progress(monkeypatch):
     import app.tasks.fundamentals_tasks as module
 

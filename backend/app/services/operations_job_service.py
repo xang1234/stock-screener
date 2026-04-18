@@ -565,7 +565,7 @@ class OperationsJobService:
             record.current = runtime_record.get("current")
         if runtime_record.get("total") is not None:
             record.total = runtime_record.get("total")
-        record.progress_mode = runtime_record.get("progress_mode") or _progress_mode(
+        record.progress_mode = _progress_mode(
             record.percent,
             record.current,
             record.total,

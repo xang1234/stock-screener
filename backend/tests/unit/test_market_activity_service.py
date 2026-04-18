@@ -169,6 +169,48 @@ def test_mark_market_activity_progress_updates_running_record_with_determinate_p
     assert us_market["percent"] == 25.0
 
 
+def test_runtime_activity_counts_without_percent_are_still_determinate(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        lifecycle="bootstrap",
+        task_name="refresh_all_fundamentals",
+        task_id="task-us",
+        message="Refreshing fundamentals",
+    )
+    module.mark_market_activity_progress(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        task_name="refresh_all_fundamentals",
+        task_id="task-us",
+        current=25,
+        total=100,
+        percent=None,
+        message="Refreshing fundamentals",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["US"], state="running"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["progress_mode"] == "determinate"
+    assert us_market["percent"] == 25.0
+    assert us_market["current"] == 25
+    assert us_market["total"] == 100
+
+
 def test_runtime_activity_prefers_persisted_progress_over_heartbeat_overlay(
     db_session,
     monkeypatch,

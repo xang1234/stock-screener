@@ -268,4 +268,35 @@ describe('OperationsPage', () => {
     expect(screen.getByText(/Refreshing prices/)).toBeInTheDocument();
     expect(screen.getByText(/Failed to refresh runtime activity/)).toBeInTheDocument();
   });
+
+  it('derives percent for determinate jobs that only expose counts', async () => {
+    fetchOperationsJobs.mockResolvedValue({
+      ...OPERATIONS_PAYLOAD,
+      jobs: [
+        {
+          task_id: 'task-fetch-hk',
+          task_name: 'app.tasks.cache_tasks.smart_refresh_cache',
+          queue: 'data_fetch_hk',
+          market: 'HK',
+          state: 'running',
+          worker: 'datafetch-global@host',
+          age_seconds: 45,
+          wait_reason: null,
+          heartbeat_lag_seconds: 5,
+          cancel_strategy: 'unsupported',
+          progress_mode: 'determinate',
+          percent: null,
+          current: 600,
+          total: 1000,
+          message: 'Batch 3/5 · refreshing prices',
+        },
+      ],
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(await screen.findByText(/60%/)).toBeInTheDocument();
+    expect(screen.getByText(/600\/1000/)).toBeInTheDocument();
+    expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
+  });
 });

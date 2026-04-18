@@ -43,6 +43,11 @@ async def test_operations_jobs_endpoint_returns_inventory(client, monkeypatch):
                     "wait_reason": "waiting_for_external_fetch_global",
                     "heartbeat_lag_seconds": None,
                     "cancel_strategy": "revoke_and_remove_from_queue",
+                    "progress_mode": "determinate",
+                    "percent": 60.0,
+                    "current": 600,
+                    "total": 1000,
+                    "message": "Batch 3/5 · refreshing prices",
                 }
             ],
             "queues": [{"queue": "data_fetch_us", "depth": 1, "oldest_age_seconds": 12.0}],
@@ -61,6 +66,11 @@ async def test_operations_jobs_endpoint_returns_inventory(client, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["jobs"][0]["wait_reason"] == "waiting_for_external_fetch_global"
+    assert payload["jobs"][0]["progress_mode"] == "determinate"
+    assert payload["jobs"][0]["percent"] == 60.0
+    assert payload["jobs"][0]["current"] == 600
+    assert payload["jobs"][0]["total"] == 1000
+    assert payload["jobs"][0]["message"] == "Batch 3/5 · refreshing prices"
     assert payload["queues"][0]["depth"] == 1
     assert payload["workers"][0]["worker"] == "general@host"
 
@@ -93,4 +103,3 @@ async def test_operations_cancel_endpoint_returns_service_payload(client, monkey
         "cancel_strategy": "scan_cancel",
         "message": "Cancelled task-123",
     }
-

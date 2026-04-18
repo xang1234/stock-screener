@@ -132,6 +132,39 @@ def _maybe_publish_fundamentals_progress(
     progress_state["last_time"] = now
 
 
+def _load_active_universe_stocks(
+    db,
+    *,
+    market: str | None = None,
+) -> list[StockUniverse]:
+    query = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+    if market is not None:
+        query = query.filter(StockUniverse.market == market)
+    return query.all()
+
+
+def _resolve_snapshot_progress_total(result: Dict, fallback_total: int) -> int:
+    snapshot = result.get("snapshot") or {}
+    coverage = snapshot.get("coverage") or {}
+    universe = result.get("universe") or {}
+    hydrate = result.get("hydrate") or {}
+    for candidate in (
+        universe.get("active_symbols"),
+        coverage.get("active_symbols"),
+        hydrate.get("symbols_hydrated"),
+        fallback_total,
+    ):
+        if candidate is None:
+            continue
+        try:
+            resolved = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if resolved >= 0:
+            return resolved
+    return max(int(fallback_total or 0), 0)
+
+
 def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     """
     Execute the snapshot-backed fundamentals refresh flow.
@@ -221,6 +254,8 @@ def refresh_all_fundamentals(
         "last_time": time.monotonic(),
     }
     processed = 0
+    total_stocks = 0
+    scoped_market = effective_market if market is not None else None
 
     try:
         mark_market_activity_started(
@@ -233,11 +268,37 @@ def refresh_all_fundamentals(
             message="Refreshing fundamentals",
         )
         if settings.provider_snapshot_cutover_enabled:
+            total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=0,
+                total=total_stocks,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+                force=True,
+            )
             logger.info(
                 "Provider snapshot cutover enabled - using snapshot publish pipeline",
                 extra=_log_extra,
             )
             result = _run_snapshot_pipeline(db, publish=True)
+            total_stocks = _resolve_snapshot_progress_total(result, total_stocks)
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=total_stocks,
+                total=total_stocks,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+                force=True,
+            )
             duration = time.time() - start_time
             response = {
                 **result,
@@ -254,15 +315,14 @@ def refresh_all_fundamentals(
                 lifecycle=activity_lifecycle,
                 task_name=task_name,
                 task_id=task_id,
+                current=total_stocks if total_stocks > 0 else None,
+                total=total_stocks if total_stocks > 0 else None,
                 message="Fundamentals refresh completed",
             )
             return response
 
         # Get all active stocks from universe (market-filtered when scoped)
-        _uni_q = db.query(StockUniverse).filter(StockUniverse.is_active == True)
-        if market is not None:
-            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
-        universe_stocks = _uni_q.all()
+        universe_stocks = _load_active_universe_stocks(db, market=scoped_market)
 
         if not universe_stocks:
             logger.warning("No active stocks found in universe", extra=_log_extra)
@@ -807,6 +867,8 @@ def refresh_all_fundamentals_hybrid(
         "last_current": 0,
         "last_time": time.monotonic(),
     }
+    total_stocks = 0
+    scoped_market = effective_market if market is not None else None
 
     try:
         mark_market_activity_started(
@@ -820,11 +882,37 @@ def refresh_all_fundamentals_hybrid(
         )
         if settings.provider_snapshot_cutover_enabled or settings.provider_snapshot_ingestion_enabled:
             publish = settings.provider_snapshot_cutover_enabled
+            total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=0,
+                total=total_stocks,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+                force=True,
+            )
             logger.info(
                 "Provider snapshot pipeline enabled (publish=%s) - bypassing legacy hybrid fetch",
                 publish,
             )
             result = _run_snapshot_pipeline(db, publish=publish)
+            total_stocks = _resolve_snapshot_progress_total(result, total_stocks)
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=total_stocks,
+                total=total_stocks,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+                force=True,
+            )
             duration = time.time() - start_time
             response = {
                 **result,
@@ -843,15 +931,14 @@ def refresh_all_fundamentals_hybrid(
                 lifecycle=activity_lifecycle,
                 task_name=task_name,
                 task_id=task_id,
+                current=total_stocks if total_stocks > 0 else None,
+                total=total_stocks if total_stocks > 0 else None,
                 message="Fundamentals refresh completed",
             )
             return response
 
         # Get all active stocks from universe (market-filtered when scoped)
-        _uni_q = db.query(StockUniverse).filter(StockUniverse.is_active == True)
-        if market is not None:
-            _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
-        universe_stocks = _uni_q.all()
+        universe_stocks = _load_active_universe_stocks(db, market=scoped_market)
 
         if not universe_stocks:
             logger.warning("No active stocks found in universe", extra=_log_extra)
@@ -1020,6 +1107,8 @@ def refresh_all_fundamentals_hybrid(
             lifecycle=activity_lifecycle,
             task_name=task_name,
             task_id=task_id,
+            current=int(progress_state.get("last_current") or 0),
+            total=total_stocks,
             message=str(e),
         )
         return {

@@ -33,16 +33,30 @@ function formatCount(value) {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
+function resolveDeterminatePercent(percent, current, total) {
+  if (Number.isFinite(percent)) {
+    return Math.max(0, Math.min(100, Number(percent)));
+  }
+  if (current != null && total != null && total > 0) {
+    return Math.max(0, Math.min(100, (Number(current) / Number(total)) * 100));
+  }
+  return null;
+}
+
 function resolveStageLocalProgress(activity) {
-  if (!activity || activity.progress_mode !== 'determinate' || activity.percent === null || activity.percent === undefined) {
+  if (!activity || activity.progress_mode !== 'determinate') {
     return null;
   }
   const stageKey = activity.stage_key || '';
   if (!STAGE_LOCAL_PROGRESS_KEYS.has(stageKey)) {
     return null;
   }
+  const percent = resolveDeterminatePercent(activity.percent, activity.current, activity.total);
+  if (percent === null) {
+    return null;
+  }
   return {
-    percent: Math.max(0, Math.min(100, Number(activity.percent))),
+    percent,
     detail: (
       activity.current !== null
       && activity.current !== undefined
@@ -118,9 +132,17 @@ export default function BootstrapSetupScreen({
   const bootstrapPercent = (
     bootstrapProgressMode === 'determinate'
       ? (stageLocalProgress?.percent
-        ?? Math.max(0, Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0))))
+        ?? resolveDeterminatePercent(
+          bootstrap?.percent ?? primaryActivity?.percent,
+          bootstrap?.current ?? primaryActivity?.current,
+          bootstrap?.total ?? primaryActivity?.total,
+        )
+        ?? 0)
       : null
   );
+  const bootstrapMessage = stageLocalProgress
+    ? (primaryActivity?.message || bootstrap?.message || 'Preparing primary market data.')
+    : (bootstrap?.message || primaryActivity?.message || 'Preparing primary market data.');
 
   const toggleMarket = (market) => {
     if (market === selectedPrimary) {
@@ -218,7 +240,7 @@ export default function BootstrapSetupScreen({
                       </Typography>
                     )}
                     <Typography variant="body2" color="text.secondary">
-                      {bootstrap?.message || primaryActivity?.message || 'Preparing primary market data.'}
+                      {bootstrapMessage}
                     </Typography>
                   </Stack>
                 </Box>
