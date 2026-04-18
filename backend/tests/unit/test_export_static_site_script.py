@@ -75,6 +75,7 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
             "universe_name": f"market:{market.lower()}",
             "market": market,
             "publish_pointer_key": f"latest_published_market:{market}",
+            "ignore_runtime_market_gate": True,
         }
     assert results["default_market_pointer"] == {
         "market": "US",
@@ -399,7 +400,51 @@ def test_run_daily_refresh_uses_static_daily_mode_and_group_rank_bypass(monkeypa
         "universe_name": "market:us",
         "market": "US",
         "publish_pointer_key": "latest_published_market:US",
+        "ignore_runtime_market_gate": True,
     }
+
+
+def test_run_daily_refresh_warns_when_non_default_market_snapshot_is_not_publish_ready(monkeypatch):
+    def build_snapshot(**kwargs):
+        if kwargs["market"] == "HK":
+            return {
+                "status": "skipped",
+                "reason": "market HK is disabled in local runtime preferences",
+                "market": "HK",
+            }
+        return {"status": "published", "run_id": 77, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(run=build_snapshot),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date: {"task": "price_refresh", "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: 10105,
+    )
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", SimpleNamespace(run=lambda: {"task": "universe_refresh"}))
+    monkeypatch.setattr(
+        fundamentals_tasks,
+        "refresh_all_fundamentals",
+        SimpleNamespace(run=lambda: {"task": "fundamentals_refresh"}),
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    _results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    assert "Static export market HK snapshot returned status 'skipped' (market HK is disabled in local runtime preferences)." in warnings
 
 
 def test_resolve_latest_completed_us_trading_date_uses_last_market_close(monkeypatch):
