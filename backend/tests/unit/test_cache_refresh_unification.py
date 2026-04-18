@@ -185,6 +185,41 @@ def test_smart_refresh_cache_non_us_market_skips_time_window_guard(monkeypatch):
     assert result.get("skipped") is not True or "Outside refresh window" not in result.get("reason", "")
 
 
+def test_smart_refresh_cache_publishes_failed_market_activity(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    fake_price_cache = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=RuntimeError("benchmark unavailable")))
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+
+    started = []
+    failed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_failed", lambda *args, **kwargs: failed.append(kwargs))
+
+    result = module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full", market="US")
+
+    assert result["status"] == "failed"
+    assert started[0]["stage_key"] == "prices"
+    assert started[0]["lifecycle"] == "daily_refresh"
+    assert failed[0]["stage_key"] == "prices"
+    assert "benchmark unavailable" in failed[0]["message"]
+
+
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 

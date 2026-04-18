@@ -14,6 +14,7 @@ import {
   Chip,
   CircularProgress,
   Container,
+  LinearProgress,
   Stack,
   Table,
   TableBody,
@@ -24,6 +25,7 @@ import {
   Button,
 } from '@mui/material';
 import { fetchAlerts, acknowledgeAlert } from '../api/telemetry';
+import { useRuntimeActivity } from '../hooks/useRuntimeActivity';
 
 const POLL_MS = 30000;
 
@@ -36,6 +38,14 @@ const STATE_COLOR = {
   open: 'error',
   acknowledged: 'warning',
   closed: 'default',
+};
+
+const ACTIVITY_STATUS_COLOR = {
+  running: 'info',
+  queued: 'warning',
+  completed: 'success',
+  failed: 'error',
+  idle: 'default',
 };
 
 function formatLagSeconds(seconds) {
@@ -65,17 +75,18 @@ function MarketSummaryCard({ summary }) {
           <Typography variant="body2">
             <strong>Benchmark age:</strong> {formatLagSeconds(benchmark?.age_seconds)}
           </Typography>
-          <Typography variant="body2">
-            <strong>Universe:</strong> {drift?.current_size ?? '—'}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" component="span">
+              <strong>Universe:</strong> {drift?.current_size ?? '—'}
+            </Typography>
             {drift?.delta != null && drift.delta !== 0 && (
               <Chip
                 label={`${drift.delta > 0 ? '+' : ''}${drift.delta}`}
                 size="small"
                 color={Math.abs(drift.delta) > (drift.prior_size || 1) * 0.05 ? 'warning' : 'default'}
-                sx={{ ml: 1 }}
               />
             )}
-          </Typography>
+          </Box>
           <Typography variant="body2">
             <strong>Low completeness (0-25):</strong>{' '}
             {completeness?.bucket_counts && completeness?.symbols_total
@@ -83,6 +94,68 @@ function MarketSummaryCard({ summary }) {
               : '—'}
           </Typography>
         </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatTimestamp(value) {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function MarketActivityCard({ activity }) {
+  const showProgress = activity.status === 'running' || activity.status === 'queued';
+  const progressValue = Number.isFinite(activity.percent) ? activity.percent : null;
+
+  return (
+    <Card variant="outlined" sx={{ minWidth: 260, flex: '1 1 280px' }}>
+      <CardContent>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="overline" color="text.secondary">
+            {activity.market}
+          </Typography>
+          <Stack direction="row" spacing={1}>
+            <Chip label={activity.lifecycle || 'idle'} size="small" variant="outlined" />
+            <Chip
+              label={activity.status || 'idle'}
+              size="small"
+              color={ACTIVITY_STATUS_COLOR[activity.status] || 'default'}
+            />
+          </Stack>
+        </Stack>
+        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+          {activity.stage_label || 'Idle'}
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ minHeight: 40 }}>
+          {activity.message || 'No active work for this market.'}
+        </Typography>
+        {showProgress && (
+          <Box sx={{ mt: 1.5 }}>
+            <LinearProgress
+              variant={progressValue != null ? 'determinate' : 'indeterminate'}
+              value={progressValue != null ? progressValue : undefined}
+              aria-label={`${activity.market} progress`}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+              {progressValue != null
+                ? `${Math.round(progressValue)}%`
+                : 'Progress pending'}{activity.current != null && activity.total != null
+                ? ` · ${activity.current}/${activity.total}`
+                : ''}
+            </Typography>
+          </Box>
+        )}
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+          Task: {activity.task_name || '—'}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Updated: {formatTimestamp(activity.updated_at)}
+        </Typography>
       </CardContent>
     </Card>
   );
@@ -145,6 +218,7 @@ function AlertsTable({ alerts, onAcknowledge }) {
 export default function OperationsPage() {
   const queryClient = useQueryClient();
   const [ackError, setAckError] = useState(null);
+  const activityQuery = useRuntimeActivity();
 
   // Single poll: /alerts returns both summaries and alerts so the dashboard
   // doesn't fan out to two endpoints (the eval already builds the summaries).
@@ -165,6 +239,8 @@ export default function OperationsPage() {
 
   const summaries = alertsQuery.data?.summaries || [];
   const alerts = alertsQuery.data?.alerts || [];
+  const marketActivity = activityQuery.data?.markets || [];
+  const bootstrap = activityQuery.data?.bootstrap;
 
   return (
     <Container maxWidth="xl" sx={{ py: 2 }}>
@@ -174,6 +250,28 @@ export default function OperationsPage() {
       <Typography variant="body2" color="text.secondary" gutterBottom>
         Per-market telemetry and active alerts. Polls every {POLL_MS / 1000}s.
       </Typography>
+
+      <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>
+        Market activity
+      </Typography>
+      {bootstrap?.background_warning && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          {bootstrap.background_warning}
+        </Typography>
+      )}
+      {activityQuery.isLoading ? (
+        <CircularProgress size={20} />
+      ) : activityQuery.isError ? (
+        <Typography variant="body2" color="error">
+          Failed to load runtime activity.
+        </Typography>
+      ) : (
+        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 3 }}>
+          {marketActivity.map((activity) => (
+            <MarketActivityCard key={activity.market} activity={activity} />
+          ))}
+        </Stack>
+      )}
 
       <Box sx={{ my: 2 }}>
         {alertsQuery.isLoading ? (

@@ -9,6 +9,7 @@ from celery import chain
 
 from ..domain.scanning.defaults import get_default_scan_profile
 from ..database import SessionLocal
+from ..services.market_activity_service import mark_market_activity_queued
 from ..tasks.market_queues import SHARED_DATA_FETCH_QUEUE
 from ..celery_app import celery_app
 
@@ -34,17 +35,35 @@ def _build_market_bootstrap_signatures(
         refresh_stock_universe,
     )
 
-    universe_task = (
-        refresh_stock_universe.si(market=market)
-        if market == "US"
-        else refresh_official_market_universe.si(market=market)
-    )
     signatures = [
-        universe_task.set(queue=SHARED_DATA_FETCH_QUEUE),
-        smart_refresh_cache.si(mode="full", market=market).set(queue=SHARED_DATA_FETCH_QUEUE),
-        refresh_all_fundamentals.si(market=market).set(queue=SHARED_DATA_FETCH_QUEUE),
-        calculate_daily_breadth_with_gapfill.si(market=market).set(queue=SHARED_DATA_FETCH_QUEUE),
-        calculate_daily_group_rankings.si(market=market).set(queue=SHARED_DATA_FETCH_QUEUE),
+        (
+            refresh_stock_universe.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            )
+            if market == "US"
+            else refresh_official_market_universe.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            )
+        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        smart_refresh_cache.si(
+            mode="full",
+            market=market,
+            activity_lifecycle="bootstrap",
+        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        refresh_all_fundamentals.si(
+            market=market,
+            activity_lifecycle="bootstrap",
+        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        calculate_daily_breadth_with_gapfill.si(
+            market=market,
+            activity_lifecycle="bootstrap",
+        ).set(queue=SHARED_DATA_FETCH_QUEUE),
+        calculate_daily_group_rankings.si(
+            market=market,
+            activity_lifecycle="bootstrap",
+        ).set(queue=SHARED_DATA_FETCH_QUEUE),
     ]
     if market == "US":
         signatures.append(
@@ -52,6 +71,7 @@ def _build_market_bootstrap_signatures(
                 market=market,
                 universe_name=_bootstrap_universe_name(market),
                 publish_pointer_key=f"latest_published_market:{market}",
+                activity_lifecycle="bootstrap",
             ).set(queue=SHARED_DATA_FETCH_QUEUE)
         )
     elif include_initial_scan:
@@ -154,6 +174,15 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
     queued_secondary = []
     for market in secondary_markets:
         task = chain(*_build_market_bootstrap_signatures(market)).apply_async()
+        mark_market_activity_queued(
+            db,
+            market=market,
+            stage_key="universe",
+            lifecycle="bootstrap",
+            task_name="runtime_bootstrap",
+            task_id=task.id,
+            message=f"Queued bootstrap for {market}",
+        )
         queued_secondary.append({"market": market, "task_id": task.id})
 
     logger.info(

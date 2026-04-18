@@ -169,6 +169,7 @@ def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
     monkeypatch.setattr(bootstrap, "get_data_fetch_lock", lambda: fake_lock)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     emitted = []
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: emitted.append((market, prior)))
@@ -181,6 +182,10 @@ def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
         "_ingest_official_snapshot",
         lambda snap: {"total": len(snap.rows), "added": 1, "updated": 0, "rejected": 0},
     )
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
 
     module.refresh_official_market_universe.request.id = "task-123"
     module.refresh_official_market_universe.request.retries = 0
@@ -190,6 +195,9 @@ def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
     assert result["snapshot_id"] == snapshot.snapshot_id
     assert result["total"] == 1
     assert emitted == [("HK", 10)]
+    assert started[0]["stage_key"] == "universe"
+    assert started[0]["lifecycle"] == "weekly_refresh"
+    assert completed[0]["stage_key"] == "universe"
     fake_lock.release.assert_called_once_with("task-123", market="HK")
 
 
@@ -201,6 +209,7 @@ def test_refresh_official_market_universe_retries_when_market_lock_is_busy(monke
     fake_lock.acquire.return_value = (False, False)
     fake_lock.get_current_holder.return_value = {"task_name": "weekly_full_refresh", "task_id": "abc"}
     monkeypatch.setattr(bootstrap, "get_data_fetch_lock", lambda: fake_lock)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
 
     retry_calls = []
 
@@ -227,6 +236,7 @@ def test_refresh_official_market_universe_does_not_ingest_on_fetch_failure(monke
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
     monkeypatch.setattr(bootstrap, "get_data_fetch_lock", lambda: fake_lock)
+    monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: None)
     monkeypatch.setattr(

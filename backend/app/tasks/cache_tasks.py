@@ -21,6 +21,11 @@ from ..celery_app import celery_app
 from ..database import SessionLocal, is_corruption_error, safe_rollback
 from ..services.cache_manager import CacheManager
 from ..services.benchmark_registry_service import benchmark_registry
+from ..services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
@@ -1409,7 +1414,12 @@ def auto_refresh_after_close(self, market: str | None = None):
     soft_time_limit=14400,
 )
 @serialized_data_fetch('smart_refresh_cache')
-def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
+def smart_refresh_cache(
+    self,
+    mode: str = "auto",
+    market: str | None = None,
+    activity_lifecycle: str | None = None,
+):
     """
     Smart cache refresh with market cap prioritization.
 
@@ -1437,7 +1447,9 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     from .market_queues import market_tag, log_extra, normalize_market
     from ..services.runtime_preferences_service import is_market_enabled_now
 
-    _market_label = normalize_market(market).lower()
+    effective_market = normalize_market(market) if market is not None else "US"
+    _market_label = effective_market.lower()
+    activity_lifecycle = activity_lifecycle or "daily_refresh"
     _log_extra = log_extra(market)
     logger.info("=" * 80)
     logger.info(
@@ -1452,8 +1464,8 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
         logger.info("Skipping smart refresh for disabled market %s", market, extra=_log_extra)
         return {
             'status': 'skipped',
-            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
-            'market': normalize_market(market),
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
             'mode': mode,
             'timestamp': datetime.now().isoformat(),
         }
@@ -1510,6 +1522,15 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
     failed_symbols = []
 
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Refreshing market prices",
+        )
         # Step 1: Always warm market benchmarks first (required for RS
         # calculations). Scoped to caller's market to avoid redundant work
         # across parallel per-market refreshes.
@@ -1556,6 +1577,17 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
                 "No active symbols found in universe"
             )
             price_cache.save_warmup_metadata("completed", 0, 0, market=market)
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="prices",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "smart_refresh_cache"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=0,
+                total=0,
+                message=message,
+            )
             return {
                 "status": "completed",
                 "refreshed": 0,
@@ -1683,6 +1715,17 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
         if failed_symbols:
             logger.info(f"  Failed symbols: {failed_symbols[:10]}...")
         logger.info("=" * 80)
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=refreshed,
+            total=total,
+            message=f"Price refresh {status}",
+        )
 
         return {
             "status": status,
@@ -1705,12 +1748,34 @@ def smart_refresh_cache(self, mode: str = "auto", market: str | None = None):
             market=market,
         )
         price_cache.complete_warmup_heartbeat("failed", market=market)
+        mark_market_activity_failed(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=refreshed,
+            total=locals().get("total", 0),
+            message="Soft time limit exceeded",
+        )
         raise
     except Exception as e:
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
         # Save partial progress
         price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
         price_cache.complete_warmup_heartbeat("failed", market=market)
+        mark_market_activity_failed(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=refreshed,
+            total=locals().get("total", 0),
+            message=str(e),
+        )
         return {
             "status": "failed",
             "error": str(e),

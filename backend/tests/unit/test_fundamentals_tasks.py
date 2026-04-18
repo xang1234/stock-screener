@@ -180,3 +180,39 @@ def test_refresh_symbols_hybrid_passes_session_factory(monkeypatch):
 
     assert result["updated"] == 1
     assert captured["kwargs"]["session_factory"] is module.SessionLocal
+
+
+def test_refresh_all_fundamentals_publishes_market_activity(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_fundamentals=lambda *args, **kwargs: {"symbol": "AAPL"}),
+    )
+    monkeypatch.setattr(module, "get_ticker_validation_service", lambda: MagicMock())
+
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US")
+
+    assert result["updated"] == 1
+    assert started[0]["stage_key"] == "fundamentals"
+    assert started[0]["lifecycle"] == "weekly_refresh"
+    assert completed[0]["stage_key"] == "fundamentals"
+    assert completed[0]["market"] == "US"

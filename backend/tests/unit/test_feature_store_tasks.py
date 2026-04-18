@@ -274,6 +274,9 @@ def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
     ), patch(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        return_value=True,
+    ), patch(
         "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
         return_value="auto-scan-001",
     ), patch(
@@ -863,3 +866,46 @@ def test_fail_stale_feature_runs_uses_utc_aware_cutoff():
     assert stats.failed_symbols == 0
     assert stats.duration_seconds > 0
     assert captured["warnings"] is not None
+
+
+def test_build_daily_snapshot_publishes_market_activity():
+    fake_use_case = _FakeUseCase()
+    started = []
+    completed = []
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        return_value=True,
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.mark_market_activity_started",
+        side_effect=lambda *args, **kwargs: started.append(kwargs),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.mark_market_activity_completed",
+        side_effect=lambda *args, **kwargs: completed.append(kwargs),
+    ):
+        result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16", market="US")
+
+    assert result["status"] == "published"
+    assert started[0]["stage_key"] == "snapshot"
+    assert started[0]["lifecycle"] == "daily_refresh"
+    assert completed[0]["stage_key"] == "snapshot"

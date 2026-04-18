@@ -210,3 +210,31 @@ def test_breadth_gapfill_reraises_soft_time_limit(monkeypatch):
         module.calculate_daily_breadth_with_gapfill.run()
 
     fake_db.rollback.assert_called_once()
+
+
+def test_breadth_gapfill_publishes_market_activity(monkeypatch):
+    import app.tasks.breadth_tasks as module
+
+    fake_db = MagicMock()
+    fake_calculator = MagicMock()
+    fake_calculator.find_missing_dates.return_value = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "breadth_gapfill_enabled", False)
+    monkeypatch.setattr(module, "BreadthCalculatorService", lambda db, price_cache: fake_calculator)
+    monkeypatch.setattr(module, "calculate_daily_breadth", lambda market=None: {"date": "2026-03-20"})
+    monkeypatch.setattr("app.utils.market_hours.is_trading_day", lambda d: True)
+    monkeypatch.setattr("app.utils.market_hours.get_eastern_now", lambda: datetime(2026, 3, 20, 17, 40, 0))
+
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.calculate_daily_breadth_with_gapfill.run(market="US")
+
+    assert result["today"]["date"] == "2026-03-20"
+    assert started[0]["stage_key"] == "breadth"
+    assert started[0]["lifecycle"] == "daily_refresh"
+    assert completed[0]["stage_key"] == "breadth"

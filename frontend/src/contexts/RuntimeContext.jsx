@@ -90,6 +90,7 @@ export function RuntimeProvider({ children }) {
     ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
     },
   });
 
@@ -99,6 +100,7 @@ export function RuntimeProvider({ children }) {
     ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
     },
   });
 

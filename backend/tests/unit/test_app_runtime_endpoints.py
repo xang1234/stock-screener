@@ -97,6 +97,61 @@ async def test_runtime_bootstrap_status_endpoint_returns_persisted_state(client,
 
 
 @pytest.mark.asyncio
+async def test_runtime_activity_endpoint_returns_runtime_activity_payload(client, monkeypatch):
+    from app.api.v1 import app_runtime as module
+
+    monkeypatch.setattr(
+        module,
+        "get_runtime_activity_status",
+        lambda _db: {
+            "bootstrap": {
+                "state": "running",
+                "app_ready": False,
+                "primary_market": "US",
+                "enabled_markets": ["US", "HK"],
+                "current_stage": "Price Refresh",
+                "percent": 25.0,
+                "message": "Refreshing prices",
+                "background_warning": "Additional data loading continues in the background.",
+            },
+            "summary": {
+                "active_market_count": 1,
+                "active_markets": ["US"],
+                "status": "active",
+            },
+            "markets": [
+                {
+                    "market": "US",
+                    "lifecycle": "bootstrap",
+                    "stage_key": "prices",
+                    "stage_label": "Price Refresh",
+                    "status": "running",
+                    "percent": 50.0,
+                    "current": 50,
+                    "total": 100,
+                    "message": "Refreshing prices",
+                    "task_name": "smart_refresh_cache",
+                    "task_id": "task-us",
+                    "updated_at": "2026-04-18T12:00:00+00:00",
+                }
+            ],
+        },
+    )
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+
+    try:
+        response = await client.get("/api/v1/runtime/activity")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bootstrap"]["current_stage"] == "Price Refresh"
+    assert payload["summary"]["active_markets"] == ["US"]
+    assert payload["markets"][0]["task_name"] == "smart_refresh_cache"
+
+
+@pytest.mark.asyncio
 async def test_runtime_bootstrap_start_persists_preferences_and_queues_orchestration(client, monkeypatch):
     from app.api.v1 import app_runtime as module
     from app.services import server_auth
