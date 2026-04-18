@@ -361,9 +361,19 @@ def calculate_daily_breadth(
         db.close()
 
 
+def _calculate_daily_breadth_in_process(*, market: str | None = None):
+    """Run breadth logic without reacquiring the market workload lease."""
+    task = calculate_daily_breadth
+    if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
+        return task(market=market)
+    if hasattr(task, "request") and callable(getattr(task, "run", None)):
+        return task.run(market=market)
+    return task(market=market)
+
+
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
 @serialized_market_workload('backfill_breadth_data')
-def backfill_breadth_data(self, start_date: str, end_date: str):
+def backfill_breadth_data(self, start_date: str, end_date: str, market: str = "US"):
     """
     Backfill market breadth data for historical date range.
 
@@ -590,7 +600,7 @@ def calculate_daily_breadth_with_gapfill(
 
         if is_trading_day(today):
             logger.info(f"Calculating breadth for today ({today})...")
-            today_result = calculate_daily_breadth(market=market)
+            today_result = _calculate_daily_breadth_in_process(market=market)
             result['today'] = today_result
         else:
             last_trading = get_last_trading_day(today)

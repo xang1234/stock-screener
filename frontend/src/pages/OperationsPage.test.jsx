@@ -188,6 +188,34 @@ describe('OperationsPage', () => {
     expect(cancelOperationsJob.mock.calls[0][0]).toBe('task-fetch-hk');
   });
 
+  it('clears the Working state after a cancel mutation settles', async () => {
+    let resolveCancel;
+    cancelOperationsJob.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCancel = resolve;
+        })
+    );
+
+    renderWithProviders(<OperationsPage />);
+
+    const cancelButton = (await screen.findAllByRole('button', { name: /cancel/i }))[0];
+    fireEvent.click(cancelButton);
+
+    expect(await screen.findByRole('button', { name: /working/i })).toBeDisabled();
+
+    resolveCancel({
+      status: 'accepted',
+      cancel_strategy: 'revoke_and_remove_from_queue',
+      message: 'Removed task-fetch-hk',
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /working/i })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: /cancel/i })[0]).toBeEnabled();
+    });
+  });
+
   it('shows empty-state message when no alerts active', async () => {
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [] });
     renderWithProviders(<OperationsPage />);

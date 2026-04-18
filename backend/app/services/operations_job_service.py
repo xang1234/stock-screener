@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from sqlalchemy.orm import Session
 
-from app.celery_app import celery_app
+from app.celery_app import _MARKET_JOB_TASKS, celery_app
 from app.config import settings
 from app.models.app_settings import AppSetting
 from app.services.job_backend import CeleryJobBackend
@@ -33,6 +33,7 @@ from app.tasks.market_queues import (
     all_data_fetch_queues,
     all_market_job_queues,
     all_user_scans_queues,
+    data_fetch_queue_for_market,
     market_jobs_queue_for_market,
     normalize_market,
 )
@@ -190,6 +191,11 @@ def _cancel_strategy_for(record: _JobRecord) -> str:
         and _queue_family(record.queue) == "data_fetch"
     ):
         return "force_cancel_refresh"
+    if (
+        record.state in {"stale", "stuck"}
+        and _queue_family(record.queue) in {"market_jobs", "user_scans"}
+    ):
+        return "force_release_market_lease"
     return "unsupported"
 
 
@@ -501,8 +507,10 @@ class OperationsJobService:
         if queue_name is None:
             if task_name == SCAN_TASK_NAME:
                 queue_name = f"user_scans_{market.lower()}"
-            else:
+            elif task_name in _MARKET_JOB_TASKS:
                 queue_name = market_jobs_queue_for_market(market)
+            else:
+                queue_name = data_fetch_queue_for_market(market)
         state, age_seconds = _market_lease_state(holder)
         record = _JobRecord(
             task_id=task_id,
@@ -803,11 +811,29 @@ class OperationsJobService:
             lock_key = current.get("lock_key", "")
             suffix = lock_key.rsplit(":", 1)[-1] if ":" in lock_key else ""
             market = None if suffix in {"", "shared"} else suffix
-            lock.force_release_all()
+            lock.force_release(market=market)
+            coordination = get_workload_coordination()
+            coordination.release_market_workload(task_id, market=market)
+            coordination.release_external_fetch(task_id)
             from app.wiring.bootstrap import get_price_cache
 
             get_price_cache().clear_warmup_heartbeat(market=market)
             message = f"Force-cancelled stale external fetch task {task_id}."
+            self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="accepted", message=message)
+            return {"status": "accepted", "cancel_strategy": strategy, "message": message}
+
+        if strategy == "force_release_market_lease":
+            if not record.market:
+                message = f"Task {task_id} does not have a market-scoped lease to release."
+                self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="blocked", message=message)
+                return {"status": "blocked", "cancel_strategy": strategy, "message": message}
+            coordination = get_workload_coordination()
+            released = coordination.release_market_workload(task_id, market=record.market)
+            if not released:
+                message = f"Market workload lease for task {task_id} is no longer held."
+                self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="blocked", message=message)
+                return {"status": "blocked", "cancel_strategy": strategy, "message": message}
+            message = f"Released stale market workload lease for task {task_id} ({record.market})."
             self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="accepted", message=message)
             return {"status": "accepted", "cancel_strategy": strategy, "message": message}
 

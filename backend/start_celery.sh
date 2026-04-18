@@ -46,6 +46,7 @@ echo "  Enabled markets: $ENABLED_MARKETS"
 ./venv/bin/celery -A app.celery_app worker \
     --loglevel=info \
     --pool="$POOL" \
+    --concurrency=1 \
     -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_jp,data_fetch_tw \
     -n datafetch-global@%h &
 

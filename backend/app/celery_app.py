@@ -114,7 +114,17 @@ def _clear_startup_lock_if_stale(lock, *, market: str | None) -> bool:
         )
         return False
 
-    if not _startup_heartbeat_is_stale(current_task.get("last_heartbeat")):
+    last_heartbeat = current_task.get("last_heartbeat")
+    if not last_heartbeat:
+        _logger.info(
+            "Leaving data fetch lock in place on startup without heartbeat evidence "
+            "(market=%s, task_id=%s)",
+            market_label,
+            current_task.get("task_id", "unknown"),
+        )
+        return False
+
+    if not _startup_heartbeat_is_stale(last_heartbeat):
         _logger.info(
             "Leaving active data fetch lock in place on startup (market=%s, task_id=%s)",
             market_label,

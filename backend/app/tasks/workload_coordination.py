@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Dict, Optional, Tuple
 
@@ -62,7 +62,7 @@ class WorkloadCoordination:
                 if holder_task_id and holder_task_id == task_id:
                     return (True, True)
 
-        lock_value = f"{task_name}:{task_id}:{datetime.now().isoformat()}"
+        lock_value = f"{task_name}:{task_id}:{datetime.now(timezone.utc).isoformat()}"
         acquired = self.redis.set(key, lock_value, nx=True, ex=self.lock_timeout)
         return (bool(acquired), False)
 

@@ -373,7 +373,7 @@ function WorkerStatusTable({ workers }) {
   );
 }
 
-function JobsTable({ jobs, onCancel, cancellingTaskId }) {
+function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
   if (!jobs.length) {
     return (
       <Box sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
@@ -400,7 +400,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId }) {
       <TableBody>
         {jobs.map((job) => {
           const canCancel = job.cancel_strategy && job.cancel_strategy !== 'unsupported';
-          const isCancelling = cancellingTaskId === job.task_id;
+          const isCancelling = cancelInFlight && cancellingTaskId === job.task_id;
           return (
             <TableRow key={job.task_id}>
               <TableCell>
@@ -652,6 +652,7 @@ export default function OperationsPage() {
           jobs={filteredJobs}
           onCancel={(taskId) => cancelMutation.mutate(taskId)}
           cancellingTaskId={cancelMutation.variables}
+          cancelInFlight={cancelMutation.isPending}
         />
       )}
 

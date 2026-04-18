@@ -367,7 +367,7 @@ def calculate_daily_group_rankings(
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings')
 @serialized_market_workload('backfill_group_rankings')
-def backfill_group_rankings(self, start_date: str, end_date: str):
+def backfill_group_rankings(self, start_date: str, end_date: str, market: str = "US"):
     """
     Backfill historical group rankings for a date range (optimized version).
 
@@ -467,7 +467,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str):
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.gapfill_group_rankings')
 @serialized_market_workload('gapfill_group_rankings')
-def gapfill_group_rankings(self, max_days: int = 365):
+def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
     """
     Detect and fill gaps in group ranking data (optimized version).
 
@@ -555,7 +555,7 @@ def gapfill_group_rankings(self, max_days: int = 365):
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings_1year')
 @serialized_market_workload('backfill_group_rankings_1year')
-def backfill_group_rankings_1year(self):
+def backfill_group_rankings_1year(self, market: str = "US"):
     """
     One-time task to backfill 1 year of group rankings (optimized version).
 

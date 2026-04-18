@@ -15,16 +15,15 @@ _service = OperationsJobService()
 
 
 @router.get("/jobs", response_model=OperationsJobsResponse)
-async def get_operations_jobs(db: Session = Depends(get_db)) -> OperationsJobsResponse:
+def get_operations_jobs(db: Session = Depends(get_db)) -> OperationsJobsResponse:
     """Return queue, worker, and lease state for the Operations console."""
     return OperationsJobsResponse(**_service.list_jobs(db))
 
 
 @router.post("/jobs/{task_id}/cancel", response_model=OperationsCancelJobResponse)
-async def cancel_operations_job(
+def cancel_operations_job(
     task_id: str,
     db: Session = Depends(get_db),
 ) -> OperationsCancelJobResponse:
     """Safely cancel or revoke a job when the strategy supports it."""
     return OperationsCancelJobResponse(**_service.cancel_job(db, task_id))
-
