@@ -15,6 +15,15 @@ def _patch_serialized_lock(monkeypatch):
         "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
     )
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.release_market_workload.return_value = True
+    fake_coordination.acquire_external_fetch.return_value = (True, False)
+    fake_coordination.release_external_fetch.return_value = True
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
+    )
 
 
 def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):

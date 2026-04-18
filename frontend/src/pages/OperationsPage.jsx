@@ -391,6 +391,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
           <TableCell>Queue</TableCell>
           <TableCell>Market</TableCell>
           <TableCell>Worker</TableCell>
+          <TableCell>Progress</TableCell>
           <TableCell>Age</TableCell>
           <TableCell>Blocker</TableCell>
           <TableCell>Heartbeat</TableCell>
@@ -419,6 +420,31 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
               <TableCell>{job.queue || '—'}</TableCell>
               <TableCell>{job.market || '—'}</TableCell>
               <TableCell>{job.worker || '—'}</TableCell>
+              <TableCell sx={{ minWidth: 220 }}>
+                {job.progress_mode === 'determinate' ? (
+                  <Box sx={{ minWidth: 180 }}>
+                    <LinearProgress
+                      variant="determinate"
+                      value={job.percent ?? 0}
+                      aria-label={`${job.task_name} progress`}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                      {Number.isFinite(job.percent) ? `${Math.round(job.percent)}%` : 'Progress'}{job.current != null && job.total != null
+                        ? ` · ${job.current}/${job.total}`
+                        : ''}
+                    </Typography>
+                    {job.message && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {job.message}
+                      </Typography>
+                    )}
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    {job.message || 'Progress pending'}
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell>{formatLagSeconds(job.age_seconds)}</TableCell>
               <TableCell>{job.wait_reason || '—'}</TableCell>
               <TableCell>{formatLagSeconds(job.heartbeat_lag_seconds)}</TableCell>

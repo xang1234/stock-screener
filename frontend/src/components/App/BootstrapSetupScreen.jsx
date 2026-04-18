@@ -27,7 +27,7 @@ const STATUS_COLOR = {
   failed: 'error',
   idle: 'default',
 };
-const STAGE_LOCAL_PROGRESS_LABELS = new Set(['Price Refresh', 'Fundamentals Refresh']);
+const STAGE_LOCAL_PROGRESS_KEYS = new Set(['prices', 'fundamentals']);
 
 function formatCount(value) {
   return new Intl.NumberFormat('en-US').format(value);
@@ -37,8 +37,8 @@ function resolveStageLocalProgress(activity) {
   if (!activity || activity.progress_mode !== 'determinate' || activity.percent === null || activity.percent === undefined) {
     return null;
   }
-  const stageLabel = activity.stage_label || '';
-  if (!STAGE_LOCAL_PROGRESS_LABELS.has(stageLabel)) {
+  const stageKey = activity.stage_key || '';
+  if (!STAGE_LOCAL_PROGRESS_KEYS.has(stageKey)) {
     return null;
   }
   return {

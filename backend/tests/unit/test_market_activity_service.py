@@ -169,6 +169,63 @@ def test_mark_market_activity_progress_updates_running_record_with_determinate_p
     assert us_market["percent"] == 25.0
 
 
+def test_runtime_activity_prefers_persisted_progress_over_heartbeat_overlay(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="prices",
+        lifecycle="bootstrap",
+        task_name="smart_refresh_cache",
+        task_id="task-us",
+        message="Refreshing prices",
+    )
+    module.mark_market_activity_progress(
+        db_session,
+        market="US",
+        stage_key="prices",
+        lifecycle="bootstrap",
+        task_name="smart_refresh_cache",
+        task_id="task-us",
+        current=40,
+        total=100,
+        percent=40.0,
+        message="Batch 1/2 · refreshing prices",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["US"], state="running"),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_data_fetch_lock",
+        lambda: _FakeLock(
+            {
+                "US": {
+                    "task_id": "task-us",
+                    "current": 10,
+                    "total": 100,
+                    "progress": 10.0,
+                }
+            }
+        ),
+    )
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["progress_mode"] == "determinate"
+    assert us_market["current"] == 40
+    assert us_market["total"] == 100
+    assert us_market["percent"] == 40.0
+    assert us_market["message"] == "Batch 1/2 · refreshing prices"
+
+
 def test_mark_market_activity_progress_does_not_overwrite_completed_record(
     db_session,
     monkeypatch,

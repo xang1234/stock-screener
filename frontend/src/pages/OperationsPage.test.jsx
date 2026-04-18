@@ -65,6 +65,11 @@ const OPERATIONS_PAYLOAD = {
       wait_reason: 'waiting_for_external_fetch_global',
       heartbeat_lag_seconds: null,
       cancel_strategy: 'revoke_and_remove_from_queue',
+      progress_mode: 'determinate',
+      percent: 60,
+      current: 600,
+      total: 1000,
+      message: 'Batch 3/5 · refreshing prices',
     },
     {
       task_id: 'task-scan-us',
@@ -77,6 +82,11 @@ const OPERATIONS_PAYLOAD = {
       wait_reason: null,
       heartbeat_lag_seconds: null,
       cancel_strategy: 'scan_cancel',
+      progress_mode: 'indeterminate',
+      percent: null,
+      current: null,
+      total: null,
+      message: 'Running scan',
     },
   ],
   queues: [
@@ -152,6 +162,8 @@ describe('OperationsPage', () => {
       expect(screen.getAllByText('app.tasks.cache_tasks.smart_refresh_cache').length).toBeGreaterThan(0);
     });
     expect(screen.getByText('waiting_for_external_fetch_global')).toBeInTheDocument();
+    expect(screen.getByText(/600\/1000/)).toBeInTheDocument();
+    expect(screen.getByText(/Batch 3\/5 · refreshing prices/)).toBeInTheDocument();
     expect(screen.getByText('External Fetch Lease')).toBeInTheDocument();
     expect(screen.getByText('Workers')).toBeInTheDocument();
     expect(screen.getAllByText('Queues').length).toBeGreaterThan(0);

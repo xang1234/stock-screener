@@ -45,16 +45,30 @@ async def client():
         yield c
 
 
+def _patch_serialized_coordination(monkeypatch):
+    fake_lock = MagicMock()
+    fake_lock.acquire.return_value = (True, False)
+    fake_lock.release.return_value = True
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_data_fetch_lock",
+        lambda: fake_lock,
+    )
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.release_market_workload.return_value = True
+    fake_coordination.acquire_external_fetch.return_value = (True, False)
+    fake_coordination.release_external_fetch.return_value = True
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
+    )
+    return fake_lock, fake_coordination
+
+
 def test_daily_cache_warmup_delegates_to_smart_refresh(monkeypatch):
     import app.tasks.cache_tasks as module
 
-    mock_lock = MagicMock()
-    mock_lock.acquire.return_value = (True, False)
-    mock_lock.release.return_value = True
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_data_fetch_lock",
-        lambda: mock_lock,
-    )
+    _patch_serialized_coordination(monkeypatch)
 
     delegated_result = {"status": "completed", "mode": "full"}
     delegated = MagicMock(return_value=delegated_result)
@@ -85,13 +99,7 @@ def test_celery_schedule_moves_orphan_cleanup_and_keeps_legacy_manual_routes():
 def test_smart_refresh_cache_reraises_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 
-    mock_lock = MagicMock()
-    mock_lock.acquire.return_value = (True, False)
-    mock_lock.release.return_value = True
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_data_fetch_lock",
-        lambda: mock_lock,
-    )
+    _patch_serialized_coordination(monkeypatch)
 
     fake_db = MagicMock()
     fake_price_cache = MagicMock()
@@ -220,6 +228,84 @@ def test_smart_refresh_cache_publishes_failed_market_activity(monkeypatch):
     assert "benchmark unavailable" in failed[0]["message"]
 
 
+def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    symbols = [SimpleNamespace(symbol=f"SYM{i}") for i in range(101)]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_query.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_db.query.return_value = fake_query
+
+    fake_price_cache = MagicMock()
+    fake_lock = MagicMock()
+    bulk_fetcher = MagicMock()
+    progress_updates: list[dict] = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: bulk_fetcher,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_data_fetch_lock",
+        lambda: fake_lock,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: SimpleNamespace(
+            acquire_market_workload=lambda *args, **kwargs: (True, False),
+            release_market_workload=lambda *args, **kwargs: True,
+            acquire_external_fetch=lambda *args, **kwargs: (True, False),
+            release_external_fetch=lambda *args, **kwargs: True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_rate_limiter",
+        lambda: SimpleNamespace(wait_for_market=lambda *args, **kwargs: None, wait=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            symbol: _success_result(symbol)
+            for symbol in batch_symbols
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_progress",
+        lambda *args, **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(module.smart_refresh_cache, "update_state", lambda *args, **kwargs: None)
+
+    result = module.smart_refresh_cache.run.__wrapped__(
+        module.smart_refresh_cache, "full", market="US", activity_lifecycle="bootstrap"
+    )
+
+    assert result["status"] == "completed"
+    assert progress_updates[0]["current"] == 0
+    assert progress_updates[0]["total"] == 101
+    assert progress_updates[0]["percent"] == 0
+    assert any(update["message"] == "Batch 1/2 · refreshing prices" for update in progress_updates)
+    assert any(update["message"] == "Batch 2/2 · refreshing prices" for update in progress_updates)
+    assert progress_updates[-1]["current"] == 101
+    assert progress_updates[-1]["total"] == 101
+    assert progress_updates[-1]["percent"] == pytest.approx(100.0)
+
+
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 
@@ -257,13 +343,7 @@ def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 
-    mock_lock = MagicMock()
-    mock_lock.acquire.return_value = (True, False)
-    mock_lock.release.return_value = True
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_data_fetch_lock",
-        lambda: mock_lock,
-    )
+    _patch_serialized_coordination(monkeypatch)
 
     fake_db = MagicMock()
     first_query = MagicMock()
@@ -298,13 +378,7 @@ def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
 def test_weekly_full_refresh_reraises_nested_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 
-    mock_lock = MagicMock()
-    mock_lock.acquire.return_value = (True, False)
-    mock_lock.release.return_value = True
-    monkeypatch.setattr(
-        "app.wiring.bootstrap.get_data_fetch_lock",
-        lambda: mock_lock,
-    )
+    _patch_serialized_coordination(monkeypatch)
 
     fake_db = MagicMock()
     first_query = MagicMock()

@@ -220,6 +220,7 @@ def refresh_all_fundamentals(
         "last_current": 0,
         "last_time": time.monotonic(),
     }
+    processed = 0
 
     try:
         mark_market_activity_started(
@@ -281,6 +282,18 @@ def refresh_all_fundamentals(
 
         total_stocks = len(universe_stocks)
         logger.info(f"Found {total_stocks} active stocks to refresh")
+        _maybe_publish_fundamentals_progress(
+            db,
+            market=effective_market,
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            current=0,
+            total=total_stocks,
+            message="Refreshing fundamentals",
+            progress_state=progress_state,
+            force=True,
+        )
 
         # Initialize cache service
         cache = get_fundamentals_cache()
@@ -350,6 +363,7 @@ def refresh_all_fundamentals(
                         task_id=self.request.id if self.request else None,
                     )
             finally:
+                processed = i + 1
                 _maybe_publish_fundamentals_progress(
                     db,
                     market=effective_market,
@@ -427,6 +441,8 @@ def refresh_all_fundamentals(
             lifecycle=activity_lifecycle,
             task_name=task_name,
             task_id=task_id,
+            current=processed,
+            total=locals().get("total_stocks", 0),
             message="Soft time limit exceeded",
         )
         raise
@@ -439,6 +455,8 @@ def refresh_all_fundamentals(
             lifecycle=activity_lifecycle,
             task_name=task_name,
             task_id=task_id,
+            current=processed,
+            total=locals().get("total_stocks", 0),
             message=str(e),
         )
         _retry_transient_failure(self, "refresh_all_fundamentals", e)
@@ -452,6 +470,8 @@ def refresh_all_fundamentals(
             lifecycle=activity_lifecycle,
             task_name=task_name,
             task_id=task_id,
+            current=processed,
+            total=locals().get("total_stocks", 0),
             message=str(e),
         )
         return {

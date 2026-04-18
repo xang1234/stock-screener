@@ -350,6 +350,8 @@ def mark_market_activity_failed(
 def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any]:
     if record.get("status") != "running":
         return record
+    if record.get("stage_key") != "prices":
+        return record
     try:
         current_task = get_data_fetch_lock().get_current_task(market=market)
     except Exception:
@@ -357,11 +359,11 @@ def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any
     if not current_task or current_task.get("task_id") != record.get("task_id"):
         return record
     merged = dict(record)
-    if current_task.get("progress") is not None:
+    if merged.get("percent") is None and current_task.get("progress") is not None:
         merged["percent"] = float(current_task["progress"])
-    if current_task.get("current") is not None:
+    if merged.get("current") is None and current_task.get("current") is not None:
         merged["current"] = current_task["current"]
-    if current_task.get("total") is not None:
+    if merged.get("total") is None and current_task.get("total") is not None:
         merged["total"] = current_task["total"]
     if current_task.get("last_heartbeat") is not None:
         merged["updated_at"] = current_task["last_heartbeat"]
