@@ -352,3 +352,41 @@ def test_refresh_all_fundamentals_hybrid_publishes_running_progress(monkeypatch)
     assert progress_updates[0]["current"] == 1
     assert progress_updates[0]["total"] == 2
     assert progress_updates[0]["percent"] == pytest.approx(50.0)
+
+
+def test_refresh_all_fundamentals_progress_counts_failed_iterations(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [SimpleNamespace(symbol=f"SYM{i}", market="US") for i in range(30)]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+
+    fake_cache = MagicMock()
+    fake_cache.get_fundamentals.side_effect = RuntimeError("provider unavailable")
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: fake_cache)
+
+    validation_service = MagicMock()
+    validation_service.classify_error.return_value = ("provider_error", "provider unavailable")
+    monkeypatch.setattr(module, "get_ticker_validation_service", lambda: validation_service)
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US")
+
+    assert result["failed"] == 30
+    assert progress_updates
+    assert any(update["current"] < update["total"] for update in progress_updates)
+    assert progress_updates[-1]["current"] == 30
+    assert progress_updates[-1]["total"] == 30

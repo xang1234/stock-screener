@@ -24,6 +24,7 @@ from ...schemas.scanning import (
     ScanStatusResponse,
     SetupDetailsResponse,
 )
+from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...services.market_activity_service import get_runtime_activity_status
 from ...wiring.bootstrap import (
@@ -47,6 +48,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 SCAN_BLOCKING_ACTIVITY_STAGES = {"prices", "fundamentals"}
 SCAN_BLOCKING_ACTIVITY_STATUSES = {"queued", "running"}
+SCAN_GUARD_MARKET_BY_INDEX = {
+    IndexName.SP500.value: "US",
+    IndexName.HSI.value: "HK",
+    IndexName.NIKKEI225.value: "JP",
+    IndexName.TAIEX.value: "TW",
+}
 
 
 def _get_market_refresh_conflict_detail(uow: Any, market: str | None) -> dict[str, object] | None:
@@ -90,8 +97,10 @@ def _get_market_refresh_conflict_detail(uow: Any, market: str | None) -> dict[st
 def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     if getattr(universe_def, "market", None):
         return universe_def.market.value
-    if getattr(universe_def, "exchange", None) or getattr(universe_def, "index", None):
+    if getattr(universe_def, "exchange", None):
         return "US"
+    if getattr(universe_def, "index", None):
+        return SCAN_GUARD_MARKET_BY_INDEX.get(universe_def.index.value)
     return None
 
 

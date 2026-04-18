@@ -295,9 +295,8 @@ def refresh_all_fundamentals(
 
         # Process each stock with rate limiting (2 seconds between calls)
         for i, stock in enumerate(universe_stocks):
+            symbol = stock.symbol
             try:
-                symbol = stock.symbol
-
                 # Log progress every 50 stocks
                 if (i + 1) % 50 == 0:
                     logger.info(f"Progress: {i + 1}/{total_stocks} ({(i+1)/total_stocks*100:.1f}%)")
@@ -346,23 +345,22 @@ def refresh_all_fundamentals(
                     symbol=symbol,
                     error_type=error_type,
                     error_message=error_msg,
-                    data_source=TickerValidationService.SOURCE_YFINANCE,
-                    triggered_by=TickerValidationService.TRIGGER_FUNDAMENTALS_REFRESH,
+                        data_source=TickerValidationService.SOURCE_YFINANCE,
+                        triggered_by=TickerValidationService.TRIGGER_FUNDAMENTALS_REFRESH,
                         task_id=self.request.id if self.request else None,
                     )
-                continue
-
-            _maybe_publish_fundamentals_progress(
-                db,
-                market=effective_market,
-                lifecycle=activity_lifecycle,
-                task_name=task_name,
-                task_id=task_id,
-                current=i + 1,
-                total=total_stocks,
-                message="Refreshing fundamentals",
-                progress_state=progress_state,
-            )
+            finally:
+                _maybe_publish_fundamentals_progress(
+                    db,
+                    market=effective_market,
+                    lifecycle=activity_lifecycle,
+                    task_name=task_name,
+                    task_id=task_id,
+                    current=i + 1,
+                    total=total_stocks,
+                    message="Refreshing fundamentals",
+                    progress_state=progress_state,
+                )
 
         _maybe_publish_fundamentals_progress(
             db,

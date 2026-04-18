@@ -567,3 +567,60 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
     assert payload["detail"]["code"] == "market_refresh_active"
     assert payload["detail"]["market"] == "US"
     assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_for_hk_index_when_hk_refresh_is_active(client):
+    fake_uow = _FakeUoW()
+    fake_uow.session = MagicMock()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hsi",
+            status="queued",
+            total_stocks=80,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "HK",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 25.0,
+                        "current": 20,
+                        "total": 80,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-hk",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "index", "index": "HSI"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == "HK"
+    assert payload["detail"]["active_stages"] == ["prices"]
+    assert fake_use_case.received_cmd is None
