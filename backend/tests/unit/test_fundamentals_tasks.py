@@ -256,3 +256,168 @@ def test_refresh_all_fundamentals_publishes_market_activity(monkeypatch):
     assert started[0]["lifecycle"] == "weekly_refresh"
     assert completed[0]["stage_key"] == "fundamentals"
     assert completed[0]["market"] == "US"
+
+
+def test_refresh_all_fundamentals_publishes_running_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [SimpleNamespace(symbol=f"SYM{i}", market="US") for i in range(30)]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "get_fundamentals_cache",
+        lambda: SimpleNamespace(get_fundamentals=lambda *args, **kwargs: {"symbol": kwargs.get("symbol", "SYM")}),
+    )
+    monkeypatch.setattr(module, "get_ticker_validation_service", lambda: MagicMock())
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US")
+
+    assert result["updated"] == 30
+    assert progress_updates
+    assert progress_updates[0]["market"] == "US"
+    assert progress_updates[0]["stage_key"] == "fundamentals"
+    assert all(update["total"] == 30 for update in progress_updates)
+    assert any(update["current"] < update["total"] for update in progress_updates)
+    assert any(update["percent"] > 0 for update in progress_updates)
+
+
+def test_refresh_all_fundamentals_hybrid_publishes_running_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: MagicMock())
+    monkeypatch.setattr(module, "get_ticker_validation_service", lambda: MagicMock())
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+
+    class _HybridStub:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        @staticmethod
+        def fetch_fundamentals_batch(symbols, **kwargs):
+            kwargs["progress_callback"](1, 2)
+            return {symbol: {"symbol": symbol} for symbol in symbols}
+
+        @staticmethod
+        def store_all_caches(*args, **kwargs):
+            return {
+                "fundamentals_stored": 2,
+                "quarterly_stored": 2,
+                "failed": 0,
+            }
+
+    monkeypatch.setattr(module, "HybridFundamentalsService", _HybridStub)
+
+    result = module.refresh_all_fundamentals_hybrid.run(include_finviz=False, market="US")
+
+    assert result["updated"] == 2
+    assert progress_updates
+    assert progress_updates[0]["market"] == "US"
+    assert progress_updates[0]["stage_key"] == "fundamentals"
+    assert progress_updates[0]["current"] == 1
+    assert progress_updates[0]["total"] == 2
+    assert progress_updates[0]["percent"] == pytest.approx(50.0)
+
+
+def test_refresh_all_fundamentals_hybrid_rolls_back_before_failure_publish(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [SimpleNamespace(symbol="AAPL", market="US")]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+
+    class _HybridBoom:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        @staticmethod
+        def fetch_fundamentals_batch(*args, **kwargs):
+            raise RuntimeError("hybrid fetch failed")
+
+    monkeypatch.setattr(module, "HybridFundamentalsService", _HybridBoom)
+
+    result = module.refresh_all_fundamentals_hybrid.run(include_finviz=False, market="US")
+
+    fake_db.rollback.assert_called_once()
+    assert result["error"] == "hybrid fetch failed"
+
+
+def test_refresh_all_fundamentals_progress_counts_failed_iterations(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [SimpleNamespace(symbol=f"SYM{i}", market="US") for i in range(30)]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+
+    fake_cache = MagicMock()
+    fake_cache.get_fundamentals.side_effect = RuntimeError("provider unavailable")
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: fake_cache)
+
+    validation_service = MagicMock()
+    validation_service.classify_error.return_value = ("provider_error", "provider unavailable")
+    monkeypatch.setattr(module, "get_ticker_validation_service", lambda: validation_service)
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US")
+
+    assert result["failed"] == 30
+    assert progress_updates
+    assert any(update["current"] < update["total"] for update in progress_updates)
+    assert progress_updates[-1]["current"] == 30
+    assert progress_updates[-1]["total"] == 30

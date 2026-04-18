@@ -97,14 +97,21 @@ def _save_market_activity(
             existing_payload = json.loads(setting.value)
         except (json.JSONDecodeError, TypeError):
             existing_payload = None
-    if (
-        preserve_existing_statuses
-        and isinstance(existing_payload, dict)
-        and existing_payload.get("task_id")
-        and existing_payload.get("task_id") == payload.get("task_id")
-        and existing_payload.get("status") in preserve_existing_statuses
-    ):
-        return existing_payload
+    if preserve_existing_statuses and isinstance(existing_payload, dict):
+        existing_status = existing_payload.get("status")
+        if existing_status in preserve_existing_statuses:
+            payload_status = payload.get("status")
+            same_task = existing_payload.get("task_id") == payload.get("task_id")
+            same_stage = existing_payload.get("stage_key") == payload.get("stage_key")
+            same_owner = same_task and same_stage
+
+            if existing_status == "running":
+                if payload_status == "queued" or not same_owner:
+                    return existing_payload
+            elif existing_status in {"completed", "failed"}:
+                incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
+                if not incoming_new_cycle:
+                    return existing_payload
     encoded = json.dumps(payload)
     if setting is None:
         setting = AppSetting(
@@ -223,6 +230,56 @@ def mark_market_activity_started(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
+    )
+
+
+def mark_market_activity_progress(
+    db: Session,
+    *,
+    market: str,
+    stage_key: str,
+    lifecycle: str | None = None,
+    task_name: str | None = None,
+    task_id: str | None = None,
+    percent: float | None = None,
+    current: int | None = None,
+    total: int | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    existing = _load_market_activity(db, market)
+    if isinstance(existing, dict):
+        existing_task_id = existing.get("task_id")
+        existing_stage_key = existing.get("stage_key")
+        existing_status = existing.get("status")
+        if existing_status in {"completed", "failed"}:
+            return existing
+        if existing_task_id and task_id and existing_task_id != task_id:
+            return existing
+        if existing_stage_key and existing_stage_key != stage_key:
+            return existing
+        stage_key = existing_stage_key or stage_key
+        lifecycle = lifecycle or existing.get("lifecycle")
+        task_name = task_name or existing.get("task_name")
+        task_id = task_id or existing_task_id
+        message = message or existing.get("message")
+
+    return _save_market_activity(
+        db,
+        market,
+        _activity_payload(
+            market=market,
+            stage_key=stage_key,
+            lifecycle=lifecycle,
+            status="running",
+            task_name=task_name,
+            task_id=task_id,
+            percent=percent,
+            current=current,
+            total=total,
+            message=message,
+        ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -254,6 +311,7 @@ def mark_market_activity_completed(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -285,6 +343,7 @@ def mark_market_activity_failed(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 

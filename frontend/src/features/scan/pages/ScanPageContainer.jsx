@@ -17,6 +17,7 @@ import ChartViewerModal from '../../../components/Scan/ChartViewerModal';
 import { buildFilterParams, getStableFilterKey } from '../../../utils/filterUtils';
 import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../../api/priceHistory';
 import { useFilterPresets } from '../../../hooks/useFilterPresets';
+import { useRuntimeActivity } from '../../../hooks/useRuntimeActivity';
 import { useRuntime } from '../../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../../contexts/StrategyProfileContext';
 import { DEFAULT_SCAN_DEFAULTS } from '../../../constants/scanDefaults';
@@ -29,6 +30,43 @@ import { useScanFilterPresets } from '../hooks/useScanFilterPresets';
 import { buildUniverseDef, parseLegacyUniverseDefault } from '../universeSelection';
 
 const INITIAL_UNIVERSE_SELECTION = parseLegacyUniverseDefault(DEFAULT_SCAN_DEFAULTS.universe);
+const SCAN_BLOCKING_ACTIVITY_STAGES = new Set(['prices', 'fundamentals']);
+const SCAN_BLOCKING_ACTIVITY_STATUSES = new Set(['queued', 'running']);
+
+function buildRefreshConflict(activity, market) {
+  if (!market || market === 'TEST') {
+    return null;
+  }
+
+  const marketActivity = (activity?.markets ?? []).find((item) => (
+    item?.market === market
+    && SCAN_BLOCKING_ACTIVITY_STAGES.has(item.stage_key)
+    && SCAN_BLOCKING_ACTIVITY_STATUSES.has(item.status)
+  ));
+  if (!marketActivity) {
+    return null;
+  }
+
+  const stageLabel = (marketActivity.stage_label || marketActivity.stage_key || 'refresh').toLowerCase();
+  const statusLabel = marketActivity.status === 'queued' ? 'queued' : 'running';
+  return {
+    market,
+    stageKey: marketActivity.stage_key,
+    status: marketActivity.status,
+    lifecycle: marketActivity.lifecycle ?? null,
+    message: `${market} ${stageLabel} is ${statusLabel}. Wait for it to finish before starting a scan.`,
+  };
+}
+
+function getMutationErrorMessage(error) {
+  if (!error) {
+    return null;
+  }
+  return error?.response?.data?.detail?.message
+    || error?.response?.data?.message
+    || error?.message
+    || 'Failed to start scan.';
+}
 
 function ScanPage() {
   const { runtimeReady, uiSnapshots, scanDefaults } = useRuntime();
@@ -60,6 +98,7 @@ function ScanPage() {
 
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.scan);
   const initialQueriesEnabled = runtimeReady && (!snapshotEnabled || initialBootstrapSettled);
+  const runtimeActivityQuery = useRuntimeActivity({ enabled: runtimeReady });
 
   useEffect(() => {
     if (!runtimeReady) {
@@ -328,8 +367,19 @@ function ScanPage() {
     () => normalizeScanFilterOptions(filterOptionsData),
     [filterOptionsData]
   );
+  const refreshConflict = useMemo(
+    () => buildRefreshConflict(runtimeActivityQuery.data, universeMarket),
+    [runtimeActivityQuery.data, universeMarket]
+  );
+  const createScanError = useMemo(() => {
+    const message = getMutationErrorMessage(createScanMutation.error);
+    return message ? { message } : null;
+  }, [createScanMutation.error]);
 
   const handleStartScan = () => {
+    if (refreshConflict) {
+      return;
+    }
     const universeDef = buildUniverseDef(universeMarket, universeScope);
     if (!universeDef) {
       return;
@@ -525,8 +575,9 @@ function ScanPage() {
         statusData={statusData}
         customFilters={customFilters}
         onCustomFiltersChange={setCustomFilters}
-        createScanError={createScanMutation.error}
+        createScanError={createScanError}
         cancelScanError={cancelScanMutation.error}
+        refreshConflict={refreshConflict}
       />
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (

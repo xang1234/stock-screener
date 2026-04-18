@@ -1,5 +1,6 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 
 import ScanPage from './ScanPage';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
@@ -13,9 +14,14 @@ const runtimeState = {
   },
   scanDefaults: DEFAULT_SCAN_DEFAULTS,
 };
+const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
+}));
+
+vi.mock('../hooks/useRuntimeActivity', () => ({
+  useRuntimeActivity: (...args) => useRuntimeActivityMock(...args),
 }));
 
 vi.mock('../contexts/StrategyProfileContext', () => ({
@@ -61,6 +67,14 @@ beforeEach(() => {
   runtimeState.runtimeReady = false;
   runtimeState.uiSnapshots = { scan: false };
   runtimeState.scanDefaults = DEFAULT_SCAN_DEFAULTS;
+  useRuntimeActivityMock.mockReset();
+  useRuntimeActivityMock.mockReturnValue({
+    data: {
+      bootstrap: {},
+      summary: { active_market_count: 0, active_markets: [], status: 'idle' },
+      markets: [],
+    },
+  });
   scanApi.getScanBootstrap.mockResolvedValue(null);
   scanApi.getScanStatus.mockResolvedValue({ status: 'completed' });
   scanApi.getScanResults.mockResolvedValue({ total: 0, results: [] });
@@ -225,5 +239,151 @@ describe('ScanPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/Results:\s*1 stocks/i)).toBeInTheDocument();
     });
+  });
+
+  it('disables scan creation with a hover warning when prices refresh is active for the selected market', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {},
+        summary: { active_market_count: 1, active_markets: ['US'], status: 'active' },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            lifecycle: 'daily_refresh',
+            progress_mode: 'determinate',
+            percent: 30,
+            current: 300,
+            total: 1000,
+            message: 'Refreshing prices',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    expect(scanButton).toBeDisabled();
+
+    await user.hover(scanButton.parentElement);
+
+    expect(
+      await screen.findByText('US price refresh is running. Wait for it to finish before starting a scan.')
+    ).toBeInTheDocument();
+  });
+
+  it('adds keyboard focus semantics to the disabled scan control wrapper when refresh is blocked', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {},
+        summary: { active_market_count: 1, active_markets: ['US'], status: 'active' },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            lifecycle: 'daily_refresh',
+            progress_mode: 'determinate',
+            percent: 30,
+            current: 300,
+            total: 1000,
+            message: 'Refreshing prices',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    expect(scanButton.parentElement).toHaveAttribute('tabindex', '0');
+    expect(scanButton.parentElement).toHaveAttribute(
+      'aria-label',
+      'US price refresh is running. Wait for it to finish before starting a scan.'
+    );
+  });
+
+  it('disables scan creation with a hover warning when fundamentals refresh is active for the selected market', async () => {
+    const user = userEvent.setup();
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {},
+        summary: { active_market_count: 1, active_markets: ['US'], status: 'active' },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'fundamentals',
+            stage_label: 'Fundamentals Refresh',
+            status: 'queued',
+            lifecycle: 'bootstrap',
+            progress_mode: 'indeterminate',
+            percent: null,
+            current: null,
+            total: null,
+            message: 'Queued fundamentals refresh',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    expect(scanButton).toBeDisabled();
+
+    await user.hover(scanButton.parentElement);
+
+    expect(
+      await screen.findByText('US fundamentals refresh is queued. Wait for it to finish before starting a scan.')
+    ).toBeInTheDocument();
+  });
+
+  it('shows the backend market-refresh conflict message if a scan request loses the polling race', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    scanApi.createScan.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'market_refresh_active',
+            message: 'US fundamentals refresh is running. Wait for it to finish before starting a scan.',
+          },
+        },
+      },
+      message: 'Request failed with status code 409',
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    fireEvent.click(scanButton);
+
+    expect(
+      await screen.findByText('Error: US fundamentals refresh is running. Wait for it to finish before starting a scan.')
+    ).toBeInTheDocument();
   });
 });

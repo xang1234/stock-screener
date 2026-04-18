@@ -22,7 +22,7 @@ describe('BootstrapSetupScreen', () => {
           primary_market: 'US',
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
-          percent: 42,
+          percent: 25,
           message: 'Refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -33,6 +33,8 @@ describe('BootstrapSetupScreen', () => {
             status: 'running',
             progress_mode: 'determinate',
             percent: 42,
+            current: 420,
+            total: 1000,
             message: 'Refreshing prices',
           },
           {
@@ -60,6 +62,7 @@ describe('BootstrapSetupScreen', () => {
 
     expect(screen.getByText('Price Refresh')).toBeInTheDocument();
     expect(screen.getByText('42%')).toBeInTheDocument();
+    expect(screen.getByText('420 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Refreshing prices/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
     expect(screen.getByText('Enabled market queue')).toBeInTheDocument();
@@ -109,5 +112,48 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.getByText('Fundamentals Refresh')).toBeInTheDocument();
     expect(screen.getByText('Refreshing fundamentals')).toBeInTheDocument();
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
+  it('renders determinate fundamentals progress from the primary market activity row', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Fundamentals Refresh',
+          progress_mode: 'determinate',
+          percent: 40,
+          message: 'Refreshing fundamentals',
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            stage_label: 'Fundamentals Refresh',
+            status: 'running',
+            progress_mode: 'determinate',
+            percent: 75,
+            current: 750,
+            total: 1000,
+            message: 'Refreshing fundamentals',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        bootstrapState="running"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('75%')).toBeInTheDocument();
+    expect(screen.getByText('750 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('Fundamentals Refresh')).toBeInTheDocument();
   });
 });

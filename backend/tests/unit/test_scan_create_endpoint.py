@@ -285,3 +285,345 @@ async def test_create_scan_returns_409_when_another_scan_is_active(client):
     assert payload["detail"]["code"] == "scan_already_active"
     assert payload["detail"]["active_scan"]["scan_id"] == "scan-active"
     assert payload["detail"]["active_scan"]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_when_market_prices_refresh_is_active(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hk",
+            status="queued",
+            total_stocks=1200,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "HK",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 40.0,
+                        "current": 400,
+                        "total": 1000,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-hk",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "market", "market": "HK"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == "HK"
+    assert payload["detail"]["active_stages"] == ["prices"]
+    assert payload["detail"]["lifecycle"] == "daily_refresh"
+    assert "wait for it to finish" in payload["detail"]["message"].lower()
+    assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_when_market_fundamentals_refresh_is_queued(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-us",
+            status="queued",
+            total_stocks=3200,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["US"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "US",
+                        "lifecycle": "bootstrap",
+                        "stage_key": "fundamentals",
+                        "stage_label": "Fundamentals Refresh",
+                        "status": "queued",
+                        "progress_mode": "indeterminate",
+                        "percent": None,
+                        "current": None,
+                        "total": None,
+                        "message": "Queued fundamentals refresh",
+                        "task_name": "refresh_all_fundamentals",
+                        "task_id": "task-us",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "market", "market": "US"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == "US"
+    assert payload["detail"]["active_stages"] == ["fundamentals"]
+    assert payload["detail"]["lifecycle"] == "bootstrap"
+    assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_allows_non_core_runtime_activity_for_market(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hk-ok",
+            status="queued",
+            total_stocks=1200,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "HK",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "breadth",
+                        "stage_label": "Breadth Calculation",
+                        "status": "running",
+                        "progress_mode": "indeterminate",
+                        "percent": None,
+                        "current": None,
+                        "total": None,
+                        "message": "Calculating breadth",
+                        "task_name": "refresh_market_breadth",
+                        "task_id": "task-hk",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "market", "market": "HK"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert fake_use_case.received_cmd.universe_market == "HK"
+
+
+@pytest.mark.asyncio
+async def test_create_scan_allows_other_market_refresh_activity(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hk-ok",
+            status="queued",
+            total_stocks=1200,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["US"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "US",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 55.0,
+                        "current": 550,
+                        "total": 1000,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-us",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "market", "market": "HK"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert fake_use_case.received_cmd.universe_market == "HK"
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-nyse",
+            status="queued",
+            total_stocks=500,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["US"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "US",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 55.0,
+                        "current": 550,
+                        "total": 1000,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-us",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "exchange", "exchange": "NYSE"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == "US"
+    assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.parametrize(
+    ("index_name", "market"),
+    [
+        ("HSI", "HK"),
+        ("NIKKEI225", "JP"),
+        ("TAIEX", "TW"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_for_index_when_mapped_market_refresh_is_active(
+    client,
+    index_name,
+    market,
+):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-hsi",
+            status="queued",
+            total_stocks=80,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": [market], "status": "active"},
+                "markets": [
+                    {
+                        "market": market,
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 25.0,
+                        "current": 20,
+                        "total": 80,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-hk",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "index", "index": index_name}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == market
+    assert payload["detail"]["active_stages"] == ["prices"]
+    assert fake_use_case.received_cmd is None

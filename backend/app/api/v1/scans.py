@@ -24,7 +24,10 @@ from ...schemas.scanning import (
     ScanStatusResponse,
     SetupDetailsResponse,
 )
+from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...database import SessionLocal
+from ...services.market_activity_service import get_runtime_activity_status
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
@@ -44,6 +47,63 @@ from ...use_cases.scanning.create_scan import ActiveScanConflictError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+SCAN_BLOCKING_ACTIVITY_STAGES = {"prices", "fundamentals"}
+SCAN_BLOCKING_ACTIVITY_STATUSES = {"queued", "running"}
+SCAN_GUARD_MARKET_BY_INDEX = {
+    IndexName.SP500.value: "US",
+    IndexName.HSI.value: "HK",
+    IndexName.NIKKEI225.value: "JP",
+    IndexName.TAIEX.value: "TW",
+}
+
+
+def _get_market_refresh_conflict_detail(market: str | None) -> dict[str, object] | None:
+    if not market:
+        return None
+
+    session = SessionLocal()
+    try:
+        runtime_activity = get_runtime_activity_status(session)
+    finally:
+        session.close()
+
+    normalized_market = str(market).upper()
+    conflicting_activity = [
+        item
+        for item in runtime_activity.get("markets", [])
+        if str(item.get("market", "")).upper() == normalized_market
+        and item.get("stage_key") in SCAN_BLOCKING_ACTIVITY_STAGES
+        and item.get("status") in SCAN_BLOCKING_ACTIVITY_STATUSES
+    ]
+    if not conflicting_activity:
+        return None
+
+    active_stages = sorted({str(item.get("stage_key")) for item in conflicting_activity if item.get("stage_key")})
+    lifecycle = conflicting_activity[0].get("lifecycle")
+    stage_labels = ", ".join(
+        item.get("stage_label") or str(item.get("stage_key")).replace("_", " ").title()
+        for item in conflicting_activity
+    )
+    return {
+        "code": "market_refresh_active",
+        "message": (
+            f"{normalized_market} {stage_labels.lower()} is running or queued. "
+            "Wait for it to finish before starting a scan."
+        ),
+        "market": normalized_market,
+        "active_stages": active_stages,
+        "lifecycle": lifecycle,
+    }
+
+
+def _resolve_scan_guard_market(universe_def: Any) -> str | None:
+    if getattr(universe_def, "market", None):
+        return universe_def.market.value
+    if getattr(universe_def, "exchange", None):
+        return "US"
+    if getattr(universe_def, "index", None):
+        return SCAN_GUARD_MARKET_BY_INDEX.get(universe_def.index.value)
+    return None
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
@@ -109,6 +169,9 @@ async def create_scan(
         from ...services.universe_compat_metrics import record_legacy_universe_usage
 
         record_legacy_universe_usage(universe_resolution.legacy_value)
+    market_refresh_conflict = _get_market_refresh_conflict_detail(_resolve_scan_guard_market(universe_def))
+    if market_refresh_conflict is not None:
+        raise HTTPException(status_code=409, detail=market_refresh_conflict)
     cmd = CreateScanCommand(
         universe_def=universe_def,
         universe_label=universe_def.label(),

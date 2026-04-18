@@ -14,6 +14,7 @@ import {
   Paper,
   Select,
   TextField,
+  Tooltip,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -69,6 +70,7 @@ export default function ScanControlBar({
   onCustomFiltersChange,
   createScanError,
   cancelScanError,
+  refreshConflict = null,
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
   const scopeOptions = universeMarket ? UNIVERSE_SCOPES_BY_MARKET[universeMarket] ?? [] : [];
@@ -76,7 +78,14 @@ export default function ScanControlBar({
   const startDisabled =
     createScanPending
     || !universeMarket
-    || (needsScope && !universeScope);
+    || (needsScope && !universeScope)
+    || Boolean(refreshConflict);
+  const createScanErrorMessage = typeof createScanError === 'string'
+    ? createScanError
+    : createScanError?.message;
+  const cancelScanErrorMessage = typeof cancelScanError === 'string'
+    ? cancelScanError
+    : cancelScanError?.message;
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -210,15 +219,35 @@ export default function ScanControlBar({
             Cancel
           </Button>
         ) : (
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={createScanPending ? <CircularProgress size={14} /> : <PlayArrowIcon />}
-            onClick={onStartScan}
-            disabled={startDisabled}
-          >
-            Scan
-          </Button>
+          refreshConflict ? (
+            <Tooltip title={refreshConflict.message} describeChild>
+              <span
+                tabIndex={0}
+                aria-label={refreshConflict.message}
+                style={{ display: 'inline-flex' }}
+              >
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={createScanPending ? <CircularProgress size={14} /> : <PlayArrowIcon />}
+                  onClick={onStartScan}
+                  disabled={startDisabled}
+                >
+                  Scan
+                </Button>
+              </span>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={createScanPending ? <CircularProgress size={14} /> : <PlayArrowIcon />}
+              onClick={onStartScan}
+              disabled={startDisabled}
+            >
+              Scan
+            </Button>
+          )
         )}
 
         {currentScanId && statusData && (
@@ -307,14 +336,14 @@ export default function ScanControlBar({
         </Box>
       </Collapse>
 
-      {createScanError && (
+      {createScanErrorMessage && (
         <Alert severity="error" sx={{ mt: 1 }}>
-          Error: {createScanError.message}
+          Error: {createScanErrorMessage}
         </Alert>
       )}
-      {cancelScanError && (
+      {cancelScanErrorMessage && (
         <Alert severity="error" sx={{ mt: 1 }}>
-          Error: {cancelScanError.message}
+          Error: {cancelScanErrorMessage}
         </Alert>
       )}
       {scanStatus === 'cancelled' && (
