@@ -66,11 +66,13 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
 
     assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" in task_names
     assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" not in task_names
+    assert "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill" not in task_names
+    assert "app.tasks.group_rank_tasks.calculate_daily_group_rankings" not in task_names
     assert [
         signature.kwargs.get("activity_lifecycle")
         for signature in signatures
         if signature.task != "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan"
-    ] == ["bootstrap"] * 5
+    ] == ["bootstrap"] * 3
 
 
 def test_bootstrap_universe_name_uses_uppercase_market_code():

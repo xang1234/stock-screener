@@ -5,8 +5,8 @@ Provides background tasks for:
 - Daily group ranking calculation after market close
 - Historical backfill of ranking data
 
-All data-fetching tasks use the @serialized_data_fetch decorator
-to ensure only one task fetches external data at a time.
+Group ranking tasks mutate market-derived data and therefore use the
+market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -29,7 +29,7 @@ from ..services.ibd_group_rank_service import (
 )
 from ..wiring.bootstrap import get_group_rank_service
 from ..utils.market_hours import is_trading_day, get_eastern_now
-from .data_fetch_lock import serialized_data_fetch
+from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -110,7 +110,7 @@ def _validate_same_day_cache_only_group_rankings(
     soft_time_limit=3600,
     max_retries=2,
 )
-@serialized_data_fetch('calculate_daily_group_rankings')
+@serialized_market_workload('calculate_daily_group_rankings')
 def calculate_daily_group_rankings(
     self,
     calculation_date: str | None = None,
@@ -139,6 +139,14 @@ def calculate_daily_group_rankings(
     logger.info(
         "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
     )
+    if market is not None and normalize_market(market) != "US":
+        logger.info("Skipping group rankings for unsupported market %s", market, extra=_log_extra)
+        return {
+            'status': 'skipped',
+            'reason': 'group_rankings_are_us_only',
+            'market': effective_market,
+            'timestamp': datetime.now().isoformat(),
+        }
     if market is not None and not is_market_enabled_now(normalize_market(market)):
         logger.info("Skipping group rankings for disabled market %s", market, extra=_log_extra)
         return {
@@ -147,13 +155,6 @@ def calculate_daily_group_rankings(
             'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
-    # Group-rank computation aggregates across markets; however, same-day
-    # warmup completeness validation is market-scoped via warmup metadata.
-    if market is not None:
-        logger.debug(
-            "Group-rank computation aggregates across markets; warmup gate is market-scoped.",
-            extra=_log_extra,
-        )
     today_et = get_eastern_now().date()
 
     # Parse date
@@ -227,6 +228,7 @@ def calculate_daily_group_rankings(
         results = service.calculate_group_rankings(
             db,
             calc_date,
+            market="US",
             cache_only=same_day_cache_only,
             require_complete_cache=same_day_cache_only,
         )
@@ -364,7 +366,7 @@ def calculate_daily_group_rankings(
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings')
-@serialized_data_fetch('backfill_group_rankings')
+@serialized_market_workload('backfill_group_rankings')
 def backfill_group_rankings(self, start_date: str, end_date: str):
     """
     Backfill historical group rankings for a date range (optimized version).
@@ -464,7 +466,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str):
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.gapfill_group_rankings')
-@serialized_data_fetch('gapfill_group_rankings')
+@serialized_market_workload('gapfill_group_rankings')
 def gapfill_group_rankings(self, max_days: int = 365):
     """
     Detect and fill gaps in group ranking data (optimized version).
@@ -474,8 +476,8 @@ def gapfill_group_rankings(self, max_days: int = 365):
     2. Pre-fetches all data once for efficiency
     3. Processes all missing dates with cached data
 
-    Serialization with other data-fetching tasks is handled by the
-    @serialized_data_fetch decorator and the data_fetch queue.
+    Serialization with other same-market write workloads is handled by the
+    market workload lease and the market-jobs queue family.
 
     Args:
         max_days: Maximum days to look back for gaps
@@ -552,7 +554,7 @@ def gapfill_group_rankings(self, max_days: int = 365):
 
 
 @celery_app.task(bind=True, name='app.tasks.group_rank_tasks.backfill_group_rankings_1year')
-@serialized_data_fetch('backfill_group_rankings_1year')
+@serialized_market_workload('backfill_group_rankings_1year')
 def backfill_group_rankings_1year(self):
     """
     One-time task to backfill 1 year of group rankings (optimized version).

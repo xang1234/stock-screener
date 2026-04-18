@@ -13,9 +13,16 @@ def _patch_serialized_lock(monkeypatch):
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.release_market_workload.return_value = True
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
     )
 
 
@@ -84,6 +91,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
     fake_service.calculate_group_rankings.assert_called_once_with(
         fake_db,
         datetime(2026, 3, 20, 17, 40, 0).date(),
+        market="US",
         cache_only=True,
         require_complete_cache=True,
     )
@@ -159,6 +167,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
     fake_service.calculate_group_rankings.assert_called_once_with(
         fake_db,
         datetime(2026, 3, 19).date(),
+        market="US",
         cache_only=False,
         require_complete_cache=False,
     )
@@ -202,6 +211,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
     fake_service.calculate_group_rankings.assert_called_once_with(
         fake_db,
         datetime(2026, 4, 2).date(),
+        market="US",
         cache_only=True,
         require_complete_cache=True,
     )
@@ -369,3 +379,26 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
     assert started[0]["stage_key"] == "groups"
     assert started[0]["lifecycle"] == "daily_refresh"
     assert completed[0]["stage_key"] == "groups"
+
+
+def test_daily_group_rankings_skip_non_us_market(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings.run(market="HK")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "group_rankings_are_us_only"
+    fake_service.calculate_group_rankings.assert_not_called()

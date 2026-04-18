@@ -50,6 +50,7 @@ _include("cache", tags=["cache"])
 _include("fundamentals", tags=["fundamentals"])
 _include("data_fetch_status", tags=["data-fetch"])
 _include("telemetry", tags=["telemetry"])
+_include("operations", tags=["operations"])
 
 if settings.feature_themes:
     _include("themes", prefix="/themes", tags=["themes"])

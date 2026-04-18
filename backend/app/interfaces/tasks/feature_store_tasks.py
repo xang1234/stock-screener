@@ -24,7 +24,7 @@ from app.services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from app.tasks.data_fetch_lock import serialized_data_fetch
+from app.tasks.workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +327,17 @@ def _create_auto_scan_for_published_run(
     return scan_id
 
 
+def _is_market_trading_day(as_of: date, *, market: str | None) -> bool:
+    if (market or "US").upper() == "US":
+        from app.use_cases.feature_store.build_daily_snapshot import _is_us_trading_day
+
+        return _is_us_trading_day(as_of)
+
+    from app.services.market_calendar_service import MarketCalendarService
+
+    return MarketCalendarService().is_trading_day((market or "US").upper(), as_of)
+
+
 @celery_app.task(
     bind=True,
     name="app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
@@ -336,7 +347,7 @@ def _create_auto_scan_for_published_run(
     max_retries=3,
     soft_time_limit=settings.feature_snapshot_soft_time_limit_seconds,
 )
-@serialized_data_fetch("build_daily_snapshot")
+@serialized_market_workload("build_daily_snapshot")
 def build_daily_snapshot(
     self,
     as_of_date_str: str | None = None,
@@ -374,7 +385,6 @@ def build_daily_snapshot(
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailySnapshotCommand,
-        _is_us_trading_day,
     )
     from app.wiring.bootstrap import get_build_daily_snapshot_use_case
 
@@ -447,8 +457,8 @@ def build_daily_snapshot(
     )
 
     # ── Trading-day guard (fast exit — lock released immediately) ─
-    if not _is_us_trading_day(as_of):
-        logger.info("Skipping build_daily_snapshot: %s is not a US trading day", as_of)
+    if not _is_market_trading_day(as_of, market=market):
+        logger.info("Skipping build_daily_snapshot: %s is not a trading day for %s", as_of, effective_market)
         return {
             "status": "skipped",
             "reason": "not_trading_day",

@@ -339,7 +339,12 @@ class FakeTaskDispatcher(TaskDispatcher):
         self.dispatched: list[tuple[str, list[str], dict]] = []
 
     def dispatch_scan(
-        self, scan_id: str, symbols: list[str], criteria: dict
+        self,
+        scan_id: str,
+        symbols: list[str],
+        criteria: dict,
+        *,
+        market: str | None = None,
     ) -> str:
         if self._should_fail:
             raise RuntimeError("Celery is down")

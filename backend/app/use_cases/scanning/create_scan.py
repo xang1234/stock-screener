@@ -247,7 +247,10 @@ class CreateScanUseCase:
             # ── Dispatch background task ─────────────────────────────
             try:
                 task_id = self._dispatcher.dispatch_scan(
-                    scan_id, symbols, cmd.criteria or {}
+                    scan_id,
+                    symbols,
+                    cmd.criteria or {},
+                    market=cmd.universe_market,
                 )
             except Exception:
                 scan.status = "failed"

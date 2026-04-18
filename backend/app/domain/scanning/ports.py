@@ -228,7 +228,12 @@ class TaskDispatcher(abc.ABC):
 
     @abc.abstractmethod
     def dispatch_scan(
-        self, scan_id: str, symbols: list[str], criteria: dict
+        self,
+        scan_id: str,
+        symbols: list[str],
+        criteria: dict,
+        *,
+        market: str | None = None,
     ) -> str:
         """Queue a bulk-scan task. Returns the task ID."""
         ...

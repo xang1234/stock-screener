@@ -1,16 +1,23 @@
-import { screen, waitFor, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../test/renderWithProviders';
 import OperationsPage from './OperationsPage';
 
 const fetchAlerts = vi.fn();
 const acknowledgeAlert = vi.fn();
+const fetchOperationsJobs = vi.fn();
+const cancelOperationsJob = vi.fn();
 const useRuntimeActivity = vi.fn();
 
 vi.mock('../api/telemetry', () => ({
   fetchAlerts: (...args) => fetchAlerts(...args),
   acknowledgeAlert: (...args) => acknowledgeAlert(...args),
+}));
+
+vi.mock('../api/operations', () => ({
+  fetchOperationsJobs: (...args) => fetchOperationsJobs(...args),
+  cancelOperationsJob: (...args) => cancelOperationsJob(...args),
 }));
 
 vi.mock('../hooks/useRuntimeActivity', () => ({
@@ -45,10 +52,67 @@ const ALERT_US = {
   closed_at: null,
 };
 
+const OPERATIONS_PAYLOAD = {
+  jobs: [
+    {
+      task_id: 'task-fetch-hk',
+      task_name: 'app.tasks.cache_tasks.smart_refresh_cache',
+      queue: 'data_fetch_hk',
+      market: 'HK',
+      state: 'waiting',
+      worker: null,
+      age_seconds: 45,
+      wait_reason: 'waiting_for_external_fetch_global',
+      heartbeat_lag_seconds: null,
+      cancel_strategy: 'revoke_and_remove_from_queue',
+    },
+    {
+      task_id: 'task-scan-us',
+      task_name: 'app.tasks.scan_tasks.run_bulk_scan',
+      queue: 'user_scans_us',
+      market: 'US',
+      state: 'running',
+      worker: 'userscans-us@host',
+      age_seconds: 120,
+      wait_reason: null,
+      heartbeat_lag_seconds: null,
+      cancel_strategy: 'scan_cancel',
+    },
+  ],
+  queues: [
+    { queue: 'data_fetch_hk', depth: 1, oldest_age_seconds: 45 },
+    { queue: 'user_scans_us', depth: 0, oldest_age_seconds: null },
+  ],
+  workers: [
+    { worker: 'general@host', status: 'online', queues: ['celery'], active: 0, reserved: 0, scheduled: 0 },
+    { worker: 'userscans-us@host', status: 'online', queues: ['user_scans_us'], active: 1, reserved: 0, scheduled: 0 },
+  ],
+  leases: {
+    external_fetch_global: {
+      task_id: 'task-fetch-us',
+      task_name: 'app.tasks.cache_tasks.smart_refresh_cache',
+      started_at: '2026-04-18T11:50:00Z',
+    },
+    market_workload: {
+      US: { task_id: 'task-scan-us', task_name: 'app.tasks.scan_tasks.run_bulk_scan' },
+      HK: null,
+      JP: null,
+      TW: null,
+    },
+  },
+  generated_at: '2026-04-18T12:00:00Z',
+};
+
 describe('OperationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [ALERT_US] });
+    fetchOperationsJobs.mockResolvedValue(OPERATIONS_PAYLOAD);
+    cancelOperationsJob.mockResolvedValue({
+      status: 'accepted',
+      cancel_strategy: 'scan_cancel',
+      message: 'Cancelled task-scan-us',
+    });
     useRuntimeActivity.mockReturnValue({
       data: {
         bootstrap: {
@@ -74,32 +138,33 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('renders per-market summary card and active alerts table', async () => {
+  it('renders market activity, job console, and telemetry sections', async () => {
     renderWithProviders(<OperationsPage />);
 
     expect(screen.getByText('Market activity')).toBeInTheDocument();
+    expect(screen.getByText('Job console')).toBeInTheDocument();
+    expect(screen.getByText('Lease status')).toBeInTheDocument();
     expect(screen.getByText('Price Refresh')).toBeInTheDocument();
     expect(screen.getByText(/Refreshing prices/)).toBeInTheDocument();
     expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
 
-    // Market card content (the card heading + a few labels)
+    await waitFor(() => {
+      expect(screen.getAllByText('app.tasks.cache_tasks.smart_refresh_cache').length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText('waiting_for_external_fetch_global')).toBeInTheDocument();
+    expect(screen.getByText('External Fetch Lease')).toBeInTheDocument();
+    expect(screen.getByText('Workers')).toBeInTheDocument();
+    expect(screen.getAllByText('Queues').length).toBeGreaterThan(0);
+
     await waitFor(() => {
       expect(screen.getByText(/Freshness:/)).toBeInTheDocument();
     });
-    expect(screen.getByText(/Universe:/)).toBeInTheDocument();
-    // "US" appears in both the card label and the alert row, so use getAllByText.
-    expect(screen.getAllByText('US').length).toBeGreaterThanOrEqual(1);
-
-    // Alert row content
-    await waitFor(() => {
-      expect(screen.getByText('warning')).toBeInTheDocument();
-    });
+    expect(screen.queryByText(/No active alerts/)).not.toBeInTheDocument();
+    expect(screen.getByText('warning')).toBeInTheDocument();
     expect(screen.getByText('open')).toBeInTheDocument();
-    expect(screen.getByText('freshness_lag')).toBeInTheDocument();
-    expect(screen.getByText('us-ops')).toBeInTheDocument();
   });
 
-  it('clicking Ack calls acknowledgeAlert and refetches', async () => {
+  it('clicking Ack calls acknowledgeAlert', async () => {
     acknowledgeAlert.mockResolvedValue({ ...ALERT_US, state: 'acknowledged' });
     renderWithProviders(<OperationsPage />);
 
@@ -111,6 +176,18 @@ describe('OperationsPage', () => {
     });
   });
 
+  it('clicking a job action calls cancelOperationsJob', async () => {
+    renderWithProviders(<OperationsPage />);
+
+    const cancelButtons = await screen.findAllByRole('button', { name: /cancel/i });
+    fireEvent.click(cancelButtons[0]);
+
+    await waitFor(() => {
+      expect(cancelOperationsJob).toHaveBeenCalled();
+    });
+    expect(cancelOperationsJob.mock.calls[0][0]).toBe('task-fetch-hk');
+  });
+
   it('shows empty-state message when no alerts active', async () => {
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [] });
     renderWithProviders(<OperationsPage />);
@@ -120,7 +197,7 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('keeps the last runtime activity cards visible when the activity poll errors', async () => {
+  it('keeps runtime activity cards visible when the activity poll errors', async () => {
     useRuntimeActivity.mockReturnValue({
       data: {
         bootstrap: {

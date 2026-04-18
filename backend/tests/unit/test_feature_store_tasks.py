@@ -1057,3 +1057,40 @@ def test_build_daily_snapshot_does_not_ignore_market_gate_outside_static_mode():
     assert result["market"] == "HK"
     assert result["reason"] == "market HK is disabled in local runtime preferences"
     assert fake_use_case.received_cmd is None
+
+
+def test_build_daily_snapshot_uses_market_calendar_for_non_us_market():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
+        return_value=False,
+    ) as mock_is_trading_day, patch(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            universe_name="market:hk",
+            market="HK",
+        )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "not_trading_day"
+    mock_is_trading_day.assert_called_once_with(date(2026, 3, 16), market="HK")
+    assert fake_use_case.received_cmd is None

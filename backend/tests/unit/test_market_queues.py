@@ -4,14 +4,17 @@ from __future__ import annotations
 import pytest
 
 from app.tasks.market_queues import (
+    MARKET_JOBS_BASE,
     SHARED_DATA_FETCH_QUEUE,
     SHARED_SENTINEL,
     SHARED_USER_SCANS_QUEUE,
     SUPPORTED_MARKETS,
     all_data_fetch_queues,
+    all_market_job_queues,
     all_user_scans_queues,
     data_fetch_queue_for_market,
     log_extra,
+    market_jobs_queue_for_market,
     market_tag,
     normalize_market,
     queue_for_market,
@@ -64,6 +67,17 @@ class TestQueueForMarket:
 
     def test_custom_base(self):
         assert queue_for_market("HK", base="custom") == "custom_hk"
+        assert queue_for_market("US", base=MARKET_JOBS_BASE) == "market_jobs_us"
+
+    @pytest.mark.parametrize("market,expected", [
+        ("US", "market_jobs_us"),
+        ("HK", "market_jobs_hk"),
+        ("JP", "market_jobs_jp"),
+        ("TW", "market_jobs_tw"),
+    ])
+    def test_market_jobs_queue(self, market, expected):
+        assert market_jobs_queue_for_market(market) == expected
+        assert queue_for_market(market, base=MARKET_JOBS_BASE) == expected
 
     def test_unknown_market_raises(self):
         with pytest.raises(ValueError):
@@ -88,6 +102,17 @@ class TestAllQueues:
     def test_custom_market_subset(self):
         queues = all_data_fetch_queues(markets=["US", "HK"])
         assert queues == ["data_fetch_us", "data_fetch_hk", SHARED_DATA_FETCH_QUEUE]
+
+    def test_market_job_queues_include_all_markets(self):
+        queues = all_market_job_queues()
+        for m in SUPPORTED_MARKETS:
+            assert f"market_jobs_{m.lower()}" in queues
+
+    def test_market_job_queue_subset(self):
+        assert all_market_job_queues(markets=["US", "HK"]) == [
+            "market_jobs_us",
+            "market_jobs_hk",
+        ]
 
 
 class TestLoggingHelpers:

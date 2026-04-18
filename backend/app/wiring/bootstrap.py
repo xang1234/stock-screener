@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from app.services.ui_snapshot_service import UISnapshotService
     from app.services.yfinance_service import YFinanceService
     from app.tasks.data_fetch_lock import DataFetchLock
+    from app.tasks.workload_coordination import WorkloadCoordination
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailyFeatureSnapshotUseCase,
     )
@@ -98,6 +99,7 @@ class RuntimeServices:
         self._group_rank_service: IBDGroupRankService | None = None
         self._task_registry_service: TaskRegistryService | None = None
         self._data_fetch_lock: DataFetchLock | None = None
+        self._workload_coordination: WorkloadCoordination | None = None
         self._groq_key_manager: GroqKeyManager | None = None
         self._zai_key_manager: ZAIKeyManager | None = None
         self._rate_limiter: RedisRateLimiter | None = None
@@ -199,6 +201,15 @@ class RuntimeServices:
 
                     self._data_fetch_lock = DataFetchLock()
         return self._data_fetch_lock
+
+    def workload_coordination(self) -> WorkloadCoordination:
+        if self._workload_coordination is None:
+            with self._init_lock:
+                if self._workload_coordination is None:
+                    from app.tasks.workload_coordination import WorkloadCoordination
+
+                    self._workload_coordination = WorkloadCoordination()
+        return self._workload_coordination
 
     def groq_key_manager(self) -> GroqKeyManager:
         if self._groq_key_manager is None:
@@ -375,6 +386,7 @@ class RuntimeServices:
             self._group_rank_service = None
             self._task_registry_service = None
             self._data_fetch_lock = None
+            self._workload_coordination = None
             self._groq_key_manager = None
             self._zai_key_manager = None
             self._rate_limiter = None
@@ -548,6 +560,11 @@ def get_task_registry_service() -> TaskRegistryService:
 def get_data_fetch_lock() -> DataFetchLock:
     """Return process-scoped distributed lock instance."""
     return _resolve_runtime_services().data_fetch_lock()
+
+
+def get_workload_coordination() -> WorkloadCoordination:
+    """Return process-scoped workload lease coordinator."""
+    return _resolve_runtime_services().workload_coordination()
 
 
 def get_groq_key_manager() -> GroqKeyManager:

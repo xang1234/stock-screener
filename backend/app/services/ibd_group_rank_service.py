@@ -66,6 +66,7 @@ class IBDGroupRankService:
         db: Session,
         calculation_date: date = None,
         *,
+        market: str | None = None,
         cache_only: bool = False,
         require_complete_cache: bool = False,
     ) -> List[Dict]:
@@ -97,6 +98,7 @@ class IBDGroupRankService:
         spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
             self._prefetch_all_data(
                 db,
+                market=market,
                 cache_only=cache_only,
             )
         )
@@ -766,6 +768,7 @@ class IBDGroupRankService:
         self,
         db: Session,
         *,
+        market: str | None = None,
         cache_only: bool = False,
     ) -> tuple:
         """
@@ -800,7 +803,10 @@ class IBDGroupRankService:
         logger.info(f"Fetched SPY data: {len(spy_data)} days")
 
         # 2. Get active symbols from stock_universe (same as bulk scans)
-        active_symbols_list = get_stock_universe_service().get_active_symbols(db)
+        active_symbols_list = get_stock_universe_service().get_active_symbols(
+            db,
+            market=(market or "US").upper(),
+        )
         active_symbols = set(active_symbols_list)
         logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
 

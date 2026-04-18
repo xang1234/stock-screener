@@ -93,7 +93,95 @@ services:
         reservations:
           memory: 128M
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d datafetch-shared@$$HOSTNAME"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d datafetch-global@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-marketjobs-us:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-us@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-marketjobs-hk:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-hk@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-marketjobs-jp:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-jp@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-marketjobs-tw:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d marketjobs-tw@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -116,6 +204,94 @@ services:
           memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-shared@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-userscans-us:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-us@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-userscans-hk:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-hk@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-userscans-jp:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-jp@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  celery-userscans-tw:
+    env_file:
+      - .env.docker
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping -d userscans-tw@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3
