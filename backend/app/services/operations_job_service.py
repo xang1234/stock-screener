@@ -45,6 +45,7 @@ OPERATIONS_JOB_ACTION_CATEGORY = "operations_job_actions"
 RUNNING_STALE_AFTER_SECONDS = 30 * 60
 QUEUED_STALE_AFTER_SECONDS = 20 * 60
 HEARTBEAT_STUCK_AFTER_SECONDS = 30 * 60
+LEASE_STUCK_TTL_SECONDS = 10 * 60
 
 SCAN_TASK_NAME = "app.tasks.scan_tasks.run_bulk_scan"
 
@@ -190,6 +191,21 @@ def _cancel_strategy_for(record: _JobRecord) -> str:
     ):
         return "force_cancel_refresh"
     return "unsupported"
+
+
+def _market_lease_state(holder: dict[str, Any]) -> tuple[str, float | None]:
+    age_seconds = _age_seconds_from(holder.get("started_at"))
+    ttl_seconds = holder.get("ttl_seconds")
+    try:
+        ttl_seconds = int(ttl_seconds) if ttl_seconds is not None else None
+    except (TypeError, ValueError):
+        ttl_seconds = None
+
+    if age_seconds is not None and age_seconds >= RUNNING_STALE_AFTER_SECONDS:
+        if ttl_seconds is not None and ttl_seconds <= LEASE_STUCK_TTL_SECONDS:
+            return ("stuck", age_seconds)
+        return ("stale", age_seconds)
+    return ("running", age_seconds)
 
 
 def _task_wait_reason(
@@ -487,14 +503,15 @@ class OperationsJobService:
                 queue_name = f"user_scans_{market.lower()}"
             else:
                 queue_name = market_jobs_queue_for_market(market)
+        state, age_seconds = _market_lease_state(holder)
         record = _JobRecord(
             task_id=task_id,
             task_name=task_name,
             queue=queue_name,
             market=market,
-            state="running",
+            state=state,
             worker=None,
-            age_seconds=_age_seconds_from(holder.get("started_at")),
+            age_seconds=age_seconds,
             wait_reason=None,
             heartbeat_lag_seconds=None,
             cancel_strategy="unsupported",
@@ -797,4 +814,3 @@ class OperationsJobService:
         message = f"Task {task_id} cannot be cancelled safely while in state '{record.state}'."
         self._record_cancel_action(db, task_id=task_id, strategy=strategy, outcome="unsupported", message=message)
         return {"status": "unsupported", "cancel_strategy": strategy, "message": message}
-

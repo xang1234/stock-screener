@@ -5,6 +5,7 @@ All tests mock Redis (no live Redis needed) and mock CacheManager/PriceCacheServ
 (no external API calls).
 """
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
@@ -501,11 +502,12 @@ class TestClearStaleLockOnStartup:
         from app.celery_app import _clear_stale_data_fetch_lock
 
         mock_lock = MagicMock()
-        mock_lock.get_current_holder.return_value = {
+        mock_lock.get_current_task.return_value = {
             'task_name': 'calculate_daily_group_rankings',
             'task_id': 'dead-task-id',
             'started_at': '2026-01-01T00:00:00',
             'ttl_seconds': 5400,
+            'last_heartbeat': '2026-01-01T00:00:00+00:00',
         }
         mock_get_instance.return_value = mock_lock
 
@@ -522,6 +524,7 @@ class TestClearStaleLockOnStartup:
         from app.celery_app import _clear_stale_data_fetch_lock
 
         mock_lock = MagicMock()
+        mock_lock.get_current_task.return_value = None
         mock_lock.get_current_holder.return_value = None
         mock_get_instance.return_value = mock_lock
 
@@ -570,6 +573,53 @@ class TestClearStaleLockOnStartup:
 
         # Should not raise — the handler catches all exceptions
         _clear_stale_data_fetch_lock(sender=sender)
+
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    def test_global_worker_does_not_drop_live_market_locks(self, mock_get_instance):
+        """Global worker must not clear a live per-market lock during startup overlap."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        mock_lock = MagicMock()
+        mock_lock.get_current_task.side_effect = lambda market=None: {
+            'task_name': 'smart_refresh_cache',
+            'task_id': 'live-task-id',
+            'started_at': '2026-04-19T00:00:00+00:00',
+            'ttl_seconds': 7100,
+            'last_heartbeat': datetime.now(timezone.utc).isoformat(),
+        } if market == 'US' else None
+        mock_get_instance.return_value = mock_lock
+
+        sender = MagicMock()
+        sender.hostname = 'datafetch-global@abc123'
+
+        _clear_stale_data_fetch_lock(sender=sender)
+
+        mock_lock.force_release_all.assert_not_called()
+        mock_lock.force_release.assert_not_called()
+
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    def test_global_worker_clears_only_stale_market_locks(self, mock_get_instance):
+        """Global worker clears only scopes whose heartbeat is stale."""
+        from app.celery_app import _clear_stale_data_fetch_lock
+
+        stale_heartbeat = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+        mock_lock = MagicMock()
+        mock_lock.get_current_task.side_effect = lambda market=None: {
+            'task_name': 'smart_refresh_cache',
+            'task_id': 'stale-task-id',
+            'started_at': '2026-04-19T00:00:00+00:00',
+            'ttl_seconds': 5400,
+            'last_heartbeat': stale_heartbeat,
+        } if market == 'HK' else None
+        mock_get_instance.return_value = mock_lock
+
+        sender = MagicMock()
+        sender.hostname = 'datafetch-global@abc123'
+
+        _clear_stale_data_fetch_lock(sender=sender)
+
+        mock_lock.force_release.assert_called_once_with(market='HK')
+        mock_lock.force_release_all.assert_not_called()
 
 
 class TestEnsureWorkerRuntimeServices:

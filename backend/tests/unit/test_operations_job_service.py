@@ -151,6 +151,72 @@ def test_list_jobs_surfaces_stuck_lock_holder_without_worker_inspect():
     assert stuck_job["queue"] == "data_fetch_us"
 
 
+def test_list_jobs_marks_orphaned_market_lease_as_stale():
+    service = OperationsJobService()
+    service._broker = lambda: _FakeBroker({})
+    service._inspect = lambda: _FakeInspect()
+    service._runtime_activity_records = lambda _db: []
+
+    lock = MagicMock()
+    lock.get_current_task.return_value = None
+
+    with patch("app.services.operations_job_service.get_workload_coordination") as mock_get_coordination, patch(
+        "app.services.operations_job_service.get_data_fetch_lock",
+        return_value=lock,
+    ):
+        mock_get_coordination.return_value.get_external_fetch_holder.return_value = None
+        mock_get_coordination.return_value.get_market_workload_holders.return_value = {
+            "US": {
+                "task_id": "market-job-1",
+                "task_name": "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+                "started_at": (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat(),
+                "ttl_seconds": 5400,
+            },
+            "HK": None,
+            "JP": None,
+            "TW": None,
+        }
+
+        payload = service.list_jobs(MagicMock())
+
+    lease_job = next(job for job in payload["jobs"] if job["task_id"] == "market-job-1")
+    assert lease_job["state"] == "stale"
+    assert lease_job["queue"] == "market_jobs_us"
+
+
+def test_list_jobs_marks_near_expiry_market_lease_as_stuck():
+    service = OperationsJobService()
+    service._broker = lambda: _FakeBroker({})
+    service._inspect = lambda: _FakeInspect()
+    service._runtime_activity_records = lambda _db: []
+
+    lock = MagicMock()
+    lock.get_current_task.return_value = None
+
+    with patch("app.services.operations_job_service.get_workload_coordination") as mock_get_coordination, patch(
+        "app.services.operations_job_service.get_data_fetch_lock",
+        return_value=lock,
+    ):
+        mock_get_coordination.return_value.get_external_fetch_holder.return_value = None
+        mock_get_coordination.return_value.get_market_workload_holders.return_value = {
+            "US": None,
+            "HK": {
+                "task_id": "scan-hk-1",
+                "task_name": "app.tasks.scan_tasks.run_bulk_scan",
+                "started_at": (datetime.now(timezone.utc) - timedelta(minutes=50)).isoformat(),
+                "ttl_seconds": 120,
+            },
+            "JP": None,
+            "TW": None,
+        }
+
+        payload = service.list_jobs(MagicMock())
+
+    lease_job = next(job for job in payload["jobs"] if job["task_id"] == "scan-hk-1")
+    assert lease_job["state"] == "stuck"
+    assert lease_job["queue"] == "user_scans_hk"
+
+
 def test_cancel_job_removes_queued_task_and_revokes():
     service = OperationsJobService()
     raw = _queued_message(
@@ -208,4 +274,3 @@ def test_cancel_job_uses_scan_cancel_strategy_for_running_scan():
     assert result["status"] == "accepted"
     assert result["cancel_strategy"] == "scan_cancel"
     assert result["message"] == "cancelled:scan-001"
-

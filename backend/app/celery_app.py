@@ -5,6 +5,7 @@ Handles async bulk scanning of stocks and cache warming.
 """
 import logging
 import os
+from datetime import datetime, timezone
 
 # Disable MPS/Metal before any PyTorch imports to avoid fork() issues on macOS
 # Must be set at the very start before any libraries that use PyTorch are imported
@@ -67,6 +68,7 @@ celery_app.conf.update(
 
 _logger = logging.getLogger(__name__)
 _default_scan_profile = get_default_scan_profile()
+_STARTUP_STALE_HEARTBEAT_SECONDS = 30 * 60
 
 
 def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
@@ -81,6 +83,54 @@ def _ensure_worker_runtime_services(*, force_rebuild: bool = False):
     celery_app.runtime_services = runtime_services
     celery_app.runtime_services_pid = current_pid
     return runtime_services
+
+
+def _startup_heartbeat_is_stale(last_heartbeat: str | None) -> bool:
+    if not last_heartbeat:
+        return False
+    try:
+        parsed = datetime.fromisoformat(last_heartbeat)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() >= _STARTUP_STALE_HEARTBEAT_SECONDS
+
+
+def _clear_startup_lock_if_stale(lock, *, market: str | None) -> bool:
+    from .tasks.market_queues import normalize_market
+
+    current_task = lock.get_current_task(market=market) or lock.get_current_holder(market=market)
+    market_label = normalize_market(market).lower()
+    if not current_task:
+        _logger.info("No stale data fetch lock found on startup (market=%s)", market_label)
+        return False
+    if not isinstance(current_task, dict):
+        _logger.warning(
+            "Ignoring malformed data fetch lock state on startup (market=%s)",
+            market_label,
+        )
+        return False
+
+    if not _startup_heartbeat_is_stale(current_task.get("last_heartbeat")):
+        _logger.info(
+            "Leaving active data fetch lock in place on startup (market=%s, task_id=%s)",
+            market_label,
+            current_task.get("task_id", "unknown"),
+        )
+        return False
+
+    _logger.warning(
+        "Clearing stale data fetch lock on worker startup "
+        "(market=%s, was held by %s, task_id=%s)",
+        market_label,
+        current_task.get("task_name", "unknown"),
+        current_task.get("task_id", "unknown"),
+    )
+    lock.force_release(market=market)
+    return True
 
 
 @celery_app.on_after_configure.connect
@@ -110,7 +160,7 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
             return
 
         from .wiring.bootstrap import get_data_fetch_lock
-        from .tasks.market_queues import SUPPORTED_MARKETS, normalize_market
+        from .tasks.market_queues import SUPPORTED_MARKETS
 
         # Parse "datafetch-hk@host" -> market="HK"; "datafetch-shared@host" -> None;
         # "datafetch-global@host" clears every market lock.
@@ -135,38 +185,17 @@ def _clear_stale_data_fetch_lock(sender, **kwargs):
 
         lock = get_data_fetch_lock()
         if clear_all_markets:
-            released = lock.force_release_all()
+            released = 0
+            for market_code in [*SUPPORTED_MARKETS, None]:
+                if _clear_startup_lock_if_stale(lock, market=market_code):
+                    released += 1
             if released:
                 _logger.warning(
                     "Cleared %s stale data fetch lock key(s) on global worker startup",
                     released,
                 )
-            else:
-                _logger.info("No stale data fetch locks found on global worker startup")
         else:
-            holder = lock.get_current_holder(market=worker_market)
-            if holder:
-                _logger.warning(
-                    "Clearing stale data fetch lock on worker startup "
-                    "(market=%s, was held by %s, task_id=%s)",
-                    normalize_market(worker_market).lower(),
-                    holder.get('task_name', 'unknown'),
-                    holder.get('task_id', 'unknown'),
-                )
-                lock.force_release(market=worker_market)
-            else:
-                _logger.info(
-                    "No stale data fetch lock found on startup (market=%s)",
-                    normalize_market(worker_market).lower(),
-                )
-
-        # Also clear the unsuffixed legacy key on the shared/global worker only,
-        # so old pre-9.1 deployments upgrading in place don't leave it stuck.
-        if worker_market is None or clear_all_markets:
-            from .tasks.data_fetch_lock import LOCK_KEY as _LEGACY_LOCK_KEY
-            if lock.redis.exists(_LEGACY_LOCK_KEY) > 0:
-                lock.redis.delete(_LEGACY_LOCK_KEY)
-                _logger.warning("Cleared legacy unsuffixed %s key on startup", _LEGACY_LOCK_KEY)
+            _clear_startup_lock_if_stale(lock, market=worker_market)
     except Exception as e:
         _logger.warning("Failed to check/clear stale lock on startup: %s", e)
 
