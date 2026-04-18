@@ -12,14 +12,20 @@ function buildSummary(activity) {
   const failedMarket = markets.find((market) => market.status === 'failed');
 
   if (bootstrap.state === 'running') {
-    const percent = Math.round(bootstrap.percent ?? 0);
+    const determinateBootstrap = (
+      bootstrap.progress_mode === 'determinate'
+      && Number.isFinite(bootstrap.percent)
+    );
+    const percent = determinateBootstrap ? Math.round(bootstrap.percent) : null;
     return {
-      badge: `${percent}%`,
+      badge: determinateBootstrap ? `${percent}%` : 'Sync',
       badgeColor: 'info',
       title: `Bootstrapping ${bootstrap.primary_market || 'market'}`,
-      detail: bootstrap.current_stage
+      detail: determinateBootstrap && bootstrap.current_stage
         ? `${bootstrap.current_stage} · ${percent}%`
-        : bootstrap.message || 'Preparing market data',
+        : bootstrap.current_stage
+          || bootstrap.message
+          || 'Preparing market data',
     };
   }
 
