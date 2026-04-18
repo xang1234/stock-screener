@@ -281,6 +281,43 @@ describe('ScanPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('adds keyboard focus semantics to the disabled scan control wrapper when refresh is blocked', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:us',
+    };
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {},
+        summary: { active_market_count: 1, active_markets: ['US'], status: 'active' },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            lifecycle: 'daily_refresh',
+            progress_mode: 'determinate',
+            percent: 30,
+            current: 300,
+            total: 1000,
+            message: 'Refreshing prices',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    expect(scanButton.parentElement).toHaveAttribute('tabindex', '0');
+    expect(scanButton.parentElement).toHaveAttribute(
+      'aria-label',
+      'US price refresh is running. Wait for it to finish before starting a scan.'
+    );
+  });
+
   it('disables scan creation with a hover warning when fundamentals refresh is active for the selected market', async () => {
     const user = userEvent.setup();
     runtimeState.runtimeReady = true;

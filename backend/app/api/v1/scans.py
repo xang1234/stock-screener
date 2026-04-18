@@ -26,6 +26,7 @@ from ...schemas.scanning import (
 )
 from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...database import SessionLocal
 from ...services.market_activity_service import get_runtime_activity_status
 from ...wiring.bootstrap import (
     get_uow,
@@ -56,15 +57,16 @@ SCAN_GUARD_MARKET_BY_INDEX = {
 }
 
 
-def _get_market_refresh_conflict_detail(uow: Any, market: str | None) -> dict[str, object] | None:
+def _get_market_refresh_conflict_detail(market: str | None) -> dict[str, object] | None:
     if not market:
         return None
 
-    session = getattr(uow, "session", None)
-    if session is None or not hasattr(session, "query"):
-        return None
+    session = SessionLocal()
+    try:
+        runtime_activity = get_runtime_activity_status(session)
+    finally:
+        session.close()
 
-    runtime_activity = get_runtime_activity_status(session)
     normalized_market = str(market).upper()
     conflicting_activity = [
         item
@@ -167,10 +169,7 @@ async def create_scan(
         from ...services.universe_compat_metrics import record_legacy_universe_usage
 
         record_legacy_universe_usage(universe_resolution.legacy_value)
-    market_refresh_conflict = _get_market_refresh_conflict_detail(
-        uow,
-        _resolve_scan_guard_market(universe_def),
-    )
+    market_refresh_conflict = _get_market_refresh_conflict_detail(_resolve_scan_guard_market(universe_def))
     if market_refresh_conflict is not None:
         raise HTTPException(status_code=409, detail=market_refresh_conflict)
     cmd = CreateScanCommand(

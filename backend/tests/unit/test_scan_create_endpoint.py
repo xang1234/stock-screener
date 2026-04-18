@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.main import app
 from app.services import server_auth
@@ -18,9 +18,6 @@ from app.use_cases.scanning.create_scan import (
 
 
 class _FakeUoW:
-    def __init__(self):
-        self.session = None
-
     def __enter__(self):
         return self
 
@@ -293,7 +290,6 @@ async def test_create_scan_returns_409_when_another_scan_is_active(client):
 @pytest.mark.asyncio
 async def test_create_scan_returns_409_when_market_prices_refresh_is_active(client):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-hk",
@@ -352,7 +348,6 @@ async def test_create_scan_returns_409_when_market_prices_refresh_is_active(clie
 @pytest.mark.asyncio
 async def test_create_scan_returns_409_when_market_fundamentals_refresh_is_queued(client):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-us",
@@ -410,7 +405,6 @@ async def test_create_scan_returns_409_when_market_fundamentals_refresh_is_queue
 @pytest.mark.asyncio
 async def test_create_scan_allows_non_core_runtime_activity_for_market(client):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-hk-ok",
@@ -463,7 +457,6 @@ async def test_create_scan_allows_non_core_runtime_activity_for_market(client):
 @pytest.mark.asyncio
 async def test_create_scan_allows_other_market_refresh_activity(client):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-hk-ok",
@@ -516,7 +509,6 @@ async def test_create_scan_allows_other_market_refresh_activity(client):
 @pytest.mark.asyncio
 async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active(client):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-nyse",
@@ -569,10 +561,21 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
     assert fake_use_case.received_cmd is None
 
 
+@pytest.mark.parametrize(
+    ("index_name", "market"),
+    [
+        ("HSI", "HK"),
+        ("NIKKEI225", "JP"),
+        ("TAIEX", "TW"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_create_scan_returns_409_for_hk_index_when_hk_refresh_is_active(client):
+async def test_create_scan_returns_409_for_index_when_mapped_market_refresh_is_active(
+    client,
+    index_name,
+    market,
+):
     fake_uow = _FakeUoW()
-    fake_uow.session = MagicMock()
     fake_use_case = _FakeCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-hsi",
@@ -590,10 +593,10 @@ async def test_create_scan_returns_409_for_hk_index_when_hk_refresh_is_active(cl
             "app.api.v1.scans.get_runtime_activity_status",
             return_value={
                 "bootstrap": {},
-                "summary": {"active_market_count": 1, "active_markets": ["HK"], "status": "active"},
+                "summary": {"active_market_count": 1, "active_markets": [market], "status": "active"},
                 "markets": [
                     {
-                        "market": "HK",
+                        "market": market,
                         "lifecycle": "daily_refresh",
                         "stage_key": "prices",
                         "stage_label": "Price Refresh",
@@ -612,7 +615,7 @@ async def test_create_scan_returns_409_for_hk_index_when_hk_refresh_is_active(cl
         ):
             response = await client.post(
                 "/api/v1/scans",
-                json={"universe_def": {"type": "index", "index": "HSI"}},
+                json={"universe_def": {"type": "index", "index": index_name}},
             )
     finally:
         app.dependency_overrides.pop(get_uow, None)
@@ -621,6 +624,6 @@ async def test_create_scan_returns_409_for_hk_index_when_hk_refresh_is_active(cl
     assert response.status_code == 409
     payload = response.json()
     assert payload["detail"]["code"] == "market_refresh_active"
-    assert payload["detail"]["market"] == "HK"
+    assert payload["detail"]["market"] == market
     assert payload["detail"]["active_stages"] == ["prices"]
     assert fake_use_case.received_cmd is None

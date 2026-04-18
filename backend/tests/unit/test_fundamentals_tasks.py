@@ -354,6 +354,37 @@ def test_refresh_all_fundamentals_hybrid_publishes_running_progress(monkeypatch)
     assert progress_updates[0]["percent"] == pytest.approx(50.0)
 
 
+def test_refresh_all_fundamentals_hybrid_rolls_back_before_failure_publish(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    stocks = [SimpleNamespace(symbol="AAPL", market="US")]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = stocks
+    fake_query.filter.return_value.all.return_value = stocks
+    fake_db.query.return_value = fake_query
+
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+
+    class _HybridBoom:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        @staticmethod
+        def fetch_fundamentals_batch(*args, **kwargs):
+            raise RuntimeError("hybrid fetch failed")
+
+    monkeypatch.setattr(module, "HybridFundamentalsService", _HybridBoom)
+
+    result = module.refresh_all_fundamentals_hybrid.run(include_finviz=False, market="US")
+
+    fake_db.rollback.assert_called_once()
+    assert result["error"] == "hybrid fetch failed"
+
+
 def test_refresh_all_fundamentals_progress_counts_failed_iterations(monkeypatch):
     import app.tasks.fundamentals_tasks as module
 

@@ -220,8 +220,12 @@ export default function ScanControlBar({
           </Button>
         ) : (
           refreshConflict ? (
-            <Tooltip title={refreshConflict.message}>
-              <span>
+            <Tooltip title={refreshConflict.message} describeChild>
+              <span
+                tabIndex={0}
+                aria-label={refreshConflict.message}
+                style={{ display: 'inline-flex' }}
+              >
                 <Button
                   variant="contained"
                   size="small"

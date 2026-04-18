@@ -992,6 +992,7 @@ def refresh_all_fundamentals_hybrid(
 
     except Exception as e:
         logger.error(f"Fatal error in hybrid fundamental refresh: {e}", exc_info=True)
+        db.rollback()
         _mark_market_activity_failed_safely(
             db,
             market=effective_market,

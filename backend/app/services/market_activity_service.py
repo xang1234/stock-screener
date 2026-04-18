@@ -97,14 +97,18 @@ def _save_market_activity(
             existing_payload = json.loads(setting.value)
         except (json.JSONDecodeError, TypeError):
             existing_payload = None
-    if (
-        preserve_existing_statuses
-        and isinstance(existing_payload, dict)
-        and existing_payload.get("task_id")
-        and existing_payload.get("task_id") == payload.get("task_id")
-        and existing_payload.get("status") in preserve_existing_statuses
-    ):
-        return existing_payload
+    if preserve_existing_statuses and isinstance(existing_payload, dict):
+        existing_status = existing_payload.get("status")
+        payload_status = payload.get("status")
+        same_task = existing_payload.get("task_id") == payload.get("task_id")
+        same_stage = existing_payload.get("stage_key") == payload.get("stage_key")
+        existing_terminal = existing_status in {"completed", "failed"}
+        stale_queue_downgrade = existing_status == "running" and payload_status == "queued"
+        stale_owner = not same_task or not same_stage
+        if existing_status in preserve_existing_statuses and (
+            stale_owner or existing_terminal or stale_queue_downgrade
+        ):
+            return existing_payload
     encoded = json.dumps(payload)
     if setting is None:
         setting = AppSetting(
@@ -223,6 +227,7 @@ def mark_market_activity_started(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -271,6 +276,7 @@ def mark_market_activity_progress(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -302,6 +308,7 @@ def mark_market_activity_completed(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -333,6 +340,7 @@ def mark_market_activity_failed(
             total=total,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 

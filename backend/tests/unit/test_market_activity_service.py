@@ -212,6 +212,93 @@ def test_mark_market_activity_progress_does_not_overwrite_completed_record(
     assert us_market["percent"] == 100.0
 
 
+def test_mark_market_activity_progress_does_not_overwrite_newer_running_task(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        lifecycle="bootstrap",
+        task_name="refresh_all_fundamentals",
+        task_id="new-task",
+        message="Refreshing fundamentals",
+    )
+    module.mark_market_activity_progress(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        task_name="refresh_all_fundamentals",
+        task_id="stale-task",
+        current=25,
+        total=100,
+        percent=25.0,
+        message="Refreshing fundamentals",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["US"], state="running"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert us_market["task_id"] == "new-task"
+    assert us_market["current"] is None
+    assert us_market["percent"] is None
+
+
+def test_mark_market_activity_completed_still_advances_same_task_running_record(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        lifecycle="bootstrap",
+        task_name="refresh_all_fundamentals",
+        task_id="task-us",
+        current=25,
+        total=100,
+        percent=25.0,
+        message="Refreshing fundamentals",
+    )
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        lifecycle="bootstrap",
+        task_name="refresh_all_fundamentals",
+        task_id="task-us",
+        current=100,
+        total=100,
+        message="Fundamentals refresh completed",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US"], state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "completed"
+    assert us_market["task_id"] == "task-us"
+    assert us_market["current"] == 100
+    assert us_market["percent"] == 100.0
+
+
 def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_running(
     db_session,
     monkeypatch,
