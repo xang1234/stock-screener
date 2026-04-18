@@ -30,6 +30,7 @@ from ..services.hybrid_fundamentals_service import HybridFundamentalsService
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from ..services.ticker_validation_service import TickerValidationService
@@ -38,6 +39,8 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+PROGRESS_PUBLISH_EVERY_STOCKS = 25
+PROGRESS_PUBLISH_EVERY_SECONDS = 2.0
 
 
 def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
@@ -66,6 +69,67 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
+
+
+def _mark_market_activity_progress_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_progress(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity progress for fundamentals task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+
+
+def _maybe_publish_fundamentals_progress(
+    db,
+    *,
+    market: str,
+    lifecycle: str,
+    task_name: str,
+    task_id: str | None,
+    current: int,
+    total: int,
+    message: str,
+    progress_state: dict[str, float | int],
+    force: bool = False,
+) -> None:
+    if total <= 0:
+        return
+
+    now = time.monotonic()
+    last_current = int(progress_state.get("last_current") or 0)
+    last_time = float(progress_state.get("last_time") or 0.0)
+    should_publish = force or current >= total
+    if not should_publish:
+        should_publish = (
+            (last_current == 0 and current > 0)
+            or
+            (current - last_current) >= PROGRESS_PUBLISH_EVERY_STOCKS
+            or (now - last_time) >= PROGRESS_PUBLISH_EVERY_SECONDS
+        )
+    if not should_publish:
+        return
+
+    _mark_market_activity_progress_safely(
+        db,
+        market=market,
+        stage_key="fundamentals",
+        lifecycle=lifecycle,
+        task_name=task_name,
+        task_id=task_id,
+        current=current,
+        total=total,
+        percent=round((current / total) * 100, 1),
+        message=message,
+    )
+    progress_state["last_current"] = current
+    progress_state["last_time"] = now
 
 
 def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
@@ -150,6 +214,12 @@ def refresh_all_fundamentals(
     db = SessionLocal()
     start_time = time.time()
     ticker_validation_service = get_ticker_validation_service()
+    task_name = getattr(self, "name", "refresh_all_fundamentals")
+    task_id = getattr(getattr(self, "request", None), "id", None)
+    progress_state: dict[str, float | int] = {
+        "last_current": 0,
+        "last_time": time.monotonic(),
+    }
 
     try:
         mark_market_activity_started(
@@ -157,8 +227,8 @@ def refresh_all_fundamentals(
             market=effective_market,
             stage_key="fundamentals",
             lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "refresh_all_fundamentals"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
+            task_name=task_name,
+            task_id=task_id,
             message="Refreshing fundamentals",
         )
         if settings.provider_snapshot_cutover_enabled:
@@ -181,8 +251,8 @@ def refresh_all_fundamentals(
                 market=effective_market,
                 stage_key="fundamentals",
                 lifecycle=activity_lifecycle,
-                task_name=getattr(self, "name", "refresh_all_fundamentals"),
-                task_id=getattr(getattr(self, "request", None), "id", None),
+                task_name=task_name,
+                task_id=task_id,
                 message="Fundamentals refresh completed",
             )
             return response
@@ -200,8 +270,8 @@ def refresh_all_fundamentals(
                 market=effective_market,
                 stage_key="fundamentals",
                 lifecycle=activity_lifecycle,
-                task_name=getattr(self, "name", "refresh_all_fundamentals"),
-                task_id=getattr(getattr(self, "request", None), "id", None),
+                task_name=task_name,
+                task_id=task_id,
                 message="No active stocks found",
             )
             return {
@@ -278,9 +348,34 @@ def refresh_all_fundamentals(
                     error_message=error_msg,
                     data_source=TickerValidationService.SOURCE_YFINANCE,
                     triggered_by=TickerValidationService.TRIGGER_FUNDAMENTALS_REFRESH,
-                    task_id=self.request.id if self.request else None,
-                )
+                        task_id=self.request.id if self.request else None,
+                    )
                 continue
+
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=i + 1,
+                total=total_stocks,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+            )
+
+        _maybe_publish_fundamentals_progress(
+            db,
+            market=effective_market,
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            current=total_stocks,
+            total=total_stocks,
+            message="Refreshing fundamentals",
+            progress_state=progress_state,
+            force=True,
+        )
 
         duration = time.time() - start_time
 
@@ -305,9 +400,9 @@ def refresh_all_fundamentals(
             market=effective_market,
             stage_key="fundamentals",
             lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "refresh_all_fundamentals"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            current=stats['updated'],
+            task_name=task_name,
+            task_id=task_id,
+            current=total_stocks,
             total=total_stocks,
             message="Fundamentals refresh completed",
         )
@@ -332,8 +427,8 @@ def refresh_all_fundamentals(
             market=effective_market,
             stage_key="fundamentals",
             lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "refresh_all_fundamentals"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
+            task_name=task_name,
+            task_id=task_id,
             message="Soft time limit exceeded",
         )
         raise
@@ -344,8 +439,8 @@ def refresh_all_fundamentals(
             market=effective_market,
             stage_key="fundamentals",
             lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "refresh_all_fundamentals"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
+            task_name=task_name,
+            task_id=task_id,
             message=str(e),
         )
         _retry_transient_failure(self, "refresh_all_fundamentals", e)
@@ -357,8 +452,8 @@ def refresh_all_fundamentals(
             market=effective_market,
             stage_key="fundamentals",
             lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "refresh_all_fundamentals"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
+            task_name=task_name,
+            task_id=task_id,
             message=str(e),
         )
         return {
@@ -652,6 +747,7 @@ def refresh_all_fundamentals_hybrid(
     include_finviz: bool = True,
     yfinance_batch_size: int = 50,
     market: str | None = None,
+    activity_lifecycle: str | None = None,
 ):
     """
     HYBRID fundamental refresh - optimized for speed.
@@ -685,8 +781,25 @@ def refresh_all_fundamentals_hybrid(
     db = SessionLocal()
     start_time = time.time()
     ticker_validation_service = get_ticker_validation_service()
+    effective_market = normalize_market(market) if market is not None else "US"
+    activity_lifecycle = activity_lifecycle or "weekly_refresh"
+    task_name = getattr(self, "name", "refresh_all_fundamentals_hybrid")
+    task_id = getattr(getattr(self, "request", None), "id", None)
+    progress_state: dict[str, float | int] = {
+        "last_current": 0,
+        "last_time": time.monotonic(),
+    }
 
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            message="Refreshing fundamentals",
+        )
         if settings.provider_snapshot_cutover_enabled or settings.provider_snapshot_ingestion_enabled:
             publish = settings.provider_snapshot_cutover_enabled
             logger.info(
@@ -705,6 +818,15 @@ def refresh_all_fundamentals_hybrid(
             if publish and result.get("snapshot", {}).get("published"):
                 eps_task = calculate_eps_rating_percentiles.delay()
                 response["eps_rating_task_id"] = eps_task.id
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message="Fundamentals refresh completed",
+            )
             return response
 
         # Get all active stocks from universe (market-filtered when scoped)
@@ -715,6 +837,15 @@ def refresh_all_fundamentals_hybrid(
 
         if not universe_stocks:
             logger.warning("No active stocks found in universe", extra=_log_extra)
+            _mark_market_activity_failed_safely(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message="No active stocks found",
+            )
             return {
                 'error': 'No active stocks found',
                 'timestamp': datetime.now().isoformat()
@@ -751,6 +882,17 @@ def refresh_all_fundamentals_hybrid(
             if current > 0:
                 eta = (elapsed / current) * (total - current) / 60
                 logger.info(f"Hybrid progress: {current}/{total} ({pct:.1f}%), ETA: {eta:.1f} min")
+            _maybe_publish_fundamentals_progress(
+                db,
+                market=effective_market,
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=current,
+                total=total,
+                message="Refreshing fundamentals",
+                progress_state=progress_state,
+            )
 
         # Fetch all fundamentals using hybrid approach
         all_data = hybrid_service.fetch_fundamentals_batch(
@@ -811,6 +953,29 @@ def refresh_all_fundamentals_hybrid(
         logger.info("Queuing EPS Rating Percentiles calculation...")
         eps_task = calculate_eps_rating_percentiles.delay()
         logger.info(f"EPS Rating Percentiles task queued: {eps_task.id}")
+        _maybe_publish_fundamentals_progress(
+            db,
+            market=effective_market,
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            current=total_stocks,
+            total=total_stocks,
+            message="Refreshing fundamentals",
+            progress_state=progress_state,
+            force=True,
+        )
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            current=total_stocks,
+            total=total_stocks,
+            message="Fundamentals refresh completed",
+        )
 
         return {
             'mode': 'hybrid',
@@ -829,6 +994,15 @@ def refresh_all_fundamentals_hybrid(
 
     except Exception as e:
         logger.error(f"Fatal error in hybrid fundamental refresh: {e}", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            message=str(e),
+        )
         return {
             'error': str(e),
             'timestamp': datetime.now().isoformat()

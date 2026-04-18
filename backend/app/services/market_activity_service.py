@@ -226,6 +226,54 @@ def mark_market_activity_started(
     )
 
 
+def mark_market_activity_progress(
+    db: Session,
+    *,
+    market: str,
+    stage_key: str,
+    lifecycle: str | None = None,
+    task_name: str | None = None,
+    task_id: str | None = None,
+    percent: float | None = None,
+    current: int | None = None,
+    total: int | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    existing = _load_market_activity(db, market)
+    if isinstance(existing, dict):
+        existing_task_id = existing.get("task_id")
+        existing_stage_key = existing.get("stage_key")
+        existing_status = existing.get("status")
+        if existing_status in {"completed", "failed"}:
+            return existing
+        if existing_task_id and task_id and existing_task_id != task_id:
+            return existing
+        if existing_stage_key and existing_stage_key != stage_key:
+            return existing
+        stage_key = existing_stage_key or stage_key
+        lifecycle = lifecycle or existing.get("lifecycle")
+        task_name = task_name or existing.get("task_name")
+        task_id = task_id or existing_task_id
+        message = message or existing.get("message")
+
+    return _save_market_activity(
+        db,
+        market,
+        _activity_payload(
+            market=market,
+            stage_key=stage_key,
+            lifecycle=lifecycle,
+            status="running",
+            task_name=task_name,
+            task_id=task_id,
+            percent=percent,
+            current=current,
+            total=total,
+            message=message,
+        ),
+    )
+
+
 def mark_market_activity_completed(
     db: Session,
     *,

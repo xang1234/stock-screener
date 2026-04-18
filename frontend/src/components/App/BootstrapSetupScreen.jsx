@@ -27,6 +27,32 @@ const STATUS_COLOR = {
   failed: 'error',
   idle: 'default',
 };
+const STAGE_LOCAL_PROGRESS_LABELS = new Set(['Price Refresh', 'Fundamentals Refresh']);
+
+function formatCount(value) {
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function resolveStageLocalProgress(activity) {
+  if (!activity || activity.progress_mode !== 'determinate' || activity.percent === null || activity.percent === undefined) {
+    return null;
+  }
+  const stageLabel = activity.stage_label || '';
+  if (!STAGE_LOCAL_PROGRESS_LABELS.has(stageLabel)) {
+    return null;
+  }
+  return {
+    percent: Math.max(0, Math.min(100, Number(activity.percent))),
+    detail: (
+      activity.current !== null
+      && activity.current !== undefined
+      && activity.total !== null
+      && activity.total !== undefined
+    )
+      ? `${formatCount(activity.current)} / ${formatCount(activity.total)} stocks`
+      : null,
+  };
+}
 
 function normalizeEnabled(primaryMarket, enabledMarkets) {
   const next = enabledMarkets.includes(primaryMarket)
@@ -81,14 +107,18 @@ export default function BootstrapSetupScreen({
     () => marketActivity.find((market) => market.market === (primaryMarket || selectedPrimary)) ?? marketActivity[0],
     [marketActivity, primaryMarket, selectedPrimary]
   );
+  const stageLocalProgress = resolveStageLocalProgress(primaryActivity);
   const bootstrapProgressMode = (
-    bootstrap?.progress_mode
-    || primaryActivity?.progress_mode
-    || 'indeterminate'
+    stageLocalProgress ? 'determinate' : (
+      bootstrap?.progress_mode
+      || primaryActivity?.progress_mode
+      || 'indeterminate'
+    )
   );
   const bootstrapPercent = (
     bootstrapProgressMode === 'determinate'
-      ? Math.max(0, Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0)))
+      ? (stageLocalProgress?.percent
+        ?? Math.max(0, Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0))))
       : null
   );
 
@@ -182,6 +212,11 @@ export default function BootstrapSetupScreen({
                       value={bootstrapProgressMode === 'determinate' ? bootstrapPercent : undefined}
                       aria-label="Bootstrap progress"
                     />
+                    {stageLocalProgress?.detail && (
+                      <Typography variant="caption" color="text.secondary">
+                        {stageLocalProgress.detail}
+                      </Typography>
+                    )}
                     <Typography variant="body2" color="text.secondary">
                       {bootstrap?.message || primaryActivity?.message || 'Preparing primary market data.'}
                     </Typography>
