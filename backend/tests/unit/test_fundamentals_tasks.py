@@ -203,6 +203,11 @@ def test_refresh_all_fundamentals_publishes_market_activity(monkeypatch):
         lambda: SimpleNamespace(get_fundamentals=lambda *args, **kwargs: {"symbol": "AAPL"}),
     )
     monkeypatch.setattr(module, "get_ticker_validation_service", lambda: MagicMock())
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
 
     started = []
     completed = []

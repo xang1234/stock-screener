@@ -75,17 +75,37 @@ def _load_market_activity(db: Session, market: str) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(setting.value)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return None
     if not isinstance(payload, dict):
         return None
     return payload
 
 
-def _save_market_activity(db: Session, market: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _save_market_activity(
+    db: Session,
+    market: str,
+    payload: dict[str, Any],
+    *,
+    preserve_existing_statuses: set[str] | None = None,
+) -> dict[str, Any]:
     key = _activity_key(market)
-    encoded = json.dumps(payload)
     setting = _get_setting(db, key)
+    existing_payload = None
+    if setting is not None:
+        try:
+            existing_payload = json.loads(setting.value)
+        except (json.JSONDecodeError, TypeError):
+            existing_payload = None
+    if (
+        preserve_existing_statuses
+        and isinstance(existing_payload, dict)
+        and existing_payload.get("task_id")
+        and existing_payload.get("task_id") == payload.get("task_id")
+        and existing_payload.get("status") in preserve_existing_statuses
+    ):
+        return existing_payload
+    encoded = json.dumps(payload)
     if setting is None:
         setting = AppSetting(
             key=key,
@@ -164,6 +184,7 @@ def mark_market_activity_queued(
             task_id=task_id,
             message=message,
         ),
+        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -412,7 +433,9 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
         bootstrap_message = "Bootstrap queued."
 
     background_warning = None
-    if len(enabled_markets) > 1:
+    if len(enabled_markets) > 1 and (
+        bootstrap_status.bootstrap_state == "running" or bool(secondary_active)
+    ):
         background_warning = (
             "Data loading continues in the background after bootstrap. "
             "Additional enabled markets keep syncing after the app becomes usable."

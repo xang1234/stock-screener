@@ -135,6 +135,45 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
     assert hk_market["status"] == "running"
 
 
+def test_mark_market_activity_queued_does_not_overwrite_newer_state_for_same_task(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="universe",
+        lifecycle="bootstrap",
+        task_name="runtime_bootstrap",
+        task_id="secondary-task-123",
+        message="Refreshing official market universe",
+    )
+    module.mark_market_activity_queued(
+        db_session,
+        market="HK",
+        stage_key="universe",
+        lifecycle="bootstrap",
+        task_name="runtime_bootstrap",
+        task_id="secondary-task-123",
+        message="Queued bootstrap for HK",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US", "HK"], state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
+    assert hk_market["status"] == "running"
+    assert hk_market["message"] == "Refreshing official market universe"
+    assert hk_market["task_id"] == "secondary-task-123"
+
+
 def test_runtime_activity_status_surfaces_concurrent_market_refreshes(db_session, monkeypatch):
     from app.services import market_activity_service as module
 
@@ -223,3 +262,30 @@ def test_runtime_activity_status_returns_idle_markets_without_activity(db_sessio
     assert payload["summary"]["status"] == "idle"
     assert payload["summary"]["active_market_count"] == 0
     assert [item["status"] for item in payload["markets"]] == ["idle", "idle"]
+
+
+def test_runtime_activity_status_hides_background_warning_when_secondary_work_is_idle(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="snapshot",
+        lifecycle="bootstrap",
+        task_name="build_daily_snapshot",
+        task_id="task-us",
+        message="Primary bootstrap complete",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US", "HK"], state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    assert payload["bootstrap"]["background_warning"] is None

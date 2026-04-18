@@ -241,6 +241,7 @@ export default function OperationsPage() {
   const alerts = alertsQuery.data?.alerts || [];
   const marketActivity = activityQuery.data?.markets || [];
   const bootstrap = activityQuery.data?.bootstrap;
+  const hasMarketActivity = marketActivity.length > 0;
 
   return (
     <Container maxWidth="xl" sx={{ py: 2 }}>
@@ -259,18 +260,31 @@ export default function OperationsPage() {
           {bootstrap.background_warning}
         </Typography>
       )}
-      {activityQuery.isLoading ? (
+      {activityQuery.isLoading && !hasMarketActivity ? (
         <CircularProgress size={20} />
-      ) : activityQuery.isError ? (
-        <Typography variant="body2" color="error">
-          Failed to load runtime activity.
-        </Typography>
       ) : (
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 3 }}>
-          {marketActivity.map((activity) => (
-            <MarketActivityCard key={activity.market} activity={activity} />
-          ))}
-        </Stack>
+        <>
+          {activityQuery.isError && (
+            <Typography variant="body2" color="error" sx={{ mb: 1.5 }}>
+              Failed to refresh runtime activity. Showing last known status.
+            </Typography>
+          )}
+          {hasMarketActivity ? (
+            <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 3 }}>
+              {marketActivity.map((activity) => (
+                <MarketActivityCard key={activity.market} activity={activity} />
+              ))}
+            </Stack>
+          ) : (
+            !activityQuery.isLoading && (
+              <Typography variant="body2" color={activityQuery.isError ? 'error' : 'text.secondary'}>
+                {activityQuery.isError
+                  ? 'Failed to load runtime activity.'
+                  : 'No runtime activity available.'}
+              </Typography>
+            )
+          )}
+        </>
       )}
 
       <Box sx={{ my: 2 }}>

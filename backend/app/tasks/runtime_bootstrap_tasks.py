@@ -20,6 +20,22 @@ def _bootstrap_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
 
 
+def _publish_secondary_bootstrap_queued(*, market: str, task_id: str) -> None:
+    activity_db = SessionLocal()
+    try:
+        mark_market_activity_queued(
+            activity_db,
+            market=market,
+            stage_key="universe",
+            lifecycle="bootstrap",
+            task_name="runtime_bootstrap",
+            task_id=task_id,
+            message=f"Queued bootstrap for {market}",
+        )
+    finally:
+        activity_db.close()
+
+
 def _build_market_bootstrap_signatures(
     market: str,
     *,
@@ -174,15 +190,7 @@ def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[
     queued_secondary = []
     for market in secondary_markets:
         task = chain(*_build_market_bootstrap_signatures(market)).apply_async()
-        mark_market_activity_queued(
-            db,
-            market=market,
-            stage_key="universe",
-            lifecycle="bootstrap",
-            task_name="runtime_bootstrap",
-            task_id=task.id,
-            message=f"Queued bootstrap for {market}",
-        )
+        _publish_secondary_bootstrap_queued(market=market, task_id=task.id)
         queued_secondary.append({"market": market, "task_id": task.id})
 
     logger.info(
