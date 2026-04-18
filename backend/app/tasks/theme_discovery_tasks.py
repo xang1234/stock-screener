@@ -165,7 +165,7 @@ def _theme_automation_gate_result(db) -> dict[str, object] | None:
 
     has_active_sources = (
         db.query(ContentSource.id)
-        .filter(ContentSource.is_active == True)
+        .filter(ContentSource.is_active.is_(True))
         .limit(1)
         .first()
         is not None
@@ -1315,7 +1315,7 @@ def poll_due_sources():
         # SQLAlchemy doesn't support arithmetic with columns directly in filter,
         # so we fetch all active sources and filter in Python
         all_active_sources = db.query(ContentSource).filter(
-            ContentSource.is_active == True
+            ContentSource.is_active.is_(True)
         ).order_by(ContentSource.priority.desc()).all()
 
         due_sources = []

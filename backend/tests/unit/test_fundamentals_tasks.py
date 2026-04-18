@@ -50,6 +50,41 @@ def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
     assert module.refresh_all_fundamentals.soft_time_limit == 7200
 
 
+def test_refresh_all_fundamentals_retry_survives_activity_publish_failure(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module, "get_fundamentals_cache", lambda: (_ for _ in ()).throw(ConnectionError("provider down")))
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        MagicMock(side_effect=RuntimeError("activity store unavailable")),
+    )
+
+    retry_calls = []
+
+    def fake_retry(*args, **kwargs):
+        retry_calls.append(kwargs)
+        raise Retry("retry")
+
+    monkeypatch.setattr(module.refresh_all_fundamentals, "retry", fake_retry)
+    module.refresh_all_fundamentals.request.id = "task-123"
+    module.refresh_all_fundamentals.request.retries = 0
+
+    with pytest.raises(Retry):
+        module.refresh_all_fundamentals.run()
+
+    assert retry_calls[0]["countdown"] == 60
+
+
 def test_refresh_all_fundamentals_reraises_soft_time_limit(monkeypatch):
     import app.tasks.fundamentals_tasks as module
 

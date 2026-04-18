@@ -381,6 +381,16 @@ def build_daily_snapshot(
         activity_db = SessionLocal()
         try:
             activity_fn(activity_db, **kwargs)
+        except Exception:
+            logger.warning(
+                "Failed to publish market activity for feature snapshot",
+                extra={
+                    "market": kwargs.get("market"),
+                    "stage_key": kwargs.get("stage_key"),
+                    "task_id": kwargs.get("task_id"),
+                },
+                exc_info=True,
+            )
         finally:
             activity_db.close()
 

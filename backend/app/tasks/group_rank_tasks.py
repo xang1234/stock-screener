@@ -62,6 +62,21 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for group ranking task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+
+
 def _validate_same_day_cache_only_group_rankings(
     price_cache,
     market: Optional[str] = None,
@@ -191,7 +206,7 @@ def calculate_daily_group_rankings(
                 if completeness_error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
                     logger.info("=" * 60)
-                    mark_market_activity_failed(
+                    _mark_market_activity_failed_safely(
                         db,
                         market=effective_market,
                         stage_key="groups",
@@ -283,7 +298,7 @@ def calculate_daily_group_rankings(
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.error("Soft time limit exceeded in calculate_daily_group_rankings", exc_info=True)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="groups",
@@ -297,7 +312,7 @@ def calculate_daily_group_rankings(
         db.rollback()
         logger.error("✗ Refusing to publish daily group rankings: %s", e)
         logger.info("=" * 60)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="groups",
@@ -315,7 +330,7 @@ def calculate_daily_group_rankings(
         }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="groups",
@@ -329,7 +344,7 @@ def calculate_daily_group_rankings(
         db.rollback()
         logger.error(f"Error in calculate_daily_group_rankings task: {e}", exc_info=True)
         logger.info("=" * 60)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="groups",

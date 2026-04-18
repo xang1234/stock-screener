@@ -63,6 +63,21 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
 
 
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for breadth task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+
+
 def _validate_same_day_cache_only_breadth(
     price_cache,
     metrics: dict,
@@ -607,7 +622,7 @@ def calculate_daily_breadth_with_gapfill(
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.error("Soft time limit exceeded in calculate_daily_breadth_with_gapfill", exc_info=True)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="breadth",
@@ -619,7 +634,7 @@ def calculate_daily_breadth_with_gapfill(
         raise
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="breadth",
@@ -632,7 +647,7 @@ def calculate_daily_breadth_with_gapfill(
     except Exception as e:
         logger.error(f"✗ Error in calculate_daily_breadth_with_gapfill: {e}", exc_info=True)
         logger.info("=" * 60)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="breadth",

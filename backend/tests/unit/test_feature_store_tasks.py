@@ -380,6 +380,39 @@ def test_build_daily_snapshot_reraises_soft_time_limit():
     assert build_daily_snapshot.soft_time_limit == 10800
 
 
+def test_build_daily_snapshot_reraises_soft_time_limit_when_failure_activity_publish_breaks():
+    class _TimeoutUseCase:
+        def execute(self, **kwargs):
+            raise SoftTimeLimitExceeded()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=_TimeoutUseCase(),
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.mark_market_activity_failed",
+        side_effect=RuntimeError("activity store unavailable"),
+    ):
+        with pytest.raises(SoftTimeLimitExceeded):
+            _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16")
+
+
 def test_build_daily_snapshot_creates_auto_scan_after_publish():
     fake_use_case = _FakeUseCase()
 

@@ -40,6 +40,21 @@ _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
 )
 
 
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for cache task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+
+
 def _active_benchmark_markets(db, scope_market: Optional[str] = None) -> List[str]:
     """Return distinct active markets that have configured benchmarks.
 
@@ -1748,7 +1763,7 @@ def smart_refresh_cache(
             market=market,
         )
         price_cache.complete_warmup_heartbeat("failed", market=market)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="prices",
@@ -1762,10 +1777,11 @@ def smart_refresh_cache(
         raise
     except Exception as e:
         logger.error(f"Error in smart_refresh_cache task: {e}", exc_info=True)
+        safe_rollback(db)
         # Save partial progress
         price_cache.save_warmup_metadata("failed", refreshed, locals().get('total', 0), str(e), market=market)
         price_cache.complete_warmup_heartbeat("failed", market=market)
-        mark_market_activity_failed(
+        _mark_market_activity_failed_safely(
             db,
             market=effective_market,
             stage_key="prices",

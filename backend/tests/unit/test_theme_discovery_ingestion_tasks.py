@@ -22,6 +22,10 @@ from app.tasks.theme_discovery_tasks import (
 )
 
 
+def _enable_theme_feature(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.tasks.theme_discovery_tasks.settings.feature_themes", True)
+
+
 @pytest.fixture
 def db_session_factory():
     engine = create_engine("sqlite:///:memory:")
@@ -212,6 +216,7 @@ def test_theme_beat_tasks_use_shared_automation_gate(
     task,
     kwargs,
 ) -> None:
+    _enable_theme_feature(monkeypatch)
     monkeypatch.setattr("app.tasks.theme_discovery_tasks.SessionLocal", db_session_factory)
     monkeypatch.setattr(
         "app.tasks.theme_discovery_tasks._theme_automation_gate_result",
@@ -233,6 +238,7 @@ def test_poll_due_sources_skips_when_bootstrap_is_running(
     monkeypatch: pytest.MonkeyPatch,
     db_session_factory,
 ) -> None:
+    _enable_theme_feature(monkeypatch)
     session = db_session_factory()
     session.add(
         ContentSource(
@@ -269,6 +275,7 @@ def test_extract_themes_skips_when_no_active_sources_exist(
     monkeypatch: pytest.MonkeyPatch,
     db_session_factory,
 ) -> None:
+    _enable_theme_feature(monkeypatch)
     monkeypatch.setattr("app.tasks.theme_discovery_tasks.SessionLocal", db_session_factory)
     monkeypatch.setattr(
         "app.tasks.theme_discovery_tasks.get_runtime_bootstrap_status",
@@ -292,6 +299,7 @@ def test_extract_themes_runs_when_bootstrap_is_ready_and_source_exists(
     monkeypatch: pytest.MonkeyPatch,
     db_session_factory,
 ) -> None:
+    _enable_theme_feature(monkeypatch)
     session = db_session_factory()
     session.add(
         ContentSource(

@@ -41,6 +41,42 @@ const defaultCapabilities = (authenticated) => ({
   api_base_path: '/api',
 });
 
+const defaultRuntimeActivity = {
+  bootstrap: {
+    state: 'ready',
+    app_ready: true,
+    primary_market: 'US',
+    enabled_markets: ['US'],
+    current_stage: null,
+    progress_mode: 'determinate',
+    percent: 100,
+    message: 'Primary market is ready.',
+    background_warning: null,
+  },
+  summary: {
+    active_market_count: 0,
+    active_markets: [],
+    status: 'idle',
+  },
+  markets: [
+    {
+      market: 'US',
+      lifecycle: 'idle',
+      stage_key: null,
+      stage_label: null,
+      status: 'idle',
+      progress_mode: 'determinate',
+      percent: null,
+      current: null,
+      total: null,
+      message: 'Idle',
+      task_name: null,
+      task_id: null,
+      updated_at: null,
+    },
+  ],
+};
+
 const jsonResponse = (route, payload, status = 200) =>
   route.fulfill({
     status,
@@ -267,6 +303,10 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
         message: 'Cache up to date',
         can_refresh: true,
       });
+    }
+
+    if (path === '/v1/runtime/activity' && method === 'GET') {
+      return jsonResponse(route, defaultRuntimeActivity);
     }
 
     if (path.startsWith('/v1/market-scan/watchlist/') && method === 'GET') {

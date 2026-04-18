@@ -220,6 +220,40 @@ def test_smart_refresh_cache_publishes_failed_market_activity(monkeypatch):
     assert "benchmark unavailable" in failed[0]["message"]
 
 
+def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    fake_price_cache = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(side_effect=RuntimeError("benchmark unavailable")))
+    monkeypatch.setattr(module, "safe_rollback", MagicMock())
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: MagicMock(),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        MagicMock(side_effect=RuntimeError("activity store unavailable")),
+    )
+
+    result = module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full", market="US")
+
+    assert result["status"] == "failed"
+    module.safe_rollback.assert_called_once_with(fake_db)
+    fake_price_cache.save_warmup_metadata.assert_called_once()
+
+
 def test_weekly_full_refresh_reraises_soft_time_limit(monkeypatch):
     import app.tasks.cache_tasks as module
 

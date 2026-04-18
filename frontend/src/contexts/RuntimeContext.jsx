@@ -62,7 +62,7 @@ function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
       ? 'Bootstrap queued.'
       : `Queued until ${primaryMarket} is ready.`,
     task_name: 'runtime_bootstrap',
-    task_id: taskId ?? null,
+    task_id: market === primaryMarket ? (taskId ?? null) : null,
     updated_at: null,
   }));
 }

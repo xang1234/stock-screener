@@ -69,18 +69,23 @@ function renderRuntime() {
     defaultOptions: {
       queries: {
         retryDelay: 1,
-        gcTime: 0,
+        gcTime: Infinity,
       },
     },
   });
 
-  return render(
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
       <RuntimeProvider>
         <RuntimeProbe />
       </RuntimeProvider>
     </QueryClientProvider>
   );
+
+  return {
+    queryClient,
+    ...rendered,
+  };
 }
 
 describe('RuntimeProvider', () => {
@@ -152,7 +157,7 @@ describe('RuntimeProvider', () => {
       task_id: 'task-bootstrap-123',
     });
 
-    renderRuntime();
+    const { queryClient } = renderRuntime();
 
     await waitFor(() => {
       expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
@@ -172,6 +177,13 @@ describe('RuntimeProvider', () => {
       expect(screen.getByTestId('bootstrap-state')).toHaveTextContent('running');
       expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
       expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData(['runtimeActivity'])?.markets).toEqual([
+        expect.objectContaining({ market: 'HK', task_id: 'task-bootstrap-123' }),
+        expect.objectContaining({ market: 'US', task_id: null }),
+      ]);
     });
   });
 });
