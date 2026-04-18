@@ -73,7 +73,8 @@ class RuntimeActivityBootstrapResponse(BaseModel):
     primary_market: str
     enabled_markets: list[str] = Field(default_factory=list)
     current_stage: str | None = None
-    percent: float = 0.0
+    progress_mode: str = "indeterminate"
+    percent: float | None = None
     message: str | None = None
     background_warning: str | None = None
 
@@ -94,6 +95,7 @@ class RuntimeActivityMarketResponse(BaseModel):
     stage_key: str | None = None
     stage_label: str | None = None
     status: str
+    progress_mode: str = "indeterminate"
     percent: float | None = None
     current: int | None = None
     total: int | None = None

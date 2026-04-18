@@ -81,14 +81,49 @@ def test_runtime_activity_status_reports_primary_bootstrap_progress(db_session, 
     assert payload["bootstrap"]["state"] == "running"
     assert payload["bootstrap"]["app_ready"] is False
     assert payload["bootstrap"]["current_stage"] == "Price Refresh"
+    assert payload["bootstrap"]["progress_mode"] == "determinate"
     assert payload["bootstrap"]["percent"] == pytest.approx(25.0)
     assert payload["summary"]["active_market_count"] == 2
     assert payload["summary"]["active_markets"] == ["US", "HK"]
     us_market = next(item for item in payload["markets"] if item["market"] == "US")
     assert us_market["status"] == "running"
+    assert us_market["progress_mode"] == "determinate"
     assert us_market["current"] == 50
     assert us_market["total"] == 100
     assert us_market["percent"] == 50.0
+
+
+def test_runtime_activity_status_marks_running_stage_without_real_percent_as_indeterminate(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="fundamentals",
+        lifecycle="bootstrap",
+        task_name="refresh_all_fundamentals",
+        task_id="task-us",
+        message="Refreshing fundamentals",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["US"], state="running"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    assert payload["bootstrap"]["current_stage"] == "Fundamentals Refresh"
+    assert payload["bootstrap"]["progress_mode"] == "indeterminate"
+    assert payload["bootstrap"]["percent"] is None
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert us_market["progress_mode"] == "indeterminate"
+    assert us_market["percent"] is None
 
 
 def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_running(
@@ -126,6 +161,7 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
 
     assert payload["bootstrap"]["state"] == "ready"
     assert payload["bootstrap"]["app_ready"] is True
+    assert payload["bootstrap"]["progress_mode"] == "determinate"
     assert payload["bootstrap"]["percent"] == 100.0
     assert "continues in the background" in payload["bootstrap"]["background_warning"].lower()
     assert payload["summary"]["active_market_count"] == 1
@@ -133,6 +169,7 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
     hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
     assert hk_market["lifecycle"] == "bootstrap"
     assert hk_market["status"] == "running"
+    assert hk_market["progress_mode"] == "indeterminate"
 
 
 def test_mark_market_activity_queued_does_not_overwrite_newer_state_for_same_task(

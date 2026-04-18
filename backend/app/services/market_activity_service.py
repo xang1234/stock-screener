@@ -122,6 +122,12 @@ def _save_market_activity(
     return payload
 
 
+def _progress_mode(status: str | None, percent: float | None) -> str:
+    if percent is not None or status in {"completed", "idle"}:
+        return "determinate"
+    return "indeterminate"
+
+
 def _activity_payload(
     *,
     market: str,
@@ -152,6 +158,7 @@ def _activity_payload(
         "stage_key": stage_key,
         "stage_label": stage_label,
         "status": status,
+        "progress_mode": _progress_mode(status, percent),
         "percent": percent,
         "current": current,
         "total": total,
@@ -299,6 +306,7 @@ def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any
         merged["total"] = current_task["total"]
     if current_task.get("last_heartbeat") is not None:
         merged["updated_at"] = current_task["last_heartbeat"]
+    merged["progress_mode"] = _progress_mode(merged.get("status"), merged.get("percent"))
     return merged
 
 
@@ -332,6 +340,7 @@ def _queued_bootstrap_market_payload(market: str, primary_market: str) -> dict[s
         "stage_key": "universe",
         "stage_label": _stage_label("universe"),
         "status": "queued",
+        "progress_mode": "indeterminate",
         "percent": None,
         "current": None,
         "total": None,
@@ -350,6 +359,7 @@ def _idle_market_payload(market: str, record: dict[str, Any] | None) -> dict[str
             "stage_key": None,
             "stage_label": None,
             "status": "idle",
+            "progress_mode": "determinate",
             "percent": None,
             "current": None,
             "total": None,
@@ -361,6 +371,7 @@ def _idle_market_payload(market: str, record: dict[str, Any] | None) -> dict[str
     payload = dict(record)
     if payload.get("status") == "completed":
         payload["lifecycle"] = "idle"
+    payload["progress_mode"] = _progress_mode(payload.get("status"), payload.get("percent"))
     return payload
 
 
@@ -416,6 +427,7 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
     ]
 
     if bootstrap_status.bootstrap_state == "ready":
+        bootstrap_progress_mode = "determinate"
         bootstrap_percent = 100.0
         bootstrap_stage = primary_payload.get("stage_label") if primary_payload else None
         bootstrap_message = (
@@ -423,14 +435,20 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
             if not secondary_active
             else "Primary market is ready while additional market loading continues."
         )
-    elif primary_payload is not None:
+    elif primary_payload is not None and primary_payload.get("progress_mode") == "determinate":
+        bootstrap_progress_mode = "determinate"
         bootstrap_percent = _bootstrap_progress_percent(primary_payload)
         bootstrap_stage = primary_payload.get("stage_label")
         bootstrap_message = primary_payload.get("message")
     else:
-        bootstrap_percent = 0.0
-        bootstrap_stage = None
-        bootstrap_message = "Bootstrap queued."
+        bootstrap_progress_mode = "indeterminate"
+        bootstrap_percent = None
+        bootstrap_stage = primary_payload.get("stage_label") if primary_payload else None
+        bootstrap_message = (
+            primary_payload.get("message")
+            if primary_payload is not None
+            else "Bootstrap queued."
+        )
 
     background_warning = None
     if len(enabled_markets) > 1 and (
@@ -448,6 +466,7 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
             "primary_market": primary_market,
             "enabled_markets": enabled_markets,
             "current_stage": bootstrap_stage,
+            "progress_mode": bootstrap_progress_mode,
             "percent": bootstrap_percent,
             "message": bootstrap_message,
             "background_warning": background_warning,

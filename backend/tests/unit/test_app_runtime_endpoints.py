@@ -110,7 +110,8 @@ async def test_runtime_activity_endpoint_returns_runtime_activity_payload(client
                 "primary_market": "US",
                 "enabled_markets": ["US", "HK"],
                 "current_stage": "Price Refresh",
-                "percent": 25.0,
+                "progress_mode": "indeterminate",
+                "percent": None,
                 "message": "Refreshing prices",
                 "background_warning": "Additional data loading continues in the background.",
             },
@@ -126,6 +127,7 @@ async def test_runtime_activity_endpoint_returns_runtime_activity_payload(client
                     "stage_key": "prices",
                     "stage_label": "Price Refresh",
                     "status": "running",
+                    "progress_mode": "determinate",
                     "percent": 50.0,
                     "current": 50,
                     "total": 100,
@@ -147,7 +149,10 @@ async def test_runtime_activity_endpoint_returns_runtime_activity_payload(client
     assert response.status_code == 200
     payload = response.json()
     assert payload["bootstrap"]["current_stage"] == "Price Refresh"
+    assert payload["bootstrap"]["progress_mode"] == "indeterminate"
+    assert payload["bootstrap"]["percent"] is None
     assert payload["summary"]["active_markets"] == ["US"]
+    assert payload["markets"][0]["progress_mode"] == "determinate"
     assert payload["markets"][0]["task_name"] == "smart_refresh_cache"
 
 

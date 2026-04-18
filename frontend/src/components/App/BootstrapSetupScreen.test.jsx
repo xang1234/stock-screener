@@ -1,39 +1,51 @@
 import { screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import BootstrapSetupScreen from './BootstrapSetupScreen';
 import { renderWithProviders } from '../../test/renderWithProviders';
 
+const useRuntimeActivityMock = vi.hoisted(() => vi.fn());
+
 vi.mock('../../hooks/useRuntimeActivity', () => ({
-  useRuntimeActivity: () => ({
-    data: {
-      bootstrap: {
-        primary_market: 'US',
-        current_stage: 'Price Refresh',
-        percent: 42,
-        message: 'Refreshing prices',
-        background_warning: 'Additional data loading continues in the background.',
-      },
-      markets: [
-        {
-          market: 'US',
-          stage_label: 'Price Refresh',
-          status: 'running',
-          message: 'Refreshing prices',
-        },
-        {
-          market: 'HK',
-          stage_label: 'Universe Refresh',
-          status: 'queued',
-          message: 'Queued for background bootstrap',
-        },
-      ],
-    },
-  }),
+  useRuntimeActivity: (...args) => useRuntimeActivityMock(...args),
 }));
 
 describe('BootstrapSetupScreen', () => {
+  beforeEach(() => {
+    useRuntimeActivityMock.mockReset();
+  });
+
   it('renders bootstrap progress and background-loading warning while running', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Price Refresh',
+          progress_mode: 'determinate',
+          percent: 42,
+          message: 'Refreshing prices',
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            progress_mode: 'determinate',
+            percent: 42,
+            message: 'Refreshing prices',
+          },
+          {
+            market: 'HK',
+            stage_label: 'Universe Refresh',
+            status: 'queued',
+            progress_mode: 'indeterminate',
+            message: 'Queued for background bootstrap',
+          },
+        ],
+      },
+    });
+
     renderWithProviders(
       <BootstrapSetupScreen
         primaryMarket="US"
@@ -54,5 +66,48 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.getAllByText('US (primary)').length).toBeGreaterThan(0);
     expect(screen.getAllByText('HK').length).toBeGreaterThan(0);
     expect(screen.getByRole('progressbar', { name: 'Bootstrap progress' })).toBeInTheDocument();
+  });
+
+  it('renders indeterminate bootstrap progress when no real percent is available yet', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Fundamentals Refresh',
+          progress_mode: 'indeterminate',
+          percent: null,
+          message: 'Refreshing fundamentals',
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            stage_label: 'Fundamentals Refresh',
+            status: 'running',
+            progress_mode: 'indeterminate',
+            percent: null,
+            message: 'Refreshing fundamentals',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        bootstrapState="running"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    const progressBar = screen.getByRole('progressbar', { name: 'Bootstrap progress' });
+    expect(progressBar).not.toHaveAttribute('aria-valuenow');
+    expect(screen.getByText('Fundamentals Refresh')).toBeInTheDocument();
+    expect(screen.getByText('Refreshing fundamentals')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 });

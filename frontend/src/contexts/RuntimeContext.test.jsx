@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RuntimeProvider, useRuntime } from './RuntimeContext';
+import { DEFAULT_CAPABILITIES, RuntimeProvider, useRuntime } from './RuntimeContext';
 
 const {
   getAppCapabilities,
@@ -36,15 +36,30 @@ vi.mock('../api/auth', () => ({
 }));
 
 function RuntimeProbe() {
-  const { auth, runtimeReady, bootstrapRequired, primaryMarket, enabledMarkets } = useRuntime();
+  const {
+    auth,
+    runtimeReady,
+    bootstrapRequired,
+    bootstrapState,
+    primaryMarket,
+    enabledMarkets,
+    startBootstrap,
+  } = useRuntime();
 
   return (
     <>
       <div data-testid="runtime-ready">{String(runtimeReady)}</div>
       <div data-testid="auth-required">{String(auth.required)}</div>
       <div data-testid="bootstrap-required">{String(bootstrapRequired)}</div>
+      <div data-testid="bootstrap-state">{bootstrapState}</div>
       <div data-testid="primary-market">{primaryMarket}</div>
       <div data-testid="enabled-markets">{enabledMarkets.join(',')}</div>
+      <button
+        type="button"
+        onClick={() => startBootstrap({ primaryMarket: 'HK', enabledMarkets: ['HK', 'US'] })}
+      >
+        Start bootstrap
+      </button>
     </>
   );
 }
@@ -117,5 +132,46 @@ describe('RuntimeProvider', () => {
     expect(screen.getByTestId('bootstrap-required')).toHaveTextContent('true');
     expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
     expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
+  });
+
+  it('updates cached bootstrap state immediately after bootstrap starts', async () => {
+    getAppCapabilities
+      .mockResolvedValueOnce({
+        ...DEFAULT_CAPABILITIES,
+        bootstrap_required: true,
+        bootstrap_state: 'not_started',
+      })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    startRuntimeBootstrap.mockResolvedValue({
+      bootstrap_required: true,
+      empty_system: true,
+      primary_market: 'HK',
+      enabled_markets: ['HK', 'US'],
+      bootstrap_state: 'running',
+      supported_markets: ['US', 'HK', 'JP', 'TW'],
+      task_id: 'task-bootstrap-123',
+    });
+
+    renderRuntime();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
+    });
+    expect(screen.getByTestId('bootstrap-state')).toHaveTextContent('not_started');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+
+    await waitFor(() => {
+      expect(startRuntimeBootstrap).toHaveBeenCalledWith({
+        primaryMarket: 'HK',
+        enabledMarkets: ['HK', 'US'],
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('bootstrap-required')).toHaveTextContent('true');
+      expect(screen.getByTestId('bootstrap-state')).toHaveTextContent('running');
+      expect(screen.getByTestId('primary-market')).toHaveTextContent('HK');
+      expect(screen.getByTestId('enabled-markets')).toHaveTextContent('HK,US');
+    });
   });
 });

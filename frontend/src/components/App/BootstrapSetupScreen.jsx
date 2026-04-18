@@ -81,9 +81,15 @@ export default function BootstrapSetupScreen({
     () => marketActivity.find((market) => market.market === (primaryMarket || selectedPrimary)) ?? marketActivity[0],
     [marketActivity, primaryMarket, selectedPrimary]
   );
-  const bootstrapPercent = Math.max(
-    0,
-    Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0))
+  const bootstrapProgressMode = (
+    bootstrap?.progress_mode
+    || primaryActivity?.progress_mode
+    || 'indeterminate'
+  );
+  const bootstrapPercent = (
+    bootstrapProgressMode === 'determinate'
+      ? Math.max(0, Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0)))
+      : null
   );
 
   const toggleMarket = (market) => {
@@ -165,13 +171,15 @@ export default function BootstrapSetupScreen({
                       <Typography variant="subtitle2">
                         {bootstrap?.current_stage || primaryActivity?.stage_label || 'Preparing bootstrap'}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {Math.round(bootstrapPercent)}%
-                      </Typography>
+                      {bootstrapProgressMode === 'determinate' && bootstrapPercent !== null && (
+                        <Typography variant="body2" color="text.secondary">
+                          {Math.round(bootstrapPercent)}%
+                        </Typography>
+                      )}
                     </Stack>
                     <LinearProgress
-                      variant="determinate"
-                      value={bootstrapPercent}
+                      variant={bootstrapProgressMode === 'determinate' ? 'determinate' : 'indeterminate'}
+                      value={bootstrapProgressMode === 'determinate' ? bootstrapPercent : undefined}
                       aria-label="Bootstrap progress"
                     />
                     <Typography variant="body2" color="text.secondary">
