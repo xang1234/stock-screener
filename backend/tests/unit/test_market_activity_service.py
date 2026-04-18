@@ -299,6 +299,98 @@ def test_mark_market_activity_completed_still_advances_same_task_running_record(
     assert us_market["percent"] == 100.0
 
 
+def test_mark_market_activity_started_allows_new_same_stage_run_after_completion(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="prices",
+        lifecycle="daily_refresh",
+        task_name="smart_refresh_cache",
+        task_id="day-1-task",
+        current=100,
+        total=100,
+        message="Price refresh completed",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="prices",
+        lifecycle="daily_refresh",
+        task_name="smart_refresh_cache",
+        task_id="day-2-task",
+        current=5,
+        total=100,
+        percent=5.0,
+        message="Refreshing prices",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US"], state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert us_market["task_id"] == "day-2-task"
+    assert us_market["stage_key"] == "prices"
+    assert us_market["current"] == 5
+    assert us_market["percent"] == 5.0
+
+
+def test_mark_market_activity_started_allows_next_stage_after_completion(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="universe",
+        lifecycle="bootstrap",
+        task_name="refresh_stock_universe",
+        task_id="universe-task",
+        current=100,
+        total=100,
+        message="Universe refresh completed",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="US",
+        stage_key="prices",
+        lifecycle="bootstrap",
+        task_name="smart_refresh_cache",
+        task_id="prices-task",
+        current=10,
+        total=200,
+        percent=5.0,
+        message="Refreshing prices",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["US"], state="running"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    us_market = next(item for item in payload["markets"] if item["market"] == "US")
+    assert us_market["status"] == "running"
+    assert us_market["task_id"] == "prices-task"
+    assert us_market["stage_key"] == "prices"
+    assert us_market["current"] == 10
+    assert us_market["percent"] == 5.0
+
+
 def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_running(
     db_session,
     monkeypatch,

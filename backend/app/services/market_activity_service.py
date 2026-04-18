@@ -99,16 +99,19 @@ def _save_market_activity(
             existing_payload = None
     if preserve_existing_statuses and isinstance(existing_payload, dict):
         existing_status = existing_payload.get("status")
-        payload_status = payload.get("status")
-        same_task = existing_payload.get("task_id") == payload.get("task_id")
-        same_stage = existing_payload.get("stage_key") == payload.get("stage_key")
-        existing_terminal = existing_status in {"completed", "failed"}
-        stale_queue_downgrade = existing_status == "running" and payload_status == "queued"
-        stale_owner = not same_task or not same_stage
-        if existing_status in preserve_existing_statuses and (
-            stale_owner or existing_terminal or stale_queue_downgrade
-        ):
-            return existing_payload
+        if existing_status in preserve_existing_statuses:
+            payload_status = payload.get("status")
+            same_task = existing_payload.get("task_id") == payload.get("task_id")
+            same_stage = existing_payload.get("stage_key") == payload.get("stage_key")
+            same_owner = same_task and same_stage
+
+            if existing_status == "running":
+                if payload_status == "queued" or not same_owner:
+                    return existing_payload
+            elif existing_status in {"completed", "failed"}:
+                incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
+                if not incoming_new_cycle:
+                    return existing_payload
     encoded = json.dumps(payload)
     if setting is None:
         setting = AppSetting(
