@@ -27,8 +27,10 @@ import time
 from uuid import uuid4
 
 from ..celery_app import celery_app
+from ..config import settings
 from ..database import SessionLocal
 from ..services.redis_pool import get_redis_client
+from ..services.runtime_preferences_service import get_runtime_bootstrap_status
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,52 @@ def _release_theme_stale_embedding_lock(client, token: str) -> None:
         logger.warning("Failed to release stale embedding recompute lock: %s", exc)
 
 
+def _theme_automation_skip_payload(*, reason: str, message: str) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "reason": reason,
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _theme_automation_gate_result(db) -> dict[str, object] | None:
+    if not settings.feature_themes:
+        return _theme_automation_skip_payload(
+            reason="themes_disabled",
+            message="Theme automation is disabled.",
+        )
+
+    bootstrap_status = get_runtime_bootstrap_status(db)
+    if bootstrap_status.bootstrap_required and bootstrap_status.bootstrap_state == "running":
+        return _theme_automation_skip_payload(
+            reason="bootstrap_running",
+            message="Theme automation is blocked until bootstrap finishes.",
+        )
+    if bootstrap_status.bootstrap_required:
+        return _theme_automation_skip_payload(
+            reason="bootstrap_not_ready",
+            message="Theme automation is blocked until first-run bootstrap is ready.",
+        )
+
+    from ..models.theme import ContentSource
+
+    has_active_sources = (
+        db.query(ContentSource.id)
+        .filter(ContentSource.is_active.is_(True))
+        .limit(1)
+        .first()
+        is not None
+    )
+    if not has_active_sources:
+        return _theme_automation_skip_payload(
+            reason="no_active_content_sources",
+            message="Theme automation requires at least one active content source.",
+        )
+
+    return None
+
+
 @celery_app.task(name='app.tasks.theme_discovery_tasks.ingest_content')
 def ingest_content(lookback_days=None):
     """
@@ -210,28 +258,32 @@ def extract_themes(limit: int = 50, pipeline: str = None):
     """
     pipelines = _default_pipeline_order(pipeline)
 
-    logger.info("=" * 60)
-    logger.info("TASK: Theme Extraction via LLM")
-    logger.info(f"Processing up to {limit} items for pipelines: {pipelines}")
-    logger.info("=" * 60)
-
     from ..services.theme_extraction_service import ThemeExtractionService
 
     db = SessionLocal()
-    start_time = time.time()
-
-    combined_result = {
-        'processed': 0,
-        'total_mentions': 0,
-        'errors': 0,
-        'new_themes': [],
-        'pipelines': pipelines,
-        'aborted': False,
-        'abort_reason': None,
-        'pipeline_results': {},
-    }
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
+        logger.info("=" * 60)
+        logger.info("TASK: Theme Extraction via LLM")
+        logger.info(f"Processing up to {limit} items for pipelines: {pipelines}")
+        logger.info("=" * 60)
+
+        combined_result = {
+            'processed': 0,
+            'total_mentions': 0,
+            'errors': 0,
+            'new_themes': [],
+            'pipelines': pipelines,
+            'aborted': False,
+            'abort_reason': None,
+            'pipeline_results': {},
+        }
+
         for p in pipelines:
             logger.info(f"Processing pipeline: {p}")
             service = ThemeExtractionService(db, pipeline=p)
@@ -317,29 +369,33 @@ def reprocess_failed_themes(limit: int = 500, pipeline: str = None):
     """
     pipelines = _default_pipeline_order(pipeline)
 
-    logger.info("=" * 60)
-    logger.info("TASK: Reprocess Failed Theme Extractions")
-    logger.info(f"Processing up to {limit} failed items for pipelines: {pipelines}")
-    logger.info("=" * 60)
-
     from ..services.theme_extraction_service import ThemeExtractionService
 
     db = SessionLocal()
-    start_time = time.time()
-
-    combined_result = {
-        'reprocessed_count': 0,
-        'processed': 0,
-        'total_mentions': 0,
-        'errors': 0,
-        'pipelines': pipelines,
-        'silent_failures_reset': 0,
-        'aborted': False,
-        'abort_reason': None,
-        'pipeline_results': {},
-    }
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
+        logger.info("=" * 60)
+        logger.info("TASK: Reprocess Failed Theme Extractions")
+        logger.info(f"Processing up to {limit} failed items for pipelines: {pipelines}")
+        logger.info("=" * 60)
+
+        combined_result = {
+            'reprocessed_count': 0,
+            'processed': 0,
+            'total_mentions': 0,
+            'errors': 0,
+            'pipelines': pipelines,
+            'silent_failures_reset': 0,
+            'aborted': False,
+            'abort_reason': None,
+            'pipeline_results': {},
+        }
+
         for p in pipelines:
             logger.info(f"Reprocessing failed items for pipeline: {p}")
             service = ThemeExtractionService(db, pipeline=p)
@@ -424,25 +480,29 @@ def calculate_theme_metrics(pipeline: str = None):
     """
     pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
 
-    logger.info("=" * 60)
-    logger.info("TASK: Calculate Theme Metrics")
-    logger.info(f"Pipelines: {pipelines}")
-    logger.info("=" * 60)
-
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
     db = SessionLocal()
-    start_time = time.time()
-
-    combined_result = {
-        'themes_updated': 0,
-        'errors': 0,
-        'rankings': [],
-        'pipelines': pipelines,
-        'skipped_pipelines': [],
-    }
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
+        logger.info("=" * 60)
+        logger.info("TASK: Calculate Theme Metrics")
+        logger.info(f"Pipelines: {pipelines}")
+        logger.info("=" * 60)
+
+        combined_result = {
+            'themes_updated': 0,
+            'errors': 0,
+            'rankings': [],
+            'pipelines': pipelines,
+            'skipped_pipelines': [],
+        }
+
         completed_at = datetime.now(timezone.utc)
         pipelines_with_work: list[str] = []
         for p in pipelines:
@@ -646,18 +706,23 @@ def promote_candidate_themes(pipeline: str = None, limit: int = 1000):
     Promote candidate themes to active based on evidence thresholds.
     """
     pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
-    logger.info("=" * 60)
-    logger.info("TASK: Promote Candidate Themes")
-    logger.info(f"Pipelines: {pipelines}")
-    logger.info("=" * 60)
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
     db = SessionLocal()
-    start_time = time.time()
-    summary = {"pipelines": {}, "promoted_total": 0, "scanned_total": 0, "errors": 0}
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
+        summary = {"pipelines": {}, "promoted_total": 0, "scanned_total": 0, "errors": 0}
+        logger.info("=" * 60)
+        logger.info("TASK: Promote Candidate Themes")
+        logger.info(f"Pipelines: {pipelines}")
+        logger.info("=" * 60)
+
         for p in pipelines:
             service = ThemeDiscoveryService(db, pipeline=p)
             result = service.promote_candidate_themes(limit=limit)
@@ -692,24 +757,29 @@ def apply_lifecycle_policies(pipeline: str = None, limit: int = 1000):
     Apply dormancy/reactivation lifecycle policies with explainable counters.
     """
     pipelines = [pipeline] if pipeline else ["technical", "fundamental"]
-    logger.info("=" * 60)
-    logger.info("TASK: Apply Lifecycle Dormancy/Reactivation Policies")
-    logger.info(f"Pipelines: {pipelines}")
-    logger.info("=" * 60)
 
     from ..services.theme_discovery_service import ThemeDiscoveryService
 
     db = SessionLocal()
-    start_time = time.time()
-    summary = {
-        "pipelines": {},
-        "to_dormant_total": 0,
-        "to_reactivated_total": 0,
-        "scanned_total": 0,
-        "errors": 0,
-    }
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
+        summary = {
+            "pipelines": {},
+            "to_dormant_total": 0,
+            "to_reactivated_total": 0,
+            "scanned_total": 0,
+            "errors": 0,
+        }
+        logger.info("=" * 60)
+        logger.info("TASK: Apply Lifecycle Dormancy/Reactivation Policies")
+        logger.info(f"Pipelines: {pipelines}")
+        logger.info("=" * 60)
+
         for p in pipelines:
             service = ThemeDiscoveryService(db, pipeline=p)
             result = service.apply_dormancy_and_reactivation_policies(limit=limit)
@@ -1225,15 +1295,18 @@ def poll_due_sources():
     from ..models.theme import ContentSource
     from ..services.content_ingestion_service import ContentIngestionService
 
-    logger.info("=" * 60)
-    logger.info("TASK: Poll Due Content Sources")
-    logger.info("=" * 60)
-
     db = SessionLocal()
-    start_time = time.time()
 
     try:
+        skip_result = _theme_automation_gate_result(db)
+        if skip_result is not None:
+            return skip_result
+
+        start_time = time.time()
         now = datetime.now(timezone.utc)
+        logger.info("=" * 60)
+        logger.info("TASK: Poll Due Content Sources")
+        logger.info("=" * 60)
 
         # Find sources due for refresh:
         # - last_fetched_at is NULL (never fetched), OR
@@ -1242,7 +1315,7 @@ def poll_due_sources():
         # SQLAlchemy doesn't support arithmetic with columns directly in filter,
         # so we fetch all active sources and filter in Python
         all_active_sources = db.query(ContentSource).filter(
-            ContentSource.is_active == True
+            ContentSource.is_active.is_(True)
         ).order_by(ContentSource.priority.desc()).all()
 
         due_sources = []

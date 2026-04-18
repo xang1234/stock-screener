@@ -19,6 +19,11 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
 from ..database import SessionLocal
+from ..services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
 )
@@ -55,6 +60,21 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
         retries + 1,
     )
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
+
+
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for group ranking task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
 
 
 def _validate_same_day_cache_only_group_rankings(
@@ -96,6 +116,7 @@ def calculate_daily_group_rankings(
     calculation_date: str | None = None,
     force_cache_only: bool = False,
     market: str | None = None,
+    activity_lifecycle: str | None = None,
 ):
     """
     Calculate and store daily IBD industry group rankings.
@@ -112,6 +133,8 @@ def calculate_daily_group_rankings(
     from .market_queues import market_tag, log_extra, normalize_market
     from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
+    effective_market = normalize_market(market) if market is not None else "US"
+    activity_lifecycle = activity_lifecycle or "daily_refresh"
     logger.info("=" * 60)
     logger.info(
         "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
@@ -120,8 +143,8 @@ def calculate_daily_group_rankings(
         logger.info("Skipping group rankings for disabled market %s", market, extra=_log_extra)
         return {
             'status': 'skipped',
-            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
-            'market': normalize_market(market),
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
     # Group-rank computation aggregates across markets; however, same-day
@@ -157,6 +180,15 @@ def calculate_daily_group_rankings(
     start_time = time.time()
 
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Calculating group rankings",
+        )
         # Initialize service
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_et
@@ -174,6 +206,15 @@ def calculate_daily_group_rankings(
                 if completeness_error:
                     logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
                     logger.info("=" * 60)
+                    _mark_market_activity_failed_safely(
+                        db,
+                        market=effective_market,
+                        stage_key="groups",
+                        lifecycle=activity_lifecycle,
+                        task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+                        task_id=getattr(getattr(self, "request", None), "id", None),
+                        message=completeness_error,
+                    )
                     return {
                         'error': completeness_error,
                         'date': calc_date.strftime('%Y-%m-%d'),
@@ -195,6 +236,17 @@ def calculate_daily_group_rankings(
 
         if not results:
             logger.warning(f"No groups ranked for {calc_date}")
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="groups",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=0,
+                total=0,
+                message="No groups ranked",
+            )
             return {
                 'date': calc_date.strftime('%Y-%m-%d'),
                 'groups_ranked': 0,
@@ -221,6 +273,17 @@ def calculate_daily_group_rankings(
             safe_publish_groups_bootstrap()
         except Exception as snapshot_error:
             logger.warning("Group rankings snapshot publish failed: %s", snapshot_error)
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=len(results),
+            total=len(results),
+            message="Group rankings completed",
+        )
 
         return {
             'date': calc_date.strftime('%Y-%m-%d'),
@@ -235,11 +298,29 @@ def calculate_daily_group_rankings(
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.error("Soft time limit exceeded in calculate_daily_group_rankings", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Soft time limit exceeded",
+        )
         raise
     except IncompleteGroupRankingCacheError as e:
         db.rollback()
         logger.error("✗ Refusing to publish daily group rankings: %s", e)
         logger.info("=" * 60)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         return {
             'error': str(e),
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
@@ -249,11 +330,29 @@ def calculate_daily_group_rankings(
         }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         _retry_transient_failure(self, "calculate_daily_group_rankings", e)
     except Exception as e:
         db.rollback()
         logger.error(f"Error in calculate_daily_group_rankings task: {e}", exc_info=True)
         logger.info("=" * 60)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         return {
             'error': str(e),
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,

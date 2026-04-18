@@ -10,6 +10,7 @@ import {
 } from '../api/appRuntime';
 import { loginServer, logoutServer } from '../api/auth';
 import { DEFAULT_SCAN_DEFAULTS } from '../constants/scanDefaults';
+import { DEFAULT_RUNTIME_ACTIVITY } from '../hooks/useRuntimeActivity';
 
 export const DEFAULT_CAPABILITIES = {
   features: {
@@ -41,6 +42,30 @@ export const DEFAULT_CAPABILITIES = {
 };
 
 const RuntimeContext = createContext(null);
+const BOOTSTRAP_BACKGROUND_WARNING = (
+  'Data loading continues in the background after bootstrap. '
+  + 'Additional enabled markets keep syncing after the app becomes usable.'
+);
+
+function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
+  return enabledMarkets.map((market) => ({
+    market,
+    lifecycle: 'bootstrap',
+    stage_key: 'universe',
+    stage_label: 'Universe Refresh',
+    status: 'queued',
+    progress_mode: 'indeterminate',
+    percent: null,
+    current: null,
+    total: null,
+    message: market === primaryMarket
+      ? 'Bootstrap queued.'
+      : `Queued until ${primaryMarket} is ready.`,
+    task_name: 'runtime_bootstrap',
+    task_id: market === primaryMarket ? (taskId ?? null) : null,
+    updated_at: null,
+  }));
+}
 
 export function RuntimeProvider({ children }) {
   const queryClient = useQueryClient();
@@ -88,8 +113,46 @@ export function RuntimeProvider({ children }) {
     mutationFn: ({ primaryMarket, enabledMarkets }) => (
       startRuntimeBootstrap({ primaryMarket, enabledMarkets })
     ),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData(['appCapabilities'], (previous) => ({
+        ...(previous ?? DEFAULT_CAPABILITIES),
+        bootstrap_required: Boolean(data.bootstrap_required),
+        primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
+        enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
+        bootstrap_state: data.bootstrap_state ?? 'running',
+        supported_markets: data.supported_markets
+          ?? previous?.supported_markets
+          ?? ['US', 'HK', 'JP', 'TW'],
+      }));
+      queryClient.setQueryData(['runtimeActivity'], (previous) => {
+        const primaryMarket = data.primary_market ?? 'US';
+        const enabledMarkets = data.enabled_markets ?? [primaryMarket];
+        return {
+          ...(previous ?? DEFAULT_RUNTIME_ACTIVITY),
+          bootstrap: {
+            ...(previous?.bootstrap ?? DEFAULT_RUNTIME_ACTIVITY.bootstrap),
+            state: data.bootstrap_state ?? 'running',
+            app_ready: !data.bootstrap_required,
+            primary_market: primaryMarket,
+            enabled_markets: enabledMarkets,
+            current_stage: 'Universe Refresh',
+            progress_mode: 'indeterminate',
+            percent: null,
+            message: 'Bootstrap queued.',
+            background_warning: enabledMarkets.length > 1
+              ? BOOTSTRAP_BACKGROUND_WARNING
+              : null,
+          },
+          summary: {
+            active_market_count: enabledMarkets.length,
+            active_markets: enabledMarkets,
+            status: 'active',
+          },
+          markets: buildBootstrapSeed(primaryMarket, enabledMarkets, data.task_id),
+        };
+      });
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
     },
   });
 
@@ -99,6 +162,7 @@ export function RuntimeProvider({ children }) {
     ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
     },
   });
 

@@ -19,6 +19,11 @@ from app.domain.scanning.signature import (
     hash_scan_signature,
     hash_universe_symbols,
 )
+from app.services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from app.tasks.data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
@@ -343,6 +348,7 @@ def build_daily_snapshot(
     static_daily_mode: bool = False,
     market: str | None = None,
     publish_pointer_key: str = "latest_published",
+    activity_lifecycle: str | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -371,6 +377,23 @@ def build_daily_snapshot(
     )
     from app.wiring.bootstrap import get_build_daily_snapshot_use_case
 
+    def _publish_activity(activity_fn, **kwargs) -> None:
+        activity_db = SessionLocal()
+        try:
+            activity_fn(activity_db, **kwargs)
+        except Exception:
+            logger.warning(
+                "Failed to publish market activity for feature snapshot",
+                extra={
+                    "market": kwargs.get("market"),
+                    "stage_key": kwargs.get("stage_key"),
+                    "task_id": kwargs.get("task_id"),
+                },
+                exc_info=True,
+            )
+        finally:
+            activity_db.close()
+
     as_of = date.fromisoformat(as_of_date_str) if as_of_date_str else date.today()
     from app.domain.scanning.defaults import get_default_scan_profile
 
@@ -384,6 +407,8 @@ def build_daily_snapshot(
         else composite_method
     )
     correlation_id = self.request.id
+    effective_market = market.upper() if isinstance(market, str) else "US"
+    activity_lifecycle = activity_lifecycle or "daily_refresh"
 
     # `market` is a routing/log label here; real per-market scoping comes
     # from `universe_name` via universe_resolver.
@@ -394,8 +419,8 @@ def build_daily_snapshot(
             logger.info("Skipping feature snapshot for disabled market %s", market, extra=_log_extra)
             return {
                 "status": "skipped",
-                "reason": f"market {market.upper()} is disabled in local runtime preferences",
-                "market": market.upper(),
+                "reason": f"market {effective_market} is disabled in local runtime preferences",
+                "market": effective_market,
                 "timestamp": datetime.now().isoformat(),
             }
         logger.debug("build_daily_snapshot market label=%s", market, extra=_log_extra)
@@ -502,6 +527,15 @@ def build_daily_snapshot(
     )
 
     try:
+        _publish_activity(
+            mark_market_activity_started,
+            market=effective_market,
+            stage_key="snapshot",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "build_daily_snapshot"),
+            task_id=correlation_id,
+            message="Building feature snapshot",
+        )
         result = use_case.execute(
             uow=uow,
             cmd=cmd,
@@ -514,6 +548,26 @@ def build_daily_snapshot(
             as_of,
             correlation_id,
             exc_info=True,
+        )
+        _publish_activity(
+            mark_market_activity_failed,
+            market=effective_market,
+            stage_key="snapshot",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "build_daily_snapshot"),
+            task_id=correlation_id,
+            message="Soft time limit exceeded",
+        )
+        raise
+    except Exception as exc:
+        _publish_activity(
+            mark_market_activity_failed,
+            market=effective_market,
+            stage_key="snapshot",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "build_daily_snapshot"),
+            task_id=correlation_id,
+            message=str(exc),
         )
         raise
 
@@ -551,6 +605,17 @@ def build_daily_snapshot(
             auto_scan_id,
             result.run_id,
         )
+    _publish_activity(
+        mark_market_activity_completed,
+        market=effective_market,
+        stage_key="snapshot",
+        lifecycle=activity_lifecycle,
+        task_name=getattr(self, "name", "build_daily_snapshot"),
+        task_id=correlation_id,
+        current=result.processed_symbols,
+        total=result.total_symbols,
+        message=f"Feature snapshot {result.status}",
+    )
 
     return {
         "run_id": result.run_id,

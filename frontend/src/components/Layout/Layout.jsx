@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useState } from 'react';
 import {
   AppBar,
   Box,
@@ -21,13 +21,12 @@ import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PersonIcon from '@mui/icons-material/Person';
-import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { ColorModeContext } from '../../contexts/ColorModeContext';
 import { AssistantChat } from '../AssistantChat';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
-import CacheStatus from '../Scan/CacheStatus';
+import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
 import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
@@ -79,15 +78,6 @@ function Layout({ children }) {
   const { activeProfile, activeProfileDetail, profiles, setActiveProfile } = useStrategyProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [cacheStatusEnabled, setCacheStatusEnabled] = useState(false);
-
-  useEffect(() => {
-    setCacheStatusEnabled(false);
-    const timer = window.setTimeout(() => {
-      setCacheStatusEnabled(true);
-    }, 2500);
-    return () => window.clearTimeout(timer);
-  }, [location.pathname]);
 
   const assistantAvailable = features.chatbot && (!auth?.required || auth?.authenticated);
 
@@ -96,7 +86,6 @@ function Layout({ children }) {
     { path: '/scan', label: 'Scan' },
     { path: '/breadth', label: 'Breadth' },
     { path: '/groups', label: 'Groups' },
-    { path: '/digest', label: 'Digest' },
     { path: '/validation', label: 'Backtest' },
     ...(features.themes ? [{ path: '/themes', label: 'Themes' }] : []),
     ...(features.chatbot ? [{ path: '/chatbot', label: 'Assistant' }] : []),
@@ -119,9 +108,7 @@ function Layout({ children }) {
           <Typography variant="subtitle1" component="div" sx={{ fontWeight: 600 }}>
             STOCK SCANNER
           </Typography>
-          <Box sx={{ ml: 2 }}>
-            <CacheStatus enabled={cacheStatusEnabled} />
-          </Box>
+          <RuntimeActivityStatusButton />
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
           <Box sx={{ flexGrow: 1 }} />
@@ -194,17 +181,6 @@ function Layout({ children }) {
               <SettingsIcon fontSize="small" />
             </IconButton>
           )}
-          <IconButton
-            sx={{ ml: 0.5 }}
-            component={RouterLink}
-            to="/operations"
-            color="inherit"
-            aria-label="Operations / telemetry"
-            title="Operations / telemetry"
-            size="small"
-          >
-            <MonitorHeartIcon fontSize="small" />
-          </IconButton>
           {auth?.required && auth?.authenticated && (
             <Button
               color="inherit"

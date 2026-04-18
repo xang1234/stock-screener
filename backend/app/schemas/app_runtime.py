@@ -65,6 +65,54 @@ class RuntimeBootstrapStartResponse(RuntimeBootstrapStatusResponse):
     task_id: str | None = None
 
 
+class RuntimeActivityBootstrapResponse(BaseModel):
+    """Bootstrap progress summary for the frontend shell."""
+
+    state: str
+    app_ready: bool
+    primary_market: str
+    enabled_markets: list[str] = Field(default_factory=list)
+    current_stage: str | None = None
+    progress_mode: str = "indeterminate"
+    percent: float | None = None
+    message: str | None = None
+    background_warning: str | None = None
+
+
+class RuntimeActivitySummaryResponse(BaseModel):
+    """Compact runtime activity summary for the header."""
+
+    active_market_count: int = 0
+    active_markets: list[str] = Field(default_factory=list)
+    status: str = "idle"
+
+
+class RuntimeActivityMarketResponse(BaseModel):
+    """Per-market runtime activity row."""
+
+    market: str
+    lifecycle: str
+    stage_key: str | None = None
+    stage_label: str | None = None
+    status: str
+    progress_mode: str = "indeterminate"
+    percent: float | None = None
+    current: int | None = None
+    total: int | None = None
+    message: str | None = None
+    task_name: str | None = None
+    task_id: str | None = None
+    updated_at: str | None = None
+
+
+class RuntimeActivityResponse(BaseModel):
+    """Unified runtime activity payload for bootstrap and operations UI."""
+
+    bootstrap: RuntimeActivityBootstrapResponse
+    summary: RuntimeActivitySummaryResponse
+    markets: list[RuntimeActivityMarketResponse] = Field(default_factory=list)
+
+
 class RuntimeMarketsUpdateRequest(BaseModel):
     """Patch request for persisted local market preferences."""
 

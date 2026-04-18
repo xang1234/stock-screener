@@ -12,11 +12,21 @@ import {
   FormControlLabel,
   FormGroup,
   InputLabel,
+  LinearProgress,
   MenuItem,
   Select,
   Stack,
   Typography,
 } from '@mui/material';
+import { useRuntimeActivity } from '../../hooks/useRuntimeActivity';
+
+const STATUS_COLOR = {
+  running: 'info',
+  queued: 'warning',
+  completed: 'success',
+  failed: 'error',
+  idle: 'default',
+};
 
 function normalizeEnabled(primaryMarket, enabledMarkets) {
   const next = enabledMarkets.includes(primaryMarket)
@@ -51,6 +61,36 @@ export default function BootstrapSetupScreen({
     () => normalizeEnabled(selectedPrimary, selectedMarkets),
     [selectedMarkets, selectedPrimary]
   );
+  const running = bootstrapState === 'running';
+  const activityQuery = useRuntimeActivity({ enabled: running || isStartingBootstrap });
+  const bootstrap = activityQuery.data?.bootstrap ?? null;
+  const marketActivity = useMemo(() => {
+    const markets = activityQuery.data?.markets ?? [];
+    const byMarket = new Map(markets.map((item) => [item.market, item]));
+    return normalizedSelection.map((market) => (
+      byMarket.get(market) ?? {
+        market,
+        lifecycle: running ? 'bootstrap' : 'idle',
+        stage_label: running ? 'Queued' : 'Idle',
+        status: running && market === (bootstrap?.primary_market || primaryMarket) ? 'running' : 'queued',
+        message: running ? 'Waiting for bootstrap task' : 'Idle',
+      }
+    ));
+  }, [activityQuery.data?.markets, bootstrap?.primary_market, normalizedSelection, primaryMarket, running]);
+  const primaryActivity = useMemo(
+    () => marketActivity.find((market) => market.market === (primaryMarket || selectedPrimary)) ?? marketActivity[0],
+    [marketActivity, primaryMarket, selectedPrimary]
+  );
+  const bootstrapProgressMode = (
+    bootstrap?.progress_mode
+    || primaryActivity?.progress_mode
+    || 'indeterminate'
+  );
+  const bootstrapPercent = (
+    bootstrapProgressMode === 'determinate'
+      ? Math.max(0, Math.min(100, Number(bootstrap?.percent ?? primaryActivity?.percent ?? 0)))
+      : null
+  );
 
   const toggleMarket = (market) => {
     if (market === selectedPrimary) {
@@ -79,8 +119,6 @@ export default function BootstrapSetupScreen({
       // Mutation state already drives the visible error UI.
     }
   };
-
-  const running = bootstrapState === 'running';
 
   return (
     <Box
@@ -114,10 +152,84 @@ export default function BootstrapSetupScreen({
             )}
 
             {running && (
-              <Alert severity="info">
-                Initial sync is running for {primaryMarket}. The app will switch to the main workspace
-                as soon as that market has core data.
-              </Alert>
+              <Stack spacing={2}>
+                <Alert severity="info">
+                  Initial sync is running for {primaryMarket}. The workspace will open as soon as that
+                  market has core data.
+                </Alert>
+                <Box
+                  sx={{
+                    p: 2,
+                    borderRadius: 2,
+                    border: 1,
+                    borderColor: 'divider',
+                    backgroundColor: 'action.hover',
+                  }}
+                >
+                  <Stack spacing={1.5}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="subtitle2">
+                        {bootstrap?.current_stage || primaryActivity?.stage_label || 'Preparing bootstrap'}
+                      </Typography>
+                      {bootstrapProgressMode === 'determinate' && bootstrapPercent !== null && (
+                        <Typography variant="body2" color="text.secondary">
+                          {Math.round(bootstrapPercent)}%
+                        </Typography>
+                      )}
+                    </Stack>
+                    <LinearProgress
+                      variant={bootstrapProgressMode === 'determinate' ? 'determinate' : 'indeterminate'}
+                      value={bootstrapProgressMode === 'determinate' ? bootstrapPercent : undefined}
+                      aria-label="Bootstrap progress"
+                    />
+                    <Typography variant="body2" color="text.secondary">
+                      {bootstrap?.message || primaryActivity?.message || 'Preparing primary market data.'}
+                    </Typography>
+                  </Stack>
+                </Box>
+                <Alert severity="warning">
+                  {bootstrap?.background_warning
+                    || 'Data loading will continue after bootstrap. Secondary markets and follow-up refresh jobs keep running in the background.'}
+                </Alert>
+                <Box>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Enabled market queue
+                  </Typography>
+                  <Stack spacing={1}>
+                    {marketActivity.map((market) => (
+                      <Box
+                        key={market.market}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 2,
+                          px: 1.5,
+                          py: 1,
+                          borderRadius: 1.5,
+                          border: 1,
+                          borderColor: 'divider',
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                            {market.market}
+                            {market.market === (bootstrap?.primary_market || primaryMarket) ? ' (primary)' : ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {market.stage_label || 'Queued'}{market.message ? ` · ${market.message}` : ''}
+                          </Typography>
+                        </Box>
+                        <Chip
+                          size="small"
+                          color={STATUS_COLOR[market.status] || 'default'}
+                          label={market.status || 'idle'}
+                        />
+                      </Box>
+                    ))}
+                  </Stack>
+                </Box>
+              </Stack>
             )}
 
             <Divider />

@@ -6,10 +6,15 @@ import OperationsPage from './OperationsPage';
 
 const fetchAlerts = vi.fn();
 const acknowledgeAlert = vi.fn();
+const useRuntimeActivity = vi.fn();
 
 vi.mock('../api/telemetry', () => ({
   fetchAlerts: (...args) => fetchAlerts(...args),
   acknowledgeAlert: (...args) => acknowledgeAlert(...args),
+}));
+
+vi.mock('../hooks/useRuntimeActivity', () => ({
+  useRuntimeActivity: (...args) => useRuntimeActivity(...args),
 }));
 
 const SUMMARY_US = {
@@ -44,10 +49,38 @@ describe('OperationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fetchAlerts.mockResolvedValue({ summaries: [SUMMARY_US], alerts: [ALERT_US] });
+    useRuntimeActivity.mockReturnValue({
+      data: {
+        bootstrap: {
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            lifecycle: 'daily_refresh',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            percent: 42,
+            current: 42,
+            total: 100,
+            message: 'Refreshing prices',
+            task_name: 'smart_refresh_cache',
+            updated_at: '2026-04-18T12:00:00Z',
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    });
   });
 
   it('renders per-market summary card and active alerts table', async () => {
     renderWithProviders(<OperationsPage />);
+
+    expect(screen.getByText('Market activity')).toBeInTheDocument();
+    expect(screen.getByText('Price Refresh')).toBeInTheDocument();
+    expect(screen.getByText(/Refreshing prices/)).toBeInTheDocument();
+    expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
 
     // Market card content (the card heading + a few labels)
     await waitFor(() => {
@@ -85,5 +118,37 @@ describe('OperationsPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/No active alerts/)).toBeInTheDocument();
     });
+  });
+
+  it('keeps the last runtime activity cards visible when the activity poll errors', async () => {
+    useRuntimeActivity.mockReturnValue({
+      data: {
+        bootstrap: {
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            lifecycle: 'daily_refresh',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            percent: 42,
+            current: 42,
+            total: 100,
+            message: 'Refreshing prices',
+            task_name: 'smart_refresh_cache',
+            updated_at: '2026-04-18T12:00:00Z',
+          },
+        ],
+      },
+      isLoading: false,
+      isError: true,
+    });
+
+    renderWithProviders(<OperationsPage />);
+
+    expect(screen.getByText('Price Refresh')).toBeInTheDocument();
+    expect(screen.getByText(/Refreshing prices/)).toBeInTheDocument();
+    expect(screen.getByText(/Failed to refresh runtime activity/)).toBeInTheDocument();
   });
 });

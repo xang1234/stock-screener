@@ -10,7 +10,12 @@ from datetime import datetime
 from typing import Any, Optional
 
 from ..celery_app import celery_app
-from ..database import SessionLocal
+from ..database import SessionLocal, safe_rollback
+from ..services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from ..wiring.bootstrap import get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
@@ -20,6 +25,21 @@ _OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "JP", "TW"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
+
+
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for universe task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
 
 
 def _count_active_universe(market: Optional[str]) -> Optional[int]:
@@ -109,7 +129,12 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_stock_universe')
 @serialized_data_fetch('refresh_stock_universe')
-def refresh_stock_universe(self, exchange_filter: str = None, market: str | None = None):
+def refresh_stock_universe(
+    self,
+    exchange_filter: str = None,
+    market: str | None = None,
+    activity_lifecycle: str | None = None,
+):
     """
     Weekly task to refresh stock universe from finviz.
 
@@ -143,6 +168,7 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
     logger.info("=" * 60)
 
     effective_market = _market or "US"
+    activity_lifecycle = activity_lifecycle or "weekly_refresh"
     if not is_market_enabled_now(effective_market):
         logger.info("Skipping universe refresh for disabled market %s", effective_market, extra=_log_extra)
         return {
@@ -172,6 +198,15 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
     prior_size = _count_active_universe(effective_market)
     db = SessionLocal()
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_stock_universe"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Refreshing stock universe",
+        )
         stock_universe_service = get_stock_universe_service()
         stats = stock_universe_service.populate_universe(db, exchange_filter=exchange_filter)
 
@@ -184,6 +219,15 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         logger.info("=" * 60)
 
         _emit_universe_drift(effective_market, prior_size)
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_stock_universe"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Universe refresh completed",
+        )
 
         return {
             'status': 'success',
@@ -192,7 +236,17 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
         }
 
     except Exception as e:
+        safe_rollback(db)
         logger.error(f"Error refreshing universe: {e}", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_stock_universe"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         return {
             'status': 'error',
             'error': str(e),
@@ -203,7 +257,11 @@ def refresh_stock_universe(self, exchange_filter: str = None, market: str | None
 
 
 @celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_official_market_universe')
-def refresh_official_market_universe(self, market: str):
+def refresh_official_market_universe(
+    self,
+    market: str,
+    activity_lifecycle: str | None = None,
+):
     """Refresh HK/JP/TW universe snapshots from official exchange sources."""
     from ..services.official_market_universe_source_service import (
         OfficialMarketUniverseSourceService,
@@ -213,6 +271,7 @@ def refresh_official_market_universe(self, market: str):
     from .market_queues import log_extra, market_tag, normalize_market
 
     _market = normalize_market(market)
+    activity_lifecycle = activity_lifecycle or "weekly_refresh"
     if not is_market_enabled_now(_market):
         logger.info("Skipping official universe refresh for disabled market %s", _market)
         return {
@@ -257,6 +316,19 @@ def refresh_official_market_universe(self, market: str):
         )
 
     try:
+        activity_db = SessionLocal()
+        try:
+            mark_market_activity_started(
+                activity_db,
+                market=_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", task_name),
+                task_id=task_id,
+                message="Refreshing official market universe",
+            )
+        finally:
+            activity_db.close()
         prior_size = _count_active_universe(_market)
         snapshot = OfficialMarketUniverseSourceService().fetch_market_snapshot(_market)
         stats = _ingest_official_snapshot(snapshot)
@@ -271,6 +343,21 @@ def refresh_official_market_universe(self, market: str):
         logger.info("Updated: %s", stats.get('updated', 0), extra=_log_extra)
         logger.info("Rejected rows: %s", stats.get('rejected', 0), extra=_log_extra)
         logger.info("=" * 60)
+        activity_db = SessionLocal()
+        try:
+            mark_market_activity_completed(
+                activity_db,
+                market=_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", task_name),
+                task_id=task_id,
+                current=stats.get("total"),
+                total=stats.get("total"),
+                message="Official universe refresh completed",
+            )
+        finally:
+            activity_db.close()
 
         return {
             'status': 'success',
@@ -281,7 +368,28 @@ def refresh_official_market_universe(self, market: str):
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
-    except Exception:
+    except Exception as exc:
+        activity_db = None
+        try:
+            activity_db = SessionLocal()
+            _mark_market_activity_failed_safely(
+                activity_db,
+                market=_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", task_name),
+                task_id=task_id,
+                message=str(exc),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to open activity session for official universe refresh",
+                extra={"market": _market, "task_id": task_id},
+                exc_info=True,
+            )
+        finally:
+            if activity_db is not None:
+                activity_db.close()
         logger.exception("Error refreshing official universe for %s", _market)
         raise
     finally:

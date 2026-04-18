@@ -10,6 +10,7 @@ from ...database import get_db
 from ...schemas.app_runtime import (
     AppCapabilitiesResponse,
     AppAuthStatusResponse,
+    RuntimeActivityResponse,
     RuntimeBootstrapRequest,
     RuntimeBootstrapStartResponse,
     RuntimeBootstrapStatusResponse,
@@ -22,6 +23,7 @@ from ...services.runtime_preferences_service import (
     get_runtime_bootstrap_status,
     save_runtime_preferences,
 )
+from ...services.market_activity_service import get_runtime_activity_status
 from ...tasks.runtime_bootstrap_tasks import queue_local_runtime_bootstrap
 
 router = APIRouter()
@@ -70,6 +72,14 @@ async def get_bootstrap_status(
     return RuntimeBootstrapStatusResponse(
         **_bootstrap_status_payload(get_runtime_bootstrap_status(db))
     )
+
+
+@router.get("/runtime/activity", response_model=RuntimeActivityResponse)
+async def get_runtime_activity(
+    db: Session = Depends(get_db),
+) -> RuntimeActivityResponse:
+    """Return unified bootstrap and per-market background activity status."""
+    return RuntimeActivityResponse(**get_runtime_activity_status(db))
 
 
 @router.post(

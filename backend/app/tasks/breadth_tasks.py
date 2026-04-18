@@ -21,6 +21,11 @@ from celery.exceptions import SoftTimeLimitExceeded
 from ..celery_app import celery_app
 from ..database import SessionLocal
 from ..services.breadth_calculator_service import BreadthCalculatorService
+from ..services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
@@ -56,6 +61,21 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
         retries + 1,
     )
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
+
+
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for breadth task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
 
 
 def _validate_same_day_cache_only_breadth(
@@ -452,6 +472,7 @@ def calculate_daily_breadth_with_gapfill(
     self,
     max_gap_days: int | None = None,
     market: str | None = None,
+    activity_lifecycle: str | None = None,
 ):
     """
     Calculate daily breadth with automatic gap detection and filling.
@@ -475,6 +496,8 @@ def calculate_daily_breadth_with_gapfill(
     from .market_queues import market_tag, log_extra, normalize_market
     from ..services.runtime_preferences_service import is_market_enabled_now
     _log_extra = log_extra(market)
+    effective_market = normalize_market(market) if market is not None else "US"
+    activity_lifecycle = activity_lifecycle or "daily_refresh"
     logger.info("=" * 60)
     logger.info(
         "TASK: Calculate Daily Market Breadth (with Gap-Fill) %s", market_tag(market),
@@ -485,8 +508,8 @@ def calculate_daily_breadth_with_gapfill(
         logger.info("Skipping breadth calculation for disabled market %s", market, extra=_log_extra)
         return {
             'status': 'skipped',
-            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
-            'market': normalize_market(market),
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
     # Breadth calculator aggregates across markets; the `market` kwarg is a
@@ -511,6 +534,15 @@ def calculate_daily_breadth_with_gapfill(
     }
 
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="breadth",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_breadth_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Calculating market breadth",
+        )
         calculator = BreadthCalculatorService(db, get_price_cache())
 
         # Step 1: Check if gap-fill is enabled
@@ -575,19 +607,55 @@ def calculate_daily_breadth_with_gapfill(
         logger.info("=" * 60)
 
         result['total_duration_seconds'] = round(total_duration, 2)
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="breadth",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_breadth_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Breadth calculation completed",
+        )
 
         return result
 
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.error("Soft time limit exceeded in calculate_daily_breadth_with_gapfill", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="breadth",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_breadth_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Soft time limit exceeded",
+        )
         raise
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="breadth",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_breadth_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         _retry_transient_failure(self, "calculate_daily_breadth_with_gapfill", e)
     except Exception as e:
         logger.error(f"✗ Error in calculate_daily_breadth_with_gapfill: {e}", exc_info=True)
         logger.info("=" * 60)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="breadth",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_breadth_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         return {
             'error': str(e),
             'gap_fill': result.get('gap_fill'),

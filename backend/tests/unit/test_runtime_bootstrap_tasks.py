@@ -66,9 +66,71 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
 
     assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" in task_names
     assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" not in task_names
+    assert [
+        signature.kwargs.get("activity_lifecycle")
+        for signature in signatures
+        if signature.task != "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan"
+    ] == ["bootstrap"] * 5
 
 
 def test_bootstrap_universe_name_uses_uppercase_market_code():
     from app.tasks import runtime_bootstrap_tasks as module
 
     assert module._bootstrap_universe_name("us") == "market:US"
+
+
+def test_complete_local_runtime_bootstrap_marks_secondary_markets_queued(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeDb:
+        def close(self):
+            return None
+
+    fake_db = _FakeDb()
+    queued = []
+
+    class _FakeAsyncResult:
+        def __init__(self, task_id: str) -> None:
+            self.id = task_id
+
+    class _FakeChain:
+        def __init__(self, *signatures) -> None:
+            self.signatures = signatures
+
+        def apply_async(self):
+            return _FakeAsyncResult("secondary-task-123")
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda db, state: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "chain",
+        lambda *signatures: _FakeChain(*signatures),
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_market_bootstrap_signatures",
+        lambda market, include_initial_scan=False: [_FakeSignature(f"task:{market}")],
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_queued",
+        lambda db, **kwargs: queued.append(kwargs),
+    )
+
+    result = module.complete_local_runtime_bootstrap("US", ["US", "HK"])
+
+    assert result["queued_secondary"] == [{"market": "HK", "task_id": "secondary-task-123"}]
+    assert queued == [
+        {
+            "market": "HK",
+            "stage_key": "universe",
+            "lifecycle": "bootstrap",
+            "task_name": "runtime_bootstrap",
+            "task_id": "secondary-task-123",
+            "message": "Queued bootstrap for HK",
+        }
+    ]

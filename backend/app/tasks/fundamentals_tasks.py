@@ -27,6 +27,11 @@ from ..wiring.bootstrap import (
     get_ticker_validation_service,
 )
 from ..services.hybrid_fundamentals_service import HybridFundamentalsService
+from ..services.market_activity_service import (
+    mark_market_activity_completed,
+    mark_market_activity_failed,
+    mark_market_activity_started,
+)
 from ..services.ticker_validation_service import TickerValidationService
 from ..config import settings
 from .data_fetch_lock import serialized_data_fetch
@@ -46,6 +51,21 @@ def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
         retries + 1,
     )
     raise task.retry(exc=exc, countdown=countdown, max_retries=2)
+
+
+def _mark_market_activity_failed_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_failed(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity failure for fundamentals task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
 
 
 def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
@@ -86,7 +106,11 @@ def _run_snapshot_pipeline(db, *, publish: bool) -> Dict:
     max_retries=2,
 )
 @serialized_data_fetch('refresh_all_fundamentals')
-def refresh_all_fundamentals(self, market: str | None = None):
+def refresh_all_fundamentals(
+    self,
+    market: str | None = None,
+    activity_lifecycle: str | None = None,
+):
     """
     Weekly task to refresh fundamental data for all stocks in universe.
 
@@ -112,12 +136,14 @@ def refresh_all_fundamentals(self, market: str | None = None):
     logger.info("Timestamp: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), extra=_log_extra)
     logger.info("=" * 60)
 
-    if market is not None and not is_market_enabled_now(normalize_market(market)):
+    effective_market = normalize_market(market) if market is not None else "US"
+    activity_lifecycle = activity_lifecycle or "weekly_refresh"
+    if market is not None and not is_market_enabled_now(effective_market):
         logger.info("Skipping fundamentals refresh for disabled market %s", market, extra=_log_extra)
         return {
             'status': 'skipped',
-            'reason': f'market {normalize_market(market)} is disabled in local runtime preferences',
-            'market': normalize_market(market),
+            'reason': f'market {effective_market} is disabled in local runtime preferences',
+            'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
 
@@ -126,6 +152,15 @@ def refresh_all_fundamentals(self, market: str | None = None):
     ticker_validation_service = get_ticker_validation_service()
 
     try:
+        mark_market_activity_started(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_all_fundamentals"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Refreshing fundamentals",
+        )
         if settings.provider_snapshot_cutover_enabled:
             logger.info(
                 "Provider snapshot cutover enabled - using snapshot publish pipeline",
@@ -141,6 +176,15 @@ def refresh_all_fundamentals(self, market: str | None = None):
             if result.get("snapshot", {}).get("published"):
                 eps_task = calculate_eps_rating_percentiles.delay()
                 response["eps_rating_task_id"] = eps_task.id
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "refresh_all_fundamentals"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                message="Fundamentals refresh completed",
+            )
             return response
 
         # Get all active stocks from universe (market-filtered when scoped)
@@ -151,6 +195,15 @@ def refresh_all_fundamentals(self, market: str | None = None):
 
         if not universe_stocks:
             logger.warning("No active stocks found in universe", extra=_log_extra)
+            mark_market_activity_failed(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "refresh_all_fundamentals"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                message="No active stocks found",
+            )
             return {
                 'error': 'No active stocks found',
                 'timestamp': datetime.now().isoformat()
@@ -247,6 +300,17 @@ def refresh_all_fundamentals(self, market: str | None = None):
         logger.info("Queuing EPS Rating Percentiles calculation...")
         eps_task = calculate_eps_rating_percentiles.delay()
         logger.info(f"EPS Rating Percentiles task queued: {eps_task.id}")
+        mark_market_activity_completed(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_all_fundamentals"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=stats['updated'],
+            total=total_stocks,
+            message="Fundamentals refresh completed",
+        )
 
         return {
             'total_stocks': total_stocks,
@@ -263,13 +327,40 @@ def refresh_all_fundamentals(self, market: str | None = None):
     except SoftTimeLimitExceeded:
         db.rollback()
         logger.error("Soft time limit exceeded in refresh_all_fundamentals", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_all_fundamentals"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message="Soft time limit exceeded",
+        )
         raise
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_all_fundamentals"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         _retry_transient_failure(self, "refresh_all_fundamentals", e)
     except Exception as e:
         db.rollback()
         logger.error(f"Fatal error in fundamental refresh: {e}", exc_info=True)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="fundamentals",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "refresh_all_fundamentals"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
         return {
             'error': str(e),
             'timestamp': datetime.now().isoformat()

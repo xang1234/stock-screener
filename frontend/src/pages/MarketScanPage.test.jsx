@@ -22,10 +22,6 @@ vi.mock('../components/MarketScan/DailyMarketSnapshotTab', () => ({
   default: () => <div>daily-snapshot-tab</div>,
 }));
 
-vi.mock('../components/MarketScan/DigestTab', () => ({
-  default: () => <div>digest-tab</div>,
-}));
-
 vi.mock('../components/MarketScan/ThemesTab', () => ({
   default: () => <div>themes-tab</div>,
 }));
@@ -49,7 +45,6 @@ describe('MarketScanPage capability gating', () => {
     expect(screen.queryByRole('tab', { name: 'Themes' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Key Markets' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Daily Snapshot' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Digest' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Watchlists' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Stockbee MM' })).toBeInTheDocument();
   });
