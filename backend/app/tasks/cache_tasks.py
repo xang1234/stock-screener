@@ -24,6 +24,7 @@ from ..services.benchmark_registry_service import benchmark_registry
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from ..config import settings
@@ -46,6 +47,21 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
     except Exception:
         logger.warning(
             "Failed to publish market activity failure for cache task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+
+
+def _mark_market_activity_progress_safely(db, **kwargs) -> None:
+    try:
+        mark_market_activity_progress(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity progress for cache task",
             extra={
                 "market": kwargs.get("market"),
                 "stage_key": kwargs.get("stage_key"),
@@ -493,6 +509,7 @@ def weekly_full_refresh(self, market: str | None = None):
 
     db = SessionLocal()
     refreshed = 0
+    processed = 0
     failed = 0
     failed_symbols = []
 
@@ -1533,6 +1550,7 @@ def smart_refresh_cache(
     db = SessionLocal()
 
     refreshed = 0
+    processed = 0
     failed = 0
     failed_symbols = []
 
@@ -1614,20 +1632,31 @@ def smart_refresh_cache(
             }
 
         total = len(symbols)
+        batch_size = 100
+        total_batches = (total + batch_size - 1) // batch_size if total > 0 else 0
 
         # Write initial heartbeat before batch loop to prevent false "stuck" detection.
         # Without this, the health endpoint sees lock held + no heartbeat = stuck.
         price_cache.update_warmup_heartbeat(0, total, 0.0, market=market)
+        _mark_market_activity_progress_safely(
+            db,
+            market=effective_market,
+            stage_key="prices",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "smart_refresh_cache"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            current=0,
+            total=total,
+            percent=0,
+            message="Refreshing market prices",
+        )
 
         # Step 3: Batch fetch with progress tracking
         logger.info(f"[3/3] Fetching {total} symbols...")
 
-        batch_size = 100
-
         for batch_start in range(0, total, batch_size):
             batch_symbols = symbols[batch_start:batch_start + batch_size]
             batch_num = (batch_start // batch_size) + 1
-            total_batches = (total + batch_size - 1) // batch_size
 
             logger.info(f"Batch {batch_num}/{total_batches}: Fetching {len(batch_symbols)} symbols")
 
@@ -1684,6 +1713,7 @@ def smart_refresh_cache(
             # Update progress for UI and stuck detection
             progress = min((batch_start + batch_size), total)
             percent = (progress / total) * 100
+            processed = progress
 
             # Update Celery task state
             self.update_state(
@@ -1699,6 +1729,18 @@ def smart_refresh_cache(
 
             # Update heartbeat for stuck detection
             price_cache.update_warmup_heartbeat(progress, total, percent, market=market)
+            _mark_market_activity_progress_safely(
+                db,
+                market=effective_market,
+                stage_key="prices",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "smart_refresh_cache"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=progress,
+                total=total,
+                percent=round(percent, 1),
+                message=f"Batch {batch_num}/{total_batches} · refreshing prices",
+            )
 
             # Extend lock TTL to prevent expiry during long-running tasks
             task_id = self.request.id or 'unknown'
@@ -1737,7 +1779,7 @@ def smart_refresh_cache(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "smart_refresh_cache"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=refreshed,
+            current=total,
             total=total,
             message=f"Price refresh {status}",
         )
@@ -1770,7 +1812,7 @@ def smart_refresh_cache(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "smart_refresh_cache"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=refreshed,
+            current=processed,
             total=locals().get("total", 0),
             message="Soft time limit exceeded",
         )
@@ -1788,7 +1830,7 @@ def smart_refresh_cache(
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "smart_refresh_cache"),
             task_id=getattr(getattr(self, "request", None), "id", None),
-            current=refreshed,
+            current=processed,
             total=locals().get("total", 0),
             message=str(e),
         )

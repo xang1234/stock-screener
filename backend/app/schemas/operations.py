@@ -18,6 +18,11 @@ class OperationsJobRow(BaseModel):
     wait_reason: str | None = None
     heartbeat_lag_seconds: float | None = None
     cancel_strategy: str
+    progress_mode: str = "indeterminate"
+    percent: float | None = None
+    current: int | None = None
+    total: int | None = None
+    message: str | None = None
 
 
 class OperationsQueueSummary(BaseModel):
@@ -52,4 +57,3 @@ class OperationsCancelJobResponse(BaseModel):
     status: str
     cancel_strategy: str
     message: str
-

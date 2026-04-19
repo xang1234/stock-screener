@@ -15,6 +15,15 @@ def _patch_serialized_lock(monkeypatch):
         "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
     )
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.release_market_workload.return_value = True
+    fake_coordination.acquire_external_fetch.return_value = (True, False)
+    fake_coordination.release_external_fetch.return_value = True
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
+    )
 
 
 def test_refresh_all_fundamentals_retries_transient_outer_failures(monkeypatch):
@@ -294,6 +303,107 @@ def test_refresh_all_fundamentals_publishes_running_progress(monkeypatch):
     assert all(update["total"] == 30 for update in progress_updates)
     assert any(update["current"] < update["total"] for update in progress_updates)
     assert any(update["percent"] > 0 for update in progress_updates)
+
+
+def test_refresh_all_fundamentals_snapshot_cutover_publishes_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", True)
+    monkeypatch.setattr(
+        module,
+        "_run_snapshot_pipeline",
+        lambda db, publish: {
+            "snapshot": {"published": True},
+            "universe": {"active_symbols": 2},
+            "hydrate": {"symbols_hydrated": 2},
+        },
+    )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US", activity_lifecycle="bootstrap")
+
+    assert result["snapshot"]["published"] is True
+    assert progress_updates[0]["current"] == 0
+    assert progress_updates[0]["total"] == 2
+    assert progress_updates[0]["percent"] == 0
+    assert completed[0]["current"] == 2
+    assert completed[0]["total"] == 2
+
+
+def test_refresh_all_fundamentals_hybrid_snapshot_cutover_publishes_progress(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", True)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "_run_snapshot_pipeline",
+        lambda db, publish: {
+            "snapshot": {
+                "published": True,
+                "coverage": {"active_symbols": 2},
+            },
+            "hydrate": {"symbols_hydrated": 2},
+        },
+    )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+
+    progress_updates = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: progress_updates.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals_hybrid.run(
+        include_finviz=False,
+        market="US",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["snapshot"]["published"] is True
+    assert progress_updates[0]["current"] == 0
+    assert progress_updates[0]["total"] == 2
+    assert progress_updates[0]["percent"] == 0
+    assert completed[0]["current"] == 2
+    assert completed[0]["total"] == 2
 
 
 def test_refresh_all_fundamentals_hybrid_publishes_running_progress(monkeypatch):

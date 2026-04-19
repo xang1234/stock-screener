@@ -62,6 +62,7 @@ class CeleryJobBackend(JobBackend):
 
         info = result.info if isinstance(result.info, dict) else {}
         if state == "PROGRESS":
+            snapshot.message = info.get("message")
             snapshot.current = info.get("current")
             snapshot.total = info.get("total")
             snapshot.percent = info.get("percent")
@@ -85,5 +86,4 @@ class CeleryJobBackend(JobBackend):
             snapshot.error = str(result.result) if result.result else "Task failed"
 
         return snapshot
-
 

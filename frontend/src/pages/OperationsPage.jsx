@@ -102,6 +102,16 @@ function formatCancelLabel(strategy) {
   }
 }
 
+function resolveDeterminatePercent(percent, current, total) {
+  if (Number.isFinite(percent)) {
+    return Math.max(0, Math.min(100, Number(percent)));
+  }
+  if (current != null && total != null && total > 0) {
+    return Math.max(0, Math.min(100, (Number(current) / Number(total)) * 100));
+  }
+  return null;
+}
+
 function MarketSummaryCard({ summary }) {
   const freshness = summary.freshness_lag;
   const benchmark = summary.benchmark_age;
@@ -147,7 +157,7 @@ function MarketSummaryCard({ summary }) {
 
 function MarketActivityCard({ activity }) {
   const showProgress = activity.status === 'running' || activity.status === 'queued';
-  const progressValue = Number.isFinite(activity.percent) ? activity.percent : null;
+  const progressValue = resolveDeterminatePercent(activity.percent, activity.current, activity.total);
 
   return (
     <Card variant="outlined" sx={{ minWidth: 260, flex: '1 1 280px' }}>
@@ -391,6 +401,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
           <TableCell>Queue</TableCell>
           <TableCell>Market</TableCell>
           <TableCell>Worker</TableCell>
+          <TableCell>Progress</TableCell>
           <TableCell>Age</TableCell>
           <TableCell>Blocker</TableCell>
           <TableCell>Heartbeat</TableCell>
@@ -401,6 +412,8 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
         {jobs.map((job) => {
           const canCancel = job.cancel_strategy && job.cancel_strategy !== 'unsupported';
           const isCancelling = cancelInFlight && cancellingTaskId === job.task_id;
+          const progressValue = resolveDeterminatePercent(job.percent, job.current, job.total);
+          const hasDeterminateProgress = job.progress_mode === 'determinate' && progressValue != null;
           return (
             <TableRow key={job.task_id}>
               <TableCell>
@@ -419,6 +432,31 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
               <TableCell>{job.queue || '—'}</TableCell>
               <TableCell>{job.market || '—'}</TableCell>
               <TableCell>{job.worker || '—'}</TableCell>
+              <TableCell sx={{ minWidth: 220 }}>
+                {hasDeterminateProgress ? (
+                  <Box sx={{ minWidth: 180 }}>
+                    <LinearProgress
+                      variant="determinate"
+                      value={progressValue}
+                      aria-label={`${job.task_name} progress`}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                      {`${Math.round(progressValue)}%`}{job.current != null && job.total != null
+                        ? ` · ${job.current}/${job.total}`
+                        : ''}
+                    </Typography>
+                    {job.message && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {job.message}
+                      </Typography>
+                    )}
+                  </Box>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    {job.message || 'Progress pending'}
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell>{formatLagSeconds(job.age_seconds)}</TableCell>
               <TableCell>{job.wait_reason || '—'}</TableCell>
               <TableCell>{formatLagSeconds(job.heartbeat_lag_seconds)}</TableCell>

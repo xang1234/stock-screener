@@ -63,6 +63,10 @@ class _JobRecord:
     wait_reason: str | None
     heartbeat_lag_seconds: float | None
     cancel_strategy: str
+    progress_mode: str = "indeterminate"
+    percent: float | None = None
+    current: int | None = None
+    total: int | None = None
     message: str | None = None
     args: Any = None
     kwargs: dict[str, Any] | None = None
@@ -80,6 +84,11 @@ class _JobRecord:
             "wait_reason": self.wait_reason,
             "heartbeat_lag_seconds": self.heartbeat_lag_seconds,
             "cancel_strategy": self.cancel_strategy,
+            "progress_mode": self.progress_mode,
+            "percent": self.percent,
+            "current": self.current,
+            "total": self.total,
+            "message": self.message,
         }
 
 
@@ -197,6 +206,14 @@ def _cancel_strategy_for(record: _JobRecord) -> str:
     ):
         return "force_release_market_lease"
     return "unsupported"
+
+
+def _progress_mode(percent: float | None, current: int | None, total: int | None) -> str:
+    if percent is not None:
+        return "determinate"
+    if current is not None and total is not None:
+        return "determinate"
+    return "indeterminate"
 
 
 def _market_lease_state(holder: dict[str, Any]) -> tuple[str, float | None]:
@@ -484,6 +501,10 @@ class OperationsJobService:
             wait_reason=None,
             heartbeat_lag_seconds=heartbeat_lag,
             cancel_strategy="force_cancel_refresh" if state == "stuck" else "unsupported",
+            progress_mode=_progress_mode(current_task.get("progress"), current_task.get("current"), current_task.get("total")),
+            percent=current_task.get("progress"),
+            current=current_task.get("current"),
+            total=current_task.get("total"),
             args=[],
             kwargs={"market": market},
             source="lock_holder",
@@ -523,12 +544,69 @@ class OperationsJobService:
             wait_reason=None,
             heartbeat_lag_seconds=None,
             cancel_strategy="unsupported",
+            progress_mode=_progress_mode(runtime_record.get("percent"), runtime_record.get("current"), runtime_record.get("total")),
+            percent=runtime_record.get("percent"),
+            current=runtime_record.get("current"),
+            total=runtime_record.get("total"),
             args=[],
             kwargs={"market": market},
+            message=runtime_record.get("message"),
             source="market_lease",
         )
         record.cancel_strategy = _cancel_strategy_for(record)
         return record
+
+    def _apply_runtime_progress(self, record: _JobRecord, runtime_record: dict[str, Any]) -> None:
+        if runtime_record.get("message"):
+            record.message = runtime_record.get("message")
+        if runtime_record.get("percent") is not None:
+            record.percent = runtime_record.get("percent")
+        if runtime_record.get("current") is not None:
+            record.current = runtime_record.get("current")
+        if runtime_record.get("total") is not None:
+            record.total = runtime_record.get("total")
+        record.progress_mode = _progress_mode(
+            record.percent,
+            record.current,
+            record.total,
+        )
+
+    def _apply_job_backend_progress(self, record: _JobRecord) -> None:
+        if record.state not in {"running", "reserved", "waiting"}:
+            return
+        try:
+            snapshot = self._job_backend.get_status(record.task_id)
+        except Exception:
+            logger.debug("Failed to read job-backend progress for %s", record.task_id, exc_info=True)
+            return
+        if snapshot is None:
+            return
+        if record.message is None and getattr(snapshot, "message", None):
+            record.message = snapshot.message
+        if record.percent is None and getattr(snapshot, "percent", None) is not None:
+            record.percent = snapshot.percent
+        if record.current is None and getattr(snapshot, "current", None) is not None:
+            record.current = snapshot.current
+        if record.total is None and getattr(snapshot, "total", None) is not None:
+            record.total = snapshot.total
+        record.progress_mode = _progress_mode(record.percent, record.current, record.total)
+
+    def _apply_heartbeat_progress(self, record: _JobRecord) -> None:
+        if _queue_family(record.queue) != "data_fetch" or record.market is None:
+            return
+        current_task = get_data_fetch_lock().get_current_task(market=record.market)
+        if not current_task or current_task.get("task_id") != record.task_id:
+            return
+        heartbeat_lag = _age_seconds_from(current_task.get("last_heartbeat"))
+        if heartbeat_lag is not None:
+            record.heartbeat_lag_seconds = heartbeat_lag
+        if record.percent is None and current_task.get("progress") is not None:
+            record.percent = current_task.get("progress")
+        if record.current is None and current_task.get("current") is not None:
+            record.current = current_task.get("current")
+        if record.total is None and current_task.get("total") is not None:
+            record.total = current_task.get("total")
+        record.progress_mode = _progress_mode(record.percent, record.current, record.total)
 
     def _augment_with_runtime_activity(
         self,
@@ -555,7 +633,7 @@ class OperationsJobService:
         for task_id, runtime_record in runtime_records.items():
             if task_id in records:
                 record = records[task_id]
-                record.message = runtime_record.get("message")
+                self._apply_runtime_progress(record, runtime_record)
                 if record.market is None and runtime_record.get("market"):
                     record.market = runtime_record.get("market")
                 if record.wait_reason is None and runtime_record.get("message") and record.state == "waiting":
@@ -603,6 +681,10 @@ class OperationsJobService:
                 wait_reason=None,
                 heartbeat_lag_seconds=None,
                 cancel_strategy="unsupported",
+                progress_mode=_progress_mode(runtime_record.get("percent"), runtime_record.get("current"), runtime_record.get("total")),
+                percent=runtime_record.get("percent"),
+                current=runtime_record.get("current"),
+                total=runtime_record.get("total"),
                 args=[],
                 kwargs={"market": market} if market else {},
                 message=runtime_record.get("message"),
@@ -664,6 +746,10 @@ class OperationsJobService:
                 records[job.task_id] = job
 
         self._augment_with_runtime_activity(db, records, lease_snapshot)
+        for record in records.values():
+            if record.progress_mode == "indeterminate" or not record.message:
+                self._apply_job_backend_progress(record)
+            self._apply_heartbeat_progress(record)
 
         jobs = sorted(
             (record.to_api() for record in records.values()),
