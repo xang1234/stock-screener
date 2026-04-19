@@ -285,7 +285,12 @@ class SqlScanResultRepository(ScanResultRepository):
         ]
         return self.bulk_insert(rows)
 
-    def _load_symbol_enrichment(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    def _load_symbol_enrichment(
+        self,
+        symbols: list[str],
+        *,
+        ranking_date: date | None = None,
+    ) -> dict[str, dict[str, Any]]:
         """Load enrichment fields used by scan result persistence in bulk."""
         if not symbols:
             return {}
@@ -356,7 +361,7 @@ class SqlScanResultRepository(ScanResultRepository):
             d = enrichment.setdefault(row.symbol, {})
             d["ibd_industry_group"] = row.industry_group
 
-        latest_rank_date = self._session.query(func.max(IBDGroupRank.date)).scalar()
+        latest_rank_date = ranking_date or self._session.query(func.max(IBDGroupRank.date)).scalar()
         rank_by_group: dict[str, int] = {}
         if latest_rank_date is not None:
             rank_rows = (
@@ -406,6 +411,64 @@ class SqlScanResultRepository(ScanResultRepository):
             d["market_themes"] = entry.themes_list()
 
         return enrichment
+
+    def backfill_ibd_metadata_for_scan(
+        self,
+        scan_id: str,
+        *,
+        ranking_date: date | None = None,
+    ) -> dict[str, Any]:
+        """Repair IBD classification/rank fields for an existing scan's rows."""
+        rows = (
+            self._session.query(ScanResult)
+            .filter(ScanResult.scan_id == scan_id)
+            .all()
+        )
+        if not rows:
+            return {
+                "scan_id": scan_id,
+                "ranking_date": ranking_date.isoformat() if ranking_date else None,
+                "total_rows": 0,
+                "updated_rows": 0,
+                "missing_industry_rows": 0,
+                "missing_rank_rows": 0,
+            }
+
+        enrichment = self._load_symbol_enrichment(
+            [row.symbol for row in rows],
+            ranking_date=ranking_date,
+        )
+        updated_rows = 0
+        missing_industry_rows = 0
+        missing_rank_rows = 0
+
+        for row in rows:
+            meta = enrichment.get(row.symbol, {})
+            industry_group = meta.get("ibd_industry_group")
+            group_rank = meta.get("ibd_group_rank")
+            if industry_group is None:
+                missing_industry_rows += 1
+            elif group_rank is None:
+                missing_rank_rows += 1
+
+            if row.ibd_industry_group != industry_group or row.ibd_group_rank != group_rank:
+                row.ibd_industry_group = industry_group
+                row.ibd_group_rank = group_rank
+                details = dict(row.details or {})
+                details["ibd_industry_group"] = industry_group
+                details["ibd_group_rank"] = group_rank
+                row.details = details
+                updated_rows += 1
+
+        self._session.flush()
+        return {
+            "scan_id": scan_id,
+            "ranking_date": ranking_date.isoformat() if ranking_date else None,
+            "total_rows": len(rows),
+            "updated_rows": updated_rows,
+            "missing_industry_rows": missing_industry_rows,
+            "missing_rank_rows": missing_rank_rows,
+        }
 
     def _enrich_raw_result(
         self,

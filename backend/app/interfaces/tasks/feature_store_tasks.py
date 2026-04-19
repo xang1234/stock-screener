@@ -314,6 +314,143 @@ def _enrich_feature_run_with_ibd_metadata(
         db.close()
 
 
+def _feature_run_market(run) -> str | None:
+    config = getattr(run, "config_json", None) or {}
+    if not isinstance(config, dict):
+        return None
+    universe = config.get("universe")
+    if isinstance(universe, dict):
+        market = universe.get("market")
+        if market:
+            return str(market).upper()
+    return None
+
+
+def _resolve_latest_published_run_for_market(*, db, market: str) -> int | None:
+    from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
+
+    normalized_market = market.upper()
+    pointer_key = f"latest_published_market:{normalized_market}"
+
+    pointer = (
+        db.query(FeatureRunPointer)
+        .filter(FeatureRunPointer.key == pointer_key)
+        .first()
+    )
+    if pointer is not None:
+        run = db.query(FeatureRun).filter(FeatureRun.id == pointer.run_id).first()
+        if run is not None and run.status == "published" and _feature_run_market(run) == normalized_market:
+            return run.id
+
+    fallback_pointer = (
+        db.query(FeatureRunPointer)
+        .filter(FeatureRunPointer.key == "latest_published")
+        .first()
+    )
+    if fallback_pointer is not None:
+        run = db.query(FeatureRun).filter(FeatureRun.id == fallback_pointer.run_id).first()
+        if run is not None and run.status == "published" and _feature_run_market(run) == normalized_market:
+            return run.id
+
+    published_runs = (
+        db.query(FeatureRun)
+        .filter(FeatureRun.status == "published")
+        .order_by(FeatureRun.published_at.desc(), FeatureRun.id.desc())
+        .all()
+    )
+    for run in published_runs:
+        if _feature_run_market(run) == normalized_market:
+            return run.id
+    return None
+
+
+def _repair_current_us_group_metadata(
+    *,
+    ranking_date: date,
+    session_factory=None,
+) -> dict[str, object]:
+    """Repair current US scan-facing IBD metadata after rankings are available."""
+    from app.database import SessionLocal
+    from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
+    from app.models.scan_result import Scan
+    from app.services.ui_snapshot_service import safe_publish_scan_bootstrap
+
+    session_factory = session_factory or SessionLocal
+    db = session_factory()
+    try:
+        feature_run_id = _resolve_latest_published_run_for_market(db=db, market="US")
+        feature_run_stats = None
+        if feature_run_id is not None:
+            feature_run_stats = _enrich_feature_run_with_ibd_metadata(
+                feature_run_id=feature_run_id,
+                ranking_date=ranking_date,
+                session_factory=session_factory,
+            )
+
+        completed_statuses = ("completed", "cancelled")
+        feature_scan_ids: list[str] = []
+        if feature_run_id is not None:
+            feature_scan_ids = [
+                scan_id
+                for scan_id, in (
+                    db.query(Scan.scan_id)
+                    .filter(
+                        Scan.feature_run_id == feature_run_id,
+                        Scan.universe_market == "US",
+                        Scan.status.in_(completed_statuses),
+                    )
+                    .order_by(Scan.started_at.desc(), Scan.id.desc())
+                    .limit(1)
+                    .all()
+                )
+            ]
+
+        legacy_scan_ids = [
+            scan_id
+            for scan_id, in (
+                db.query(Scan.scan_id)
+                .filter(
+                    Scan.feature_run_id.is_(None),
+                    Scan.universe_market == "US",
+                    Scan.status.in_(completed_statuses),
+                )
+                .order_by(Scan.started_at.desc(), Scan.id.desc())
+                .limit(1)
+                .all()
+            )
+        ]
+
+        scan_repo = SqlScanResultRepository(db)
+        repaired_legacy_scans = []
+        for scan_id in legacy_scan_ids:
+            repaired_legacy_scans.append(
+                scan_repo.backfill_ibd_metadata_for_scan(
+                    scan_id,
+                    ranking_date=ranking_date,
+                )
+            )
+        db.commit()
+
+        published_scan_ids = []
+        for scan_id in [*feature_scan_ids, *legacy_scan_ids]:
+            safe_publish_scan_bootstrap(scan_id)
+            published_scan_ids.append(scan_id)
+        safe_publish_scan_bootstrap()
+
+        return {
+            "market": "US",
+            "ranking_date": ranking_date.isoformat(),
+            "feature_run": feature_run_stats,
+            "legacy_scans": repaired_legacy_scans,
+            "published_scan_ids": published_scan_ids,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _create_auto_scan_for_published_run(
     *,
     feature_run_id: int,

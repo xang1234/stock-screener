@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
-from app.models.scan_result import ScanResult
+from app.models.scan_result import Scan, ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
 from app.services.market_taxonomy_service import MarketTaxonomyEntry
@@ -220,3 +220,72 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
     assert row.ibd_industry_group == "Transportation Equipment"
     assert row.ibd_group_rank == 3
     assert row.details["market_themes"] == ["Automation"]
+
+
+def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
+    session.add(Scan(scan_id="scan-us-1", status="completed", universe_market="US"))
+    session.add_all(
+        [
+            ScanResult(
+                scan_id="scan-us-1",
+                symbol="AAPL",
+                composite_score=80.0,
+                rating="Buy",
+                details={},
+                ibd_industry_group=None,
+                ibd_group_rank=None,
+            ),
+            ScanResult(
+                scan_id="scan-us-1",
+                symbol="MSFT",
+                composite_score=79.0,
+                rating="Watch",
+                details={},
+                ibd_industry_group=None,
+                ibd_group_rank=None,
+            ),
+        ]
+    )
+    session.add_all(
+        [
+            IBDIndustryGroup(
+                symbol="AAPL",
+                industry_group="Computer-Hardware/Peripherals",
+            ),
+            IBDIndustryGroup(
+                symbol="MSFT",
+                industry_group="Software",
+            ),
+            IBDGroupRank(
+                industry_group="Computer-Hardware/Peripherals",
+                date=date(2026, 2, 19),
+                rank=5,
+                avg_rs_rating=80.0,
+            ),
+            IBDGroupRank(
+                industry_group="Software",
+                date=date(2026, 2, 19),
+                rank=9,
+                avg_rs_rating=74.0,
+            ),
+        ]
+    )
+    session.commit()
+
+    repo = SqlScanResultRepository(session)
+    stats = repo.backfill_ibd_metadata_for_scan("scan-us-1")
+
+    rows = (
+        session.query(ScanResult)
+        .filter(ScanResult.scan_id == "scan-us-1")
+        .order_by(ScanResult.symbol.asc())
+        .all()
+    )
+
+    assert stats["updated_rows"] == 2
+    assert rows[0].symbol == "AAPL"
+    assert rows[0].ibd_industry_group == "Computer-Hardware/Peripherals"
+    assert rows[0].ibd_group_rank == 5
+    assert rows[1].symbol == "MSFT"
+    assert rows[1].ibd_industry_group == "Software"
+    assert rows[1].ibd_group_rank == 9

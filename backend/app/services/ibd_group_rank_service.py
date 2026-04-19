@@ -37,6 +37,13 @@ class IncompleteGroupRankingCacheError(RuntimeError):
         super().__init__(reason)
 
 
+class MissingIBDIndustryMappingsError(RuntimeError):
+    """Raised when tracked IBD industry mappings have not been loaded."""
+
+    def __init__(self) -> None:
+        super().__init__("IBD industry mappings are not loaded")
+
+
 class IBDGroupRankService:
     """
     Service for calculating and managing IBD Industry Group Rankings.
@@ -90,16 +97,18 @@ class IBDGroupRankService:
         all_groups = IBDIndustryService.get_all_groups(db)
         if not all_groups:
             logger.error("No IBD industry groups found")
-            return []
+            raise MissingIBDIndustryMappingsError()
 
         logger.info(f"Found {len(all_groups)} IBD industry groups")
 
         # Pre-fetch ALL data upfront (SPY + all stock prices in single bulk fetch)
+        prefetch_kwargs = {"cache_only": cache_only}
+        if market is not None:
+            prefetch_kwargs["market"] = market
         spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
             self._prefetch_all_data(
                 db,
-                market=market,
-                cache_only=cache_only,
+                **prefetch_kwargs,
             )
         )
 

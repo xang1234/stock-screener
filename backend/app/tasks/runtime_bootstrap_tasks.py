@@ -49,6 +49,7 @@ def _build_market_bootstrap_signatures(
     from app.tasks.cache_tasks import smart_refresh_cache
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
     from app.tasks.group_rank_tasks import calculate_daily_group_rankings
+    from app.tasks.industry_tasks import load_tracked_ibd_industry_groups
     from app.tasks.universe_tasks import (
         refresh_official_market_universe,
         refresh_stock_universe,
@@ -66,6 +67,15 @@ def _build_market_bootstrap_signatures(
                 activity_lifecycle="bootstrap",
             )
         ).set(queue=data_fetch_queue_for_market(market)),
+    ]
+    if market == "US":
+        signatures.append(
+            load_tracked_ibd_industry_groups.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            ).set(queue=market_jobs_queue_for_market(market))
+        )
+    signatures.extend([
         smart_refresh_cache.si(
             mode="full",
             market=market,
@@ -75,7 +85,7 @@ def _build_market_bootstrap_signatures(
             market=market,
             activity_lifecycle="bootstrap",
         ).set(queue=data_fetch_queue_for_market(market)),
-    ]
+    ])
     if market == "US":
         signatures.extend([
             calculate_daily_breadth_with_gapfill.si(
