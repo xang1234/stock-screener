@@ -16,6 +16,7 @@ from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.stock import StockPrice
 from app.services.static_site_export_service import (
+    STATIC_MARKET_METADATA_FILENAME,
     STATIC_SITE_SCHEMA_VERSION,
     StaticSiteSectionUnavailableError,
     StaticSiteExportService,
@@ -253,6 +254,87 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert result.warnings == ()
 
 
+def test_export_can_write_single_market_artifact_without_root_manifest(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=8,
+            as_of_date=date(2026, 3, 31),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 31, 21, 30, 0),
+            config_json={"universe": {"market": "HK"}},
+        ),
+        pointer_run_id=8,
+        pointer_key="latest_published_market:HK",
+    )
+
+    scan_manifest = {
+        "schema_version": "static-scan-v1",
+        "generated_at": "2026-03-31T22:00:00Z",
+        "as_of_date": "2026-03-31",
+        "run_id": 8,
+        "rows_total": 1,
+        "default_filtered_rows_total": 1,
+        "chunks": [{"path": "markets/hk/scan/chunks/chunk-0001.json", "count": 1}],
+        "preview_rows": [{"symbol": "0700.HK", "composite_score": 97.5}],
+    }
+    chart_manifest = {
+        "path": "markets/hk/charts/index.json",
+        "limit": 200,
+        "symbols_total": 1,
+        "available": True,
+        "skipped_symbols": [],
+    }
+    breadth_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-03-31T22:00:00Z",
+        "available": True,
+        "payload": {"current": {"date": "2026-03-31"}},
+    }
+    groups_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-03-31T22:00:00Z",
+        "available": True,
+        "payload": {"rankings": {"date": "2026-03-31", "rankings": []}},
+    }
+    home_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-03-31T22:00:00Z",
+        "as_of_date": "2026-03-31",
+        "freshness": {"scan_run_id": 8},
+        "key_markets": [],
+        "scan_summary": {"top_results": [{"symbol": "0700.HK"}]},
+        "top_groups": [],
+    }
+
+    monkeypatch.setattr(service, "_load_scan_export_source", lambda *_args, **_kwargs: ([], SimpleNamespace()))
+    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
+    monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
+    monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
+    monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
+    monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
+
+    output_dir = tmp_path / "market-artifact"
+    result = service.export(output_dir, markets=("HK",), write_manifest=False)
+
+    assert not (output_dir / "manifest.json").exists()
+    metadata = json.loads(
+        (output_dir / "markets" / "hk" / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )
+
+    assert result.manifest["supported_markets"] == ["HK"]
+    assert metadata["market"] == "HK"
+    assert metadata["entry"]["pages"]["scan"]["path"] == "markets/hk/scan/manifest.json"
+    assert metadata["entry"]["assets"]["charts"]["path"] == "markets/hk/charts/index.json"
+    assert metadata["warnings"] == []
+
+
 def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory, monkeypatch, tmp_path):
     service, session_factory = service_and_session_factory
     _insert_runs(
@@ -326,6 +408,78 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [chunk["count"] for chunk in manifest["chunks"]] == [3, 2]
     assert [row["symbol"] for row in first_chunk["rows"]] == ["SYM0", "SYM1", "SYM2"]
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
+
+
+def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
+    artifacts_dir = tmp_path / "artifacts"
+    us_dir = artifacts_dir / "job-us" / "markets" / "us"
+    hk_dir = artifacts_dir / "job-hk" / "markets" / "hk"
+    us_dir.mkdir(parents=True)
+    hk_dir.mkdir(parents=True)
+
+    (us_dir / "scan").mkdir()
+    (hk_dir / "scan").mkdir()
+    (us_dir / "scan" / "manifest.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (hk_dir / "scan" / "manifest.json").write_text('{"ok": true}\n', encoding="utf-8")
+
+    us_entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-04-04",
+        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "pages": {"home": {"path": "markets/us/home.json"}, "scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
+        "freshness": {"scan_run_id": 11},
+    }
+    hk_entry = {
+        "market": "HK",
+        "display_name": "Hong Kong",
+        "as_of_date": "2026-04-03",
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+        "pages": {"home": {"path": "markets/hk/home.json"}, "scan": {"path": "markets/hk/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/hk/charts/index.json", "limit": 200, "symbols_total": 0}},
+        "freshness": {"scan_run_id": 12},
+    }
+
+    (us_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-04T22:00:00Z",
+                "market": "US",
+                "entry": us_entry,
+                "warnings": ["US local warning"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (hk_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-04T22:00:00Z",
+                "market": "HK",
+                "entry": hk_entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "combined"
+    result = StaticSiteExportService.combine_market_artifacts(artifacts_dir, output_dir)
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert result.manifest == manifest
+    assert manifest["default_market"] == "US"
+    assert manifest["supported_markets"] == ["US", "HK"]
+    assert manifest["markets"]["US"]["pages"]["scan"]["path"] == "markets/us/scan/manifest.json"
+    assert manifest["markets"]["HK"]["pages"]["scan"]["path"] == "markets/hk/scan/manifest.json"
+    assert (output_dir / "markets" / "us" / "scan" / "manifest.json").exists()
+    assert (output_dir / "markets" / "hk" / "scan" / "manifest.json").exists()
+    assert "US local warning" in manifest["warnings"]
+    assert any("JP" in warning for warning in manifest["warnings"])
+    assert any("TW" in warning for warning in manifest["warnings"])
 
 
 def test_export_marks_optional_sections_unavailable_without_aborting(

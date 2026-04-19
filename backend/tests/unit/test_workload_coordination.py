@@ -64,6 +64,26 @@ def test_external_fetch_lease_uses_global_key():
     assert kwargs == {"nx": True, "ex": 7200}
 
 
+def test_disable_serialized_market_workload_bypasses_coordination():
+    from app.tasks.workload_coordination import (
+        disable_serialized_market_workload,
+        serialized_market_workload,
+    )
+
+    task = SimpleNamespace(request=SimpleNamespace(id="task-123"))
+
+    @serialized_market_workload("build_daily_snapshot")
+    def my_func(self, market=None):
+        return {"status": "ok", "market": market}
+
+    with patch("app.wiring.bootstrap.get_workload_coordination") as mock_get_coordination:
+        with disable_serialized_market_workload():
+            result = my_func(task, market="HK")
+
+    assert result == {"status": "ok", "market": "HK"}
+    mock_get_coordination.assert_not_called()
+
+
 @patch("app.wiring.bootstrap.get_workload_coordination")
 @patch("app.wiring.bootstrap.get_data_fetch_lock")
 def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
