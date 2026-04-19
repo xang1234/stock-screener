@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from ..celery_app import celery_app
+from ..config import settings
 from ..database import SessionLocal
 from ..services.ibd_industry_service import IBDIndustryService
 from .market_queues import log_extra, normalize_market
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _tracked_ibd_csv_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "data" / "IBD_industry_group.csv"
+    return Path(settings.ibd_industry_csv_path)
 
 
 @celery_app.task(

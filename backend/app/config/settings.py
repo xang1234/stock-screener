@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     tw_universe_allow_insecure_fallback: bool = False
     tw_universe_source_twse_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2"
     tw_universe_source_tpex_url: str = "https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4"
+    ibd_industry_csv_path: str = str(_PROJECT_ROOT / "data" / "IBD_industry_group.csv")
 
     # Per-market rate budget overrides. Each value is in requests-per-second
     # for that market specifically. None means "use universe-weighted division
