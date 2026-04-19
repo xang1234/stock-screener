@@ -284,12 +284,25 @@ jobs:
           keep_artifact_id = int(os.environ["KEEP_ARTIFACT_ID"])
 
           result = subprocess.run(
-              ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts"],
+              [
+                  "gh",
+                  "api",
+                  "--paginate",
+                  "--slurp",
+                  f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+              ],
               check=True,
               capture_output=True,
               text=True,
           )
-          payload = json.loads(result.stdout)
+          pages = json.loads(result.stdout)
+          payload = {
+              "artifacts": [
+                  artifact
+                  for page in pages
+                  for artifact in page.get("artifacts", [])
+              ]
+          }
           duplicates = [
               artifact["id"]
               for artifact in payload.get("artifacts", [])
