@@ -89,7 +89,7 @@ class TestRateInterval:
 
 class TestBatchSize:
     @pytest.mark.parametrize("market,expected_default", [
-        ("US", 50), ("HK", 25), ("JP", 25), ("TW", 20),
+        ("US", 50), ("HK", 50), ("JP", 50), ("TW", 50),
     ])
     def test_default_batch_sizes(self, market, expected_default):
         with patch("app.services.rate_budget_policy.settings") as mock_settings:

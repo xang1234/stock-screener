@@ -50,10 +50,10 @@ class RateBudgetPolicy:
         "sec_edgar": 0.15,     # 10 req/sec
     }
 
-    # Per-market batch sizes — smaller for non-US markets given slower
-    # exchange data and less yfinance batch reliability. 9.3 will tune.
+    # Per-market batch sizes. Keep the defaults uniform unless operators
+    # explicitly override them via settings.
     _DEFAULT_BATCH_SIZE: Dict[str, Dict[str, int]] = {
-        "yfinance": {"US": 50, "HK": 25, "JP": 25, "TW": 20},
+        "yfinance": {"US": 50, "HK": 50, "JP": 50, "TW": 50},
         "finviz":   {"US": 100, "HK": 50, "JP": 50, "TW": 50},
     }
 
