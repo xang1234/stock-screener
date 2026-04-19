@@ -204,6 +204,49 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
   });
 
+  it('derives stage-local progress from counts even when progress_mode is stale', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Price Refresh',
+          progress_mode: 'indeterminate',
+          percent: null,
+          message: 'Refreshing prices',
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            progress_mode: 'indeterminate',
+            percent: null,
+            current: 550,
+            total: 1000,
+            message: 'Batch 2/4 · refreshing prices',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        bootstrapState="running"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
+  });
+
   it('uses stage_key instead of the display label to unlock primary-market stage progress', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
@@ -289,5 +332,50 @@ describe('BootstrapSetupScreen', () => {
 
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
     expect(screen.queryByText('Preparing bootstrap')).not.toBeInTheDocument();
+  });
+
+  it('keeps bootstrap percent sourced from a complete tuple', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Price Refresh',
+          progress_mode: 'determinate',
+          percent: null,
+          current: 25,
+          total: null,
+          message: 'Refreshing prices',
+          background_warning: 'Additional data loading continues in the background.',
+        },
+        markets: [
+          {
+            market: 'US',
+            stage_key: 'prices',
+            stage_label: 'Price Refresh',
+            status: 'running',
+            progress_mode: 'determinate',
+            percent: null,
+            current: 550,
+            total: 1000,
+            message: 'Batch 2/4 · refreshing prices',
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US']}
+        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        bootstrapState="running"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.queryByText('25%')).not.toBeInTheDocument();
   });
 });

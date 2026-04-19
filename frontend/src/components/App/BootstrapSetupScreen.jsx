@@ -44,7 +44,7 @@ function resolveDeterminatePercent(percent, current, total) {
 }
 
 function resolveStageLocalProgress(activity) {
-  if (!activity || activity.progress_mode !== 'determinate') {
+  if (!activity) {
     return null;
   }
   const stageKey = activity.stage_key || '';
@@ -129,14 +129,21 @@ export default function BootstrapSetupScreen({
       || 'indeterminate'
     )
   );
+  const bootstrapResolvedPercent = resolveDeterminatePercent(
+    bootstrap?.percent,
+    bootstrap?.current,
+    bootstrap?.total,
+  );
+  const primaryActivityResolvedPercent = resolveDeterminatePercent(
+    primaryActivity?.percent,
+    primaryActivity?.current,
+    primaryActivity?.total,
+  );
   const bootstrapPercent = (
     bootstrapProgressMode === 'determinate'
       ? (stageLocalProgress?.percent
-        ?? resolveDeterminatePercent(
-          bootstrap?.percent ?? primaryActivity?.percent,
-          bootstrap?.current ?? primaryActivity?.current,
-          bootstrap?.total ?? primaryActivity?.total,
-        )
+        ?? bootstrapResolvedPercent
+        ?? primaryActivityResolvedPercent
         ?? 0)
       : null
   );

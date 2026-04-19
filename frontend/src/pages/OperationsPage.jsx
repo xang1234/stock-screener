@@ -413,6 +413,7 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
           const canCancel = job.cancel_strategy && job.cancel_strategy !== 'unsupported';
           const isCancelling = cancelInFlight && cancellingTaskId === job.task_id;
           const progressValue = resolveDeterminatePercent(job.percent, job.current, job.total);
+          const hasDeterminateProgress = job.progress_mode === 'determinate' && progressValue != null;
           return (
             <TableRow key={job.task_id}>
               <TableCell>
@@ -432,15 +433,15 @@ function JobsTable({ jobs, onCancel, cancellingTaskId, cancelInFlight }) {
               <TableCell>{job.market || '—'}</TableCell>
               <TableCell>{job.worker || '—'}</TableCell>
               <TableCell sx={{ minWidth: 220 }}>
-                {job.progress_mode === 'determinate' ? (
+                {hasDeterminateProgress ? (
                   <Box sx={{ minWidth: 180 }}>
                     <LinearProgress
                       variant="determinate"
-                      value={progressValue ?? 0}
+                      value={progressValue}
                       aria-label={`${job.task_name} progress`}
                     />
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-                      {progressValue != null ? `${Math.round(progressValue)}%` : 'Progress'}{job.current != null && job.total != null
+                      {`${Math.round(progressValue)}%`}{job.current != null && job.total != null
                         ? ` · ${job.current}/${job.total}`
                         : ''}
                     </Typography>

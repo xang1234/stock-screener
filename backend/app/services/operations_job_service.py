@@ -747,7 +747,7 @@ class OperationsJobService:
 
         self._augment_with_runtime_activity(db, records, lease_snapshot)
         for record in records.values():
-            if record.progress_mode == "indeterminate":
+            if record.progress_mode == "indeterminate" or not record.message:
                 self._apply_job_backend_progress(record)
             self._apply_heartbeat_progress(record)
 

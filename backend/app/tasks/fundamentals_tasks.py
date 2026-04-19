@@ -137,7 +137,7 @@ def _load_active_universe_stocks(
     *,
     market: str | None = None,
 ) -> list[StockUniverse]:
-    query = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+    query = db.query(StockUniverse).filter(StockUniverse.is_active)
     if market is not None:
         query = query.filter(StockUniverse.market == market)
     return query.all()
@@ -618,7 +618,7 @@ def populate_initial_cache(self, limit: Optional[int] = None):
 
     try:
         # Get all active stocks from universe
-        query = db.query(StockUniverse).filter(StockUniverse.is_active == True)
+        query = db.query(StockUniverse).filter(StockUniverse.is_active)
 
         if limit:
             query = query.limit(limit)
@@ -770,7 +770,7 @@ def get_cache_stats(symbols: Optional[List[str]] = None):
         # Get symbols to check
         if symbols is None:
             universe_stocks = db.query(StockUniverse).filter(
-                StockUniverse.is_active == True
+                StockUniverse.is_active
             ).limit(100).all()  # Check first 100 for quick stats
             symbols = [s.symbol for s in universe_stocks]
 
