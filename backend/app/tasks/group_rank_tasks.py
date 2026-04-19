@@ -105,6 +105,16 @@ def _validate_same_day_cache_only_group_rankings(
     return None
 
 
+def _should_repair_current_us_metadata(
+    *,
+    calc_date: date,
+    today_et: date,
+    activity_lifecycle: str,
+) -> bool:
+    """Only repair live US surfaces for same-day or bootstrap ranking runs."""
+    return activity_lifecycle == "bootstrap" or calc_date == today_et
+
+
 @celery_app.task(
     bind=True,
     name='app.tasks.group_rank_tasks.calculate_daily_group_rankings',
@@ -271,11 +281,18 @@ def calculate_daily_group_rankings(
         logger.info("=" * 60)
 
         repair_stats = None
-        try:
-            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+        if _should_repair_current_us_metadata(
+            calc_date=calc_date,
+            today_et=today_et,
+            activity_lifecycle=activity_lifecycle,
+        ):
             from ..interfaces.tasks.feature_store_tasks import _repair_current_us_group_metadata
 
             repair_stats = _repair_current_us_group_metadata(ranking_date=calc_date)
+
+        try:
+            from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
+
             safe_publish_groups_bootstrap()
         except Exception as snapshot_error:
             logger.warning("Group rankings snapshot publish failed: %s", snapshot_error)

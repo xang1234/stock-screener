@@ -373,6 +373,10 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
     completed = []
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks._repair_current_us_group_metadata",
+        lambda **_kwargs: {"status": "ok"},
+    )
 
     result = module.calculate_daily_group_rankings.run(market="US")
 
@@ -380,6 +384,7 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
     assert started[0]["stage_key"] == "groups"
     assert started[0]["lifecycle"] == "daily_refresh"
     assert completed[0]["stage_key"] == "groups"
+    assert result["metadata_repair"] == {"status": "ok"}
 
 
 def test_daily_group_rankings_skip_non_us_market(monkeypatch):
@@ -433,3 +438,82 @@ def test_daily_group_rankings_fail_explicitly_when_ibd_mappings_missing(monkeypa
 
     assert "error" in result
     assert "ibd industry mappings are not loaded" in result["error"].lower()
+
+
+def test_historical_group_rankings_do_not_repair_current_us_metadata(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
+    ]
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    repair_calls = []
+    publish_calls = []
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks._repair_current_us_group_metadata",
+        lambda **kwargs: repair_calls.append(kwargs) or {"status": "ok"},
+    )
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: publish_calls.append("published"))
+
+    result = module.calculate_daily_group_rankings.run("2026-03-19", market="US")
+
+    assert result["groups_ranked"] == 1
+    assert repair_calls == []
+    assert publish_calls == ["published"]
+    assert result["metadata_repair"] is None
+
+
+def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Software", "avg_rs_rating": 95.0, "rank": 1, "num_stocks": 12}
+    ]
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks._repair_current_us_group_metadata",
+        MagicMock(side_effect=RuntimeError("repair failed")),
+    )
+    publish_snapshot = MagicMock()
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", publish_snapshot)
+    completed = MagicMock()
+    monkeypatch.setattr(module, "mark_market_activity_completed", completed)
+
+    result = module.calculate_daily_group_rankings.run(market="US")
+
+    assert "error" in result
+    assert "repair failed" in result["error"].lower()
+    completed.assert_not_called()
+    publish_snapshot.assert_not_called()
