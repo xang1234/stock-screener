@@ -101,7 +101,8 @@ See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend
 
 On first launch the app boots into a setup screen — no pre-seeded database required. Pick a **primary market** (the one that opens first) and any additional **enabled markets** to hydrate in the background, then click **Start bootstrap**.
 
-![Bootstrap setup](docs/screenshots/bootstrap-setup.jpg)
+<img src="docs/screenshots/bootstrap-setup.jpg" alt="Bootstrap setup" width="500" />
+
 *Primary-market dropdown and enabled-markets checkboxes on first launch*
 
 The orchestrator runs a staged Celery pipeline for the primary market:
@@ -114,7 +115,8 @@ The orchestrator runs a staged Celery pipeline for the primary market:
 6. **Feature snapshot** (US only) — daily feature rollup used by the Setup Engine.
 7. **Initial autoscan** — seeds a first scan with the default profile so you land on populated results.
 
-![Bootstrap progress](docs/screenshots/bootstrap-progress.jpg)
+<img src="docs/screenshots/bootstrap-progress.jpg" alt="Bootstrap progress" width="500" />
+
 *Per-stage progress with per-market queue status while the pipeline is running*
 
 The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,jp,tw}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
