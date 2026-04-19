@@ -55,6 +55,7 @@ STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
 STATIC_SUPPORTED_MARKETS = ("US", "HK", "JP", "TW")
+STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
     "HK": "Hong Kong",
@@ -130,7 +131,14 @@ class StaticSiteExportService:
         self._fundamentals_cache = get_fundamentals_cache()
         self._benchmark_cache = get_benchmark_cache()
 
-    def export(self, output_dir: Path, *, clean: bool = True) -> StaticSiteExportResult:
+    def export(
+        self,
+        output_dir: Path,
+        *,
+        clean: bool = True,
+        markets: tuple[str, ...] | None = None,
+        write_manifest: bool = True,
+    ) -> StaticSiteExportResult:
         output_dir = Path(output_dir)
         generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         warnings: list[str] = []
@@ -141,9 +149,10 @@ class StaticSiteExportService:
 
         with self._session_factory() as db:
             market_entries: dict[str, dict[str, Any]] = {}
+            selected_markets = tuple(markets or STATIC_SUPPORTED_MARKETS)
             available_markets = [
                 market
-                for market in STATIC_SUPPORTED_MARKETS
+                for market in selected_markets
                 if self._get_latest_published_run(db, market=market) is not None
             ]
             if not available_markets:
@@ -155,6 +164,7 @@ class StaticSiteExportService:
                 )
 
             for market in available_markets:
+                warning_count_before = len(warnings)
                 market_entries[market] = self._export_market_bundle(
                     db=db,
                     output_dir=output_dir,
@@ -162,31 +172,69 @@ class StaticSiteExportService:
                     generated_at=generated_at,
                     warnings=warnings,
                 )
+                self._write_market_metadata(
+                    output_dir=output_dir,
+                    generated_at=generated_at,
+                    market=market,
+                    entry=market_entries[market],
+                    warnings=warnings[warning_count_before:],
+                )
 
-        default_market = (
-            STATIC_DEFAULT_MARKET
-            if STATIC_DEFAULT_MARKET in market_entries
-            else next(iter(market_entries))
+        manifest = self._build_manifest(
+            market_entries=market_entries,
+            generated_at=generated_at,
+            warnings=warnings,
         )
-        default_entry = market_entries[default_market]
-        manifest = {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "as_of_date": default_entry["as_of_date"],
-            "default_market": default_market,
-            "supported_markets": list(market_entries.keys()),
-            "features": dict(default_entry["features"]),
-            "pages": dict(default_entry["pages"]),
-            "assets": dict(default_entry["assets"]),
-            "markets": market_entries,
-            "warnings": warnings,
-        }
-        self._write_json(output_dir / "manifest.json", manifest)
+        if write_manifest:
+            self._write_json(output_dir / "manifest.json", manifest)
 
         return StaticSiteExportResult(
             output_dir=output_dir,
             generated_at=generated_at,
-            as_of_date=default_entry["as_of_date"],
+            as_of_date=manifest["as_of_date"],
+            warnings=tuple(warnings),
+            manifest=manifest,
+        )
+
+    @classmethod
+    def combine_market_artifacts(
+        cls,
+        artifacts_dir: Path,
+        output_dir: Path,
+        *,
+        clean: bool = True,
+    ) -> StaticSiteExportResult:
+        artifacts_dir = Path(artifacts_dir)
+        output_dir = Path(output_dir)
+        generated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        warnings: list[str] = []
+
+        if clean and output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        market_entries, warnings = cls._collect_market_artifacts(
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir,
+            warnings=warnings,
+        )
+        missing_markets = [
+            market for market in STATIC_SUPPORTED_MARKETS if market not in market_entries
+        ]
+        warnings.extend(
+            f"Static export market {market} was omitted from the combined bundle because no artifact was produced."
+            for market in missing_markets
+        )
+        manifest = cls._build_manifest(
+            market_entries=market_entries,
+            generated_at=generated_at,
+            warnings=warnings,
+        )
+        cls._write_json(output_dir / "manifest.json", manifest)
+        return StaticSiteExportResult(
+            output_dir=output_dir,
+            generated_at=generated_at,
+            as_of_date=manifest["as_of_date"],
             warnings=tuple(warnings),
             manifest=manifest,
         )
@@ -307,6 +355,87 @@ class StaticSiteExportService:
             },
             "freshness": home_payload.get("freshness", {}),
         }
+
+    @staticmethod
+    def _market_metadata_path(market: str) -> Path:
+        return Path("markets") / market.lower() / STATIC_MARKET_METADATA_FILENAME
+
+    def _write_market_metadata(
+        self,
+        *,
+        output_dir: Path,
+        generated_at: str,
+        market: str,
+        entry: dict[str, Any],
+        warnings: list[str],
+    ) -> None:
+        payload = {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "generated_at": generated_at,
+            "market": market,
+            "entry": entry,
+            "warnings": list(warnings),
+        }
+        self._write_json(output_dir / self._market_metadata_path(market), payload)
+
+    @staticmethod
+    def _build_manifest(
+        *,
+        market_entries: dict[str, dict[str, Any]],
+        generated_at: str,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        if not market_entries:
+            raise RuntimeError("No market artifacts are available to build a static-site manifest")
+
+        ordered_markets = [
+            market for market in STATIC_SUPPORTED_MARKETS if market in market_entries
+        ]
+        ordered_entries = {market: market_entries[market] for market in ordered_markets}
+        default_market = (
+            STATIC_DEFAULT_MARKET
+            if STATIC_DEFAULT_MARKET in ordered_entries
+            else next(iter(ordered_entries))
+        )
+        default_entry = ordered_entries[default_market]
+        return {
+            "schema_version": STATIC_SITE_SCHEMA_VERSION,
+            "generated_at": generated_at,
+            "as_of_date": default_entry["as_of_date"],
+            "default_market": default_market,
+            "supported_markets": ordered_markets,
+            "features": dict(default_entry["features"]),
+            "pages": dict(default_entry["pages"]),
+            "assets": dict(default_entry["assets"]),
+            "markets": ordered_entries,
+            "warnings": list(warnings),
+        }
+
+    @classmethod
+    def _collect_market_artifacts(
+        cls,
+        *,
+        artifacts_dir: Path,
+        output_dir: Path,
+        warnings: list[str],
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        market_entries: dict[str, dict[str, Any]] = {}
+        metadata_paths = sorted(artifacts_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
+        for metadata_path in metadata_paths:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            market = str(payload["market"]).upper()
+            entry = payload.get("entry")
+            if not isinstance(entry, dict):
+                raise RuntimeError(f"Invalid market metadata payload at {metadata_path}")
+            source_market_dir = metadata_path.parent
+            target_market_dir = output_dir / "markets" / market.lower()
+            shutil.copytree(source_market_dir, target_market_dir, dirs_exist_ok=True)
+            market_entries[market] = entry
+            warnings.extend(str(item) for item in payload.get("warnings", []))
+
+        if not market_entries:
+            raise RuntimeError("No market artifacts are available to combine into a static-site bundle")
+        return market_entries, warnings
 
     def _build_optional_section_payload(
         self,

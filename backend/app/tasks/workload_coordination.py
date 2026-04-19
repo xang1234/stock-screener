@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 try:
     import redis  # type: ignore
@@ -16,6 +18,10 @@ from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
 
 EXTERNAL_FETCH_GLOBAL_KEY = "external_fetch_global"
 MARKET_WORKLOAD_PREFIX = "market_workload"
+_SERIALIZED_MARKET_WORKLOAD_DISABLED: ContextVar[bool] = ContextVar(
+    "serialized_market_workload_disabled",
+    default=False,
+)
 
 _RELEASE_LUA = """
 local val = redis.call('get', KEYS[1])
@@ -38,6 +44,16 @@ def _parse_task_id(lock_value: bytes) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+@contextmanager
+def disable_serialized_market_workload() -> Iterator[None]:
+    """Temporarily bypass Redis-backed market-workload leases."""
+    token = _SERIALIZED_MARKET_WORKLOAD_DISABLED.set(True)
+    try:
+        yield
+    finally:
+        _SERIALIZED_MARKET_WORKLOAD_DISABLED.reset(token)
 
 
 class WorkloadCoordination:
@@ -134,6 +150,9 @@ def serialized_market_workload(task_name: str):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            if _SERIALIZED_MARKET_WORKLOAD_DISABLED.get():
+                return func(*args, **kwargs)
+
             market_value: Optional[str] = kwargs.get("market")
             task = args[0] if args and hasattr(args[0], "request") else None
             task_id = getattr(getattr(task, "request", None), "id", None) or "unknown"

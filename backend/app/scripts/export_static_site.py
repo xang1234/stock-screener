@@ -21,6 +21,7 @@ from app.services.bulk_data_fetcher import BulkDataFetcher
 from app.services.ibd_industry_service import IBDIndustryService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
+from app.tasks.workload_coordination import disable_serialized_market_workload
 from app.utils.market_hours import get_last_market_close, is_trading_day
 from app.utils.symbol_support import split_supported_price_symbols
 from app.wiring.bootstrap import (
@@ -78,19 +79,20 @@ def _upsert_feature_run_pointer(*, pointer_key: str, run_id: int) -> None:
         db.commit()
 
 
-def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
+def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None) -> dict[str, Any]:
     """Refresh recent price bars in batches without Redis or warmup metadata."""
     price_cache = get_price_cache()
     fetcher = BulkDataFetcher()
 
     with SessionLocal() as db:
-        active_symbols = [
-            symbol
-            for symbol, in db.query(StockUniverse.symbol)
+        query = (
+            db.query(StockUniverse.symbol)
             .filter(StockUniverse.is_active.is_(True))
             .order_by(StockUniverse.market_cap.desc().nullslast(), StockUniverse.symbol.asc())
-            .all()
-        ]
+        )
+        if market is not None:
+            query = query.filter(StockUniverse.market == market)
+        active_symbols = [symbol for symbol, in query.all()]
         supported_symbols, skipped_symbols = split_supported_price_symbols(active_symbols)
         latest_rows = (
             db.query(StockPrice.symbol, func.max(StockPrice.date))
@@ -125,6 +127,7 @@ def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
             )
         return {
             "status": "skipped",
+            "market": market,
             "as_of_date": as_of_date.isoformat(),
             "total_active_symbols": len(active_symbols),
             "supported_symbols": len(supported_symbols),
@@ -160,6 +163,7 @@ def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
         batch_results = fetcher.fetch_prices_in_batches(
             batch_symbols,
             period=STATIC_DAILY_PRICE_REFRESH_PERIOD,
+            market=market,
         )
         batch_to_store: dict[str, Any] = {}
         for symbol, payload in batch_results.items():
@@ -179,6 +183,7 @@ def _refresh_static_daily_prices(*, as_of_date: date) -> dict[str, Any]:
 
     return {
         "status": "completed",
+        "market": market,
         "as_of_date": as_of_date.isoformat(),
         "total_active_symbols": len(active_symbols),
         "supported_symbols": len(supported_symbols),
@@ -317,6 +322,7 @@ def _ensure_breadth_history(
 
 def _run_daily_refresh(
     *,
+    market: str | None = None,
     skip_universe_refresh: bool = False,
     skip_fundamentals_refresh: bool = False,
     build_mode: Literal["price_delta", "full"] = STATIC_BUILD_MODE_PRICE_DELTA,
@@ -341,13 +347,16 @@ def _run_daily_refresh(
             return True
         return False
 
-    with disable_serialized_data_fetch_lock():
+    selected_markets = (market,) if market is not None else STATIC_EXPORT_MARKETS
+    with disable_serialized_data_fetch_lock(), disable_serialized_market_workload():
         results: dict[str, Any] = {}
         if not skip_universe_refresh:
-            results["universe_refresh"] = refresh_stock_universe.run()
+            universe_kwargs = {"market": market} if market is not None else {}
+            results["universe_refresh"] = refresh_stock_universe.run(**universe_kwargs)
 
         if not skip_fundamentals_refresh:
-            results["fundamentals_refresh"] = refresh_all_fundamentals.run()
+            fundamentals_kwargs = {"market": market} if market is not None else {}
+            results["fundamentals_refresh"] = refresh_all_fundamentals.run(**fundamentals_kwargs)
 
         if build_mode == STATIC_BUILD_MODE_FULL and hydrate_published_snapshot:
             provider_snapshot_service = get_provider_snapshot_service()
@@ -363,61 +372,62 @@ def _run_daily_refresh(
                 "loaded": IBDIndustryService.load_from_csv(db, csv_path=_tracked_ibd_csv_path()),
             }
 
-        results["price_refresh"] = _refresh_static_daily_prices(as_of_date=as_of_date)
+        results["price_refresh"] = _refresh_static_daily_prices(as_of_date=as_of_date, market=market)
         feature_snapshots: dict[str, Any] = {}
-        for market in STATIC_EXPORT_MARKETS:
+        for selected_market in selected_markets:
             market_result = build_daily_snapshot.run(
                 as_of_date_str=as_of_date.isoformat(),
                 static_daily_mode=True,
-                universe_name=f"market:{market.lower()}",
-                market=market,
-                publish_pointer_key=_market_pointer_key(market),
+                universe_name=f"market:{selected_market.lower()}",
+                market=selected_market,
+                publish_pointer_key=_market_pointer_key(selected_market),
                 ignore_runtime_market_gate=True,
             )
-            feature_snapshots[market] = market_result
+            feature_snapshots[selected_market] = market_result
 
         results["feature_snapshots"] = feature_snapshots
-        for market, snapshot in feature_snapshots.items():
-            if market == STATIC_DEFAULT_MARKET:
+        for snapshot_market, snapshot in feature_snapshots.items():
+            if snapshot_market == STATIC_DEFAULT_MARKET:
                 continue
             if _snapshot_ready(snapshot):
                 continue
             status = snapshot.get("status")
             reason = snapshot.get("reason")
-            message = f"Static export market {market} snapshot returned status {status!r}"
+            message = f"Static export market {snapshot_market} snapshot returned status {status!r}"
             if reason:
                 message += f" ({reason})."
             else:
                 message += "."
             warnings.append(message)
 
-        default_snapshot = feature_snapshots.get(STATIC_DEFAULT_MARKET, {})
-        default_snapshot_status = default_snapshot.get("status")
-        default_snapshot_ready = _snapshot_ready(default_snapshot)
-        default_run_id = (
-            default_snapshot.get("run_id")
-            or default_snapshot.get("existing_run_id")
-        )
-        if default_snapshot_ready and default_run_id is not None:
-            _upsert_feature_run_pointer(
-                pointer_key="latest_published",
-                run_id=default_run_id,
+        if STATIC_DEFAULT_MARKET in feature_snapshots:
+            default_snapshot = feature_snapshots.get(STATIC_DEFAULT_MARKET, {})
+            default_snapshot_status = default_snapshot.get("status")
+            default_snapshot_ready = _snapshot_ready(default_snapshot)
+            default_run_id = (
+                default_snapshot.get("run_id")
+                or default_snapshot.get("existing_run_id")
             )
-            results["default_market_pointer"] = {
-                "market": STATIC_DEFAULT_MARKET,
-                "pointer_key": "latest_published",
-                "run_id": default_run_id,
-            }
-        elif default_run_id is not None:
-            warnings.append(
-                f"{STATIC_DEFAULT_MARKET} feature snapshot returned status "
-                f"{default_snapshot_status!r}; 'latest_published' was not updated."
-            )
-        else:
-            warnings.append(
-                f"No {STATIC_DEFAULT_MARKET} feature snapshot produced a run id; "
-                "'latest_published' was not updated."
-            )
+            if default_snapshot_ready and default_run_id is not None:
+                _upsert_feature_run_pointer(
+                    pointer_key="latest_published",
+                    run_id=default_run_id,
+                )
+                results["default_market_pointer"] = {
+                    "market": STATIC_DEFAULT_MARKET,
+                    "pointer_key": "latest_published",
+                    "run_id": default_run_id,
+                }
+            elif default_run_id is not None:
+                warnings.append(
+                    f"{STATIC_DEFAULT_MARKET} feature snapshot returned status "
+                    f"{default_snapshot_status!r}; 'latest_published' was not updated."
+                )
+            else:
+                warnings.append(
+                    f"No {STATIC_DEFAULT_MARKET} feature snapshot produced a run id; "
+                    "'latest_published' was not updated."
+                )
 
     return results, warnings
 
@@ -433,6 +443,15 @@ def main() -> int:
         "--refresh-daily",
         action="store_true",
         help="Run the synchronous daily refresh/build steps before exporting.",
+    )
+    parser.add_argument(
+        "--market",
+        choices=STATIC_EXPORT_MARKETS,
+        help="Limit refresh/build/export to one market.",
+    )
+    parser.add_argument(
+        "--combine-artifacts-dir",
+        help="Combine previously exported market artifacts from this directory into one static-data bundle.",
     )
     parser.add_argument(
         "--build-mode",
@@ -462,24 +481,42 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    prepare_runtime()
+    if args.combine_artifacts_dir and args.refresh_daily:
+        raise SystemExit("--combine-artifacts-dir cannot be used together with --refresh-daily")
+    if args.combine_artifacts_dir and args.market:
+        raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
 
     refresh_warnings: list[str] = []
-    if args.refresh_daily:
-        refresh_results, refresh_warnings = _run_daily_refresh(
-            skip_universe_refresh=args.skip_universe_refresh,
-            skip_fundamentals_refresh=args.skip_fundamentals_refresh,
-            build_mode=args.build_mode,
-            hydrate_published_snapshot=args.hydrate_published_snapshot,
+    if args.combine_artifacts_dir:
+        result = StaticSiteExportService.combine_market_artifacts(
+            Path(args.combine_artifacts_dir),
+            Path(args.output_dir),
+            clean=not args.no_clean,
         )
-        print("Daily refresh complete:")
-        for name, result in refresh_results.items():
-            print(f"  - {name}: {result}")
-        for warning in refresh_warnings:
-            print(f"  - warning: {warning}")
+    else:
+        prepare_runtime()
 
-    service = StaticSiteExportService(SessionLocal)
-    result = service.export(Path(args.output_dir), clean=not args.no_clean)
+        if args.refresh_daily:
+            refresh_results, refresh_warnings = _run_daily_refresh(
+                market=args.market,
+                skip_universe_refresh=args.skip_universe_refresh,
+                skip_fundamentals_refresh=args.skip_fundamentals_refresh,
+                build_mode=args.build_mode,
+                hydrate_published_snapshot=args.hydrate_published_snapshot,
+            )
+            print("Daily refresh complete:")
+            for name, result_item in refresh_results.items():
+                print(f"  - {name}: {result_item}")
+            for warning in refresh_warnings:
+                print(f"  - warning: {warning}")
+
+        service = StaticSiteExportService(SessionLocal)
+        result = service.export(
+            Path(args.output_dir),
+            clean=not args.no_clean,
+            markets=((args.market,) if args.market else None),
+            write_manifest=args.market is None,
+        )
 
     print("Static site export complete:")
     print(f"  - output_dir: {result.output_dir}")

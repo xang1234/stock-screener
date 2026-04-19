@@ -16,9 +16,14 @@ permissions:
   id-token: write
 
 jobs:
-  build:
+  build-market:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [US, HK, JP, TW]
     services:
       postgres:
         image: postgres:16-alpine
@@ -46,6 +51,168 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Select weekly reference manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/weekly-reference
+          MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
+          echo "MARKET_LOWER=${MARKET_LOWER}" >> "$GITHUB_ENV"
+          MARKET_MANIFEST="weekly-reference-latest-${MARKET_LOWER}.json"
+          LEGACY_MANIFEST="weekly-reference-latest.json"
+
+          retry_download() {
+            asset_name="$1"
+            for attempt in 1 2 3; do
+              rm -f "/tmp/weekly-reference/${asset_name}"
+              if gh release download weekly-reference-data \
+                --pattern "${asset_name}" \
+                --dir /tmp/weekly-reference >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          retry_list_assets() {
+            for attempt in 1 2 3; do
+              if gh release view weekly-reference-data --json assets --jq '.assets[].name'; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          ASSET_NAMES="$(retry_list_assets)"
+
+          if printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${MARKET_MANIFEST}"; then
+            retry_download "${MARKET_MANIFEST}"
+            echo "WEEKLY_REFERENCE_MODE=market_scoped" >> "$GITHUB_ENV"
+            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/${MARKET_MANIFEST}" >> "$GITHUB_ENV"
+          elif printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${LEGACY_MANIFEST}"; then
+            retry_download "${LEGACY_MANIFEST}"
+            echo "WEEKLY_REFERENCE_MODE=legacy" >> "$GITHUB_ENV"
+            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/${LEGACY_MANIFEST}" >> "$GITHUB_ENV"
+          else
+            echo "No weekly reference manifest found for ${MARKET_LOWER} and no legacy fallback is available." >&2
+            exit 1
+          fi
+
+      - name: Download weekly reference bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          retry_download() {
+            asset_name="$1"
+            for attempt in 1 2 3; do
+              rm -f "/tmp/weekly-reference/${asset_name}"
+              if gh release download weekly-reference-data \
+                --pattern "${asset_name}" \
+                --dir /tmp/weekly-reference >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          export BUNDLE_ASSET_NAME="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["WEEKLY_REFERENCE_MANIFEST"]).read_text(encoding="utf-8"))
+          print(manifest["bundle_asset_name"])
+          PY
+          )"
+          export BUNDLE_SHA256="$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path(os.environ["WEEKLY_REFERENCE_MANIFEST"]).read_text(encoding="utf-8"))
+          print(manifest["sha256"])
+          PY
+          )"
+
+          retry_download "$BUNDLE_ASSET_NAME"
+
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          bundle_path = Path("/tmp/weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
+          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+          expected = os.environ["BUNDLE_SHA256"]
+          if digest != expected:
+              raise SystemExit(
+                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
+                  f"{digest} != {expected}"
+              )
+          print(bundle_path)
+          PY
+
+          echo "WEEKLY_REFERENCE_BUNDLE=/tmp/weekly-reference/${BUNDLE_ASSET_NAME}" >> "$GITHUB_ENV"
+
+      - name: Import weekly reference bundle
+        run: |
+          cd backend
+          python -m app.scripts.import_weekly_reference_bundle \
+            --input "${WEEKLY_REFERENCE_BUNDLE}"
+
+      - name: Load tracked IBD industry seed
+        run: |
+          cd backend
+          python -m app.scripts.load_ibd_industry_groups \
+            --csv ../data/IBD_industry_group.csv
+
+      - name: Export market static data bundle
+        run: |
+          cd backend
+          python -m app.scripts.export_static_site \
+            --output-dir /tmp/static-data \
+            --refresh-daily \
+            --build-mode price_delta \
+            --skip-universe-refresh \
+            --skip-fundamentals-refresh \
+            --market "${{ matrix.market }}"
+
+      - name: Upload market artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-market-${{ matrix.market }}
+          path: /tmp/static-data/markets/${{ env.MARKET_LOWER }}
+          if-no-files-found: error
+
+  combine-and-build:
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+    needs: build-market
+    runs-on: ubuntu-latest
+    env:
+      REDIS_ENABLED: "false"
+      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -59,187 +226,33 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
 
-      - name: Download weekly reference manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p /tmp/weekly-reference
-          if gh release download weekly-reference-data \
-            --pattern "weekly-reference-latest-us.json" \
-            --dir /tmp/weekly-reference >/dev/null 2>&1; then
-            echo "WEEKLY_REFERENCE_MODE=market_scoped" >> "$GITHUB_ENV"
-            for market in hk jp tw; do
-              gh release download weekly-reference-data \
-                --pattern "weekly-reference-latest-${market}.json" \
-                --dir /tmp/weekly-reference
-            done
-          else
-            gh release download weekly-reference-data \
-              --pattern "weekly-reference-latest.json" \
-              --dir /tmp/weekly-reference
-            echo "WEEKLY_REFERENCE_MODE=legacy" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download weekly reference bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${WEEKLY_REFERENCE_MODE}" = "legacy" ]; then
-            BUNDLE_ASSET_NAME="$(python - <<'PY'
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(
-              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["bundle_asset_name"])
-          PY
-            )"
-            BUNDLE_SHA256="$(python - <<'PY'
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(
-              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["sha256"])
-          PY
-            )"
-
-            gh release download weekly-reference-data \
-              --pattern "$BUNDLE_ASSET_NAME" \
-              --dir /tmp/weekly-reference
-
-            export BUNDLE_ASSET_NAME
-            export BUNDLE_SHA256
-            python - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-
-          bundle_path = Path("/tmp/weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
-          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
-          expected = os.environ["BUNDLE_SHA256"]
-          if digest != expected:
-              raise SystemExit(
-                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
-                  f"{digest} != {expected}"
-              )
-          PY
-          else
-            for market in us hk jp tw; do
-              export MARKET="$market"
-              BUNDLE_ASSET_NAME="$(python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          manifest = json.loads(
-              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["bundle_asset_name"])
-          PY
-            )"
-            BUNDLE_SHA256="$(python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          manifest = json.loads(
-              Path(f"/tmp/weekly-reference/weekly-reference-latest-{os.environ['MARKET']}.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["sha256"])
-          PY
-            )"
-
-            gh release download weekly-reference-data \
-              --pattern "$BUNDLE_ASSET_NAME" \
-              --dir /tmp/weekly-reference
-
-            export BUNDLE_ASSET_NAME
-            export BUNDLE_SHA256
-            python - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-
-          bundle_path = Path("/tmp/weekly-reference") / os.environ["BUNDLE_ASSET_NAME"]
-          digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
-          expected = os.environ["BUNDLE_SHA256"]
-          if digest != expected:
-              raise SystemExit(
-                  f"Weekly reference bundle checksum mismatch for {bundle_path.name}: "
-                  f"{digest} != {expected}"
-              )
-          PY
-            done
-          fi
-
-      - name: Import weekly reference bundle
-        run: |
-          cd backend
-          if [ "${WEEKLY_REFERENCE_MODE}" = "legacy" ]; then
-            python -m app.scripts.import_weekly_reference_bundle \
-              --input "/tmp/weekly-reference/$(python - <<'PY'
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(
-              Path("/tmp/weekly-reference/weekly-reference-latest.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["bundle_asset_name"])
-          PY
-            )"
-          else
-            for market in us hk jp tw; do
-              export MARKET="$market"
-              BUNDLE_ASSET_NAME="$(python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          market = os.environ["MARKET"]
-          manifest = json.loads(
-              Path(f"/tmp/weekly-reference/weekly-reference-latest-{market}.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          print(manifest["bundle_asset_name"])
-          PY
-            )"
-            python -m app.scripts.import_weekly_reference_bundle \
-              --input "/tmp/weekly-reference/${BUNDLE_ASSET_NAME}"
-            done
-          fi
-
-      - name: Load tracked IBD industry seed
-        run: |
-          cd backend
-          python -m app.scripts.load_ibd_industry_groups \
-            --csv ../data/IBD_industry_group.csv
-
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
-      - name: Export static data bundle
+      - name: Download market artifacts
+        id: download-market-artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: static-market-*
+          path: /tmp/static-market-artifacts
+          merge-multiple: false
+
+      - name: Validate market artifacts
+        run: |
+          mkdir -p /tmp/static-market-artifacts
+          find /tmp/static-market-artifacts -type f -name 'manifest.market.json'
+          if ! find /tmp/static-market-artifacts -type f -name 'manifest.market.json' | grep -q .; then
+            echo "No market artifacts were produced by the matrix build." >&2
+            exit 1
+          fi
+
+      - name: Combine static data bundle
         run: |
           cd backend
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
-            --refresh-daily \
-            --build-mode price_delta \
-            --skip-universe-refresh \
-            --skip-fundamentals-refresh
+            --combine-artifacts-dir /tmp/static-market-artifacts
 
       - name: Build static frontend
         env:
@@ -254,7 +267,7 @@ jobs:
 
   deploy:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    needs: build
+    needs: combine-and-build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
