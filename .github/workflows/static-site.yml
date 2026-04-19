@@ -61,24 +61,60 @@ jobs:
           mkdir -p /tmp/weekly-reference
           MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
           echo "MARKET_LOWER=${MARKET_LOWER}" >> "$GITHUB_ENV"
+          MARKET_MANIFEST="weekly-reference-latest-${MARKET_LOWER}.json"
+          LEGACY_MANIFEST="weekly-reference-latest.json"
 
-          if gh release download weekly-reference-data \
-            --pattern "weekly-reference-latest-${MARKET_LOWER}.json" \
-            --dir /tmp/weekly-reference >/dev/null 2>&1; then
+          retry_download() {
+            asset_name="$1"
+            for attempt in 1 2 3; do
+              rm -f "/tmp/weekly-reference/${asset_name}"
+              if gh release download weekly-reference-data \
+                --pattern "${asset_name}" \
+                --dir /tmp/weekly-reference >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          ASSET_NAMES="$(gh release view weekly-reference-data --json assets --jq '.assets[].name')"
+
+          if printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${MARKET_MANIFEST}"; then
+            retry_download "${MARKET_MANIFEST}"
             echo "WEEKLY_REFERENCE_MODE=market_scoped" >> "$GITHUB_ENV"
-            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/weekly-reference-latest-${MARKET_LOWER}.json" >> "$GITHUB_ENV"
-          else
-            gh release download weekly-reference-data \
-              --pattern "weekly-reference-latest.json" \
-              --dir /tmp/weekly-reference
+            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/${MARKET_MANIFEST}" >> "$GITHUB_ENV"
+          elif printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${LEGACY_MANIFEST}"; then
+            retry_download "${LEGACY_MANIFEST}"
             echo "WEEKLY_REFERENCE_MODE=legacy" >> "$GITHUB_ENV"
-            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/weekly-reference-latest.json" >> "$GITHUB_ENV"
+            echo "WEEKLY_REFERENCE_MANIFEST=/tmp/weekly-reference/${LEGACY_MANIFEST}" >> "$GITHUB_ENV"
+          else
+            echo "No weekly reference manifest found for ${MARKET_LOWER} and no legacy fallback is available." >&2
+            exit 1
           fi
 
       - name: Download weekly reference bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          retry_download() {
+            asset_name="$1"
+            for attempt in 1 2 3; do
+              rm -f "/tmp/weekly-reference/${asset_name}"
+              if gh release download weekly-reference-data \
+                --pattern "${asset_name}" \
+                --dir /tmp/weekly-reference >/dev/null 2>&1; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
           export BUNDLE_ASSET_NAME="$(python - <<'PY'
           import json
           import os
@@ -98,9 +134,7 @@ jobs:
           PY
           )"
 
-          gh release download weekly-reference-data \
-            --pattern "$BUNDLE_ASSET_NAME" \
-            --dir /tmp/weekly-reference
+          retry_download "$BUNDLE_ASSET_NAME"
 
           python - <<'PY'
           import hashlib
@@ -154,6 +188,9 @@ jobs:
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
     needs: build-market
     runs-on: ubuntu-latest
+    env:
+      REDIS_ENABLED: "false"
+      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
 
     steps:
       - uses: actions/checkout@v4
