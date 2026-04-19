@@ -19,12 +19,14 @@ from app.interfaces.tasks.feature_store_tasks import (
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
     _fail_stale_feature_runs,
+    _repair_current_us_group_metadata,
     _upsert_feature_run_pointer,
     build_daily_snapshot,
 )
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.schemas.universe import UniverseType
-from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
+from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer, StockFeatureDaily
+from app.models.scan_result import Scan
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 
 
@@ -600,6 +602,77 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
     assert nvda.details_json["ibd_group_rank"] == 1
     assert msft.details_json["ibd_industry_group"] == "Software"
     assert msft.details_json["ibd_group_rank"] is None
+
+    engine.dispose()
+
+
+def test_repair_current_us_group_metadata_updates_latest_published_run_and_republishes_scan_snapshot():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            FeatureRunPointer.__table__,
+            StockFeatureDaily.__table__,
+            IBDIndustryGroup.__table__,
+            IBDGroupRank.__table__,
+            Scan.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with session_factory() as db:
+        db.add(
+            FeatureRun(
+                id=31,
+                as_of_date=date(2026, 4, 2),
+                run_type="daily_snapshot",
+                status="published",
+                config_json={"universe": {"market": "US"}},
+            )
+        )
+        db.add(FeatureRunPointer(key="latest_published_market:US", run_id=31))
+        db.add(
+            StockFeatureDaily(
+                run_id=31,
+                symbol="NVDA",
+                as_of_date=date(2026, 4, 2),
+                composite_score=99.0,
+                overall_rating=5,
+                passes_count=4,
+                details_json={"symbol": "NVDA"},
+            )
+        )
+        db.add(Scan(scan_id="scan-us-1", status="completed", feature_run_id=31, universe_market="US"))
+        db.add(IBDIndustryGroup(symbol="NVDA", industry_group="Semiconductors"))
+        db.add(
+            IBDGroupRank(
+                industry_group="Semiconductors",
+                date=date(2026, 4, 2),
+                rank=1,
+                avg_rs_rating=95.0,
+            )
+        )
+        db.commit()
+
+    with patch(
+        "app.services.ui_snapshot_service.safe_publish_scan_bootstrap",
+        return_value=None,
+    ) as mock_publish:
+        stats = _repair_current_us_group_metadata(
+            ranking_date=date(2026, 4, 2),
+            session_factory=session_factory,
+        )
+
+    with session_factory() as db:
+        nvda = db.query(StockFeatureDaily).filter_by(run_id=31, symbol="NVDA").one()
+
+    assert stats["feature_run"]["run_id"] == 31
+    assert stats["feature_run"]["updated_rows"] == 1
+    assert nvda.details_json["ibd_industry_group"] == "Semiconductors"
+    assert nvda.details_json["ibd_group_rank"] == 1
+    assert mock_publish.call_args_list[0].args == ("scan-us-1",)
+    assert mock_publish.call_args_list[1].args == ()
 
     engine.dispose()
 

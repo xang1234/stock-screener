@@ -75,6 +75,60 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
     ] == ["bootstrap"] * 3
 
 
+def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    monkeypatch.setattr(
+        "app.tasks.universe_tasks.refresh_stock_universe",
+        _FakeTask("app.tasks.universe_tasks.refresh_stock_universe"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.universe_tasks.refresh_official_market_universe",
+        _FakeTask("app.tasks.universe_tasks.refresh_official_market_universe"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.industry_tasks.load_tracked_ibd_industry_groups",
+        _FakeTask("app.tasks.industry_tasks.load_tracked_ibd_industry_groups"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.cache_tasks.smart_refresh_cache",
+        _FakeTask("app.tasks.cache_tasks.smart_refresh_cache"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+        _FakeTask("app.tasks.fundamentals_tasks.refresh_all_fundamentals"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
+        _FakeTask("app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"),
+    )
+    monkeypatch.setattr(
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings"),
+    )
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
+        _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
+    )
+
+    signatures = module._build_market_bootstrap_signatures("US", include_initial_scan=True)
+    task_names = [signature.task for signature in signatures]
+
+    assert task_names == [
+        "app.tasks.universe_tasks.refresh_stock_universe",
+        "app.tasks.industry_tasks.load_tracked_ibd_industry_groups",
+        "app.tasks.cache_tasks.smart_refresh_cache",
+        "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
+        "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+        "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
+    ]
+    assert signatures[1].kwargs == {
+        "market": "US",
+        "activity_lifecycle": "bootstrap",
+    }
+
+
 def test_bootstrap_universe_name_uses_uppercase_market_code():
     from app.tasks import runtime_bootstrap_tasks as module
 

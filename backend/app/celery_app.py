@@ -44,6 +44,7 @@ celery_app = Celery(
         'app.tasks.breadth_tasks',  # Market breadth tasks
         'app.tasks.fundamentals_tasks',  # Fundamental data caching tasks
         'app.tasks.group_rank_tasks',  # IBD group ranking tasks
+        'app.tasks.industry_tasks',  # Tracked IBD industry reference loading
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
         'app.tasks.universe_tasks',  # Stock universe management tasks
         'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
@@ -277,6 +278,7 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
 )
 
 _MARKET_JOB_TASKS = (
+    'app.tasks.industry_tasks.load_tracked_ibd_industry_groups',
     'app.tasks.breadth_tasks.calculate_daily_breadth',
     'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
     'app.tasks.group_rank_tasks.calculate_daily_group_rankings',

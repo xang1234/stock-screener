@@ -7,6 +7,7 @@ import pytest
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
 from app.services.ibd_group_rank_service import IncompleteGroupRankingCacheError
+from app.services.ibd_group_rank_service import MissingIBDIndustryMappingsError
 
 
 def _patch_serialized_lock(monkeypatch):
@@ -402,3 +403,33 @@ def test_daily_group_rankings_skip_non_us_market(monkeypatch):
     assert result["status"] == "skipped"
     assert result["reason"] == "group_rankings_are_us_only"
     fake_service.calculate_group_rankings.assert_not_called()
+
+
+def test_daily_group_rankings_fail_explicitly_when_ibd_mappings_missing(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: datetime(2026, 3, 20, 17, 40, 0),
+    )
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service.calculate_group_rankings.side_effect = MissingIBDIndustryMappingsError()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings.run(market="US")
+
+    assert "error" in result
+    assert "ibd industry mappings are not loaded" in result["error"].lower()
