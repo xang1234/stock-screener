@@ -117,9 +117,8 @@ class Settings(BaseSettings):
     finviz_rate_limit_jp: float | None = None
     finviz_rate_limit_tw: float | None = None
 
-    # Per-market batch sizes for yfinance bulk downloads. Smaller batches for
-    # non-US markets reduce the blast radius of any single batch hitting
-    # provider hiccups. Defaults shipped via RateBudgetPolicy._DEFAULT_BATCH_SIZE.
+    # Per-market batch sizes for yfinance bulk downloads. Defaults ship via
+    # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
     yfinance_batch_size_us: int | None = None
     yfinance_batch_size_hk: int | None = None
     yfinance_batch_size_jp: int | None = None
