@@ -191,6 +191,109 @@ describe('StaticScanPage', () => {
     });
   });
 
+  it('passes company_name through to the shared results table before and after hydration', async () => {
+    const chunkRequest = deferred();
+
+    globalThis.fetch = vi.fn(async (url) => {
+      const path = String(url).split('/static-data/')[1];
+
+      if (path === 'manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            pages: {
+              scan: {
+                path: 'scan/manifest.json',
+              },
+            },
+          }),
+        };
+      }
+
+      if (path === 'scan/manifest.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            generated_at: '2026-04-01T00:00:00Z',
+            as_of_date: '2026-03-31',
+            run_id: 9,
+            sort: { field: 'composite_score', order: 'desc' },
+            default_page_size: 50,
+            rows_total: 2,
+            default_filters: { minVolume: 100000000 },
+            default_filtered_rows_total: 1,
+            filter_options: {
+              ibd_industries: ['Semiconductors'],
+              gics_sectors: ['Technology'],
+              ratings: ['Strong Buy'],
+            },
+            initial_rows: [
+              { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, volume: 150000000 },
+            ],
+            chunks: [{ path: 'scan/chunks/chunk-0001.json', count: 2 }],
+            charts: {
+              path: 'charts/index.json',
+              limit: 200,
+              symbols_total: 1,
+              available: true,
+            },
+          }),
+        };
+      }
+
+      if (path === 'charts/index.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            symbols: [{ symbol: 'NVDA', rank: 1, path: 'charts/NVDA.json' }],
+          }),
+        };
+      }
+
+      if (path === 'scan/chunks/chunk-0001.json') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => chunkRequest.promise,
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(resultsTableSpy).toHaveBeenCalled();
+    });
+
+    expect(resultsTableSpy.mock.calls.at(-1)?.[0]?.results?.[0]?.company_name).toBe('NVIDIA Corporation');
+
+    await act(async () => {
+      chunkRequest.resolve({
+        rows: [
+          { symbol: 'NVDA', company_name: 'NVIDIA Corporation', composite_score: 97.5, volume: 150000000 },
+          { symbol: 'MSFT', company_name: 'Microsoft Corporation', composite_score: 89.2, volume: 120000000 },
+        ],
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const latestResults = resultsTableSpy.mock.calls.at(-1)?.[0]?.results ?? [];
+      expect(latestResults).toHaveLength(2);
+      expect(latestResults[0].company_name).toBe('NVIDIA Corporation');
+      expect(latestResults[1].company_name).toBe('Microsoft Corporation');
+    });
+  });
+
   it('normalizes exported filter options before rendering the filter panel', async () => {
     globalThis.fetch = vi.fn(async (url) => {
       const path = String(url).split('/static-data/')[1];

@@ -40,7 +40,8 @@ import {
 } from '../../utils/formatUtils';
 
 // Row height constant for virtualization
-const ROW_HEIGHT = 32;
+const ROW_HEIGHT = 48;
+const SYMBOL_COLUMN_WIDTH = 210;
 
 // MCap column display modes. USD is the default per 3axp: cross-market
 // parity is the common case; local is one click away. Kept as constants
@@ -55,7 +56,7 @@ const columns = [
   { id: 'chart', label: '', sortable: false, width: 60 },
   // Width fits "0700.HK" + MarketBadge + FieldAvailabilityChip on a single
   // line without overflow (nowrap guards the rest).
-  { id: 'symbol', label: 'Sym', sortable: true, width: 130 },
+  { id: 'symbol', label: 'Sym', sortable: true, width: SYMBOL_COLUMN_WIDTH },
   { id: 'rs_trend', label: 'RS Trend', sortable: true, width: 110 },
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
   { id: 'gics_sector', label: 'Sector', sortable: true, width: 80 },
@@ -157,13 +158,38 @@ const VirtualTableRow = memo(function VirtualTableRow({
         </TableCell>
       )}
 
-      <TableCell sx={{ fontWeight: 600, width: 130, minWidth: 130, whiteSpace: 'nowrap' }}>
-        {row.symbol}
-        <MarketBadge market={row.market} exchange={row.exchange} />
-        <FieldAvailabilityChip
-          fieldAvailability={row.field_availability}
-          growthMetricBasis={row.growth_metric_basis}
-        />
+      <TableCell
+        sx={{
+          width: SYMBOL_COLUMN_WIDTH,
+          minWidth: SYMBOL_COLUMN_WIDTH,
+          maxWidth: SYMBOL_COLUMN_WIDTH,
+          py: '4px',
+          overflow: 'hidden',
+        }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, whiteSpace: 'nowrap' }}>
+            <Typography component="span" variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2, flexShrink: 0 }}>
+              {row.symbol}
+            </Typography>
+            <MarketBadge market={row.market} exchange={row.exchange} />
+            <FieldAvailabilityChip
+              fieldAvailability={row.field_availability}
+              growthMetricBasis={row.growth_metric_basis}
+            />
+          </Box>
+          {row.company_name ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              title={row.company_name}
+              sx={{ display: 'block', lineHeight: 1.2, minWidth: 0 }}
+            >
+              {row.company_name}
+            </Typography>
+          ) : null}
+        </Box>
       </TableCell>
 
       <TableCell align="center" sx={{ p: '4px', width: 110, minWidth: 110 }}>
@@ -397,6 +423,11 @@ const VirtualTableRow = memo(function VirtualTableRow({
 }, (prevProps, nextProps) => {
   // Custom comparison - only re-render if the row data actually changed
   return prevProps.row.symbol === nextProps.row.symbol &&
+         prevProps.row.company_name === nextProps.row.company_name &&
+         prevProps.row.market === nextProps.row.market &&
+         prevProps.row.exchange === nextProps.row.exchange &&
+         prevProps.row.field_availability === nextProps.row.field_availability &&
+         prevProps.row.growth_metric_basis === nextProps.row.growth_metric_basis &&
          prevProps.row.composite_score === nextProps.row.composite_score &&
          prevProps.row.rs_rating === nextProps.row.rs_rating &&
          prevProps.row.current_price === nextProps.row.current_price &&
