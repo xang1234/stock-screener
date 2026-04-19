@@ -80,7 +80,19 @@ jobs:
             return 1
           }
 
-          ASSET_NAMES="$(gh release view weekly-reference-data --json assets --jq '.assets[].name')"
+          retry_list_assets() {
+            for attempt in 1 2 3; do
+              if gh release view weekly-reference-data --json assets --jq '.assets[].name'; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 5))
+              fi
+            done
+            return 1
+          }
+
+          ASSET_NAMES="$(retry_list_assets)"
 
           if printf '%s\n' "${ASSET_NAMES}" | grep -Fxq "${MARKET_MANIFEST}"; then
             retry_download "${MARKET_MANIFEST}"

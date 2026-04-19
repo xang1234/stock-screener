@@ -5,7 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date, datetime
 from types import SimpleNamespace
+import sys
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -607,3 +609,31 @@ def test_resolve_latest_completed_us_trading_date_uses_last_market_close(monkeyp
     )
 
     assert export_script._resolve_latest_completed_us_trading_date() == datetime(2026, 4, 2, 16, 0).date()
+
+
+def test_main_rejects_market_in_combine_mode(monkeypatch, tmp_path):
+    combine_calls: list[tuple[object, object, bool]] = []
+
+    monkeypatch.setattr(
+        export_script.StaticSiteExportService,
+        "combine_market_artifacts",
+        lambda artifacts_dir, output_dir, *, clean=True: combine_calls.append((artifacts_dir, output_dir, clean)),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--combine-artifacts-dir",
+            str(tmp_path / "artifacts"),
+            "--market",
+            "HK",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="--combine-artifacts-dir cannot be used together with --market"):
+        export_script.main()
+
+    assert combine_calls == []

@@ -483,6 +483,8 @@ def main() -> int:
 
     if args.combine_artifacts_dir and args.refresh_daily:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --refresh-daily")
+    if args.combine_artifacts_dir and args.market:
+        raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
 
     refresh_warnings: list[str] = []
     if args.combine_artifacts_dir:
