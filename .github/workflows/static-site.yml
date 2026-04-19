@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: write
   contents: read
   pages: write
   id-token: write
@@ -261,9 +262,56 @@ jobs:
         run: cd frontend && npm run build
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        id: upload-pages-artifact
+        uses: actions/upload-pages-artifact@v4
         with:
           path: frontend/dist
+
+      - name: Prune duplicate Pages artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          KEEP_ARTIFACT_ID: ${{ steps.upload-pages-artifact.outputs.artifact_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ["REPOSITORY"]
+          run_id = os.environ["RUN_ID"]
+          keep_artifact_id = int(os.environ["KEEP_ARTIFACT_ID"])
+
+          result = subprocess.run(
+              ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          payload = json.loads(result.stdout)
+          duplicates = [
+              artifact["id"]
+              for artifact in payload.get("artifacts", [])
+              if artifact.get("name") == "github-pages" and artifact.get("id") != keep_artifact_id
+          ]
+
+          if not duplicates:
+              print("No duplicate github-pages artifacts found.", flush=True)
+              raise SystemExit(0)
+
+          print(
+              f"::warning::Pruning {len(duplicates)} duplicate github-pages artifact(s) "
+              f"from run {run_id}; keeping {keep_artifact_id}.",
+              flush=True,
+          )
+          for artifact_id in duplicates:
+              subprocess.run(
+                  ["gh", "api", "--method", "DELETE", f"repos/{repo}/actions/artifacts/{artifact_id}"],
+                  check=True,
+              )
+              print(f"Deleted duplicate github-pages artifact {artifact_id}.", flush=True)
+          PY
 
   deploy:
     if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
