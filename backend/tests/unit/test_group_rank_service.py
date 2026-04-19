@@ -361,6 +361,18 @@ def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_
         service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
 
 
+def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
+
+
 def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()

@@ -171,5 +171,5 @@ class IBDIndustryService:
             records = db.query(IBDIndustryGroup.industry_group).distinct().all()
             return [r.industry_group for r in records]
         except Exception as e:
-            logger.error(f"Error getting all industry groups: {e}")
-            return []
+            logger.error(f"Error getting all industry groups: {e}", exc_info=True)
+            raise
