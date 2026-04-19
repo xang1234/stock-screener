@@ -46,6 +46,15 @@ const tencentHk = {
   growth_metric_basis: null,
 };
 
+const longNameTw = {
+  ...tencentHk,
+  symbol: '2330.TW',
+  market: 'TW',
+  exchange: 'TWSE',
+  currency: 'TWD',
+  company_name: 'Taiwan Semiconductor Manufacturing Company Limited',
+};
+
 const defaultProps = {
   total: 1,
   page: 1,
@@ -60,6 +69,21 @@ const defaultProps = {
 };
 
 describe('ResultsTable — 3axp market / currency / USD toggle', () => {
+  it('renders the company name in the leading symbol cell when available', () => {
+    renderWithProviders(<ResultsTable {...defaultProps} results={[tencentHk]} />);
+
+    const symbolCell = screen.getByText('0700.HK').closest('td');
+    expect(symbolCell).not.toBeNull();
+    expect(within(symbolCell).getByText('Tencent')).toBeInTheDocument();
+  });
+
+  it('preserves the full long company name in the symbol cell title', () => {
+    renderWithProviders(<ResultsTable {...defaultProps} results={[longNameTw]} />);
+
+    const nameElement = screen.getByText('Taiwan Semiconductor Manufacturing Company Limited');
+    expect(nameElement).toHaveAttribute('title', 'Taiwan Semiconductor Manufacturing Company Limited');
+  });
+
   it('renders the HK market badge next to a suffixed symbol', () => {
     renderWithProviders(<ResultsTable {...defaultProps} results={[tencentHk]} />);
     expect(screen.getByText('0700.HK')).toBeInTheDocument();
@@ -105,5 +129,14 @@ describe('ResultsTable — 3axp market / currency / USD toggle', () => {
     expect(screen.queryByTestId('market-badge-US')).not.toBeInTheDocument();
     // Price cell falls back to $ prefix when currency is null.
     expect(screen.getByText('$410.50')).toBeInTheDocument();
+  });
+
+  it('falls back to symbol-only when company_name is absent', () => {
+    const unnamedRow = { ...tencentHk, company_name: null };
+    renderWithProviders(<ResultsTable {...defaultProps} results={[unnamedRow]} />);
+
+    const symbolCell = screen.getByText('0700.HK').closest('td');
+    expect(symbolCell).not.toBeNull();
+    expect(within(symbolCell).queryByText('Tencent')).not.toBeInTheDocument();
   });
 });
