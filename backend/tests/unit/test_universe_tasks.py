@@ -17,11 +17,23 @@ def _patch_data_fetch_lock(monkeypatch):
     return fake_lock
 
 
+def _patch_workload_coordination(monkeypatch):
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.acquire_external_fetch.return_value = (True, False)
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
+    )
+    return fake_coordination
+
+
 def test_refresh_stock_universe_returns_original_error_when_activity_publish_fails(monkeypatch):
     import app.tasks.universe_tasks as module
 
     fake_db = MagicMock()
     _patch_data_fetch_lock(monkeypatch)
+    _patch_workload_coordination(monkeypatch)
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     monkeypatch.setattr(module, "safe_rollback", MagicMock())
     monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)

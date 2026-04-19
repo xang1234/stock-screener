@@ -11,6 +11,8 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+from celery.exceptions import Retry
+
 try:
     import redis  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
@@ -20,6 +22,12 @@ from ..config import settings
 from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
 
 logger = logging.getLogger(__name__)
+
+# Celery treats retry(max_retries=None) as "use the task default", which is
+# too small for lease-contention waits during startup/bootstrap. Use a large
+# explicit ceiling so these coordination waits back off for a long time before
+# ever becoming hard failures.
+_COORDINATION_WAIT_MAX_RETRIES = 10_000
 
 # Per-market keys take the form "data_fetch_job_lock:<market_lower>" (e.g.
 # data_fetch_job_lock:hk); market-agnostic tasks use "data_fetch_job_lock:shared".
@@ -101,6 +109,16 @@ def _build_lock_contention_payload(
         "running_task_id": holder_task_id,
         "message": message,
     }
+
+
+def _retry_coordination_wait(task: Any, message: str) -> None:
+    retries = getattr(getattr(task, "request", None), "retries", 0) or 0
+    countdown = min(15 * (2 ** retries), 300)
+    raise task.retry(
+        exc=RuntimeError(message),
+        countdown=countdown,
+        max_retries=_COORDINATION_WAIT_MAX_RETRIES,
+    )
 
 
 @contextmanager
@@ -468,13 +486,7 @@ def serialized_data_fetch(task_name: str):
                         f"({current.get('task_name', 'unknown')})"
                     )
                     if task_instance is not None and hasattr(task_instance, "retry"):
-                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
-                        countdown = min(15 * (2 ** retries), 300)
-                        raise task_instance.retry(
-                            exc=RuntimeError(message),
-                            countdown=countdown,
-                            max_retries=None,
-                        )
+                        _retry_coordination_wait(task_instance, message)
                     return {
                         "status": "waiting",
                         "wait_reason": f"waiting_for_market_workload:{normalize_market(market_value)}",
@@ -493,13 +505,7 @@ def serialized_data_fetch(task_name: str):
                         f"({current.get('task_name', 'unknown')})"
                     )
                     if task_instance is not None and hasattr(task_instance, "retry"):
-                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
-                        countdown = min(15 * (2 ** retries), 300)
-                        raise task_instance.retry(
-                            exc=RuntimeError(message),
-                            countdown=countdown,
-                            max_retries=None,
-                        )
+                        _retry_coordination_wait(task_instance, message)
                     return {
                         "status": "waiting",
                         "wait_reason": "waiting_for_external_fetch_global",
@@ -521,6 +527,8 @@ def serialized_data_fetch(task_name: str):
                     task_name, duration, market_label,
                 )
                 return result
+            except Retry:
+                raise
             except Exception as e:
                 logger.error(
                     "Error in data fetch task %s (market=%s): %s",

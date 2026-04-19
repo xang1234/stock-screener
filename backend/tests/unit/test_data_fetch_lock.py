@@ -58,6 +58,13 @@ def _make_lock(lock_value=None, ttl=3600):
     return lock, mock_redis, mock_release_script, mock_extend_script
 
 
+def _make_coordination_mock():
+    mock_coordination = MagicMock()
+    mock_coordination.acquire_market_workload.return_value = (True, False)
+    mock_coordination.acquire_external_fetch.return_value = (True, False)
+    return mock_coordination
+
+
 # ---------------------------------------------------------------------------
 # Lock Mechanism Tests
 # ---------------------------------------------------------------------------
@@ -197,14 +204,21 @@ class TestExtendLock:
 class TestSerializedDataFetchDecorator:
     """Tests for the @serialized_data_fetch decorator."""
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_releases_on_success(self, mock_settings, mock_get_instance):
+    def test_decorator_releases_on_success(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """Lock is released after successful completion."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -216,14 +230,21 @@ class TestSerializedDataFetchDecorator:
         mock_lock.acquire.assert_called_once()
         mock_lock.release.assert_called_once()
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_releases_on_error(self, mock_settings, mock_get_instance):
+    def test_decorator_releases_on_error(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """Lock is released after an exception."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -234,14 +255,21 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_releases_on_retry(self, mock_settings, mock_get_instance):
+    def test_decorator_releases_on_retry(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """Lock is released when the task raises Celery Retry."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -252,14 +280,21 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_releases_on_soft_time_limit(self, mock_settings, mock_get_instance):
+    def test_decorator_releases_on_soft_time_limit(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """Lock is released when the task exceeds its soft time limit."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -270,14 +305,21 @@ class TestSerializedDataFetchDecorator:
 
         mock_lock.release.assert_called_once()
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_skips_release_on_reentrant(self, mock_settings, mock_get_instance):
+    def test_decorator_skips_release_on_reentrant(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """Re-entrant acquire does NOT call release."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, True)  # re-entrant
         mock_lock.lock_timeout = 7200
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -319,14 +361,21 @@ class TestSerializedDataFetchDecorator:
         assert result["task_id"] == "live-task-id"
         mock_lock.acquire.assert_called_once()  # no retry loop
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_does_not_release_unacquired_lock(self, mock_settings, mock_get_instance):
+    def test_decorator_does_not_release_unacquired_lock(
+        self,
+        mock_settings,
+        mock_get_instance,
+        mock_get_coordination,
+    ):
         """When lock was never acquired, release() is NOT called."""
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (False, False)
         mock_lock.get_current_holder.return_value = None
         mock_get_instance.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():
@@ -790,13 +839,20 @@ class TestExtendPerMarket:
 class TestDecoratorPassesMarket:
     """Decorator pulls `market` from task kwargs and threads it to the lock."""
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_passes_market_to_acquire(self, mock_settings, mock_get_lock):
+    def test_decorator_passes_market_to_acquire(
+        self,
+        mock_settings,
+        mock_get_lock,
+        mock_get_coordination,
+    ):
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_lock.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func(market=None):
@@ -810,13 +866,20 @@ class TestDecoratorPassesMarket:
         release_kwargs = mock_lock.release.call_args.kwargs
         assert release_kwargs.get("market") == "HK"
 
+    @patch("app.wiring.bootstrap.get_workload_coordination")
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")
-    def test_decorator_defaults_to_shared_when_no_market(self, mock_settings, mock_get_lock):
+    def test_decorator_defaults_to_shared_when_no_market(
+        self,
+        mock_settings,
+        mock_get_lock,
+        mock_get_coordination,
+    ):
         mock_lock = MagicMock()
         mock_lock.acquire.return_value = (True, False)
         mock_lock.lock_timeout = 7200
         mock_get_lock.return_value = mock_lock
+        mock_get_coordination.return_value = _make_coordination_mock()
 
         @serialized_data_fetch("test_task")
         def my_func():

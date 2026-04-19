@@ -105,11 +105,23 @@ def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
     }
     mock_get_coordination.return_value = mock_coordination
 
+    retry_calls = []
+
     def _retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        effective_max_retries = 3 if max_retries is None else max_retries
+        if task.request.retries + 1 > effective_max_retries:
+            raise exc if exc is not None else RuntimeError("max retries exceeded")
         raise Retry(message=str(exc))
 
     task = SimpleNamespace(
-        request=SimpleNamespace(id="task-123", retries=0),
+        request=SimpleNamespace(id="task-123", retries=3),
         retry=_retry,
     )
 
@@ -117,8 +129,18 @@ def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
     def my_func(self, market=None):
         return "ok"
 
-    with pytest.raises(Retry):
-        my_func(task, market="US")
+    with patch("app.tasks.data_fetch_lock.logger") as mock_logger:
+        with pytest.raises(Retry):
+            my_func(task, market="US")
+
+    assert len(retry_calls) == 1
+    assert str(retry_calls[0]["exc"]) == (
+        "waiting_for_external_fetch_global (refresh_all_fundamentals)"
+    )
+    assert retry_calls[0]["countdown"] == 120
+    assert retry_calls[0]["max_retries"] is not None
+    assert retry_calls[0]["max_retries"] > task.request.retries
+    mock_logger.error.assert_not_called()
 
     mock_coordination.acquire_market_workload.assert_called_once_with(
         "smart_refresh_cache",
@@ -134,3 +156,53 @@ def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
         market="US",
     )
     mock_lock.release.assert_called_once_with("task-123", market="US")
+
+
+@patch("app.wiring.bootstrap.get_workload_coordination")
+def test_serialized_market_workload_uses_long_retry_budget_when_lease_is_busy(
+    mock_get_coordination,
+):
+    from app.tasks.workload_coordination import serialized_market_workload
+
+    mock_coordination = MagicMock()
+    mock_coordination.acquire_market_workload.return_value = (False, False)
+    mock_coordination.get_market_workload_holder.return_value = {
+        "task_name": "calculate_daily_breadth",
+        "task_id": "other-task",
+    }
+    mock_get_coordination.return_value = mock_coordination
+
+    retry_calls = []
+
+    def _retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        effective_max_retries = 3 if max_retries is None else max_retries
+        if task.request.retries + 1 > effective_max_retries:
+            raise exc if exc is not None else RuntimeError("max retries exceeded")
+        raise Retry(message=str(exc))
+
+    task = SimpleNamespace(
+        request=SimpleNamespace(id="task-123", retries=3),
+        retry=_retry,
+    )
+
+    @serialized_market_workload("run_bulk_scan")
+    def my_func(self, market=None):
+        return "ok"
+
+    with pytest.raises(Retry):
+        my_func(task, market="US")
+
+    assert len(retry_calls) == 1
+    assert str(retry_calls[0]["exc"]) == (
+        "waiting_for_market_workload:US (calculate_daily_breadth)"
+    )
+    assert retry_calls[0]["countdown"] == 120
+    assert retry_calls[0]["max_retries"] is not None
+    assert retry_calls[0]["max_retries"] > task.request.retries

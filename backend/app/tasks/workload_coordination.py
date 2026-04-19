@@ -22,6 +22,7 @@ _SERIALIZED_MARKET_WORKLOAD_DISABLED: ContextVar[bool] = ContextVar(
     "serialized_market_workload_disabled",
     default=False,
 )
+_COORDINATION_WAIT_MAX_RETRIES = 10_000
 
 _RELEASE_LUA = """
 local val = redis.call('get', KEYS[1])
@@ -140,7 +141,7 @@ def _coordination_retry(task: Any, message: str) -> None:
     raise task.retry(
         exc=RuntimeError(message),
         countdown=countdown,
-        max_retries=None,
+        max_retries=_COORDINATION_WAIT_MAX_RETRIES,
     )
 
 
