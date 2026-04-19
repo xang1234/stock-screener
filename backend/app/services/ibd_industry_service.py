@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import delete
+from ..config import settings
 from ..models.industry import IBDIndustryGroup
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class IBDIndustryService:
             Number of records loaded
         """
         if not csv_path:
-            csv_path = Path(__file__).parent.parent.parent.parent / "data" / "IBD_industry_group.csv"
+            csv_path = settings.ibd_industry_csv_path
 
         csv_path = Path(csv_path)
         if not csv_path.exists():
@@ -171,5 +172,5 @@ class IBDIndustryService:
             records = db.query(IBDIndustryGroup.industry_group).distinct().all()
             return [r.industry_group for r in records]
         except Exception as e:
-            logger.error(f"Error getting all industry groups: {e}")
-            return []
+            logger.error(f"Error getting all industry groups: {e}", exc_info=True)
+            raise

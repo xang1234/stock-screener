@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from sqlalchemy import func
 
+from app.config import settings
 from app.database import SessionLocal
 from app.infra.db.models.feature_store import FeatureRunPointer
 from app.models.industry import IBDGroupRank
@@ -47,7 +48,7 @@ def _default_output_dir() -> Path:
 
 
 def _tracked_ibd_csv_path() -> Path:
-    return repo_root() / "data" / "IBD_industry_group.csv"
+    return Path(settings.ibd_industry_csv_path)
 
 
 def _resolve_latest_completed_us_trading_date() -> date:

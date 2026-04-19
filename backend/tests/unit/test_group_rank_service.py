@@ -12,6 +12,7 @@ from app.models.industry import IBDGroupRank
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
+    MissingIBDIndustryMappingsError,
 )
 
 
@@ -346,6 +347,30 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
     store_rankings.assert_not_called()
+
+
+def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: [],
+    )
+
+    with pytest.raises(MissingIBDIndustryMappingsError, match="IBD industry mappings are not loaded"):
+        service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
+
+
+def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        service.calculate_group_rankings(db_session, date(2026, 3, 20), market="US")
 
 
 def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):

@@ -26,6 +26,7 @@ from ..services.market_activity_service import (
 )
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
+    MissingIBDIndustryMappingsError,
 )
 from ..wiring.bootstrap import get_group_rank_service
 from ..utils.market_hours import is_trading_day, get_eastern_now
@@ -102,6 +103,16 @@ def _validate_same_day_cache_only_group_rankings(
             return "Cache warmup metadata timestamp is invalid"
 
     return None
+
+
+def _should_repair_current_us_metadata(
+    *,
+    calc_date: date,
+    today_et: date,
+    activity_lifecycle: str,
+) -> bool:
+    """Only repair live US surfaces for same-day or bootstrap ranking runs."""
+    return activity_lifecycle == "bootstrap" or calc_date == today_et
 
 
 @celery_app.task(
@@ -269,6 +280,16 @@ def calculate_daily_group_rankings(
 
         logger.info("=" * 60)
 
+        repair_stats = None
+        if _should_repair_current_us_metadata(
+            calc_date=calc_date,
+            today_et=today_et,
+            activity_lifecycle=activity_lifecycle,
+        ):
+            from ..interfaces.tasks.feature_store_tasks import _repair_current_us_group_metadata
+
+            repair_stats = _repair_current_us_group_metadata(ranking_date=calc_date)
+
         try:
             from ..services.ui_snapshot_service import safe_publish_groups_bootstrap
 
@@ -294,6 +315,7 @@ def calculate_daily_group_rankings(
             'top_avg_rs': results[0]['avg_rs_rating'] if results else None,
             'calculation_duration_seconds': round(duration, 2),
             'cache_only': same_day_cache_only,
+            'metadata_repair': repair_stats,
             'timestamp': datetime.now().isoformat()
         }
 
@@ -329,6 +351,25 @@ def calculate_daily_group_rankings(
             'timestamp': datetime.now().isoformat(),
             'cache_only': True,
             'prefetch_stats': e.stats,
+        }
+    except MissingIBDIndustryMappingsError as e:
+        db.rollback()
+        logger.error("✗ Refusing to publish daily group rankings: %s", e)
+        logger.info("=" * 60)
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e),
+        )
+        return {
+            'error': str(e),
+            'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
+            'timestamp': datetime.now().isoformat(),
+            'cache_only': same_day_cache_only,
         }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
