@@ -66,6 +66,27 @@ def _build_data_fetcher(db: Session):
     )
 
 
+def _resolve_symbol_market(db: Session, symbol: str) -> str | None:
+    market = (
+        db.query(StockUniverse.market)
+        .filter(StockUniverse.symbol == symbol.upper())
+        .scalar()
+    )
+    normalized = str(market or "").strip().upper()
+    return normalized or None
+
+
+def _get_latest_feature_run_for_symbol(uow, db: Session, symbol: str):
+    market = _resolve_symbol_market(db, symbol)
+    if market is not None:
+        latest_run = uow.feature_runs.get_latest_published(
+            pointer_key=f"latest_published_market:{market}"
+        )
+        if latest_run is not None:
+            return latest_run
+    return uow.feature_runs.get_latest_published()
+
+
 def _empty_stock_info(symbol: str) -> dict:
     normalized_symbol = symbol.upper()
     return {
@@ -589,6 +610,7 @@ async def get_stock_industry(
 @router.get("/{symbol}/chart-data")
 async def get_chart_data(
     symbol: str = Depends(require_valid_symbol),
+    db: Session = Depends(get_db),
     uow=Depends(get_uow),
 ):
     """
@@ -603,7 +625,7 @@ async def get_chart_data(
     - Growth metrics
     """
     with uow:
-        latest_run = uow.feature_runs.get_latest_published()
+        latest_run = _get_latest_feature_run_for_symbol(uow, db, symbol)
         if latest_run is None:
             raise HTTPException(
                 status_code=404,
@@ -652,7 +674,7 @@ async def get_stock_decision_dashboard(
         degraded_reasons.append("missing_price_history")
 
     with uow:
-        latest_run = uow.feature_runs.get_latest_published()
+        latest_run = _get_latest_feature_run_for_symbol(uow, db, symbol)
         feature_item = None
         feature_row = None
         if latest_run is None:
@@ -785,6 +807,7 @@ async def get_stock_decision_dashboard(
 async def get_stock_peers(
     symbol: str = Depends(require_valid_symbol),
     peer_type: str = Query("industry", pattern="^(industry|sector)$"),
+    db: Session = Depends(get_db),
     uow=Depends(get_uow),
 ):
     """Get industry/sector peers from the latest published feature run."""
@@ -793,7 +816,7 @@ async def get_stock_peers(
     pt = PeerType(peer_type)
 
     with uow:
-        latest_run = uow.feature_runs.get_latest_published()
+        latest_run = _get_latest_feature_run_for_symbol(uow, db, symbol)
         if latest_run is None:
             raise HTTPException(status_code=404, detail="No published feature run available")
 
