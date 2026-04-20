@@ -46,7 +46,7 @@ class MarketTaxonomyService:
     """Load market-aware group/theme mappings from committed CSV files."""
 
     def __init__(self, *, data_dir: Path | None = None) -> None:
-        self._data_dir = data_dir or Path(__file__).resolve().parents[3] / "data"
+        self._data_dir = data_dir or self._default_data_dir()
         self._loaded = False
         self._entries: dict[str, dict[str, MarketTaxonomyEntry]] = {
             "US": {},
@@ -54,6 +54,30 @@ class MarketTaxonomyService:
             "JP": {},
             "TW": {},
         }
+
+    @staticmethod
+    def _default_data_dir(*, service_path: Path | None = None) -> Path:
+        resolved_path = (service_path or Path(__file__)).resolve()
+        candidates: list[Path] = []
+        for parent_index in (3, 2):
+            try:
+                candidates.append(resolved_path.parents[parent_index] / "data")
+            except IndexError:
+                continue
+        candidates.append(Path.cwd() / "data")
+
+        required_files = (
+            "IBD_industry_group.csv",
+            "hk-deep.csv",
+            "kabutan_themes_en.csv",
+            "taiwan-deep.csv",
+        )
+        unique_candidates = list(dict.fromkeys(candidates))
+        best_candidate = max(
+            unique_candidates,
+            key=lambda candidate: sum((candidate / filename).exists() for filename in required_files),
+        )
+        return best_candidate
 
     def refresh(self) -> None:
         self._entries = {"US": {}, "HK": {}, "JP": {}, "TW": {}}

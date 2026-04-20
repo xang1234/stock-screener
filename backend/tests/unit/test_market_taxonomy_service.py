@@ -52,3 +52,16 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert tpex.symbol == "8069.TWO"
     assert tpex.industry_group == "Computer Peripherals"
     assert tpex.themes_list() == []
+
+
+def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp_path):
+    runtime_root = tmp_path / "runtime"
+    service_path = runtime_root / "app" / "app" / "services" / "market_taxonomy_service.py"
+    app_data = runtime_root / "app" / "data"
+    app_data.mkdir(parents=True)
+    _write_csv(app_data / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(app_data / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n700,Internet Services,AI Infrastructure\n")
+
+    resolved = MarketTaxonomyService._default_data_dir(service_path=service_path)
+
+    assert resolved == app_data
