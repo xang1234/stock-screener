@@ -184,6 +184,8 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
 
     raw = _base_raw_result()
     raw["gics_sector"] = "Consumer Discretionary"
+    raw["ibd_industry_group"] = "Legacy Autos"
+    raw["ibd_group_rank"] = 91
 
     class _FakeTaxonomyService:
         def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002

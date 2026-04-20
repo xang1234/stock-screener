@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -83,3 +84,37 @@ def test_get_market_run_series_honors_min_runs_without_cutoff():
         )
 
     assert [run.id for run in market_runs] == [10, 9]
+
+
+def test_get_current_rank_map_skips_historical_rank_change_work(monkeypatch):
+    service = MarketGroupRankingService()
+    latest_run = SimpleNamespace(id=42, as_of_date=date(2026, 4, 4))
+
+    monkeypatch.setattr(
+        service,
+        "_get_latest_published_run",
+        lambda db, *, market, calculation_date=None: latest_run,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        service,
+        "_load_run_rows",
+        lambda db, run_id: ["placeholder"],  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        service,
+        "compute_group_rankings_from_rows",
+        lambda rows, *, ranking_date: [  # noqa: ARG005
+            {"industry_group": "Internet Services", "rank": 4},
+            {"industry_group": "Software", "rank": 7},
+        ],
+    )
+
+    def _unexpected_historical_call(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("historical rank-change work should be skipped")
+
+    monkeypatch.setattr(service, "_get_market_run_series", _unexpected_historical_call)
+    monkeypatch.setattr(service, "apply_group_rank_changes", _unexpected_historical_call)
+
+    rank_map = service.get_current_rank_map(Session(), market="HK")
+
+    assert rank_map == {"Internet Services": 4, "Software": 7}

@@ -31,6 +31,7 @@ class MarketGroupRankingService:
         market: str,
         limit: int = 197,
         calculation_date: date | None = None,
+        include_rank_changes: bool = True,
     ) -> list[dict[str, Any]]:
         latest_run = self._get_latest_published_run(db, market=market, calculation_date=calculation_date)
         if latest_run is None:
@@ -40,6 +41,8 @@ class MarketGroupRankingService:
         rankings = self.compute_group_rankings_from_rows(rows, ranking_date=latest_run.as_of_date)
         if not rankings:
             return []
+        if not include_rank_changes:
+            return rankings[:limit]
 
         market_runs = self._get_market_run_series(
             db,
@@ -70,6 +73,7 @@ class MarketGroupRankingService:
             market=market,
             limit=10_000,
             calculation_date=calculation_date,
+            include_rank_changes=False,
         )
         return {
             str(row["industry_group"]): int(row["rank"])

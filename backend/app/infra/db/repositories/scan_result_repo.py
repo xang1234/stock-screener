@@ -511,9 +511,20 @@ class SqlScanResultRepository(ScanResultRepository):
         if not enriched.get("gics_industry") and meta.get("industry"):
             enriched["gics_industry"] = meta["industry"]
 
-        if not enriched.get("ibd_industry_group") and meta.get("ibd_industry_group"):
+        should_override_industry_group = (
+            normalized_market not in {"", "US"} and meta.get("ibd_industry_group")
+        )
+        should_override_group_rank = (
+            normalized_market not in {"", "US"} and meta.get("ibd_group_rank") is not None
+        )
+
+        if should_override_industry_group and enriched.get("ibd_industry_group") != meta.get("ibd_industry_group"):
             enriched["ibd_industry_group"] = meta["ibd_industry_group"]
-        if (
+        elif not enriched.get("ibd_industry_group") and meta.get("ibd_industry_group"):
+            enriched["ibd_industry_group"] = meta["ibd_industry_group"]
+        if should_override_group_rank and enriched.get("ibd_group_rank") != meta.get("ibd_group_rank"):
+            enriched["ibd_group_rank"] = meta["ibd_group_rank"]
+        elif (
             enriched.get("ibd_group_rank") is None
             and meta.get("ibd_group_rank") is not None
         ):
