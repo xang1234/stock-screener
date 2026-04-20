@@ -75,24 +75,27 @@ def build_india_taxonomy_rows(
     bse_rows: list[dict[str, Any]],
 ) -> tuple[list[dict[str, str]], Counter]:
     primary_by_isin: dict[str, dict[str, str]] = {}
+    venues_by_isin: dict[str, list[dict[str, str]]] = {}
     for row in nse_rows:
-        primary_by_isin[str(row["isin"])] = {
+        isin = str(row["isin"])
+        venue = {
             "symbol": str(row["symbol"]),
             "exchange": str(row["exchange"]),
-            "isin": str(row["isin"]),
+            "isin": isin,
             "name": str(row["name"]),
         }
+        primary_by_isin[isin] = venue
+        venues_by_isin.setdefault(isin, []).append(venue)
     for row in bse_rows:
         isin = str(row["isin"])
-        primary_by_isin.setdefault(
-            isin,
-            {
-                "symbol": str(row["symbol"]),
-                "exchange": str(row["exchange"]),
-                "isin": isin,
-                "name": str(row["name"]),
-            },
-        )
+        venue = {
+            "symbol": str(row["symbol"]),
+            "exchange": str(row["exchange"]),
+            "isin": isin,
+            "name": str(row["name"]),
+        }
+        primary_by_isin.setdefault(isin, venue)
+        venues_by_isin.setdefault(isin, []).append(venue)
 
     primary_by_local = {
         entry["symbol"].split(".", 1)[0]: entry
@@ -139,25 +142,30 @@ def build_india_taxonomy_rows(
             counts["unmatched"] += 1
             continue
 
-        output_row = {
-            "Symbol": primary["symbol"],
-            "Exchange": primary["exchange"],
-            "Industry (Sector)": str(source_row.get("Industry (Sector)") or "").strip(),
-            "Subgroup (Theme)": str(source_row.get("Subgroup (Theme)") or "").strip(),
-            "Sub-industry": str(source_row.get("Sub-industry") or "").strip(),
-            "Source Symbol": token,
-            "Match Type": match_type,
-            "ISIN": primary["isin"],
-            "Company Name": str(source_row.get("Company Name") or "").strip(),
-            "Primary Company Name": primary["name"],
-        }
-        existing = selected_by_symbol.get(primary["symbol"])
-        if existing is not None:
-            counts["duplicate_primary"] += 1
-            if _MATCH_PRIORITY[match_type] >= _MATCH_PRIORITY[existing["Match Type"]]:
-                continue
-        selected_by_symbol[primary["symbol"]] = output_row
         counts[match_type] += 1
+        venues = sorted(
+            venues_by_isin.get(primary["isin"], [primary]),
+            key=lambda venue: (venue["exchange"] != "XNSE", venue["symbol"]),
+        )
+        for venue in venues:
+            output_row = {
+                "Symbol": venue["symbol"],
+                "Exchange": venue["exchange"],
+                "Industry (Sector)": str(source_row.get("Industry (Sector)") or "").strip(),
+                "Subgroup (Theme)": str(source_row.get("Subgroup (Theme)") or "").strip(),
+                "Sub-industry": str(source_row.get("Sub-industry") or "").strip(),
+                "Source Symbol": token,
+                "Match Type": match_type,
+                "ISIN": primary["isin"],
+                "Company Name": str(source_row.get("Company Name") or "").strip(),
+                "Primary Company Name": primary["name"],
+            }
+            existing = selected_by_symbol.get(venue["symbol"])
+            if existing is not None:
+                counts["duplicate_primary"] += 1
+                if _MATCH_PRIORITY[match_type] >= _MATCH_PRIORITY[existing["Match Type"]]:
+                    continue
+            selected_by_symbol[venue["symbol"]] = output_row
 
     return (
         [selected_by_symbol[symbol] for symbol in sorted(selected_by_symbol)],

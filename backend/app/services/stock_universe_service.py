@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..models.stock_universe import (
     StockUniverse,
@@ -28,6 +28,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..models.ticker_validation import TickerValidationLog
 from ..schemas.universe import IndexName
 from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
@@ -55,6 +56,7 @@ class StockUniverseService:
         self._hk_ingestion = hk_universe_ingestion_adapter
         self._jp_ingestion = jp_universe_ingestion_adapter
         self._tw_ingestion = tw_universe_ingestion_adapter
+        self._bulk_fetcher = None
 
     @staticmethod
     def _utc_iso(value: datetime | None) -> str | None:
@@ -169,6 +171,134 @@ class StockUniverseService:
             return float(raw)
         except ValueError:
             return None
+
+    def _get_bulk_fetcher(self):
+        if self._bulk_fetcher is None:
+            from .bulk_data_fetcher import BulkDataFetcher
+
+            self._bulk_fetcher = BulkDataFetcher()
+        return self._bulk_fetcher
+
+    @staticmethod
+    def _is_india_bse_exchange(exchange: str | None) -> bool:
+        return str(exchange or "").strip().upper() in {"BSE", "XBOM"}
+
+    @staticmethod
+    def _has_verified_yfinance_price_coverage(result: Mapping[str, Any] | None) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        if bool(result.get("has_error")):
+            return False
+        price_data = result.get("price_data")
+        if price_data is None:
+            return False
+        try:
+            return len(price_data) > 0
+        except TypeError:
+            return False
+
+    def _india_bse_symbols_with_unresolved_yfinance_failures(
+        self,
+        db: Session,
+        *,
+        symbols: Iterable[str],
+    ) -> set[str]:
+        normalized_symbols = sorted(
+            {
+                str(symbol or "").strip().upper()
+                for symbol in symbols
+                if str(symbol or "").strip()
+            }
+        )
+        if not normalized_symbols:
+            return set()
+
+        cutoff = datetime.utcnow() - timedelta(days=settings.india_bse_validation_days_back)
+        rows = (
+            db.query(TickerValidationLog.symbol)
+            .filter(
+                TickerValidationLog.symbol.in_(normalized_symbols),
+                TickerValidationLog.is_resolved.is_(False),
+                TickerValidationLog.detected_at >= cutoff,
+                TickerValidationLog.consecutive_failures
+                >= settings.india_bse_validation_failures_threshold,
+                TickerValidationLog.data_source.in_(("yfinance", "both")),
+                TickerValidationLog.error_type.in_(
+                    ("no_data", "empty_info", "invalid_response", "delisted")
+                ),
+            )
+            .distinct()
+            .all()
+        )
+        return {str(row[0]).strip().upper() for row in rows if row and row[0]}
+
+    def _filter_india_bse_rows_for_downstream_support(
+        self,
+        db: Session,
+        rows: Iterable[SimpleNamespace],
+    ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
+        normalized_rows = list(rows)
+        if not settings.india_bse_coverage_gate_enabled:
+            return normalized_rows, []
+
+        bse_rows = [row for row in normalized_rows if self._is_india_bse_exchange(row.exchange)]
+        if not bse_rows:
+            return normalized_rows, []
+
+        blocked_symbols = self._india_bse_symbols_with_unresolved_yfinance_failures(
+            db,
+            symbols=(row.symbol for row in bse_rows),
+        )
+        symbols_to_verify = [row.symbol for row in bse_rows if row.symbol not in blocked_symbols]
+        verification_results: dict[str, dict[str, Any]] = {}
+        if symbols_to_verify:
+            verification_results = self._get_bulk_fetcher().fetch_prices_in_batches(
+                symbols_to_verify,
+                period=settings.india_bse_price_verification_period,
+                market="IN",
+            )
+            verified_count = sum(
+                1
+                for symbol in symbols_to_verify
+                if self._has_verified_yfinance_price_coverage(verification_results.get(symbol))
+            )
+            if (
+                verified_count == 0
+                and len(symbols_to_verify) >= settings.india_bse_gate_global_failure_min_symbols
+            ):
+                raise ValueError(
+                    "India BSE coverage gate could not verify any BSE-only symbols via yfinance"
+                )
+
+        accepted_rows: list[SimpleNamespace] = []
+        rejected_rows: list[SimpleNamespace] = []
+        for row in normalized_rows:
+            if not self._is_india_bse_exchange(row.exchange):
+                accepted_rows.append(row)
+                continue
+            if row.symbol in blocked_symbols:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row.source_row_number,
+                        source_symbol=row.source_symbol,
+                        symbol=row.symbol,
+                        reason="unresolved_yfinance_validation_failures",
+                    )
+                )
+                continue
+            if not self._has_verified_yfinance_price_coverage(verification_results.get(row.symbol)):
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row.source_row_number,
+                        source_symbol=row.source_symbol,
+                        symbol=row.symbol,
+                        reason="missing_yfinance_price_coverage",
+                    )
+                )
+                continue
+            accepted_rows.append(row)
+
+        return accepted_rows, rejected_rows
 
     def _canonicalize_in_snapshot_rows(
         self,
@@ -1054,6 +1184,10 @@ class StockUniverseService:
                 f"IN ingestion rejected {len(rejected_rows)} row(s). {sample}"
             )
 
+        canonical_rows, coverage_rejected_rows = self._filter_india_bse_rows_for_downstream_support(
+            db,
+            canonical_rows,
+        )
         now = datetime.utcnow()
         canonical_symbols = [row.symbol for row in canonical_rows]
         existing_rows = {
@@ -1164,13 +1298,14 @@ class StockUniverseService:
         db.commit()
         details_limit = 25
         canonical_preview = canonical_rows[:details_limit]
-        rejected_preview = rejected_rows[:details_limit]
+        rejected_preview = [*rejected_rows, *coverage_rejected_rows][:details_limit]
 
         return {
             "added": added_count,
             "updated": updated_count,
             "total": len(canonical_rows),
-            "rejected": len(rejected_rows),
+            "rejected": len(rejected_rows) + len(coverage_rejected_rows),
+            "coverage_rejected": len(coverage_rejected_rows),
             "source_name": source_name,
             "snapshot_id": snapshot_id,
             "canonical_rows": [

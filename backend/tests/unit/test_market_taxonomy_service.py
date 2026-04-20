@@ -18,6 +18,7 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
         (
             "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n"
             "RELIANCE.NS,XNSE,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n"
+            "500325.BO,XBOM,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n"
             "500002.BO,XBOM,INDUSTRIALS (STOCKS),Electrical Equipment,Industrial Electrical Equipment\n"
         ),
     )
@@ -48,6 +49,12 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert ind_nse.sector == "ENERGY (STOCKS)"
     assert ind_nse.industry == "Integrated Oil & Gas"
     assert ind_nse.industry_group == "Oil & Gas"
+
+    ind_bse_dual_listed = service.get("500325.BO", market="IN", exchange="XBOM")
+    assert ind_bse_dual_listed is not None
+    assert ind_bse_dual_listed.symbol == "500325.BO"
+    assert ind_bse_dual_listed.industry == "Integrated Oil & Gas"
+    assert ind_bse_dual_listed.industry_group == "Oil & Gas"
 
     ind_bse = service.get("500002", market="IN", exchange="XBOM")
     assert ind_bse is not None

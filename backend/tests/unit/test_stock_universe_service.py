@@ -16,9 +16,26 @@ from app.models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
 )
+from app.models.ticker_validation import TickerValidationLog
 from app.services.stock_universe_service import StockUniverseService
 
 stock_universe_service = StockUniverseService()
+
+
+class _FakeBulkFetcher:
+    def __init__(self, results):
+        self._results = results
+        self.calls = []
+
+    def fetch_prices_in_batches(self, symbols, period="1mo", market=None):
+        self.calls.append(
+            {
+                "symbols": list(symbols),
+                "period": period,
+                "market": market,
+            }
+        )
+        return {symbol: self._results.get(symbol, {"has_error": True, "price_data": None}) for symbol in symbols}
 
 
 def _make_session():
@@ -263,8 +280,15 @@ def test_ingest_hk_from_csv_normalizes_variants_with_zero_padding_and_lineage():
 def test_ingest_in_snapshot_rows_prefers_nse_and_keeps_bse_only_symbols():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
+    service = StockUniverseService()
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            "506854.BO": {"has_error": False, "price_data": [1, 2, 3]},
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
 
-    stats = stock_universe_service.ingest_in_snapshot_rows(
+    stats = service.ingest_in_snapshot_rows(
         db,
         rows=[
             {
@@ -303,6 +327,117 @@ def test_ingest_in_snapshot_rows_prefers_nse_and_keeps_bse_only_symbols():
     assert rows[1].market == "IN"
     assert rows[1].exchange == "XNSE"
     assert rows[1].currency == "INR"
+    assert fake_fetcher.calls == [{"symbols": ["506854.BO"], "period": "1mo", "market": "IN"}]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_filters_bse_only_symbols_without_price_coverage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    service._bulk_fetcher = _FakeBulkFetcher(
+        {
+            "500002.BO": {"has_error": True, "price_data": None},
+        }
+    )
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "RELIANCE.NS",
+                "name": "Reliance Industries Limited",
+                "exchange": "XNSE",
+                "sector": "",
+                "industry": "",
+                "market_cap": None,
+                "isin": "INE002A01018",
+            },
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["coverage_rejected"] == 1
+    assert [row.symbol for row in rows] == ["RELIANCE.NS"]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_filters_bse_only_symbols_with_repeated_yfinance_failures():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            "506854.BO": {"has_error": False, "price_data": [1, 2, 3]},
+            "500002.BO": {"has_error": False, "price_data": [1, 2, 3]},
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
+    db.add(
+        TickerValidationLog(
+            symbol="500002.BO",
+            error_type="no_data",
+            error_message="No data returned from API",
+            data_source="yfinance",
+            triggered_by="fundamentals_refresh",
+            is_resolved=False,
+            consecutive_failures=3,
+            detected_at=datetime.utcnow(),
+        )
+    )
+    db.commit()
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "506854.BO",
+                "name": "TANFAC Industries Ltd.",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 4816.33,
+                "isin": "INE639B01023",
+            },
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["coverage_rejected"] == 1
+    assert [row.symbol for row in rows] == ["506854.BO"]
+    assert fake_fetcher.calls == [{"symbols": ["506854.BO"], "period": "1mo", "market": "IN"}]
     db.close()
 
 

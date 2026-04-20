@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     bse_universe_source_url: str = (
         "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active&Group=&Scripcode="
     )
+    india_bse_coverage_gate_enabled: bool = True
+    india_bse_price_verification_period: str = "1mo"
+    india_bse_gate_global_failure_min_symbols: int = 25
+    india_bse_validation_days_back: int = 30
+    india_bse_validation_failures_threshold: int = 3
     jp_universe_source_url: str = (
         "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
     )

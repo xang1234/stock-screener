@@ -103,9 +103,12 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # Matches the legacy DataSourceService ordering so default callers are
     # unaffected.
     MARKET_US: (PROVIDER_FINVIZ, PROVIDER_YFINANCE, PROVIDER_ALPHAVANTAGE),
-    # HK / IN / JP / TW: yfinance only. finviz screener is US-only and the
+    # HK / JP / TW: yfinance only. finviz screener is US-only and the
     # alphavantage free tier does not cover these markets.
     MARKET_HK: (PROVIDER_YFINANCE,),
+    # IN: yfinance only. BSE-only .BO listings are admitted into the active
+    # universe only after India ingest verifies Yahoo price coverage and skips
+    # symbols with repeated unresolved Yahoo validation failures.
     MARKET_IN: (PROVIDER_YFINANCE,),
     MARKET_JP: (PROVIDER_YFINANCE,),
     MARKET_TW: (PROVIDER_YFINANCE,),
