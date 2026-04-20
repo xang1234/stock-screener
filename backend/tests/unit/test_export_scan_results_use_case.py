@@ -19,7 +19,9 @@ from app.use_cases.scanning.export_scan_results import (
 
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
+    FakeScanResultRepository,
     FakeUnitOfWork,
+    make_domain_item,
 )
 
 
@@ -172,6 +174,22 @@ class TestHappyPath:
         name_idx = header.index("Company Name")
         assert data_row[name_idx] == "Apple Inc."
 
+    def test_csv_coerces_scalar_market_themes_without_character_splitting(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(uow, feature_store, rows=[
+            _make_feature_row("AAPL", market_themes="AI Infrastructure"),
+        ])
+        uc = ExportScanResultsUseCase()
+
+        result = uc.execute(uow, _make_query())
+        rows = _parse_csv_bytes(result.content)
+
+        header = rows[0]
+        data_row = rows[1]
+        themes_idx = header.index("Market Themes")
+        assert data_row[themes_idx] == "AI Infrastructure"
+
 
 class TestScanNotFound:
     """Use case raises EntityNotFoundError for missing scans."""
@@ -184,18 +202,20 @@ class TestScanNotFound:
             uc.execute(uow, _make_query(scan_id="not-a-scan"))
 
 
-class TestUnboundScanRaises:
-    """Scan exists but has no feature_run_id — raises EntityNotFoundError."""
+class TestUnboundScanFallsBackToLegacy:
+    """Scan exists but has no feature_run_id — export uses legacy scan_results."""
 
-    def test_unbound_scan_raises_feature_run_not_found(self):
-        uow = FakeUnitOfWork()
+    def test_unbound_scan_exports_from_legacy_scan_results(self):
+        uow = FakeUnitOfWork(
+            scan_results=FakeScanResultRepository(items=[make_domain_item("AAPL")])
+        )
         uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
         uc = ExportScanResultsUseCase()
 
-        with pytest.raises(EntityNotFoundError) as exc_info:
-            uc.execute(uow, _make_query())
+        result = uc.execute(uow, _make_query())
+        rows = _parse_csv_bytes(result.content)
 
-        assert exc_info.value.entity == "FeatureRun"
+        assert rows[1][0] == "AAPL"
 
 
 class TestEmptyResults:

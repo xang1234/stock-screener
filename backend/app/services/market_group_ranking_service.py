@@ -100,11 +100,14 @@ class MarketGroupRankingService:
             row for row in current_rankings
             if row.get(change_key) is not None
         ]
-        groups_with_change.sort(key=lambda row: row[change_key], reverse=True)
+        gainers = [row for row in groups_with_change if row[change_key] > 0]
+        losers = [row for row in groups_with_change if row[change_key] < 0]
+        gainers.sort(key=lambda row: row[change_key], reverse=True)
+        losers.sort(key=lambda row: row[change_key])
         return {
             "period": period,
-            "gainers": groups_with_change[:limit],
-            "losers": groups_with_change[-limit:][::-1],
+            "gainers": gainers[:limit],
+            "losers": losers[:limit],
         }
 
     def get_group_history(
@@ -399,7 +402,9 @@ class MarketGroupRankingService:
                 continue
             if run.as_of_date in seen_dates:
                 continue
-            should_include = cutoff_date is None or run.as_of_date >= cutoff_date or len(market_runs) < min_runs
+            should_include = len(market_runs) < min_runs or (
+                cutoff_date is not None and run.as_of_date >= cutoff_date
+            )
             if not should_include:
                 break
             market_runs.append(run)

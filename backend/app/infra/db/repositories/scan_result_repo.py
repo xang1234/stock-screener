@@ -15,7 +15,7 @@ from app.domain.scanning.ports import ScanResultRepository
 from app.analysis.patterns.report import validate_setup_engine_report_payload
 from app.infra.query import scan_result_query
 from app.infra.query.scan_result_query import apply_filters, apply_sort_all, apply_sort_and_paginate
-from app.infra.serialization import convert_numpy_types
+from app.infra.serialization import convert_numpy_types, normalize_string_list
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
@@ -377,7 +377,7 @@ class SqlScanResultRepository(ScanResultRepository):
                 d["ibd_group_rank"] = rank_by_group.get(group_name)
 
         requested_markets = {
-            str(d.get("market") or "").upper()
+            str(d.get("market") or "").strip().upper()
             for d in enrichment.values()
             if str(d.get("market") or "").strip().upper() not in {"", "US"}
         }
@@ -519,7 +519,7 @@ class SqlScanResultRepository(ScanResultRepository):
         ):
             enriched["ibd_group_rank"] = meta["ibd_group_rank"]
         if "market_themes" not in enriched:
-            enriched["market_themes"] = list(meta.get("market_themes") or [])
+            enriched["market_themes"] = normalize_string_list(meta.get("market_themes"))
 
         return enriched
 
@@ -780,7 +780,7 @@ def _map_row_to_domain(
         "eps_rating": result.eps_rating,
         "ibd_industry_group": result.ibd_industry_group,
         "ibd_group_rank": result.ibd_group_rank,
-        "market_themes": list(details.get("market_themes") or []),
+        "market_themes": normalize_string_list(details.get("market_themes")),
         "gics_sector": result.gics_sector,
         "gics_industry": result.gics_industry,
         "rs_sparkline_data": result.rs_sparkline_data if include_sparklines else None,

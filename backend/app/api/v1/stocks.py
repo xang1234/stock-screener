@@ -9,6 +9,7 @@ from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from ...database import get_db
+from ...infra.serialization import normalize_string_list
 from ...models.market_breadth import MarketBreadth
 from ...models.stock_universe import StockUniverse
 from ...models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics
@@ -196,7 +197,7 @@ def _build_chart_data_payload(latest_run, item) -> dict:
         "gics_industry": ef.get("gics_industry"),
         "ibd_industry_group": ef.get("ibd_industry_group"),
         "ibd_group_rank": ef.get("ibd_group_rank"),
-        "market_themes": list(ef.get("market_themes") or []),
+        "market_themes": normalize_string_list(ef.get("market_themes")),
         "rs_rating": ef.get("rs_rating"),
         "rs_rating_1m": ef.get("rs_rating_1m"),
         "rs_rating_3m": ef.get("rs_rating_3m"),

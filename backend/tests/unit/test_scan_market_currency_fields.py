@@ -122,6 +122,18 @@ class TestScanResultItemMapping:
         assert response.market_cap_usd is None
         assert response.adv_usd is None
 
+    def test_market_themes_scalar_is_coerced_to_single_item_list(self):
+        item = _make_item(
+            market="HK",
+            exchange="HKEX",
+            currency="HKD",
+            market_themes="AI Infrastructure",
+        )
+
+        response = ScanResultItem.from_domain(item)
+
+        assert response.market_themes == ["AI Infrastructure"]
+
 
 # ---------------------------------------------------------------------------
 # Filter param parsing — exercised via the real GET /results endpoint
