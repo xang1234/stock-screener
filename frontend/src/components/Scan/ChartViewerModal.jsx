@@ -24,6 +24,7 @@ import StockMetricsSidebar from './StockMetricsSidebar';
 import PeerComparisonModal from './PeerComparisonModal';
 import SetupEngineDrawer from './SetupEngineDrawer';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
+import MarketThemesList from '../Stock/MarketThemesList';
 import { getGroupRankColor } from '../../utils/colorUtils';
 
 const inferMarketFromSymbol = (symbol) => {
@@ -491,15 +492,11 @@ function ChartViewerModal({
                 )}
 
                 {marketThemes.length > 0 && (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxWidth: 240 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxWidth: 280 }}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
                       Market Themes
                     </Typography>
-                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                      {marketThemes.map((theme) => (
-                        <Chip key={theme} label={theme} size="small" variant="outlined" sx={{ height: 20 }} />
-                      ))}
-                    </Box>
+                    <MarketThemesList themes={marketThemes} variant="wrap" />
                   </Box>
                 )}
 

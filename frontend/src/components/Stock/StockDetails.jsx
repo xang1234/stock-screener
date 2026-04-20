@@ -31,6 +31,7 @@ import CandlestickChart from '../Charts/CandlestickChart';
 import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import PeerComparisonModal from '../Scan/PeerComparisonModal';
+import MarketThemesList from './MarketThemesList';
 import {
   ValidationDegradedAlert,
   ValidationFailureClustersTable,
@@ -430,17 +431,7 @@ function StockDetails() {
               </Box>
               <Box>
                 <SectionHeader>MARKET THEMES</SectionHeader>
-                {marketThemes.length ? (
-                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                    {marketThemes.map((theme) => (
-                      <Chip key={theme} label={theme} size="small" variant="outlined" color="primary" />
-                    ))}
-                  </Stack>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    No market taxonomy themes are available for this symbol.
-                  </Typography>
-                )}
+                <MarketThemesList themes={marketThemes} variant="wrap" />
               </Box>
             </Stack>
           </AccordionDetails>

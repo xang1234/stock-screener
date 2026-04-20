@@ -23,6 +23,7 @@ import RSSparkline from './RSSparkline';
 import PriceSparkline from './PriceSparkline';
 import FieldAvailabilityChip from './FieldAvailabilityChip';
 import MarketBadge from './MarketBadge';
+import MarketThemesList from '../Stock/MarketThemesList';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import {
   getStageColor,
@@ -220,8 +221,8 @@ const VirtualTableRow = memo(function VirtualTableRow({
         {row.ibd_industry_group || '-'}
       </TableCell>
 
-      <TableCell align="left" sx={{ color: 'text.secondary', width: 180, minWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {row.market_themes?.length ? row.market_themes.join(' · ') : '-'}
+      <TableCell align="left" sx={{ color: 'text.secondary', width: 180, minWidth: 180, py: 0.5 }}>
+        <MarketThemesList themes={row.market_themes} variant="compact" />
       </TableCell>
 
       <TableCell align="center" sx={{
