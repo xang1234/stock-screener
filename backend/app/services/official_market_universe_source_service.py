@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, JP, and TW."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, and TW."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 import io
+import json
 import logging
 import re
 from typing import Any, Iterable
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 
 _HK_SOURCE_NAME = "hkex_official"
+_IN_SOURCE_NAME = "in_reference_bundle"
+_NSE_SOURCE_NAME = "nse_official"
+_BSE_SOURCE_NAME = "bse_official"
 _JP_SOURCE_NAME = "jpx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
 
@@ -35,6 +39,14 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
 )
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
+_NSE_SOURCE_HEADERS = {
+    "Accept": "text/csv,*/*",
+    "Referer": "https://www.nseindia.com/",
+}
+_BSE_SOURCE_HEADERS = {
+    "Accept": "application/json,*/*",
+    "Referer": "https://www.bseindia.com/corporates/List_Scrips.html",
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,8 @@ class OfficialMarketUniverseSourceService:
         normalized_market = str(market or "").strip().upper()
         if normalized_market == "HK":
             return self.fetch_hk_snapshot()
+        if normalized_market == "IN":
+            return self.fetch_in_snapshot()
         if normalized_market == "JP":
             return self.fetch_jp_snapshot()
         if normalized_market == "TW":
@@ -128,6 +142,95 @@ class OfficialMarketUniverseSourceService:
             snapshot_as_of=snapshot_as_of,
             source_metadata=source_metadata,
             rows=tuple(rows),
+        )
+
+    def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        fetched = self._http_get(
+            settings.nse_universe_source_url,
+            extra_headers=_NSE_SOURCE_HEADERS,
+        )
+        fallback_as_of = self._date_from_http_header(fetched.last_modified) or self._utc_today()
+        rows = self.parse_nse_rows(fetched.content)
+        snapshot_as_of = fallback_as_of.isoformat()
+        return OfficialMarketUniverseSnapshot(
+            market="IN",
+            source_name=_NSE_SOURCE_NAME,
+            snapshot_id=f"nse-equity-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata={
+                "source_urls": [settings.nse_universe_source_url],
+                "fetched_at": fetched.fetched_at,
+                "http_last_modified": fetched.last_modified,
+                "tls_verification_disabled": fetched.tls_verification_disabled,
+                "filters": {"series_equals": "EQ"},
+            },
+            rows=tuple(rows),
+        )
+
+    def fetch_bse_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        fetched = self._http_get(
+            settings.bse_universe_source_url,
+            extra_headers=_BSE_SOURCE_HEADERS,
+        )
+        fallback_as_of = self._date_from_http_header(fetched.last_modified) or self._utc_today()
+        rows = self.parse_bse_rows(fetched.content)
+        snapshot_as_of = fallback_as_of.isoformat()
+        return OfficialMarketUniverseSnapshot(
+            market="IN",
+            source_name=_BSE_SOURCE_NAME,
+            snapshot_id=f"bse-equity-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata={
+                "source_urls": [settings.bse_universe_source_url],
+                "fetched_at": fetched.fetched_at,
+                "http_last_modified": fetched.last_modified,
+                "tls_verification_disabled": fetched.tls_verification_disabled,
+                "filters": {"segment_equals": "Equity", "status_equals": "Active"},
+            },
+            rows=tuple(rows),
+        )
+
+    def fetch_in_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        nse_snapshot = self.fetch_nse_snapshot()
+        bse_snapshot = self.fetch_bse_snapshot()
+
+        nse_by_isin = {
+            str(row.get("isin") or "").strip().upper(): row
+            for row in nse_snapshot.rows
+            if str(row.get("isin") or "").strip()
+        }
+        bse_by_isin = {
+            str(row.get("isin") or "").strip().upper(): row
+            for row in bse_snapshot.rows
+            if str(row.get("isin") or "").strip()
+        }
+
+        overlap_isins = sorted(set(nse_by_isin) & set(bse_by_isin))
+        combined_rows = list(sorted(nse_snapshot.rows, key=lambda row: str(row.get("symbol") or "")))
+        for isin, row in sorted(bse_by_isin.items()):
+            if isin in nse_by_isin:
+                continue
+            combined_rows.append(row)
+
+        snapshot_as_of = max(nse_snapshot.snapshot_as_of, bse_snapshot.snapshot_as_of)
+        return OfficialMarketUniverseSnapshot(
+            market="IN",
+            source_name=_IN_SOURCE_NAME,
+            snapshot_id=f"in-reference-bundle-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata={
+                "source_urls": [
+                    settings.nse_universe_source_url,
+                    settings.bse_universe_source_url,
+                ],
+                "nse_snapshot_id": nse_snapshot.snapshot_id,
+                "bse_snapshot_id": bse_snapshot.snapshot_id,
+                "nse_count": len(nse_snapshot.rows),
+                "bse_count": len(bse_snapshot.rows),
+                "overlap_isin_count": len(overlap_isins),
+                "combined_count": len(combined_rows),
+            },
+            rows=tuple(combined_rows),
         )
 
     def fetch_tw_snapshot(self) -> OfficialMarketUniverseSnapshot:
@@ -240,6 +343,85 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
+    def parse_nse_rows(self, content: bytes) -> list[dict[str, Any]]:
+        frame = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False)
+        normalized = self._normalize_columns(frame)
+        self._require_columns(
+            normalized.columns,
+            required=("symbol", "name_of_company", "series", "isin_number"),
+            market="IN/NSE",
+        )
+        series = normalized["series"].astype(str).str.strip().str.upper()
+        filtered = normalized[series == "EQ"].copy()
+
+        rows: list[dict[str, Any]] = []
+        for row in filtered.to_dict("records"):
+            local_code = self._collapse_whitespace(str(row.get("symbol") or "")).upper()
+            name = str(row.get("name_of_company") or "").strip()
+            isin = str(row.get("isin_number") or "").strip().upper()
+            if not local_code or not name or not isin:
+                continue
+            rows.append(
+                {
+                    "symbol": f"{local_code}.NS",
+                    "name": name,
+                    "exchange": "XNSE",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": isin,
+                }
+            )
+
+        if not rows:
+            raise ValueError("IN/NSE official universe parse returned no EQ rows")
+        return sorted(rows, key=lambda row: row["symbol"])
+
+    def parse_bse_rows(self, content: bytes) -> list[dict[str, Any]]:
+        payload = json.loads(content.decode("utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError("IN/BSE official universe response must be a JSON list")
+
+        rows: list[dict[str, Any]] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            local_code = self._normalize_digits(row.get("SCRIP_CD"), pad_to=6, max_digits=6)
+            if not local_code:
+                continue
+            status = str(row.get("Status") or "").strip().lower()
+            segment = str(row.get("Segment") or "").strip().lower()
+            if status and status != "active":
+                continue
+            if segment and segment != "equity":
+                continue
+
+            name = self._collapse_whitespace(
+                str(row.get("Issuer_Name") or row.get("Scrip_Name") or "")
+            )
+            isin = str(row.get("ISIN_NUMBER") or "").strip().upper()
+            market_cap = self._parse_optional_float(row.get("Mktcap"))
+            industry = self._collapse_whitespace(str(row.get("INDUSTRY") or ""))
+            if not name or not isin:
+                continue
+
+            rows.append(
+                {
+                    "symbol": f"{local_code}.BO",
+                    "name": name,
+                    "exchange": "XBOM",
+                    "sector": industry,
+                    "industry": industry,
+                    "market_cap": market_cap,
+                    "isin": isin,
+                    "security_id": self._collapse_whitespace(str(row.get("scrip_id") or "")).upper(),
+                }
+            )
+
+        if not rows:
+            raise ValueError("IN/BSE official universe parse returned no active equity rows")
+        return sorted(rows, key=lambda row: row["symbol"])
+
     def parse_tw_rows(self, html: str, *, exchange: str) -> list[dict[str, Any]]:
         soup = BeautifulSoup(html, "html.parser")
         current_section = ""
@@ -337,8 +519,11 @@ class OfficialMarketUniverseSourceService:
         url: str,
         *,
         allow_insecure_fallback: bool = False,
+        extra_headers: dict[str, str] | None = None,
     ) -> _FetchedSource:
         headers = {"User-Agent": self._user_agent}
+        if extra_headers:
+            headers.update(extra_headers)
         fetched_at = datetime.now(UTC).isoformat()
         try:
             response = requests.get(url, headers=headers, timeout=self._timeout_seconds)
@@ -419,6 +604,16 @@ class OfficialMarketUniverseSourceService:
         if len(digits) < pad_to:
             return digits.zfill(pad_to)
         return digits
+
+    @staticmethod
+    def _parse_optional_float(value: Any) -> float | None:
+        raw = str(value or "").strip().replace(",", "")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
 
     @staticmethod
     def _coerce_date(value: Any) -> date | None:

@@ -17,6 +17,7 @@ def test_calendar_ids_are_canonical_for_supported_markets():
 
     assert service.calendar_id("US") == "XNYS"
     assert service.calendar_id("HK") == "XHKG"
+    assert service.calendar_id("IN") == "XNSE"
     assert service.calendar_id("JP") == "XTKS"
     assert service.calendar_id("TW") == "XTAI"
 

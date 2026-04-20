@@ -14,6 +14,14 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
         "Symbol,EM Industry (EN),Theme (EN)\n700,Internet Services,AI Infrastructure\n",
     )
     _write_csv(
+        tmp_path / "india-deep.csv",
+        (
+            "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n"
+            "RELIANCE.NS,XNSE,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n"
+            "500002.BO,XBOM,INDUSTRIALS (STOCKS),Electrical Equipment,Industrial Electrical Equipment\n"
+        ),
+    )
+    _write_csv(
         tmp_path / "kabutan_themes_en.csv",
         "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n7203,Transportation Equipment,Automobiles,Hybrid Vehicles\n",
     )
@@ -33,6 +41,18 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     hk_unpadded = service.get("700", market="HK")
     assert hk_unpadded is not None
     assert hk_unpadded.symbol == "0700.HK"
+
+    ind_nse = service.get("RELIANCE", market="IN")
+    assert ind_nse is not None
+    assert ind_nse.symbol == "RELIANCE.NS"
+    assert ind_nse.sector == "ENERGY (STOCKS)"
+    assert ind_nse.industry == "Integrated Oil & Gas"
+    assert ind_nse.industry_group == "Oil & Gas"
+
+    ind_bse = service.get("500002", market="IN", exchange="XBOM")
+    assert ind_bse is not None
+    assert ind_bse.symbol == "500002.BO"
+    assert ind_bse.industry_group == "Electrical Equipment"
 
     jp = service.get("7203.T", market="JP")
     assert jp is not None
@@ -61,6 +81,9 @@ def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp
     app_data.mkdir(parents=True)
     _write_csv(app_data / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
     _write_csv(app_data / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n700,Internet Services,AI Infrastructure\n")
+    _write_csv(app_data / "india-deep.csv", "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\nRELIANCE.NS,XNSE,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n")
+    _write_csv(app_data / "kabutan_themes_en.csv", "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n7203,Transportation Equipment,Automobiles,Hybrid Vehicles\n")
+    _write_csv(app_data / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n2330,TWSE,Semiconductors\n")
 
     resolved = MarketTaxonomyService._default_data_dir(service_path=service_path)
 

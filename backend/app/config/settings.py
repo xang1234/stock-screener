@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     hk_universe_source_url: str = (
         "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
     )
+    nse_universe_source_url: str = (
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    )
+    bse_universe_source_url: str = (
+        "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active&Group=&Scripcode="
+    )
     jp_universe_source_url: str = (
         "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
     )
@@ -111,10 +117,12 @@ class Settings(BaseSettings):
     # particular market.
     yfinance_rate_limit_us: float | None = None
     yfinance_rate_limit_hk: float | None = None
+    yfinance_rate_limit_in: float | None = None
     yfinance_rate_limit_jp: float | None = None
     yfinance_rate_limit_tw: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
+    finviz_rate_limit_in: float | None = None
     finviz_rate_limit_jp: float | None = None
     finviz_rate_limit_tw: float | None = None
 
@@ -122,6 +130,7 @@ class Settings(BaseSettings):
     # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
     yfinance_batch_size_us: int | None = None
     yfinance_batch_size_hk: int | None = None
+    yfinance_batch_size_in: int | None = None
     yfinance_batch_size_jp: int | None = None
     yfinance_batch_size_tw: int | None = None
 
@@ -129,6 +138,7 @@ class Settings(BaseSettings):
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
     yfinance_backoff_max_s_us: int | None = None
     yfinance_backoff_max_s_hk: int | None = None
+    yfinance_backoff_max_s_in: int | None = None
     yfinance_backoff_max_s_jp: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
 
@@ -194,6 +204,8 @@ class Settings(BaseSettings):
     cache_warm_minute_us: int = 30
     cache_warm_hour_hk: int = 4
     cache_warm_minute_hk: int = 30
+    cache_warm_hour_in: int = 7
+    cache_warm_minute_in: int = 30
     cache_warm_hour_jp: int = 2
     cache_warm_minute_jp: int = 30
     cache_warm_hour_tw: int = 1
@@ -246,10 +258,12 @@ class Settings(BaseSettings):
     provider_snapshot_on_demand_fallback_enabled: bool = True
     provider_snapshot_min_active_coverage_us: float = 0.98
     provider_snapshot_min_active_coverage_hk: float = 0.70
+    provider_snapshot_min_active_coverage_in: float = 0.60
     provider_snapshot_min_active_coverage_jp: float = 0.60
     provider_snapshot_min_active_coverage_tw: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
+    provider_snapshot_max_missing_ratio_in: float = 0.40
     provider_snapshot_max_missing_ratio_jp: float = 0.40
     provider_snapshot_max_missing_ratio_tw: float = 0.30
 
@@ -392,6 +406,7 @@ class Settings(BaseSettings):
         mapping = {
             "US": (self.cache_warm_hour_us, self.cache_warm_minute_us),
             "HK": (self.cache_warm_hour_hk, self.cache_warm_minute_hk),
+            "IN": (self.cache_warm_hour_in, self.cache_warm_minute_in),
             "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
         }

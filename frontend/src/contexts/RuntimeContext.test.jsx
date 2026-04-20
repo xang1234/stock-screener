@@ -124,7 +124,7 @@ describe('RuntimeProvider', () => {
       primary_market: 'HK',
       enabled_markets: ['HK', 'US'],
       bootstrap_state: 'running',
-      supported_markets: ['US', 'HK', 'JP', 'TW'],
+      supported_markets: ['US', 'HK', 'IN', 'JP', 'TW'],
       api_base_path: '/api',
     });
 
@@ -153,7 +153,7 @@ describe('RuntimeProvider', () => {
       primary_market: 'HK',
       enabled_markets: ['HK', 'US'],
       bootstrap_state: 'running',
-      supported_markets: ['US', 'HK', 'JP', 'TW'],
+      supported_markets: ['US', 'HK', 'IN', 'JP', 'TW'],
       task_id: 'task-bootstrap-123',
     });
 

@@ -37,7 +37,7 @@ export const DEFAULT_CAPABILITIES = {
   primary_market: 'US',
   enabled_markets: ['US'],
   bootstrap_state: 'not_started',
-  supported_markets: ['US', 'HK', 'JP', 'TW'],
+  supported_markets: ['US', 'HK', 'IN', 'JP', 'TW'],
   api_base_path: '/api',
 };
 
@@ -188,7 +188,7 @@ export function RuntimeProvider({ children }) {
       primaryMarket: capabilities.primary_market ?? 'US',
       enabledMarkets: capabilities.enabled_markets ?? ['US'],
       bootstrapState: capabilities.bootstrap_state ?? 'not_started',
-      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'JP', 'TW'],
+      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'IN', 'JP', 'TW'],
       login: (password) => loginMutation.mutateAsync({ password }),
       logout: () => logoutMutation.mutateAsync(),
       startBootstrap: ({ primaryMarket, enabledMarkets }) => (

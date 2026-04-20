@@ -195,6 +195,7 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
                     symbol="7203.T",
                     industry_group="Transportation Equipment",
                     sector="Manufacturing",
+                    industry="Automobiles",
                     themes=("Automation",),
                 )
             return None
@@ -218,6 +219,7 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
     )
 
     assert row.gics_sector == "Manufacturing"
+    assert row.gics_industry == "Automobiles"
     assert row.ibd_industry_group == "Transportation Equipment"
     assert row.ibd_group_rank == 3
     assert row.details["market_themes"] == ["Automation"]

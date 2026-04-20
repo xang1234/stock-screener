@@ -38,11 +38,12 @@ export const SCREENER_OPTIONS = [
 // Geographic markets the backend supports. TEST is a developer utility
 // and deliberately excluded — it's a pseudo-market for bypassing real
 // market selection.
-export const UNIVERSE_GEOGRAPHIC_MARKETS = ['US', 'HK', 'JP', 'TW'];
+export const UNIVERSE_GEOGRAPHIC_MARKETS = ['US', 'HK', 'IN', 'JP', 'TW'];
 
 export const UNIVERSE_MARKETS = [
   { value: 'US', label: 'United States' },
   { value: 'HK', label: 'Hong Kong' },
+  { value: 'IN', label: 'India' },
   { value: 'JP', label: 'Japan' },
   { value: 'TW', label: 'Taiwan' },
   { value: 'TEST', label: 'Test Mode' },
@@ -64,6 +65,9 @@ export const UNIVERSE_SCOPES_BY_MARKET = {
   HK: [
     { value: 'market', label: 'All Hong Kong' },
     { value: 'index:HSI', label: 'Hang Seng Index' },
+  ],
+  IN: [
+    { value: 'market', label: 'All India' },
   ],
   JP: [
     { value: 'market', label: 'All Japan' },

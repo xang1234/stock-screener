@@ -161,6 +161,15 @@ def _ingest_official_market_snapshot(db, stock_universe_service, snapshot) -> di
             snapshot_as_of=snapshot.snapshot_as_of,
             source_metadata=snapshot.source_metadata,
         )
+    if snapshot.market == "IN":
+        return stock_universe_service.ingest_in_snapshot_rows(
+            db,
+            rows=snapshot.rows,
+            source_name=snapshot.source_name,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_as_of=snapshot.snapshot_as_of,
+            source_metadata=snapshot.source_metadata,
+        )
     if snapshot.market == "JP":
         return stock_universe_service.ingest_jp_snapshot_rows(
             db,

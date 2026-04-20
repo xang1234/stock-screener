@@ -21,7 +21,7 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 
-_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "JP", "TW"})
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "TW"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
@@ -104,6 +104,15 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
                 snapshot_as_of=snapshot.snapshot_as_of,
                 source_metadata=snapshot.source_metadata,
             )
+        if snapshot.market == "IN":
+            return stock_universe_service.ingest_in_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
         if snapshot.market == "JP":
             return stock_universe_service.ingest_jp_snapshot_rows(
                 db,
@@ -146,7 +155,7 @@ def refresh_stock_universe(
 
     Args:
         exchange_filter: Optional filter to only refresh specific exchange
-        market: Optional market code (US/HK/JP/TW) for per-market routing and
+        market: Optional market code (US/HK/IN/JP/TW) for per-market routing and
             logging. The actual per-market universe refresh logic lives in the
             market-specific ingestion services (e.g. ingest_hk_universe_csv);
             this task's `market` kwarg currently acts as a log label and queue
@@ -262,7 +271,7 @@ def refresh_official_market_universe(
     market: str,
     activity_lifecycle: str | None = None,
 ):
-    """Refresh HK/JP/TW universe snapshots from official exchange sources."""
+    """Refresh HK/IN/JP/TW universe snapshots from official exchange sources."""
     from ..services.official_market_universe_source_service import (
         OfficialMarketUniverseSourceService,
     )

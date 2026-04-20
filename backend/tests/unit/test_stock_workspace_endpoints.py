@@ -20,6 +20,7 @@ from app.models.market_breadth import MarketBreadth
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
+from app.services.market_taxonomy_service import MarketTaxonomyEntry
 from app.services import server_auth
 from app.wiring.bootstrap import get_uow
 
@@ -487,6 +488,55 @@ async def test_price_history_endpoint_rejects_unsupported_period(client, session
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Unsupported period: 10y"
+
+
+@pytest.mark.asyncio
+async def test_stock_industry_endpoint_uses_market_taxonomy_for_non_us_symbols(client, session, monkeypatch):
+    app.dependency_overrides[get_db] = _override_db(session)
+    session.add(
+        StockUniverse(
+            symbol="RELIANCE.NS",
+            name="Reliance Industries Limited",
+            market="IN",
+            exchange="XNSE",
+            is_active=True,
+            status="active",
+        )
+    )
+    session.commit()
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "RELIANCE.NS" and market == "IN":
+                return MarketTaxonomyEntry(
+                    market="IN",
+                    symbol="RELIANCE.NS",
+                    industry_group="Oil & Gas",
+                    sector="ENERGY (STOCKS)",
+                    industry="Integrated Oil & Gas",
+                )
+            return None
+
+    class _UnexpectedFetcher:
+        @staticmethod
+        def get_industry_classification(symbol):  # noqa: ARG002
+            raise AssertionError("non-US taxonomy path should not hit the fetcher")
+
+    monkeypatch.setattr(stocks_module, "_build_data_fetcher", lambda db: _UnexpectedFetcher())
+    monkeypatch.setattr(
+        "app.services.market_taxonomy_service.get_market_taxonomy_service",
+        lambda: _FakeTaxonomyService(),
+    )
+
+    response = await client.get("/api/v1/stocks/RELIANCE.NS/industry")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "symbol": "RELIANCE.NS",
+        "sector": "ENERGY (STOCKS)",
+        "industry": "Integrated Oil & Gas",
+        "ibd_industry_group": "Oil & Gas",
+    }
 
 
 @pytest.mark.asyncio

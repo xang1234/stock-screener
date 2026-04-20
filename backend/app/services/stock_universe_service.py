@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "US": ("NYSE", "NASDAQ", "AMEX"),
     "HK": ("HKEX", "SEHK", "XHKG"),
+    "IN": ("NSE", "XNSE", "BSE", "XBOM"),
     "JP": ("TSE", "JPX", "XTKS"),
     "TW": ("TWSE", "TPEX", "XTAI"),
 }
@@ -157,6 +159,129 @@ class StockUniverseService:
         # callers must populate any required non-server defaults up front.
         if objects:
             db.bulk_save_objects(objects)
+
+    @staticmethod
+    def _parse_optional_float(value: Any) -> float | None:
+        raw = str(value or "").strip().replace(",", "")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    def _canonicalize_in_snapshot_rows(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+    ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
+        normalized_source_name = str(source_name or "").strip().lower().replace("-", "_")
+        if not normalized_source_name:
+            raise ValueError("source_name must be provided")
+
+        canonical_rows: list[SimpleNamespace] = []
+        rejected_rows: list[SimpleNamespace] = []
+        seen_symbols: set[str] = set()
+
+        for row_number, raw_row in enumerate(rows, start=1):
+            row = dict(raw_row or {})
+            source_symbol = (
+                str(row.get("symbol") or row.get("local_code") or row.get("ticker") or "")
+                .strip()
+                .upper()
+            )
+            if not source_symbol:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol="",
+                        reason="missing symbol",
+                    )
+                )
+                continue
+
+            exchange = str(row.get("exchange") or "").strip().upper() or None
+            name = str(row.get("name") or "").strip()
+            isin = str(row.get("isin") or "").strip().upper()
+            if not name:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol=source_symbol,
+                        reason="missing name",
+                    )
+                )
+                continue
+
+            try:
+                identity = self._security_master.resolve_identity(
+                    symbol=source_symbol,
+                    market="IN",
+                    exchange=exchange,
+                )
+            except Exception as exc:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol=source_symbol,
+                        reason=str(exc),
+                    )
+                )
+                continue
+
+            if identity.canonical_symbol in seen_symbols:
+                continue
+            seen_symbols.add(identity.canonical_symbol)
+
+            row_payload = {
+                "symbol": identity.canonical_symbol,
+                "name": name,
+                "market": identity.market,
+                "exchange": identity.exchange,
+                "currency": identity.currency,
+                "timezone": identity.timezone,
+                "local_code": identity.local_code,
+                "sector": str(row.get("sector") or "").strip(),
+                "industry": str(row.get("industry") or "").strip(),
+                "market_cap": self._parse_optional_float(row.get("market_cap")),
+            }
+            lineage_payload = {
+                "source_name": normalized_source_name,
+                "source_symbol": source_symbol,
+                "source_row_number": row_number,
+                "snapshot_id": snapshot_id,
+                "snapshot_as_of": snapshot_as_of,
+                "source_metadata": dict(source_metadata or {}),
+                "raw_row": row,
+                "isin": isin,
+            }
+            canonical_rows.append(
+                SimpleNamespace(
+                    **row_payload,
+                    source_name=normalized_source_name,
+                    source_symbol=source_symbol,
+                    source_row_number=row_number,
+                    snapshot_id=snapshot_id,
+                    snapshot_as_of=snapshot_as_of,
+                    source_metadata={
+                        **dict(source_metadata or {}),
+                        **({"isin": isin} if isin else {}),
+                        **(
+                            {"security_id": str(row.get("security_id") or "").strip().upper()}
+                            if str(row.get("security_id") or "").strip()
+                            else {}
+                        ),
+                    },
+                    lineage_hash=self._sha256_text(self._stable_json(lineage_payload)),
+                    row_hash=self._sha256_text(self._stable_json(row_payload)),
+                )
+            )
+
+        return canonical_rows, rejected_rows
 
     def _apply_status_transition(
         self,
@@ -899,6 +1024,178 @@ class StockUniverseService:
         updated_reconciliation["artifact_hash"] = run.artifact_hash
         updated_reconciliation["safety"] = safety
         return updated_reconciliation
+
+    def ingest_in_snapshot_rows(
+        self,
+        db: Session,
+        *,
+        rows: Iterable[dict[str, Any]],
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest IN rows with exchange-aware canonicalization and lineage metadata."""
+        canonical_rows, rejected_rows = self._canonicalize_in_snapshot_rows(
+            rows,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+        )
+
+        if strict and rejected_rows:
+            sample = "; ".join(
+                f"row {row.source_row_number}: {row.reason}"
+                for row in rejected_rows[:3]
+            )
+            raise ValueError(
+                f"IN ingestion rejected {len(rejected_rows)} row(s). {sample}"
+            )
+
+        now = datetime.utcnow()
+        canonical_symbols = [row.symbol for row in canonical_rows]
+        existing_rows = {
+            row.symbol: row
+            for row in db.query(StockUniverse).filter(
+                StockUniverse.symbol.in_(canonical_symbols)
+            ).all()
+        } if canonical_symbols else {}
+
+        added_count = 0
+        updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
+
+        for row in canonical_rows:
+            event_payload = {
+                "source_name": row.source_name,
+                "source_symbol": row.source_symbol,
+                "source_row_number": row.source_row_number,
+                "snapshot_id": row.snapshot_id,
+                "snapshot_as_of": row.snapshot_as_of,
+                "source_metadata": row.source_metadata,
+                "lineage_hash": row.lineage_hash,
+                "row_hash": row.row_hash,
+            }
+            reason = f"Present in IN source snapshot {row.snapshot_id}"
+            existing = existing_rows.get(row.symbol)
+
+            if existing is not None:
+                existing.name = row.name or existing.name
+                existing.market = row.market
+                existing.exchange = row.exchange
+                existing.currency = row.currency
+                existing.timezone = row.timezone
+                existing.local_code = row.local_code or existing.local_code
+                existing.sector = row.sector or existing.sector
+                existing.industry = row.industry or existing.industry
+                if row.market_cap is not None:
+                    existing.market_cap = row.market_cap
+                self._apply_status_transition(
+                    db,
+                    existing,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="in_ingest",
+                    reason=reason,
+                    now=now,
+                    payload=event_payload,
+                    source="in_ingest",
+                    clear_failures=True,
+                    seen_in_source=True,
+                )
+                updated_count += 1
+                continue
+
+            new_rows.append(
+                StockUniverse(
+                    symbol=row.symbol,
+                    name=row.name,
+                    market=row.market,
+                    exchange=row.exchange,
+                    currency=row.currency,
+                    timezone=row.timezone,
+                    local_code=row.local_code,
+                    sector=row.sector,
+                    industry=row.industry,
+                    market_cap=row.market_cap,
+                    is_active=True,
+                    status=UNIVERSE_STATUS_ACTIVE,
+                    status_reason=reason,
+                    source="in_ingest",
+                    consecutive_fetch_failures=0,
+                    added_at=now,
+                    first_seen_at=now,
+                    last_seen_in_source_at=now,
+                    updated_at=now,
+                )
+            )
+            new_events.append(
+                self._build_status_event_record(
+                    symbol=row.symbol,
+                    old_status=None,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="in_ingest",
+                    reason=reason,
+                    payload=event_payload,
+                )
+            )
+            added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
+
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="IN",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="IN",
+            snapshot_id=snapshot_id,
+            trigger_source="in_ingest",
+            reconciliation=reconciliation,
+            now=now,
+        )
+        db.commit()
+        details_limit = 25
+        canonical_preview = canonical_rows[:details_limit]
+        rejected_preview = rejected_rows[:details_limit]
+
+        return {
+            "added": added_count,
+            "updated": updated_count,
+            "total": len(canonical_rows),
+            "rejected": len(rejected_rows),
+            "source_name": source_name,
+            "snapshot_id": snapshot_id,
+            "canonical_rows": [
+                {
+                    "symbol": row.symbol,
+                    "local_code": row.local_code,
+                    "exchange": row.exchange,
+                    "source_symbol": row.source_symbol,
+                    "lineage_hash": row.lineage_hash,
+                    "row_hash": row.row_hash,
+                }
+                for row in canonical_preview
+            ],
+            "rejected_rows": [
+                {
+                    "source_row_number": row.source_row_number,
+                    "source_symbol": row.source_symbol,
+                    "reason": row.reason,
+                }
+                for row in rejected_preview
+            ],
+            "canonical_rows_truncated": len(canonical_rows) > details_limit,
+            "rejected_rows_truncated": len(rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
+        }
 
     @staticmethod
     def _parse_hk_csv_rows(csv_content: str) -> list[dict[str, Any]]:

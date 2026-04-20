@@ -1,4 +1,4 @@
-"""Shared market-taxonomy loader for US/HK/JP/TW group classifications."""
+"""Shared market-taxonomy loader for US/HK/IN/JP/TW group classifications."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Iterable
 from .security_master_service import security_master_resolver
 
 _HK_LOCAL_CODE_RE = re.compile(r"^[0-9]{1,8}$")
+_IN_LOCAL_CODE_RE = re.compile(r"^[0-9A-Z-]{1,16}$")
 _JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
 _TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
 
@@ -36,6 +37,7 @@ class MarketTaxonomyEntry:
     symbol: str
     industry_group: str | None = None
     sector: str | None = None
+    industry: str | None = None
     themes: tuple[str, ...] = ()
 
     def themes_list(self) -> list[str]:
@@ -51,6 +53,7 @@ class MarketTaxonomyService:
         self._entries: dict[str, dict[str, MarketTaxonomyEntry]] = {
             "US": {},
             "HK": {},
+            "IN": {},
             "JP": {},
             "TW": {},
         }
@@ -69,6 +72,7 @@ class MarketTaxonomyService:
         required_files = (
             "IBD_industry_group.csv",
             "hk-deep.csv",
+            "india-deep.csv",
             "kabutan_themes_en.csv",
             "taiwan-deep.csv",
         )
@@ -80,9 +84,10 @@ class MarketTaxonomyService:
         return best_candidate
 
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "JP": {}, "TW": {}}
+        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "TW": {}}
         self._load_us()
         self._load_hk()
+        self._load_in()
         self._load_jp()
         self._load_tw()
         self._loaded = True
@@ -127,6 +132,7 @@ class MarketTaxonomyService:
         symbol: str,
         industry_group: str | None,
         sector: str | None,
+        industry: str | None,
         themes: Iterable[str],
     ) -> None:
         bucket = self._entries[market]
@@ -143,6 +149,7 @@ class MarketTaxonomyService:
                 symbol=symbol,
                 industry_group=industry_group,
                 sector=sector,
+                industry=industry,
                 themes=tuple(dict.fromkeys(normalized_themes)),
             )
             return
@@ -152,6 +159,7 @@ class MarketTaxonomyService:
             current,
             industry_group=current.industry_group or industry_group,
             sector=current.sector or sector,
+            industry=current.industry or industry,
             themes=merged_themes,
         )
 
@@ -171,6 +179,7 @@ class MarketTaxonomyService:
                     symbol=symbol,
                     industry_group=industry_group,
                     sector=None,
+                    industry=None,
                     themes=(),
                 )
 
@@ -187,7 +196,30 @@ class MarketTaxonomyService:
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("EM Industry (EN)")),
                     sector=None,
+                    industry=None,
                     themes=[row.get("Theme (EN)") or ""],
+                )
+
+    def _load_in(self) -> None:
+        path = self._data_dir / "india-deep.csv"
+        if not path.exists():
+            return
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                symbol = self._canonicalize_in_symbol(
+                    row.get("Symbol"),
+                    exchange=row.get("Exchange"),
+                )
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="IN",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("Subgroup (Theme)")),
+                    sector=self._normalize_text(row.get("Industry (Sector)")),
+                    industry=self._normalize_text(row.get("Sub-industry")),
+                    themes=(),
                 )
 
     def _load_jp(self) -> None:
@@ -203,6 +235,7 @@ class MarketTaxonomyService:
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("TSE 33-Sector")),
                     sector=self._normalize_text(row.get("TSE 17-Sector")),
+                    industry=None,
                     themes=[row.get("Theme (EN)") or ""],
                 )
 
@@ -222,6 +255,7 @@ class MarketTaxonomyService:
                     symbol=symbol,
                     industry_group=self._normalize_text(row.get("Industry (EN)")),
                     sector=None,
+                    industry=None,
                     themes=(),
                 )
 
@@ -240,6 +274,23 @@ class MarketTaxonomyService:
         if market == "HK":
             canonical = self._canonicalize_hk_symbol(normalized)
             return (canonical,) if canonical else (normalized,)
+        if market == "IN":
+            candidates: list[str] = []
+            canonical = self._canonicalize_in_symbol(normalized, exchange=exchange)
+            if canonical:
+                candidates.append(canonical)
+            if "." not in normalized:
+                normalized_exchange = security_master_resolver.normalize_exchange(exchange)
+                if normalized_exchange not in {"BSE", "XBOM"}:
+                    nse_variant = self._canonicalize_in_symbol(normalized, exchange="XNSE")
+                    if nse_variant:
+                        candidates.append(nse_variant)
+                if normalized_exchange not in {"NSE", "XNSE"}:
+                    bse_variant = self._canonicalize_in_symbol(normalized, exchange="XBOM")
+                    if bse_variant:
+                        candidates.append(bse_variant)
+            candidates.append(normalized)
+            return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
         if market == "JP":
             canonical = self._canonicalize_jp_symbol(normalized)
             return (canonical,) if canonical else (normalized,)
@@ -296,6 +347,35 @@ class MarketTaxonomyService:
             market="HK",
             exchange="XHKG",
             local_code=local_code,
+        )
+        return identity.canonical_symbol
+
+    @staticmethod
+    def _canonicalize_in_symbol(
+        raw_symbol: object,
+        *,
+        exchange: object | None = None,
+    ) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("NSE:", "XNSE:", "BSE:", "XBOM:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        if token.endswith(".NS"):
+            token = token[:-3]
+            exchange = "XNSE"
+        elif token.endswith(".BO"):
+            token = token[:-3]
+            exchange = "XBOM"
+        if not _IN_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=token,
+            market="IN",
+            exchange=exchange,
+            local_code=token,
         )
         return identity.canonical_symbol
 

@@ -70,6 +70,7 @@ class FieldCapabilityRegistryService:
     MARKET_ORDER: Tuple[str, ...] = (
         routing_policy.MARKET_US,
         routing_policy.MARKET_HK,
+        routing_policy.MARKET_IN,
         routing_policy.MARKET_JP,
         routing_policy.MARKET_TW,
     )

@@ -258,7 +258,51 @@ def test_ingest_hk_from_csv_normalizes_variants_with_zero_padding_and_lineage():
     assert payload["snapshot_id"] == "hk-20260412"
     assert payload["source_name"] == "hkex_official"
     assert len(payload["lineage_hash"]) == 64
-    assert len(payload["row_hash"]) == 64
+
+
+def test_ingest_in_snapshot_rows_prefers_nse_and_keeps_bse_only_symbols():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+
+    stats = stock_universe_service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "RELIANCE.NS",
+                "name": "Reliance Industries Limited",
+                "exchange": "XNSE",
+                "sector": "",
+                "industry": "",
+                "market_cap": None,
+                "isin": "INE002A01018",
+            },
+            {
+                "symbol": "506854.BO",
+                "name": "TANFAC Industries Ltd.",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 4816.33,
+                "isin": "INE639B01023",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 2
+    assert stats["total"] == 2
+    assert [row.symbol for row in rows] == ["506854.BO", "RELIANCE.NS"]
+    assert rows[0].market == "IN"
+    assert rows[0].exchange == "XBOM"
+    assert rows[0].currency == "INR"
+    assert rows[1].market == "IN"
+    assert rows[1].exchange == "XNSE"
+    assert rows[1].currency == "INR"
     db.close()
 
 

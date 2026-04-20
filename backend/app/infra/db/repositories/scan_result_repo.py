@@ -408,6 +408,8 @@ class SqlScanResultRepository(ScanResultRepository):
                 d["ibd_group_rank"] = non_us_rank_maps.get(market, {}).get(entry.industry_group)
             if entry.sector:
                 d["sector"] = entry.sector
+            if entry.industry:
+                d["industry"] = entry.industry
             d["market_themes"] = entry.themes_list()
 
         return enrichment
