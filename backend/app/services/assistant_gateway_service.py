@@ -41,6 +41,7 @@ advice. Prefer concise, evidence-based responses with citations where possible.
 _CONTENT_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)(?:\s+\"([^\"]+)\")?\)")
 _RAW_URL_PATTERN = re.compile(r"(?<!\()(?P<url>https?://[^\s)]+)")
 _MAX_TOOL_ROUND_TRIPS = 3
+_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
 _TOOL_NAME_SUFFIXES = (
     "market_overview",
     "compare_feature_runs",
@@ -157,8 +158,9 @@ class AssistantGatewayService:
 
         last_network_error: Exception | None = None
         timed_out = False
+        timeout_seconds = self._health_probe_timeout_seconds()
         try:
-            async with self._open_client() as client:
+            async with self._open_client(timeout_seconds=timeout_seconds) as client:
                 for api_base in self._candidate_api_bases():
                     try:
                         response = await client.get(self._models_url(api_base), headers=self._request_headers())
@@ -211,7 +213,7 @@ class AssistantGatewayService:
             logger.warning(
                 "Hermes health check timed out for %s after %s second(s).",
                 configured_api_base,
-                self._settings.hermes_request_timeout_seconds,
+                timeout_seconds,
             )
             return {
                 "status": "timeout",
@@ -473,10 +475,14 @@ class AssistantGatewayService:
             headers["Authorization"] = f"Bearer {self._settings.hermes_api_key}"
         return headers
 
-    def _open_client(self) -> httpx.AsyncClient:
+    def _health_probe_timeout_seconds(self) -> float:
+        configured_timeout = float(getattr(self._settings, "hermes_request_timeout_seconds", 30) or 30)
+        return min(configured_timeout, _HEALTH_PROBE_TIMEOUT_SECONDS)
+
+    def _open_client(self, *, timeout_seconds: float | None = None) -> httpx.AsyncClient:
         if self._client_factory is not None:
             return self._client_factory()
-        return httpx.AsyncClient(timeout=self._settings.hermes_request_timeout_seconds)
+        return httpx.AsyncClient(timeout=timeout_seconds or self._settings.hermes_request_timeout_seconds)
 
     def _configured_hermes_api_base(self) -> str:
         return str(self._settings.hermes_api_base or "").strip()

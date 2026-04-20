@@ -197,6 +197,43 @@ async def test_health_prefers_timeout_over_earlier_network_error(session_factory
     assert payload["detail"] == "Hermes health check timed out."
 
 
+@pytest.mark.asyncio
+async def test_health_caps_probe_timeout_for_readiness_checks(session_factory, monkeypatch):
+    assistant_settings = SimpleNamespace(
+        hermes_api_base="http://hermes.test/v1",
+        hermes_api_key="test-key",
+        hermes_model="hermes-agent",
+        hermes_request_timeout_seconds=120,
+        mcp_watchlist_writes_enabled=False,
+        mcp_server_name="stockscreen-market-copilot",
+    )
+    requested_timeouts: list[float | int | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/models"
+        return httpx.Response(200, json={"data": [{"id": "hermes-agent"}]})
+
+    service = AssistantGatewayService(
+        app_settings=assistant_settings,
+        session_factory=session_factory,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    def fake_open_client(*, timeout_seconds):
+        requested_timeouts.append(timeout_seconds)
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            timeout=timeout_seconds,
+        )
+
+    monkeypatch.setattr(service, "_open_client", fake_open_client)
+
+    payload = await service.health()
+
+    assert payload["status"] == "healthy"
+    assert requested_timeouts == [5]
+
+
 def test_preview_watchlist_add_classifies_symbols(session_factory, assistant_settings):
     service = AssistantGatewayService(
         app_settings=assistant_settings,
