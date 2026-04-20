@@ -69,7 +69,10 @@ def _build_data_fetcher(db: Session):
 def _resolve_symbol_market(db: Session, symbol: str) -> str | None:
     market = (
         db.query(StockUniverse.market)
-        .filter(StockUniverse.symbol == symbol.upper())
+        .filter(
+            StockUniverse.active_filter(),
+            StockUniverse.symbol == symbol.upper(),
+        )
         .scalar()
     )
     normalized = str(market or "").strip().upper()

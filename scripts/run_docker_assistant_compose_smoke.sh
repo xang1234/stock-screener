@@ -8,12 +8,16 @@ COOKIE_JAR="$TMP_DIR/cookies.txt"
 FRONTEND_PORT="${FRONTEND_PORT:-18080}"
 SERVER_AUTH_PASSWORD="${SERVER_AUTH_PASSWORD:-smoke-password}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ssc_assistant_smoke}"
+ASSISTANT_HEALTH_MAX_ATTEMPTS="${ASSISTANT_HEALTH_MAX_ATTEMPTS:-150}"
 export COMPOSE_PROJECT_NAME
 
 cleanup() {
   echo "--- Backend container logs (last 100 lines) ---"
   docker logs --tail=100 "${COMPOSE_PROJECT_NAME}-backend-1" 2>&1 || true
   echo "--- End backend logs ---"
+  echo "--- Hermes container logs (last 100 lines) ---"
+  docker logs --tail=100 "${COMPOSE_PROJECT_NAME}-hermes-1" 2>&1 || true
+  echo "--- End hermes logs ---"
   docker compose \
     --env-file "$ENV_FILE" \
     --profile assistant \
@@ -80,10 +84,12 @@ PY
 wait_for_assistant_available() {
   local url="http://127.0.0.1:${FRONTEND_PORT}/api/v1/assistant/health"
   local attempt
-  for attempt in $(seq 1 60); do
+  local last_payload=""
+  for attempt in $(seq 1 "${ASSISTANT_HEALTH_MAX_ATTEMPTS}"); do
     local payload
     payload="$(curl -fsS -H "x-server-auth: ${SERVER_AUTH_PASSWORD}" "$url" 2>/dev/null || true)"
     if [[ -n "$payload" ]]; then
+      last_payload="$payload"
       if python3 - "$payload" <<'PY'
 import json
 import sys
@@ -98,6 +104,9 @@ PY
     sleep 2
   done
   echo "Timed out waiting for assistant health to become healthy" >&2
+  if [[ -n "$last_payload" ]]; then
+    echo "Last assistant health payload: $last_payload" >&2
+  fi
   return 1
 }
 

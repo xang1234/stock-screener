@@ -14,6 +14,7 @@ from app.use_cases.scanning.export_scan_results import (
     ExportScanResultsQuery,
     ExportScanResultsResult,
     ExportScanResultsUseCase,
+    _CSV_COLUMNS,
     _format_value,
 )
 
@@ -206,16 +207,38 @@ class TestUnboundScanFallsBackToLegacy:
     """Scan exists but has no feature_run_id — export uses legacy scan_results."""
 
     def test_unbound_scan_exports_from_legacy_scan_results(self):
-        uow = FakeUnitOfWork(
-            scan_results=FakeScanResultRepository(items=[make_domain_item("AAPL")])
+        shared_fields = {
+            "company_name": "Apple Inc.",
+            "market": "US",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "market_themes": ["AI Infrastructure", "Cloud Platforms"],
+        }
+        legacy_uow = FakeUnitOfWork(
+            scan_results=FakeScanResultRepository(items=[make_domain_item("AAPL", **shared_fields)])
         )
-        uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
+        legacy_uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
+
+        bound_feature_store = FakeFeatureStoreRepository()
+        bound_uow = FakeUnitOfWork(feature_store=bound_feature_store)
+        _setup_bound_scan(bound_uow, bound_feature_store, rows=[
+            _make_feature_row("AAPL", **shared_fields),
+        ])
+
         uc = ExportScanResultsUseCase()
 
-        result = uc.execute(uow, _make_query())
-        rows = _parse_csv_bytes(result.content)
+        legacy_rows = _parse_csv_bytes(uc.execute(legacy_uow, _make_query()).content)
+        bound_rows = _parse_csv_bytes(uc.execute(bound_uow, _make_query()).content)
+        header = legacy_rows[0]
+        data_row = legacy_rows[1]
 
-        assert rows[1][0] == "AAPL"
+        assert header == [column for column, _ in _CSV_COLUMNS]
+        assert header == bound_rows[0]
+        assert data_row == bound_rows[1]
+        assert data_row[header.index("Symbol")] == "AAPL"
+        assert data_row[header.index("Company Name")] == "Apple Inc."
+        assert data_row[header.index("Market")] == "US"
+        assert data_row[header.index("Market Themes")] == "AI Infrastructure | Cloud Platforms"
 
 
 class TestEmptyResults:

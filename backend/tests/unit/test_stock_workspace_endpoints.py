@@ -670,6 +670,22 @@ async def test_chart_data_endpoint_uses_market_specific_latest_run_pointer_for_n
     assert "latest_published_market:HK" in fake_uow.feature_runs.calls
 
 
+def test_resolve_symbol_market_ignores_inactive_universe_rows(session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            name="Tencent Holdings",
+            market="HK",
+            exchange="XHKG",
+            is_active=False,
+            status="inactive_manual",
+        )
+    )
+    session.commit()
+
+    assert stocks_module._resolve_symbol_market(session, "0700.HK") is None
+
+
 @pytest.mark.asyncio
 async def test_decision_dashboard_uses_market_specific_latest_run_pointer_for_non_us_symbol(client, session, monkeypatch):
     app.dependency_overrides[get_db] = _override_db(session)
