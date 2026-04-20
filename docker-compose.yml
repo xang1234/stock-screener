@@ -107,6 +107,7 @@ services:
   hermes:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     platform: ${HERMES_PLATFORM:-linux/amd64}
+    user: "${HERMES_UID:-1000}:${HERMES_GID:-1000}"
     profiles: ["assistant"]
     command: ["gateway"]
     environment:

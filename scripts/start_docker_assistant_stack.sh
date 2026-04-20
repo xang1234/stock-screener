@@ -264,6 +264,8 @@ EOF
 }
 
 export HERMES_PLATFORM="${HERMES_PLATFORM:-linux/amd64}"
+export HERMES_UID="${HERMES_UID:-$(id -u)}"
+export HERMES_GID="${HERMES_GID:-$(id -g)}"
 COMPOSE_CMD=(
   docker compose
   --env-file "$ENV_FILE"
@@ -276,6 +278,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "Using env file: $ENV_FILE"
   echo "Using Hermes platform: $HERMES_PLATFORM"
   echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
+  echo "Using Hermes uid/gid: ${HERMES_UID}:${HERMES_GID}"
   printf 'Would run:'
   printf ' %q' "${COMPOSE_CMD[@]}"
   printf '\n'
@@ -291,6 +294,7 @@ echo "Prepared data/hermes/config.yaml and data/hermes/.env"
 echo "Using env file: $ENV_FILE"
 echo "Using Hermes platform: $HERMES_PLATFORM"
 echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"
+echo "Using Hermes uid/gid: ${HERMES_UID}:${HERMES_GID}"
 
 "${COMPOSE_CMD[@]}"
 
