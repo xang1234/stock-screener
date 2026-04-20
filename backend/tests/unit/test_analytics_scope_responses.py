@@ -7,16 +7,16 @@ observe. All dependencies are synthetic; no server or database required.
 """
 from __future__ import annotations
 
-from app.domain.analytics.scope import AnalyticsFeature, us_only_tag
+from app.domain.analytics.scope import AnalyticsFeature, market_scope_tag, us_only_tag
 
 
 class TestGroupsEndpointResponseCarriesScope:
     """The Pydantic schema should serialize market_scope when the endpoint tags it."""
 
-    def test_rankings_response_includes_scope(self):
+    def test_rankings_response_includes_market_scope(self):
         from app.schemas.groups import GroupRankingsResponse
 
-        scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
+        scope = market_scope_tag("HK", reason="computed from HK feature runs")
         resp = GroupRankingsResponse(
             date="2026-04-11",
             total_groups=0,
@@ -25,13 +25,13 @@ class TestGroupsEndpointResponseCarriesScope:
             scope_reason=scope.get("scope_reason"),
         )
         dumped = resp.model_dump()
-        assert dumped["market_scope"] == "US"
-        assert "S&P" in dumped["scope_reason"] or "US" in dumped["scope_reason"]
+        assert dumped["market_scope"] == "HK"
+        assert dumped["scope_reason"] == "computed from HK feature runs"
 
-    def test_movers_response_includes_scope(self):
+    def test_movers_response_includes_market_scope(self):
         from app.schemas.groups import MoversResponse
 
-        scope = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
+        scope = market_scope_tag("TW")
         resp = MoversResponse(
             period="1w",
             gainers=[],
@@ -40,7 +40,7 @@ class TestGroupsEndpointResponseCarriesScope:
             scope_reason=scope.get("scope_reason"),
         )
         dumped = resp.model_dump()
-        assert dumped["market_scope"] == "US"
+        assert dumped["market_scope"] == "TW"
 
     def test_rankings_response_backcompat_when_not_tagged(self):
         """Older callers that don't tag the response still work (optional field)."""

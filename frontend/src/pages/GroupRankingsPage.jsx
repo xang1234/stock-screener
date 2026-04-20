@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -54,6 +54,13 @@ import {
 import { useRuntime } from '../contexts/RuntimeContext';
 import PriceSparkline from '../components/Scan/PriceSparkline';
 import RSSparkline from '../components/Scan/RSSparkline';
+
+const MARKET_LABELS = {
+  US: 'US',
+  HK: 'HK',
+  JP: 'JP',
+  TW: 'TW',
+};
 
 // Helper to format rank change with color
 const RankChangeCell = ({ value }) => {
@@ -146,10 +153,10 @@ const MoversCard = ({ title, groups, isGainers, period }) => {
 };
 
 // Group Detail Modal
-const GroupDetailModal = ({ group, open, onClose }) => {
+const GroupDetailModal = ({ group, market, open, onClose }) => {
   const { data: detail, isLoading } = useQuery({
-    queryKey: ['groupDetail', group],
-    queryFn: () => getGroupDetail(group, 365),
+    queryKey: ['groupDetail', market, group],
+    queryFn: () => getGroupDetail(group, 365, market),
     enabled: !!group && open,
   });
 
@@ -446,9 +453,25 @@ const GroupDetailModal = ({ group, open, onClose }) => {
 };
 
 function GroupRankingsPage() {
-  const { features, runtimeReady, uiSnapshots } = useRuntime();
+  const {
+    features,
+    runtimeReady,
+    uiSnapshots,
+    primaryMarket,
+    enabledMarkets,
+    supportedMarkets,
+  } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedPeriod, setSelectedPeriod] = useState('1w');
+  const availableMarkets = useMemo(() => {
+    const source = (enabledMarkets && enabledMarkets.length > 0)
+      ? enabledMarkets
+      : (supportedMarkets || ['US']);
+    return Array.from(new Set(source.map((market) => String(market).toUpperCase())));
+  }, [enabledMarkets, supportedMarkets]);
+  const [selectedMarket, setSelectedMarket] = useState(
+    String(primaryMarket || 'US').toUpperCase()
+  );
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [orderBy, setOrderBy] = useState('rank');
   const [order, setOrder] = useState('asc');
@@ -459,9 +482,26 @@ function GroupRankingsPage() {
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
   const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
+  useEffect(() => {
+    const preferredMarket = String(primaryMarket || 'US').toUpperCase();
+    if (availableMarkets.includes(selectedMarket)) {
+      return;
+    }
+    if (availableMarkets.includes(preferredMarket)) {
+      setSelectedMarket(preferredMarket);
+      return;
+    }
+    setSelectedMarket(availableMarkets[0] || 'US');
+  }, [availableMarkets, primaryMarket, selectedMarket]);
+
+  useEffect(() => {
+    setSelectedGroup(null);
+    setBootstrapSettled(false);
+  }, [selectedMarket]);
+
   const groupsBootstrapQuery = useQuery({
-    queryKey: ['groupsBootstrap'],
-    queryFn: getGroupsBootstrap,
+    queryKey: ['groupsBootstrap', selectedMarket],
+    queryFn: () => getGroupsBootstrap(selectedMarket),
     enabled: snapshotEnabled && !bootstrapSettled,
     retry: false,
     staleTime: 60_000,
@@ -484,14 +524,15 @@ function GroupRankingsPage() {
     }
 
     const payload = groupsBootstrapQuery.data?.payload ?? {};
-    queryClient.setQueryData(['groupRankings'], payload.rankings ?? null);
-    queryClient.setQueryData(['groupMovers', '1w'], payload.movers ?? null);
+    queryClient.setQueryData(['groupRankings', selectedMarket], payload.rankings ?? null);
+    queryClient.setQueryData(['groupMovers', '1w', selectedMarket], payload.movers ?? null);
     setBootstrapSettled(true);
   }, [
     groupsBootstrapQuery.data,
     groupsBootstrapQuery.isError,
     groupsBootstrapQuery.isSuccess,
     queryClient,
+    selectedMarket,
     snapshotEnabled,
   ]);
 
@@ -502,8 +543,8 @@ function GroupRankingsPage() {
     error: errorRankings,
     refetch: refetchRankings,
   } = useQuery({
-    queryKey: ['groupRankings'],
-    queryFn: () => getCurrentRankings(197),
+    queryKey: ['groupRankings', selectedMarket],
+    queryFn: () => getCurrentRankings(197, selectedMarket),
     enabled: liveQueriesEnabled,
     refetchInterval: 60000,
     staleTime: 60_000,
@@ -514,8 +555,8 @@ function GroupRankingsPage() {
     data: movers,
     isLoading: isLoadingMovers,
   } = useQuery({
-    queryKey: ['groupMovers', selectedPeriod],
-    queryFn: () => getRankMovers(selectedPeriod, 10),
+    queryKey: ['groupMovers', selectedPeriod, selectedMarket],
+    queryFn: () => getRankMovers(selectedPeriod, 10, selectedMarket),
     enabled: liveQueriesEnabled,
     staleTime: 60_000,
   });
@@ -639,7 +680,25 @@ function GroupRankingsPage() {
 
   return (
     <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
-      {features.tasks && (
+      <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <ToggleButtonGroup
+          value={selectedMarket}
+          exclusive
+          onChange={(_event, nextMarket) => {
+            if (nextMarket) {
+              setSelectedMarket(nextMarket);
+            }
+          }}
+          size="small"
+        >
+          {availableMarkets.map((market) => (
+            <ToggleButton key={market} value={market}>
+              {MARKET_LABELS[market] || market}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+
+      {features.tasks && selectedMarket === 'US' && (
         <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
           <Button
             variant="outlined"
@@ -652,6 +711,7 @@ function GroupRankingsPage() {
           </Button>
         </Box>
       )}
+      </Box>
 
       {isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -732,7 +792,7 @@ function GroupRankingsPage() {
                 </Tooltip>
                 {rankings && (
                   <Chip
-                    label={`${rankings.total_groups} groups | ${rankings.date}`}
+                    label={`${selectedMarket} | ${rankings.total_groups} groups | ${rankings.date}`}
                     size="small"
                   />
                 )}
@@ -940,7 +1000,7 @@ function GroupRankingsPage() {
           {rankings && (
             <Box sx={{ mt: 2, textAlign: 'center' }}>
               <Typography variant="caption" color="text.secondary">
-                Data as of {rankings.date} | {rankings.total_groups} groups ranked
+                {selectedMarket} data as of {rankings.date} | {rankings.total_groups} groups ranked
               </Typography>
             </Box>
           )}
@@ -950,6 +1010,7 @@ function GroupRankingsPage() {
       {/* Group Detail Modal */}
       <GroupDetailModal
         group={selectedGroup}
+        market={selectedMarket}
         open={!!selectedGroup}
         onClose={() => setSelectedGroup(null)}
       />

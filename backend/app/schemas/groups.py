@@ -73,7 +73,7 @@ class ConstituentStock(BaseModel):
     rs_trend: Optional[int] = Field(None, description="RS trend: -1=declining, 0=flat, 1=improving")
 
 
-class GroupDetailResponse(BaseModel):
+class GroupDetailResponse(ScopedResponseMixin):
     """Detailed response for a single industry group"""
 
     industry_group: str = Field(..., description="IBD industry group name")

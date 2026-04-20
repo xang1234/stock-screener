@@ -98,6 +98,7 @@ class TestScanResultItemMapping:
             market_cap=3_900_000_000_000,
             market_cap_usd=500_000_000_000,
             adv_usd=12_500_000,
+            market_themes=["AI Infrastructure"],
             company_name="Tencent Holdings",
         )
 
@@ -109,6 +110,7 @@ class TestScanResultItemMapping:
         assert response.market_cap == 3_900_000_000_000
         assert response.market_cap_usd == 500_000_000_000
         assert response.adv_usd == 12_500_000
+        assert response.market_themes == ["AI Infrastructure"]
 
     def test_market_fields_default_to_none_when_unset(self):
         item = _make_item(company_name="Mystery Corp")

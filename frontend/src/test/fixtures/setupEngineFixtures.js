@@ -224,6 +224,7 @@ const baseRow = {
   rs_trend: null,
   price_trend: null,
   ibd_industry_group: null,
+  market_themes: [],
 };
 
 /** All 7 SE table columns populated. */

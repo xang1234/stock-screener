@@ -95,6 +95,7 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     # Industry
     ("IBD Industry Group", lambda item: item.extended_fields.get("ibd_industry_group")),
     ("IBD Group Rank", lambda item: item.extended_fields.get("ibd_group_rank")),
+    ("Market Themes", lambda item: " | ".join(item.extended_fields.get("market_themes") or [])),
     ("GICS Sector", lambda item: item.extended_fields.get("gics_sector")),
     ("GICS Industry", lambda item: item.extended_fields.get("gics_industry")),
     # Performance

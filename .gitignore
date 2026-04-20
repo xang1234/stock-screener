@@ -30,6 +30,9 @@ frontend/public/static-data/
 *.html
 !frontend/index.html
 !data/IBD_industry_group.csv
+!data/hk-deep.csv
+!data/kabutan_themes_en.csv
+!data/taiwan-deep.csv
 *.db
 *.db-shm
 *.db-wal

@@ -26,6 +26,7 @@ from app.domain.scanning.defaults import get_default_scan_profile
 from app.schemas.universe import UniverseType
 from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
+from app.services.market_taxonomy_service import MarketTaxonomyEntry
 
 
 class _FakeTask:
@@ -600,6 +601,83 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
     assert nvda.details_json["ibd_group_rank"] == 1
     assert msft.details_json["ibd_industry_group"] == "Software"
     assert msft.details_json["ibd_group_rank"] is None
+
+    engine.dispose()
+
+
+def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_runs():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with session_factory() as db:
+        db.add(
+            FeatureRun(
+                id=22,
+                as_of_date=date(2026, 4, 2),
+                run_type="daily_snapshot",
+                status="published",
+                config_json={"universe": {"market": "HK"}},
+            )
+        )
+        db.add(
+            StockFeatureDaily(
+                run_id=22,
+                symbol="0700.HK",
+                as_of_date=date(2026, 4, 2),
+                composite_score=95.0,
+                overall_rating=5,
+                passes_count=4,
+                details_json={"symbol": "0700.HK", "rs_rating": 98.0},
+            )
+        )
+        db.commit()
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "0700.HK" and market == "HK":
+                return MarketTaxonomyEntry(
+                    market="HK",
+                    symbol="0700.HK",
+                    industry_group="Internet Services",
+                    themes=("AI Infrastructure", "Cloud"),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        @staticmethod
+        def compute_group_rankings_from_serialized_rows(rows, *, ranking_date):  # noqa: ARG004
+            assert rows[0]["ibd_industry_group"] == "Internet Services"
+            return [
+                {
+                    "industry_group": "Internet Services",
+                    "rank": 2,
+                }
+            ]
+
+    stats = _enrich_feature_run_with_ibd_metadata(
+        feature_run_id=22,
+        ranking_date=date(2026, 4, 2),
+        session_factory=session_factory,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+
+    with session_factory() as db:
+        row = db.query(StockFeatureDaily).filter_by(run_id=22, symbol="0700.HK").one()
+
+    assert stats["updated_rows"] == 1
+    assert stats["missing_industry_rows"] == 0
+    assert stats["missing_rank_rows"] == 0
+    assert row.details_json["ibd_industry_group"] == "Internet Services"
+    assert row.details_json["ibd_group_rank"] == 2
+    assert row.details_json["market_themes"] == ["AI Infrastructure", "Cloud"]
 
     engine.dispose()
 

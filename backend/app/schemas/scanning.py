@@ -161,6 +161,7 @@ class ScanResultItem(BaseModel):
     # Industry classifications
     ibd_industry_group: Optional[str] = None
     ibd_group_rank: Optional[int] = None
+    market_themes: List[str] = Field(default_factory=list)
     gics_sector: Optional[str] = None
     gics_industry: Optional[str] = None
 
@@ -288,6 +289,7 @@ class ScanResultItem(BaseModel):
             # Industry classifications
             ibd_industry_group=ef.get("ibd_industry_group"),
             ibd_group_rank=ef.get("ibd_group_rank"),
+            market_themes=list(ef.get("market_themes") or []),
             gics_sector=ef.get("gics_sector"),
             gics_industry=ef.get("gics_industry"),
             # Sparklines

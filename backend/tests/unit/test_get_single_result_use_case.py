@@ -115,10 +115,10 @@ class TestScanNotFound:
         assert exc_info.value.identifier == "missing"
 
 
-class TestUnboundScanRaises:
-    """Scan exists but has no feature_run_id — raises EntityNotFoundError."""
+class TestUnboundScanFallsBackToScanResults:
+    """Scan exists but has no feature_run_id — falls back to scan_results lookup."""
 
-    def test_unbound_scan_raises_feature_run_not_found(self):
+    def test_unbound_scan_without_row_raises_scan_result_not_found(self):
         uow = FakeUnitOfWork()
         uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
         uc = GetSingleResultUseCase()
@@ -126,7 +126,7 @@ class TestUnboundScanRaises:
         with pytest.raises(EntityNotFoundError) as exc_info:
             uc.execute(uow, _make_query())
 
-        assert exc_info.value.entity == "FeatureRun"
+        assert exc_info.value.entity == "ScanResult"
 
 
 class TestResultNotFound:
@@ -234,6 +234,7 @@ class TestDomainToResponse:
                 "eps_rating": 95,
                 "ibd_industry_group": "Semiconductor",
                 "ibd_group_rank": 5,
+                "market_themes": ["AI Infrastructure", "Foundry"],
                 "gics_sector": "Information Technology",
                 "gics_industry": "Semiconductors",
                 "rs_sparkline_data": [1.0, 1.1, 1.2],
@@ -291,6 +292,7 @@ class TestDomainToResponse:
         assert resp.eps_rating == 95
         assert resp.ibd_industry_group == "Semiconductor"
         assert resp.ibd_group_rank == 5
+        assert resp.market_themes == ["AI Infrastructure", "Foundry"]
         assert resp.gics_sector == "Information Technology"
         assert resp.gics_industry == "Semiconductors"
         assert resp.rs_sparkline_data == [1.0, 1.1, 1.2]

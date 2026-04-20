@@ -69,7 +69,23 @@ describe('StockDetails', () => {
       },
       chart: {
         price_history: [{ date: '2026-04-01', open: 900, high: 930, low: 890, close: 921.45, volume: 1000 }],
-        chart_data: { stage: 2, rs_rating: 97, eps_rating: 96, vcp_detected: true, adr_percent: 4.2, current_price: 921.45, composite_score: 88.5, minervini_score: 86, company_name: 'NVIDIA Corp', rating: 'Strong Buy', screeners_run: ['minervini'] },
+        chart_data: {
+          stage: 2,
+          rs_rating: 97,
+          eps_rating: 96,
+          vcp_detected: true,
+          adr_percent: 4.2,
+          current_price: 921.45,
+          composite_score: 88.5,
+          minervini_score: 86,
+          company_name: 'NVIDIA Corp',
+          rating: 'Strong Buy',
+          screeners_run: ['minervini'],
+          ibd_industry_group: 'Semiconductors',
+          gics_sector: 'Technology',
+          gics_industry: 'Semiconductor Devices',
+          market_themes: ['GPU Compute', 'Data Center'],
+        },
       },
       decision_summary: {
         composite_score: 88.5,
@@ -188,8 +204,12 @@ describe('StockDetails', () => {
     expect(screen.getByText('Decision Summary')).toBeInTheDocument();
     expect(screen.getByText('Event Risk & Action Plan')).toBeInTheDocument();
     expect(screen.getByText('Historical Validation')).toBeInTheDocument();
+    expect(screen.getByText('Market Classification')).toBeInTheDocument();
     expect(screen.getByText('Industry Peers')).toBeInTheDocument();
     expect(screen.getByText('AI Infrastructure')).toBeInTheDocument();
+    expect(screen.getByText('GPU Compute')).toBeInTheDocument();
+    expect(screen.getByText('Data Center')).toBeInTheDocument();
+    expect(screen.getAllByText('Semiconductors').length).toBeGreaterThan(0);
     expect(screen.getByText('Rating: Buy')).toBeInTheDocument();
     expect(screen.getByTestId('candlestick-chart')).toHaveTextContent('NVDA');
     expect(candlestickChartPropsSpy.mock.calls.at(-1)?.[0]?.dataUpdatedAtOverride).toBeUndefined();

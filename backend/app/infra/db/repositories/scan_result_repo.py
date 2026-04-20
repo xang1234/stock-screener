@@ -21,6 +21,11 @@ from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
 from app.models.stock_universe import StockUniverse
 from app.services.growth_cadence_service import build_row_field_availability
+from app.services.market_group_ranking_service import MarketGroupRankingService
+from app.services.market_taxonomy_service import (
+    MarketTaxonomyService,
+    get_market_taxonomy_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +247,18 @@ def _map_orchestrator_result(scan_id: str, symbol: str, raw: dict) -> dict:
 class SqlScanResultRepository(ScanResultRepository):
     """Persist and retrieve ScanResult rows via SQLAlchemy."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        taxonomy_service: MarketTaxonomyService | None = None,
+        market_group_ranking_service: MarketGroupRankingService | None = None,
+    ) -> None:
         self._session = session
+        self._taxonomy_service = taxonomy_service or get_market_taxonomy_service()
+        self._market_group_ranking_service = (
+            market_group_ranking_service or MarketGroupRankingService()
+        )
 
     def bulk_insert(self, rows: list[dict]) -> int:
         objects = [ScanResult(**row) for row in rows]
@@ -315,6 +330,20 @@ class SqlScanResultRepository(ScanResultRepository):
             if not d.get("industry"):
                 d["industry"] = row.industry
 
+        universe_rows = (
+            self._session.query(
+                StockUniverse.symbol,
+                StockUniverse.market,
+                StockUniverse.exchange,
+            )
+            .filter(StockUniverse.symbol.in_(unique_symbols))
+            .all()
+        )
+        for row in universe_rows:
+            d = enrichment.setdefault(row.symbol, {})
+            d["market"] = row.market
+            d["exchange"] = row.exchange
+
         ibd_group_rows = (
             self._session.query(
                 IBDIndustryGroup.symbol,
@@ -341,6 +370,40 @@ class SqlScanResultRepository(ScanResultRepository):
             group_name = d.get("ibd_industry_group")
             if group_name:
                 d["ibd_group_rank"] = rank_by_group.get(group_name)
+
+        requested_markets = {
+            str(d.get("market") or "").upper()
+            for d in enrichment.values()
+            if str(d.get("market") or "").strip().upper() not in {"", "US"}
+        }
+        non_us_rank_maps = {
+            market: self._market_group_ranking_service.get_current_rank_map(
+                self._session,
+                market=market,
+            )
+            for market in requested_markets
+        }
+        for symbol, d in enrichment.items():
+            market = str(d.get("market") or "").strip().upper()
+            if market in {"", "US"}:
+                d.setdefault("market_themes", [])
+                continue
+
+            entry = self._taxonomy_service.get(
+                symbol,
+                market=market,
+                exchange=d.get("exchange"),
+            )
+            if entry is None:
+                d.setdefault("market_themes", [])
+                continue
+
+            if entry.industry_group:
+                d["ibd_industry_group"] = entry.industry_group
+                d["ibd_group_rank"] = non_us_rank_maps.get(market, {}).get(entry.industry_group)
+            if not d.get("sector") and entry.sector:
+                d["sector"] = entry.sector
+            d["market_themes"] = entry.themes_list()
 
         return enrichment
 
@@ -387,6 +450,8 @@ class SqlScanResultRepository(ScanResultRepository):
             and meta.get("ibd_group_rank") is not None
         ):
             enriched["ibd_group_rank"] = meta["ibd_group_rank"]
+        if "market_themes" not in enriched:
+            enriched["market_themes"] = list(meta.get("market_themes") or [])
 
         return enriched
 
@@ -647,6 +712,7 @@ def _map_row_to_domain(
         "eps_rating": result.eps_rating,
         "ibd_industry_group": result.ibd_industry_group,
         "ibd_group_rank": result.ibd_group_rank,
+        "market_themes": list(details.get("market_themes") or []),
         "gics_sector": result.gics_sector,
         "gics_industry": result.gics_industry,
         "rs_sparkline_data": result.rs_sparkline_data if include_sparklines else None,

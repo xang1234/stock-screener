@@ -222,6 +222,10 @@ function StockDetails() {
   const adrValue = chart.adr_percent;
   const epsRating = chart.eps_rating;
   const groupRank = chart.ibd_group_rank;
+  const marketGroup = chart.ibd_industry_group;
+  const marketThemes = chart.market_themes || [];
+  const sector = chart.gics_sector || info.sector;
+  const industry = chart.gics_industry || info.industry;
 
   return (
     <Box>
@@ -268,11 +272,11 @@ function StockDetails() {
               bgcolor={epsRating >= 80 ? 'success.main' : epsRating >= 50 ? 'warning.main' : 'error.main'}
             />
           )}
-          {(chart.ibd_industry_group || info.sector || info.industry) && (
+          {(marketGroup || sector || industry) && (
             <Box sx={{ display: 'flex', gap: 1.5, ml: 1 }}>
-              {chart.ibd_industry_group && <InfoBox label="IBD" value={chart.ibd_industry_group} />}
-              {(chart.gics_sector || info.sector) && <InfoBox label="Sector" value={chart.gics_sector || info.sector} />}
-              {(chart.gics_industry || info.industry) && <InfoBox label="Industry" value={chart.gics_industry || info.industry} />}
+              {marketGroup && <InfoBox label="Group" value={marketGroup} />}
+              {sector && <InfoBox label="Sector" value={sector} />}
+              {industry && <InfoBox label="Industry" value={industry} />}
             </Box>
           )}
         </Box>
@@ -405,6 +409,40 @@ function StockDetails() {
                 Screener explanations are unavailable for this symbol.
               </Typography>
             )}
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+              Market Classification
+            </Typography>
+            {marketGroup && (
+              <Chip size="small" variant="outlined" label={marketGroup} sx={{ ml: 2 }} />
+            )}
+          </AccordionSummary>
+          <AccordionDetails>
+            <Stack spacing={1.5}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5 }}>
+                <InfoBox label="Group" value={marketGroup || '-'} />
+                <InfoBox label="Sector" value={sector || '-'} />
+                <InfoBox label="Industry" value={industry || '-'} />
+              </Box>
+              <Box>
+                <SectionHeader>MARKET THEMES</SectionHeader>
+                {marketThemes.length ? (
+                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    {marketThemes.map((theme) => (
+                      <Chip key={theme} label={theme} size="small" variant="outlined" color="primary" />
+                    ))}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">
+                    No market taxonomy themes are available for this symbol.
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
           </AccordionDetails>
         </Accordion>
 

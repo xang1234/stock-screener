@@ -700,6 +700,7 @@ def _map_feature_to_scan_result(
         "eps_rating": d.get("eps_rating"),
         "ibd_industry_group": d.get("ibd_industry_group"),
         "ibd_group_rank": d.get("ibd_group_rank"),
+        "market_themes": list(d.get("market_themes") or []),
         "gics_sector": d.get("gics_sector"),
         "gics_industry": d.get("gics_industry"),
         "rs_sparkline_data": d.get("rs_sparkline_data") if include_sparklines else None,

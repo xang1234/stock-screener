@@ -138,6 +138,22 @@ describe('ResultsTable', () => {
       expect(screen.getByText('IBD Industry')).toBeInTheDocument();
       expect(screen.getByText('Semiconductors')).toBeInTheDocument();
     });
+
+    it('renders a compact market themes column', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[{
+            ...fullSeRow,
+            ibd_industry_group: 'Semiconductors',
+            market_themes: ['AI Infrastructure', 'Foundry'],
+          }]}
+        />
+      );
+
+      expect(screen.getByText('Themes')).toBeInTheDocument();
+      expect(screen.getByText('AI Infrastructure · Foundry')).toBeInTheDocument();
+    });
   });
 
   // ── structural ───────────────────────────────────────────────────────

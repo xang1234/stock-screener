@@ -189,11 +189,14 @@ def _build_chart_data_payload(latest_run, item) -> dict:
         "scan_date": latest_run.completed_at.isoformat() if latest_run.completed_at else None,
         "symbol": item.symbol,
         "company_name": ef.get("company_name"),
+        "market": ef.get("market"),
+        "exchange": ef.get("exchange"),
         "current_price": item.current_price,
         "gics_sector": ef.get("gics_sector"),
         "gics_industry": ef.get("gics_industry"),
         "ibd_industry_group": ef.get("ibd_industry_group"),
         "ibd_group_rank": ef.get("ibd_group_rank"),
+        "market_themes": list(ef.get("market_themes") or []),
         "rs_rating": ef.get("rs_rating"),
         "rs_rating_1m": ef.get("rs_rating_1m"),
         "rs_rating_3m": ef.get("rs_rating_3m"),
@@ -736,7 +739,9 @@ async def get_stock_decision_dashboard(
             "scan_date": None,
             "symbol": symbol,
             "company_name": info.get("name"),
+            "market": info.get("market"),
             "current_price": info.get("current_price"),
+            "market_themes": [],
         }
     )
 

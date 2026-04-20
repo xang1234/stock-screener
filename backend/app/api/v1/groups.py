@@ -26,16 +26,74 @@ from ...schemas.groups import (
     BackfillResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...domain.analytics.scope import market_scope_tag
+from ...services.market_group_ranking_service import get_market_group_ranking_service
+from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
-from ...domain.analytics.scope import AnalyticsFeature, us_only_tag
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+SUPPORTED_GROUP_MARKETS = {"US", "HK", "JP", "TW"}
+DEFAULT_GROUP_PERIOD = "1w"
 
 
 def _get_group_rank_service():
     return get_group_rank_service()
+
+
+def _get_market_group_service():
+    return get_market_group_ranking_service()
+
+
+def _normalize_market_param(market: str | None) -> str:
+    normalized = str(market or "US").strip().upper()
+    if normalized not in SUPPORTED_GROUP_MARKETS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: US, HK, JP, TW.",
+        )
+    return normalized
+
+
+def _build_groups_payload(db: Session, *, market: str) -> dict:
+    if market == "US":
+        service = _get_group_rank_service()
+        rankings = service.get_current_rankings(db, limit=197)
+        movers = service.get_rank_movers(db, period=DEFAULT_GROUP_PERIOD, limit=10)
+    else:
+        service = _get_market_group_service()
+        rankings = service.get_current_rankings(db, market=market, limit=197)
+        movers = service.get_rank_movers(
+            db,
+            market=market,
+            period=DEFAULT_GROUP_PERIOD,
+            limit=10,
+        )
+
+    if not rankings:
+        raise GroupsBootstrapUnavailableError(
+            f"No group rankings are available for market {market}."
+        )
+
+    ranking_date = rankings[0]["date"]
+    scope = market_scope_tag(market)
+    return {
+        "rankings": GroupRankingsResponse(
+            date=ranking_date,
+            total_groups=len(rankings),
+            rankings=[GroupRankResponse(**row) for row in rankings],
+            **scope,
+        ).model_dump(mode="json"),
+        "movers_period": DEFAULT_GROUP_PERIOD,
+        "movers": MoversResponse(
+            period=movers["period"],
+            gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
+            losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
+            **scope,
+        ).model_dump(mode="json"),
+        "task_controls_enabled": settings.feature_tasks and market == "US",
+    }
 
 
 def _require_task_controls() -> None:
@@ -49,6 +107,7 @@ def _require_task_controls() -> None:
 @router.get("/rankings/current", response_model=GroupRankingsResponse)
 async def get_current_rankings(
     limit: int = Query(50, ge=1, le=197, description="Number of groups to return"),
+    market: str = Query("US", description="Market code: US, HK, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -57,8 +116,17 @@ async def get_current_rankings(
     Returns the most recent ranking snapshot with rank changes
     for 1 week, 1 month, 3 months, and 6 months.
     """
-    service = _get_group_rank_service()
-    rankings = service.get_current_rankings(db, limit=limit)
+    normalized_market = _normalize_market_param(market)
+    if normalized_market == "US":
+        service = _get_group_rank_service()
+        rankings = service.get_current_rankings(db, limit=limit)
+    else:
+        service = _get_market_group_service()
+        rankings = service.get_current_rankings(
+            db,
+            market=normalized_market,
+            limit=limit,
+        )
 
     if not rankings:
         raise HTTPException(
@@ -73,23 +141,48 @@ async def get_current_rankings(
         date=ranking_date,
         total_groups=len(rankings),
         rankings=[GroupRankResponse(**r) for r in rankings],
-        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
+        **market_scope_tag(normalized_market),
     )
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
-async def get_groups_bootstrap(snapshot_service=Depends(get_ui_snapshot_service)):
+async def get_groups_bootstrap(
+    market: str = Query("US", description="Market code: US, HK, JP, or TW"),
+    db: Session = Depends(get_db),
+    snapshot_service=Depends(get_ui_snapshot_service),
+):
     """Return the published group rankings bootstrap snapshot if available."""
-    snapshot = snapshot_service.get_groups_bootstrap()
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="No published groups bootstrap snapshot is available")
-    return UISnapshotEnvelope(**snapshot.to_dict())
+    normalized_market = _normalize_market_param(market)
+    if normalized_market == "US":
+        snapshot = snapshot_service.get_groups_bootstrap()
+        if snapshot is not None and not snapshot.is_stale:
+            return UISnapshotEnvelope(**snapshot.to_dict())
+
+    try:
+        payload = _build_groups_payload(db, market=normalized_market)
+    except GroupsBootstrapUnavailableError as exc:
+        if normalized_market == "US":
+            raise HTTPException(
+                status_code=404,
+                detail="No published groups bootstrap snapshot is available",
+            ) from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    source_revision = str(((payload.get("rankings") or {}).get("date")) or "none")
+    return UISnapshotEnvelope(
+        snapshot_revision=f"groups:{normalized_market}:{source_revision}",
+        source_revision=f"{normalized_market}:{source_revision}",
+        published_at=datetime.utcnow(),
+        is_stale=False,
+        payload=payload,
+    )
 
 
 @router.get("/rankings/movers", response_model=MoversResponse)
 async def get_rank_movers(
-    period: str = Query("1w", regex="^(1w|1m|3m|6m)$", description="Time period"),
+    period: str = Query("1w", pattern="^(1w|1m|3m|6m)$", description="Time period"),
     limit: int = Query(20, ge=1, le=50, description="Number of movers per direction"),
+    market: str = Query("US", description="Market code: US, HK, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -102,8 +195,18 @@ async def get_rank_movers(
     Returns:
         Lists of rank gainers and losers
     """
-    service = _get_group_rank_service()
-    movers = service.get_rank_movers(db, period=period, limit=limit)
+    normalized_market = _normalize_market_param(market)
+    if normalized_market == "US":
+        service = _get_group_rank_service()
+        movers = service.get_rank_movers(db, period=period, limit=limit)
+    else:
+        service = _get_market_group_service()
+        movers = service.get_rank_movers(
+            db,
+            market=normalized_market,
+            period=period,
+            limit=limit,
+        )
 
     if not movers.get('gainers') and not movers.get('losers'):
         raise HTTPException(
@@ -115,7 +218,7 @@ async def get_rank_movers(
         period=movers['period'],
         gainers=[GroupRankResponse(**g) for g in movers.get('gainers', [])],
         losers=[GroupRankResponse(**loser) for loser in movers.get('losers', [])],
-        **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
+        **market_scope_tag(normalized_market),
     )
 
 
@@ -123,6 +226,7 @@ async def get_rank_movers(
 async def get_group_detail(
     group: str = Query(..., description="IBD industry group name"),
     days: int = Query(180, ge=1, le=365, description="Days of history to retrieve"),
+    market: str = Query("US", description="Market code: US, HK, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -135,8 +239,18 @@ async def get_group_detail(
     Returns:
         Current rank, rank changes, and historical data points
     """
-    service = _get_group_rank_service()
-    detail = service.get_group_history(db, group, days=days)
+    normalized_market = _normalize_market_param(market)
+    if normalized_market == "US":
+        service = _get_group_rank_service()
+        detail = service.get_group_history(db, group, days=days)
+    else:
+        service = _get_market_group_service()
+        detail = service.get_group_history(
+            db,
+            market=normalized_market,
+            industry_group=group,
+            days=days,
+        )
 
     if not detail.get('history'):
         raise HTTPException(
@@ -144,7 +258,7 @@ async def get_group_detail(
             detail=f"No data found for industry group '{group}'"
         )
 
-    return GroupDetailResponse(**detail)
+    return GroupDetailResponse(**detail, **market_scope_tag(normalized_market))
 
 
 @router.post("/rankings/calculate", response_model=TaskResponse)

@@ -13,6 +13,8 @@ from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import ScanResult
 from app.models.stock import StockFundamental, StockIndustry
+from app.models.stock_universe import StockUniverse
+from app.services.market_taxonomy_service import MarketTaxonomyEntry
 
 
 @pytest.fixture
@@ -121,3 +123,49 @@ def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: S
     assert row.ipo_date == "1986-03-13"
     assert row.gics_sector == "Technology"
     assert row.gics_industry == "Software"
+
+
+def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+        )
+    )
+    session.commit()
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "0700.HK" and market == "HK":
+                return MarketTaxonomyEntry(
+                    market="HK",
+                    symbol="0700.HK",
+                    industry_group="Internet Services",
+                    themes=("AI Infrastructure", "Cloud"),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "HK"
+            return {"Internet Services": 4}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    repo.persist_orchestrator_results("scan-hk-1", [("0700.HK", _base_raw_result())])
+
+    row = (
+        session.query(ScanResult)
+        .filter(ScanResult.scan_id == "scan-hk-1", ScanResult.symbol == "0700.HK")
+        .one()
+    )
+
+    assert row.ibd_industry_group == "Internet Services"
+    assert row.ibd_group_rank == 4
+    assert row.details["market_themes"] == ["AI Infrastructure", "Cloud"]

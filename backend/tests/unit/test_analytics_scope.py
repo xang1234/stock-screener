@@ -8,6 +8,7 @@ from app.domain.analytics.scope import (
     AnalyticsFeature,
     UnsupportedMarketError,
     describe_policy,
+    market_scope_tag,
     policy_version,
     require_us_scope,
     us_only_tag,
@@ -23,7 +24,7 @@ class TestPolicyVersion:
 
 class TestUsOnlyTag:
     def test_tag_shape_is_stable(self):
-        tag = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
+        tag = us_only_tag(AnalyticsFeature.THEME_DISCOVERY)
         assert tag["market_scope"] == "US"
         assert "S&P" in tag["scope_reason"] or "US" in tag["scope_reason"]
         # policy_version is exposed via policy_version(), not inside the
@@ -31,14 +32,11 @@ class TestUsOnlyTag:
         # rejected-field errors.
         assert "policy_version" not in tag
 
-    def test_each_feature_has_its_own_reason(self):
+    def test_each_us_only_feature_has_its_own_reason(self):
         themes = us_only_tag(AnalyticsFeature.THEME_DISCOVERY)
-        groups = us_only_tag(AnalyticsFeature.IBD_GROUP_RANK)
         breadth = us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT)
 
         # Reasons must differ — each feature has a distinct justification.
-        assert themes["scope_reason"] != groups["scope_reason"]
-        assert groups["scope_reason"] != breadth["scope_reason"]
         assert themes["scope_reason"] != breadth["scope_reason"]
 
 
@@ -51,10 +49,9 @@ class TestRequireUsScope:
     @pytest.mark.parametrize(
         "market,feature",
         [
-            ("HK", AnalyticsFeature.IBD_GROUP_RANK),
             ("JP", AnalyticsFeature.THEME_DISCOVERY),
             ("TW", AnalyticsFeature.BREADTH_SNAPSHOT),
-            ("hk", AnalyticsFeature.IBD_GROUP_RANK),  # case-folded
+            ("hk", AnalyticsFeature.THEME_DISCOVERY),  # case-folded
         ],
     )
     def test_non_us_markets_raise(self, market, feature):
@@ -70,15 +67,31 @@ class TestRequireUsScope:
         # integer column) should not crash with AttributeError — that
         # would masquerade as a bug elsewhere.
         with pytest.raises(UnsupportedMarketError) as exc:
-            require_us_scope(123, AnalyticsFeature.IBD_GROUP_RANK)  # type: ignore[arg-type]
+            require_us_scope(123, AnalyticsFeature.THEME_DISCOVERY)  # type: ignore[arg-type]
         assert "non-string" in str(exc.value)
+
+    def test_market_aware_features_bypass_us_only_guard(self):
+        require_us_scope("HK", AnalyticsFeature.IBD_GROUP_RANK)
+        require_us_scope("TW", AnalyticsFeature.IBD_GROUP_RANK)
+
+
+class TestMarketScopeTag:
+    def test_market_scope_tag_normalizes_requested_market(self):
+        tag = market_scope_tag(" hk ")
+        assert tag == {"market_scope": "HK"}
+
+    def test_market_scope_tag_accepts_optional_reason(self):
+        tag = market_scope_tag("JP", reason="computed from JP feature runs")
+        assert tag["market_scope"] == "JP"
+        assert tag["scope_reason"] == "computed from JP feature runs"
 
 
 class TestDescribePolicy:
-    def test_snapshot_lists_all_features(self):
+    def test_snapshot_lists_current_us_only_features(self):
         snap = describe_policy()
         assert snap["policy_version"] == POLICY_VERSION
         us_only = snap["us_only_features"]
-        for feature in AnalyticsFeature:
+        for feature in (AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT):
             assert feature.value in us_only
             assert isinstance(us_only[feature.value], str)
+        assert AnalyticsFeature.IBD_GROUP_RANK.value not in us_only

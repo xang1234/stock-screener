@@ -23,6 +23,7 @@ from app.domain.analytics.scope import (
     POLICY_VERSION as ANALYTICS_POLICY_VERSION,
     AnalyticsFeature,
     UnsupportedMarketError,
+    market_scope_tag,
     require_us_scope,
     us_only_tag,
 )
@@ -59,8 +60,6 @@ EXPECTED_PRIMARY_BENCHMARK = {
 EXPECTED_SCOPE_REASON = {
     AnalyticsFeature.THEME_DISCOVERY:
         "theme content sources are English-language biased; no non-US coverage",
-    AnalyticsFeature.IBD_GROUP_RANK:
-        "IBD industry group taxonomy is S&P-based and US-specific",
     AnalyticsFeature.BREADTH_SNAPSHOT:
         "breadth indicators are computed from the US universe only",
 }
@@ -126,7 +125,10 @@ class TestUSParityMixedMarketPolicy:
 class TestUSParityAnalyticsScope:
     """T6.4: US-only analytics features carry stable scope tags."""
 
-    @pytest.mark.parametrize("feature", list(AnalyticsFeature))
+    @pytest.mark.parametrize(
+        "feature",
+        [AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT],
+    )
     def test_us_tag_shape_is_stable(self, feature: AnalyticsFeature):
         tag = us_only_tag(feature)
         assert tag["market_scope"] == "US"
@@ -138,8 +140,13 @@ class TestUSParityAnalyticsScope:
     @pytest.mark.parametrize("market", [None, "US", "us", " US "])
     def test_us_markets_pass_require_scope(self, market):
         # Defensive: US variants (case, whitespace, None) must not raise.
-        for feature in AnalyticsFeature:
+        for feature in (AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT):
             require_us_scope(market, feature)
+
+    def test_group_rank_scope_is_market_aware(self):
+        tag = market_scope_tag("HK")
+        assert tag == {"market_scope": "HK"}
+        require_us_scope("HK", AnalyticsFeature.IBD_GROUP_RANK)
 
 
 class TestUSParityScanner:
@@ -270,14 +277,21 @@ class TestNonUSRSUniverse:
 
 
 class TestNonUSAnalyticsScope:
-    """T6.4: non-US analytics calls are rejected by the scope guard."""
+    """T6.4: only the still-US-scoped analytics features are rejected."""
 
     @pytest.mark.parametrize("market", ["HK", "JP", "TW", "hk", " JP ", "eu"])
-    @pytest.mark.parametrize("feature", list(AnalyticsFeature))
+    @pytest.mark.parametrize(
+        "feature",
+        [AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT],
+    )
     def test_non_us_scope_is_rejected(self, market, feature):
         with pytest.raises(UnsupportedMarketError) as exc:
             require_us_scope(market, feature)
         assert feature.value in str(exc.value)
+
+    @pytest.mark.parametrize("market", ["HK", "JP", "TW", "hk", " JP ", "eu"])
+    def test_group_rank_scope_is_not_rejected(self, market):
+        require_us_scope(market, AnalyticsFeature.IBD_GROUP_RANK)
 
 
 class TestNonUSScanner:
@@ -326,7 +340,7 @@ class TestPolicyVersions:
         assert MIXED_MARKET_POLICY_VERSION == "2026.04.13.1"
 
     def test_analytics_scope_policy_version(self):
-        assert ANALYTICS_POLICY_VERSION == "2026.04.13.1"
+        assert ANALYTICS_POLICY_VERSION == "2026.04.20.1"
 
 
 # ---------------------------------------------------------------------------
