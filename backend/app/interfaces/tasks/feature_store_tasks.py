@@ -277,7 +277,7 @@ def _enrich_feature_run_with_ibd_metadata(
             sector_changed = bool(
                 market != "US"
                 and sector
-                and not details.get("gics_sector")
+                and details.get("gics_sector") != sector
             )
             if industry_group is None:
                 missing_industry_rows += 1

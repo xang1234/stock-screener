@@ -401,7 +401,7 @@ class SqlScanResultRepository(ScanResultRepository):
             if entry.industry_group:
                 d["ibd_industry_group"] = entry.industry_group
                 d["ibd_group_rank"] = non_us_rank_maps.get(market, {}).get(entry.industry_group)
-            if not d.get("sector") and entry.sector:
+            if entry.sector:
                 d["sector"] = entry.sector
             d["market_themes"] = entry.themes_list()
 
@@ -438,7 +438,12 @@ class SqlScanResultRepository(ScanResultRepository):
                 if ipo_from_screener:
                     enriched["ipo_date"] = _to_iso_date(ipo_from_screener)
 
-        if not enriched.get("gics_sector") and meta.get("sector"):
+        normalized_market = str(meta.get("market") or "").strip().upper()
+        should_override_sector = normalized_market not in {"", "US"} and meta.get("sector")
+
+        if should_override_sector and enriched.get("gics_sector") != meta.get("sector"):
+            enriched["gics_sector"] = meta["sector"]
+        elif not enriched.get("gics_sector") and meta.get("sector"):
             enriched["gics_sector"] = meta["sector"]
         if not enriched.get("gics_industry") and meta.get("industry"):
             enriched["gics_industry"] = meta["industry"]

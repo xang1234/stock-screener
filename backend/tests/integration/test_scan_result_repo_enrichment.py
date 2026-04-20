@@ -169,3 +169,54 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
     assert row.ibd_industry_group == "Internet Services"
     assert row.ibd_group_rank == 4
     assert row.details["market_themes"] == ["AI Infrastructure", "Cloud"]
+
+
+def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="7203.T",
+            market="JP",
+            exchange="XTKS",
+            currency="JPY",
+            timezone="Asia/Tokyo",
+        )
+    )
+    session.commit()
+
+    raw = _base_raw_result()
+    raw["gics_sector"] = "Consumer Discretionary"
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "7203.T" and market == "JP":
+                return MarketTaxonomyEntry(
+                    market="JP",
+                    symbol="7203.T",
+                    industry_group="Transportation Equipment",
+                    sector="Manufacturing",
+                    themes=("Automation",),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "JP"
+            return {"Transportation Equipment": 3}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    repo.persist_orchestrator_results("scan-jp-1", [("7203.T", raw)])
+
+    row = (
+        session.query(ScanResult)
+        .filter(ScanResult.scan_id == "scan-jp-1", ScanResult.symbol == "7203.T")
+        .one()
+    )
+
+    assert row.gics_sector == "Manufacturing"
+    assert row.ibd_industry_group == "Transportation Equipment"
+    assert row.ibd_group_rank == 3
+    assert row.details["market_themes"] == ["Automation"]

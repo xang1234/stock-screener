@@ -682,6 +682,78 @@ def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_ru
     engine.dispose()
 
 
+def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    with session_factory() as db:
+        db.add(
+            FeatureRun(
+                id=23,
+                as_of_date=date(2026, 4, 2),
+                run_type="daily_snapshot",
+                status="published",
+                config_json={"universe": {"market": "JP"}},
+            )
+        )
+        db.add(
+            StockFeatureDaily(
+                run_id=23,
+                symbol="7203.T",
+                as_of_date=date(2026, 4, 2),
+                composite_score=91.0,
+                overall_rating=5,
+                passes_count=4,
+                details_json={
+                    "symbol": "7203.T",
+                    "gics_sector": "Consumer Discretionary",
+                },
+            )
+        )
+        db.commit()
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "7203.T" and market == "JP":
+                return MarketTaxonomyEntry(
+                    market="JP",
+                    symbol="7203.T",
+                    industry_group="Transportation Equipment",
+                    sector="Manufacturing",
+                    themes=("Automation",),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        @staticmethod
+        def compute_group_rankings_from_serialized_rows(rows, *, ranking_date):  # noqa: ARG004
+            assert rows[0]["ibd_industry_group"] == "Transportation Equipment"
+            return [
+                {
+                    "industry_group": "Transportation Equipment",
+                    "rank": 1,
+                }
+            ]
+
+    _enrich_feature_run_with_ibd_metadata(
+        feature_run_id=23,
+        ranking_date=date(2026, 4, 2),
+        session_factory=session_factory,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+
+    with session_factory() as db:
+        row = db.query(StockFeatureDaily).filter_by(run_id=23, symbol="7203.T").one()
+
+    assert row.details_json["gics_sector"] == "Manufacturing"
+    assert row.details_json["ibd_industry_group"] == "Transportation Equipment"
+    assert row.details_json["market_themes"] == ["Automation"]
+
+    engine.dispose()
+
+
 def test_create_auto_scan_uses_saved_run_universe_count_for_total_stocks():
     created_scan = {}
 

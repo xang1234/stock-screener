@@ -646,6 +646,25 @@ function GroupRankingsPage() {
       })
     : [];
 
+  const marketFilter = (
+    <ToggleButtonGroup
+      value={selectedMarket}
+      exclusive
+      onChange={(_event, nextMarket) => {
+        if (nextMarket) {
+          setSelectedMarket(nextMarket);
+        }
+      }}
+      size="small"
+    >
+      {availableMarkets.map((market) => (
+        <ToggleButton key={market} value={market}>
+          {MARKET_LABELS[market] || market}
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
+  );
+
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -659,11 +678,9 @@ function GroupRankingsPage() {
   if (errorRankings) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
-        <Alert severity="error">
-          Error loading rankings: {errorRankings.message}
-        </Alert>
-        {features.tasks && (
-          <Box mt={2}>
+        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          {marketFilter}
+          {features.tasks && selectedMarket === 'US' && (
             <Button
               variant="contained"
               startIcon={<RefreshIcon />}
@@ -672,8 +689,11 @@ function GroupRankingsPage() {
             >
               {isCalculating ? 'Calculating...' : 'Calculate Rankings'}
             </Button>
-          </Box>
-        )}
+          )}
+        </Box>
+        <Alert severity="error">
+          Error loading rankings: {errorRankings.message}
+        </Alert>
       </Container>
     );
   }
@@ -681,22 +701,7 @@ function GroupRankingsPage() {
   return (
     <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
       <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-        <ToggleButtonGroup
-          value={selectedMarket}
-          exclusive
-          onChange={(_event, nextMarket) => {
-            if (nextMarket) {
-              setSelectedMarket(nextMarket);
-            }
-          }}
-          size="small"
-        >
-          {availableMarkets.map((market) => (
-            <ToggleButton key={market} value={market}>
-              {MARKET_LABELS[market] || market}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
+        {marketFilter}
 
       {features.tasks && selectedMarket === 'US' && (
         <Box sx={{ mb: 1.5, display: 'flex', justifyContent: 'flex-end' }}>

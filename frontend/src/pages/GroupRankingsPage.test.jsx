@@ -11,6 +11,14 @@ const getRankMovers = vi.fn();
 const getGroupDetail = vi.fn();
 const triggerCalculation = vi.fn();
 const getCalculationStatus = vi.fn();
+const runtimeState = {
+  features: { tasks: false },
+  runtimeReady: true,
+  uiSnapshots: { groups: false },
+  primaryMarket: 'HK',
+  enabledMarkets: ['HK', 'US'],
+  supportedMarkets: ['US', 'HK', 'JP', 'TW'],
+};
 
 vi.mock('../api/groups', () => ({
   getGroupsBootstrap: (...args) => getGroupsBootstrap(...args),
@@ -22,14 +30,7 @@ vi.mock('../api/groups', () => ({
 }));
 
 vi.mock('../contexts/RuntimeContext', () => ({
-  useRuntime: () => ({
-    features: { tasks: false },
-    runtimeReady: true,
-    uiSnapshots: { groups: false },
-    primaryMarket: 'HK',
-    enabledMarkets: ['HK', 'US'],
-    supportedMarkets: ['US', 'HK', 'JP', 'TW'],
-  }),
+  useRuntime: () => runtimeState,
 }));
 
 const rankingRowFor = (market) => ({
@@ -53,6 +54,12 @@ const rankingRowFor = (market) => ({
 
 describe('GroupRankingsPage', () => {
   beforeEach(() => {
+    runtimeState.features = { tasks: false };
+    runtimeState.runtimeReady = true;
+    runtimeState.uiSnapshots = { groups: false };
+    runtimeState.primaryMarket = 'HK';
+    runtimeState.enabledMarkets = ['HK', 'US'];
+    runtimeState.supportedMarkets = ['US', 'HK', 'JP', 'TW'];
     getGroupsBootstrap.mockReset();
     getCurrentRankings.mockReset();
     getRankMovers.mockReset();
@@ -104,5 +111,35 @@ describe('GroupRankingsPage', () => {
     expect(getRankMovers).toHaveBeenCalledWith('1w', 10, 'US');
     expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
     expect(screen.getByText('US | 1 groups | 2026-04-18')).toBeInTheDocument();
+  });
+
+  it('keeps the market filter visible on non-US load errors and hides the US-only calculation action', async () => {
+    runtimeState.features = { tasks: true };
+    getCurrentRankings.mockImplementation(async (_limit, market = 'US') => {
+      if (market === 'HK') {
+        throw new Error('HK rankings unavailable');
+      }
+      return {
+        date: '2026-04-18',
+        total_groups: 1,
+        market_scope: market,
+        rankings: [rankingRowFor(market)],
+      };
+    });
+
+    renderWithProviders(<GroupRankingsPage />);
+
+    expect(await screen.findByText('Error loading rankings: HK rankings unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'HK' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'US' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Calculate Rankings' })).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'US' }));
+
+    await waitFor(() => {
+      expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
+    });
+    expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
   });
 });
