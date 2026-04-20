@@ -606,7 +606,6 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
 
     engine.dispose()
 
-
 def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_runs():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
@@ -754,8 +753,6 @@ def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
     assert row.details_json["market_themes"] == ["Automation"]
 
     engine.dispose()
-
-
 def test_repair_current_us_group_metadata_updates_latest_published_run_and_republishes_scan_snapshot():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(

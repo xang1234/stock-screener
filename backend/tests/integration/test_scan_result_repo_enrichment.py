@@ -124,7 +124,6 @@ def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: S
     assert row.gics_sector == "Technology"
     assert row.gics_industry == "Software"
 
-
 def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: Session):
     session.add(
         StockUniverse(
@@ -220,8 +219,6 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
     assert row.ibd_industry_group == "Transportation Equipment"
     assert row.ibd_group_rank == 3
     assert row.details["market_themes"] == ["Automation"]
-
-
 def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
     session.add(Scan(scan_id="scan-us-1", status="completed", universe_market="US"))
     session.add_all(
@@ -331,7 +328,7 @@ def test_persist_orchestrator_results_strips_market_before_rank_map_lookup(sessi
         .filter(
             ScanResult.scan_id == "scan-hk-whitespace",
             ScanResult.symbol == "0700.HK",
-        )
+    )
         .one()
     )
 
