@@ -152,7 +152,9 @@ describe('ResultsTable', () => {
       );
 
       expect(screen.getByText('Themes')).toBeInTheDocument();
-      expect(screen.getByText('AI Infrastructure · Foundry')).toBeInTheDocument();
+      // Compact variant: first theme renders as a chip, with a +N counter for overflow.
+      expect(screen.getByText('AI Infrastructure')).toBeInTheDocument();
+      expect(screen.getByText('+1')).toBeInTheDocument();
     });
   });
 
