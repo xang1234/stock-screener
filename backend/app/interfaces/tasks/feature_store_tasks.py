@@ -153,15 +153,34 @@ def _enrich_feature_run_with_ibd_metadata(
     feature_run_id: int,
     ranking_date: date,
     session_factory=None,
+    taxonomy_service=None,
+    market_group_ranking_service=None,
 ) -> dict[str, int | str]:
     """Backfill IBD industry/rank metadata into persisted feature-row details."""
     from app.database import SessionLocal
-    from app.infra.db.models.feature_store import StockFeatureDaily
+    from app.infra.db.models.feature_store import FeatureRun, StockFeatureDaily
     from app.models.industry import IBDGroupRank, IBDIndustryGroup
+    from app.services.market_group_ranking_service import MarketGroupRankingService
+    from app.services.market_taxonomy_service import get_market_taxonomy_service
 
     session_factory = session_factory or SessionLocal
     db = session_factory()
+    taxonomy_service = taxonomy_service or get_market_taxonomy_service()
+    market_group_ranking_service = (
+        market_group_ranking_service or MarketGroupRankingService()
+    )
     try:
+        feature_run = (
+            db.query(FeatureRun)
+            .filter(FeatureRun.id == feature_run_id)
+            .first()
+        )
+        config = (feature_run.config_json or {}) if feature_run is not None else {}
+        universe = config.get("universe") if isinstance(config, dict) else {}
+        if not isinstance(universe, dict):
+            universe = {}
+        market = str((universe or {}).get("market") or "US").strip().upper()
+
         rows = (
             db.query(StockFeatureDaily)
             .filter(StockFeatureDaily.run_id == feature_run_id)
@@ -177,26 +196,73 @@ def _enrich_feature_run_with_ibd_metadata(
                 "missing_rank_rows": 0,
             }
 
-        industries_by_symbol = {
-            symbol: industry_group
-            for symbol, industry_group in (
-                db.query(StockFeatureDaily.symbol, IBDIndustryGroup.industry_group)
-                .join(
-                    IBDIndustryGroup,
-                    IBDIndustryGroup.symbol == StockFeatureDaily.symbol,
+        industries_by_symbol: dict[str, str | None] = {}
+        ranks_by_group: dict[str, int] = {}
+        market_themes_by_symbol: dict[str, list[str]] = {}
+        sector_by_symbol: dict[str, str | None] = {}
+
+        if market == "US":
+            industries_by_symbol = {
+                symbol: industry_group
+                for symbol, industry_group in (
+                    db.query(StockFeatureDaily.symbol, IBDIndustryGroup.industry_group)
+                    .join(
+                        IBDIndustryGroup,
+                        IBDIndustryGroup.symbol == StockFeatureDaily.symbol,
+                    )
+                    .filter(StockFeatureDaily.run_id == feature_run_id)
+                    .all()
                 )
-                .filter(StockFeatureDaily.run_id == feature_run_id)
-                .all()
-            )
-        }
-        ranks_by_group = {
-            industry_group: rank
-            for industry_group, rank in (
-                db.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
-                .filter(IBDGroupRank.date == ranking_date)
-                .all()
-            )
-        }
+            }
+            ranks_by_group = {
+                industry_group: rank
+                for industry_group, rank in (
+                    db.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
+                    .filter(IBDGroupRank.date == ranking_date)
+                    .all()
+                )
+            }
+            market_themes_by_symbol = {row.symbol: [] for row in rows}
+        else:
+            serialized_rows: list[dict[str, object]] = []
+            for row in rows:
+                details = dict(row.details_json or {})
+                entry = taxonomy_service.get(row.symbol, market=market)
+                industries_by_symbol[row.symbol] = entry.industry_group if entry else None
+                sector_by_symbol[row.symbol] = entry.sector if entry else None
+                market_themes_by_symbol[row.symbol] = entry.themes_list() if entry else []
+                serialized_rows.append(
+                    {
+                        "symbol": row.symbol,
+                        "composite_score": row.composite_score,
+                        "current_price": details.get("current_price"),
+                        "rs_rating": details.get("rs_rating"),
+                        "rs_rating_1m": details.get("rs_rating_1m"),
+                        "rs_rating_3m": details.get("rs_rating_3m"),
+                        "rs_rating_12m": details.get("rs_rating_12m"),
+                        "eps_growth_qq": details.get("eps_growth_qq"),
+                        "eps_growth_yy": details.get("eps_growth_yy"),
+                        "sales_growth_qq": details.get("sales_growth_qq"),
+                        "sales_growth_yy": details.get("sales_growth_yy"),
+                        "stage": details.get("stage"),
+                        "market_cap": details.get("market_cap"),
+                        "market_cap_usd": details.get("market_cap_usd"),
+                        "ibd_industry_group": industries_by_symbol[row.symbol],
+                        "price_sparkline_data": details.get("price_sparkline_data"),
+                        "price_trend": details.get("price_trend"),
+                        "price_change_1d": details.get("price_change_1d"),
+                        "rs_sparkline_data": details.get("rs_sparkline_data"),
+                        "rs_trend": details.get("rs_trend"),
+                    }
+                )
+            ranks_by_group = {
+                str(row["industry_group"]): int(row["rank"])
+                for row in market_group_ranking_service.compute_group_rankings_from_serialized_rows(
+                    serialized_rows,
+                    ranking_date=ranking_date,
+                )
+                if row.get("industry_group") and row.get("rank") is not None
+            }
 
         updated_rows = 0
         missing_industry_rows = 0
@@ -206,6 +272,13 @@ def _enrich_feature_run_with_ibd_metadata(
             details = dict(row.details_json or {})
             industry_group = industries_by_symbol.get(row.symbol)
             group_rank = ranks_by_group.get(industry_group) if industry_group else None
+            market_themes = list(market_themes_by_symbol.get(row.symbol) or [])
+            sector = sector_by_symbol.get(row.symbol)
+            sector_changed = bool(
+                market != "US"
+                and sector
+                and details.get("gics_sector") != sector
+            )
             if industry_group is None:
                 missing_industry_rows += 1
             elif group_rank is None:
@@ -214,9 +287,14 @@ def _enrich_feature_run_with_ibd_metadata(
             if (
                 details.get("ibd_industry_group") != industry_group
                 or details.get("ibd_group_rank") != group_rank
+                or list(details.get("market_themes") or []) != market_themes
+                or sector_changed
             ):
                 details["ibd_industry_group"] = industry_group
                 details["ibd_group_rank"] = group_rank
+                details["market_themes"] = market_themes
+                if sector_changed:
+                    details["gics_sector"] = sector
                 row.details_json = details
                 updated_rows += 1
 

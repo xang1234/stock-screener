@@ -13,6 +13,8 @@ from app.infra.db.repositories.scan_result_repo import SqlScanResultRepository
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock import StockFundamental, StockIndustry
+from app.models.stock_universe import StockUniverse
+from app.services.market_taxonomy_service import MarketTaxonomyEntry
 
 
 @pytest.fixture
@@ -122,7 +124,103 @@ def test_persist_orchestrator_results_uses_ipo_screener_date_fallback(session: S
     assert row.gics_sector == "Technology"
     assert row.gics_industry == "Software"
 
+def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+        )
+    )
+    session.commit()
 
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "0700.HK" and market == "HK":
+                return MarketTaxonomyEntry(
+                    market="HK",
+                    symbol="0700.HK",
+                    industry_group="Internet Services",
+                    themes=("AI Infrastructure", "Cloud"),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "HK"
+            return {"Internet Services": 4}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    repo.persist_orchestrator_results("scan-hk-1", [("0700.HK", _base_raw_result())])
+
+    row = (
+        session.query(ScanResult)
+        .filter(ScanResult.scan_id == "scan-hk-1", ScanResult.symbol == "0700.HK")
+        .one()
+    )
+
+    assert row.ibd_industry_group == "Internet Services"
+    assert row.ibd_group_rank == 4
+    assert row.details["market_themes"] == ["AI Infrastructure", "Cloud"]
+
+
+def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="7203.T",
+            market="JP",
+            exchange="XTKS",
+            currency="JPY",
+            timezone="Asia/Tokyo",
+        )
+    )
+    session.commit()
+
+    raw = _base_raw_result()
+    raw["gics_sector"] = "Consumer Discretionary"
+    raw["ibd_industry_group"] = "Legacy Autos"
+    raw["ibd_group_rank"] = 91
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "7203.T" and market == "JP":
+                return MarketTaxonomyEntry(
+                    market="JP",
+                    symbol="7203.T",
+                    industry_group="Transportation Equipment",
+                    sector="Manufacturing",
+                    themes=("Automation",),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "JP"
+            return {"Transportation Equipment": 3}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    repo.persist_orchestrator_results("scan-jp-1", [("7203.T", raw)])
+
+    row = (
+        session.query(ScanResult)
+        .filter(ScanResult.scan_id == "scan-jp-1", ScanResult.symbol == "7203.T")
+        .one()
+    )
+
+    assert row.gics_sector == "Manufacturing"
+    assert row.ibd_industry_group == "Transportation Equipment"
+    assert row.ibd_group_rank == 3
+    assert row.details["market_themes"] == ["Automation"]
 def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
     session.add(Scan(scan_id="scan-us-1", status="completed", universe_market="US"))
     session.add_all(
@@ -190,3 +288,50 @@ def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
     assert rows[1].symbol == "MSFT"
     assert rows[1].ibd_industry_group == "Software"
     assert rows[1].ibd_group_rank == 9
+
+
+def test_persist_orchestrator_results_strips_market_before_rank_map_lookup(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market=" HK ",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+        )
+    )
+    session.commit()
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "0700.HK" and market == "HK":
+                return MarketTaxonomyEntry(
+                    market="HK",
+                    symbol="0700.HK",
+                    industry_group="Internet Services",
+                    themes=("AI Infrastructure",),
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "HK"
+            return {"Internet Services": 4}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    repo.persist_orchestrator_results("scan-hk-whitespace", [("0700.HK", _base_raw_result())])
+
+    row = (
+        session.query(ScanResult)
+        .filter(
+            ScanResult.scan_id == "scan-hk-whitespace",
+            ScanResult.symbol == "0700.HK",
+    )
+        .one()
+    )
+
+    assert row.ibd_group_rank == 4

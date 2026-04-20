@@ -27,7 +27,7 @@ from app.infra.db.models.feature_store import (
     StockFeatureDaily,
 )
 from app.infra.db.portability import json_text
-from app.infra.serialization import convert_numpy_types
+from app.infra.serialization import convert_numpy_types, normalize_string_list
 from app.infra.query.feature_store_query import (
     apply_filters,
     apply_sort_all,
@@ -700,6 +700,7 @@ def _map_feature_to_scan_result(
         "eps_rating": d.get("eps_rating"),
         "ibd_industry_group": d.get("ibd_industry_group"),
         "ibd_group_rank": d.get("ibd_group_rank"),
+        "market_themes": normalize_string_list(d.get("market_themes")),
         "gics_sector": d.get("gics_sector"),
         "gics_industry": d.get("gics_industry"),
         "rs_sparkline_data": d.get("rs_sparkline_data") if include_sparklines else None,

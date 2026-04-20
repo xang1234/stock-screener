@@ -9,9 +9,9 @@ import apiClient from './client';
  * @param {number} limit - Maximum number of groups to return (default: 50)
  * @returns {Promise<Object>} Rankings response with date, total_groups, and rankings array
  */
-export const getCurrentRankings = async (limit = 50) => {
+export const getCurrentRankings = async (limit = 50, market = 'US') => {
   const response = await apiClient.get('/v1/groups/rankings/current', {
-    params: { limit }
+    params: { limit, market }
   });
   return response.data;
 };
@@ -19,8 +19,10 @@ export const getCurrentRankings = async (limit = 50) => {
 /**
  * Get the published groups bootstrap snapshot for the default dashboard view.
  */
-export const getGroupsBootstrap = async () => {
-  const response = await apiClient.get('/v1/groups/bootstrap');
+export const getGroupsBootstrap = async (market = 'US') => {
+  const response = await apiClient.get('/v1/groups/bootstrap', {
+    params: { market },
+  });
   return response.data;
 };
 
@@ -31,9 +33,9 @@ export const getGroupsBootstrap = async () => {
  * @param {number} limit - Number of movers per direction (default: 20)
  * @returns {Promise<Object>} Object with period, gainers, and losers arrays
  */
-export const getRankMovers = async (period = '1w', limit = 20) => {
+export const getRankMovers = async (period = '1w', limit = 20, market = 'US') => {
   const response = await apiClient.get('/v1/groups/rankings/movers', {
-    params: { period, limit }
+    params: { period, limit, market }
   });
   return response.data;
 };
@@ -45,9 +47,9 @@ export const getRankMovers = async (period = '1w', limit = 20) => {
  * @param {number} days - Days of history to retrieve (default: 180)
  * @returns {Promise<Object>} Group detail with history and rank changes
  */
-export const getGroupDetail = async (industryGroup, days = 180) => {
+export const getGroupDetail = async (industryGroup, days = 180, market = 'US') => {
   const response = await apiClient.get('/v1/groups/rankings/detail', {
-    params: { group: industryGroup, days }
+    params: { group: industryGroup, days, market }
   });
   return response.data;
 };

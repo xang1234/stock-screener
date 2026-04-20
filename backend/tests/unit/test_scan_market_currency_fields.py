@@ -98,6 +98,7 @@ class TestScanResultItemMapping:
             market_cap=3_900_000_000_000,
             market_cap_usd=500_000_000_000,
             adv_usd=12_500_000,
+            market_themes=["AI Infrastructure"],
             company_name="Tencent Holdings",
         )
 
@@ -109,6 +110,7 @@ class TestScanResultItemMapping:
         assert response.market_cap == 3_900_000_000_000
         assert response.market_cap_usd == 500_000_000_000
         assert response.adv_usd == 12_500_000
+        assert response.market_themes == ["AI Infrastructure"]
 
     def test_market_fields_default_to_none_when_unset(self):
         item = _make_item(company_name="Mystery Corp")
@@ -119,6 +121,18 @@ class TestScanResultItemMapping:
         assert response.currency is None
         assert response.market_cap_usd is None
         assert response.adv_usd is None
+
+    def test_market_themes_scalar_is_coerced_to_single_item_list(self):
+        item = _make_item(
+            market="HK",
+            exchange="HKEX",
+            currency="HKD",
+            market_themes="AI Infrastructure",
+        )
+
+        response = ScanResultItem.from_domain(item)
+
+        assert response.market_themes == ["AI Infrastructure"]
 
 
 # ---------------------------------------------------------------------------

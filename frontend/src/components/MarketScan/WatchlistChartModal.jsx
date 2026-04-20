@@ -31,6 +31,14 @@ import StockMetricsSidebar from '../Scan/StockMetricsSidebar';
 import PeerComparisonModal from '../Scan/PeerComparisonModal';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 
+const inferMarketFromSymbol = (symbol) => {
+  const normalized = String(symbol || '').toUpperCase();
+  if (normalized.endsWith('.HK')) return 'HK';
+  if (normalized.endsWith('.T')) return 'JP';
+  if (normalized.endsWith('.TW') || normalized.endsWith('.TWO')) return 'TW';
+  return 'US';
+};
+
 // Get color for group rank indicator based on thresholds
 const getGroupRankColor = (rank) => {
   if (rank == null) return 'grey.500';
@@ -80,6 +88,8 @@ function WatchlistChartModal({ open, onClose, initialSymbol, symbols = [] }) {
 
   // Get industry group from chart data (no waterfall dependency)
   const industryGroup = chartData?.ibd_industry_group;
+  const groupMarket = chartData?.market || inferMarketFromSymbol(currentSymbol);
+  const marketThemes = chartData?.market_themes || [];
 
   // Fetch group ranking - only if not already in chartData
   // When source is "scan_results", ibd_group_rank is included
@@ -88,8 +98,8 @@ function WatchlistChartModal({ open, onClose, initialSymbol, symbols = [] }) {
     data: groupRankData,
     isLoading: isGroupRankLoading,
   } = useQuery({
-    queryKey: ['groupRank', industryGroup],
-    queryFn: () => getGroupDetail(industryGroup, 1),
+    queryKey: ['groupRank', groupMarket, industryGroup],
+    queryFn: () => getGroupDetail(industryGroup, 1, groupMarket),
     enabled: open && !!needsGroupRankFetch,
     staleTime: 300000,
     retry: false,
@@ -314,7 +324,7 @@ function WatchlistChartModal({ open, onClose, initialSymbol, symbols = [] }) {
                       </Typography>
                     </Box>
                     <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
-                      IBD
+                      Group
                     </Typography>
                   </Box>
 
@@ -360,6 +370,19 @@ function WatchlistChartModal({ open, onClose, initialSymbol, symbols = [] }) {
                     <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
                       Industry
                     </Typography>
+                  </Box>
+                </Box>
+              )}
+
+              {marketThemes.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxWidth: 240 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                    Market Themes
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                    {marketThemes.map((theme) => (
+                      <Chip key={theme} label={theme} size="small" variant="outlined" sx={{ height: 20 }} />
+                    ))}
                   </Box>
                 </Box>
               )}

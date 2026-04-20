@@ -1,0 +1,367 @@
+"""Shared market-taxonomy loader for US/HK/JP/TW group classifications."""
+
+from __future__ import annotations
+
+import csv
+import re
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Iterable
+
+from .security_master_service import security_master_resolver
+
+_HK_LOCAL_CODE_RE = re.compile(r"^[0-9]{1,8}$")
+_JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
+_TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
+
+_TW_EXCHANGE_ALIASES = {
+    "TWSE": "TWSE",
+    "XTAI": "TWSE",
+    "TPEX": "TPEX",
+    "TWO": "TPEX",
+    "TPEX MARKET": "TPEX",
+    "TPEX STOCK": "TPEX",
+    "TPEX STOCKS": "TPEX",
+    "TPEx": "TPEX",
+}
+
+_EMPTY_TOKENS = {"", "-", "N/A", "NA", "NAN", "NONE", "NULL"}
+
+
+@dataclass(frozen=True)
+class MarketTaxonomyEntry:
+    """Normalized market taxonomy for one symbol."""
+
+    market: str
+    symbol: str
+    industry_group: str | None = None
+    sector: str | None = None
+    themes: tuple[str, ...] = ()
+
+    def themes_list(self) -> list[str]:
+        return list(self.themes)
+
+
+class MarketTaxonomyService:
+    """Load market-aware group/theme mappings from committed CSV files."""
+
+    def __init__(self, *, data_dir: Path | None = None) -> None:
+        self._data_dir = data_dir or Path(__file__).resolve().parents[3] / "data"
+        self._loaded = False
+        self._entries: dict[str, dict[str, MarketTaxonomyEntry]] = {
+            "US": {},
+            "HK": {},
+            "JP": {},
+            "TW": {},
+        }
+
+    def refresh(self) -> None:
+        self._entries = {"US": {}, "HK": {}, "JP": {}, "TW": {}}
+        self._load_us()
+        self._load_hk()
+        self._load_jp()
+        self._load_tw()
+        self._loaded = True
+
+    def get(
+        self,
+        symbol: str | None,
+        *,
+        market: str | None = None,
+        exchange: str | None = None,
+    ) -> MarketTaxonomyEntry | None:
+        self._ensure_loaded()
+        normalized_market = security_master_resolver.normalize_market(market)
+        if normalized_market is None:
+            normalized_market = security_master_resolver.infer_market(symbol or "", exchange)
+
+        candidates = self._candidate_symbols(symbol, market=normalized_market, exchange=exchange)
+        market_entries = self._entries.get(normalized_market, {})
+        for candidate in candidates:
+            entry = market_entries.get(candidate)
+            if entry is not None:
+                return entry
+        return None
+
+    def _ensure_loaded(self) -> None:
+        if not self._loaded:
+            self.refresh()
+
+    @staticmethod
+    def _normalize_text(value: object) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.upper() in _EMPTY_TOKENS:
+            return None
+        return text
+
+    def _merge_entry(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        industry_group: str | None,
+        sector: str | None,
+        themes: Iterable[str],
+    ) -> None:
+        bucket = self._entries[market]
+        normalized_themes = []
+        for theme in themes:
+            normalized = self._normalize_text(theme)
+            if normalized is not None:
+                normalized_themes.append(normalized)
+
+        current = bucket.get(symbol)
+        if current is None:
+            bucket[symbol] = MarketTaxonomyEntry(
+                market=market,
+                symbol=symbol,
+                industry_group=industry_group,
+                sector=sector,
+                themes=tuple(dict.fromkeys(normalized_themes)),
+            )
+            return
+
+        merged_themes = tuple(dict.fromkeys([*current.themes, *normalized_themes]))
+        bucket[symbol] = replace(
+            current,
+            industry_group=current.industry_group or industry_group,
+            sector=current.sector or sector,
+            themes=merged_themes,
+        )
+
+    def _load_us(self) -> None:
+        path = self._data_dir / "IBD_industry_group.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                symbol = security_master_resolver.normalize_symbol(row[0])
+                industry_group = self._normalize_text(row[1])
+                if not symbol or industry_group is None:
+                    continue
+                self._merge_entry(
+                    market="US",
+                    symbol=symbol,
+                    industry_group=industry_group,
+                    sector=None,
+                    themes=(),
+                )
+
+    def _load_hk(self) -> None:
+        path = self._data_dir / "hk-deep.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                symbol = self._canonicalize_hk_symbol(row.get("Symbol"))
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="HK",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("EM Industry (EN)")),
+                    sector=None,
+                    themes=[row.get("Theme (EN)") or ""],
+                )
+
+    def _load_jp(self) -> None:
+        path = self._data_dir / "kabutan_themes_en.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                symbol = self._canonicalize_jp_symbol(row.get("Symbol"))
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="JP",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("TSE 33-Sector")),
+                    sector=self._normalize_text(row.get("TSE 17-Sector")),
+                    themes=[row.get("Theme (EN)") or ""],
+                )
+
+    def _load_tw(self) -> None:
+        path = self._data_dir / "taiwan-deep.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                symbol = self._canonicalize_tw_symbol(
+                    row.get("Symbol"),
+                    exchange=row.get("Market"),
+                )
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="TW",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("Industry (EN)")),
+                    sector=None,
+                    themes=(),
+                )
+
+    def _candidate_symbols(
+        self,
+        symbol: str | None,
+        *,
+        market: str,
+        exchange: str | None = None,
+    ) -> tuple[str, ...]:
+        normalized = security_master_resolver.normalize_symbol(symbol)
+        if not normalized:
+            return ()
+        if market == "US":
+            return (normalized,)
+        if market == "HK":
+            canonical = self._canonicalize_hk_symbol(normalized)
+            return (canonical,) if canonical else (normalized,)
+        if market == "JP":
+            canonical = self._canonicalize_jp_symbol(normalized)
+            return (canonical,) if canonical else (normalized,)
+        if market == "TW":
+            candidates: list[str] = []
+            canonical = self._canonicalize_tw_symbol(normalized, exchange=exchange)
+            if canonical:
+                candidates.append(canonical)
+            if "." not in normalized:
+                raw_exchange = str(exchange or "").strip().upper()
+                if raw_exchange not in {"TPEX", "TWO"}:
+                    tpex_variant = self._canonicalize_tw_symbol(normalized, exchange="TPEX")
+                    if tpex_variant:
+                        candidates.append(tpex_variant)
+                twse_variant = self._canonicalize_tw_symbol(normalized, exchange="TWSE")
+                if twse_variant:
+                    candidates.append(twse_variant)
+            elif normalized.endswith(".TW"):
+                tpex_variant = self._canonicalize_tw_symbol(normalized[:-3], exchange="TPEX")
+                if tpex_variant:
+                    candidates.append(tpex_variant)
+            elif normalized.endswith(".TWO"):
+                twse_variant = self._canonicalize_tw_symbol(normalized[:-4], exchange="TWSE")
+                if twse_variant:
+                    candidates.append(twse_variant)
+            candidates.append(normalized)
+            return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
+        return (normalized,)
+
+    @staticmethod
+    def _canonicalize_hk_symbol(raw_symbol: object) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("HKEX:", "SEHK:", "XHKG:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        if token.endswith(".HK"):
+            token = token[:-3]
+        if not _HK_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        significant = token.lstrip("0")
+        if not significant:
+            return None
+        if len(significant) <= 4:
+            local_code = significant.zfill(4)
+        elif len(significant) == 5:
+            local_code = significant
+        else:
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=f"{local_code}.HK",
+            market="HK",
+            exchange="XHKG",
+            local_code=local_code,
+        )
+        return identity.canonical_symbol
+
+    @staticmethod
+    def _canonicalize_jp_symbol(raw_symbol: object) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("TSE:", "JPX:", "XTKS:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        if token.endswith(".JP"):
+            token = token[:-3]
+        elif token.endswith(".T"):
+            token = token[:-2]
+        if not _JP_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=f"{token}.T",
+            market="JP",
+            exchange="XTKS",
+            local_code=token,
+        )
+        return identity.canonical_symbol
+
+    @classmethod
+    def _canonicalize_tw_symbol(
+        cls,
+        raw_symbol: object,
+        *,
+        exchange: object | None = None,
+    ) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("TWSE:", "XTAI:", "TPEX:", "TWO:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        normalized_exchange = cls._normalize_tw_exchange(exchange, source_symbol=token)
+        if token.endswith(".TWO"):
+            token = token[:-4]
+            normalized_exchange = "TPEX"
+        elif token.endswith(".TW"):
+            token = token[:-3]
+            normalized_exchange = "TWSE"
+        if not _TW_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=f"{token}.TW",
+            market="TW",
+            exchange=normalized_exchange,
+            local_code=token,
+        )
+        return identity.canonical_symbol
+
+    @classmethod
+    def _normalize_tw_exchange(
+        cls,
+        raw_exchange: object | None,
+        *,
+        source_symbol: str,
+    ) -> str:
+        exchange = str(raw_exchange or "").strip()
+        if exchange:
+            normalized = _TW_EXCHANGE_ALIASES.get(exchange)
+            if normalized is not None:
+                return normalized
+            normalized = _TW_EXCHANGE_ALIASES.get(exchange.upper())
+            if normalized is not None:
+                return normalized
+        normalized_symbol = source_symbol.upper()
+        if normalized_symbol.endswith(".TWO") or normalized_symbol.startswith(("TPEX:", "TWO:")):
+            return "TPEX"
+        return "TWSE"
+
+
+_market_taxonomy_service: MarketTaxonomyService | None = None
+
+
+def get_market_taxonomy_service() -> MarketTaxonomyService:
+    global _market_taxonomy_service
+    if _market_taxonomy_service is None:
+        _market_taxonomy_service = MarketTaxonomyService()
+    return _market_taxonomy_service
+
+
+__all__ = [
+    "MarketTaxonomyEntry",
+    "MarketTaxonomyService",
+    "get_market_taxonomy_service",
+]

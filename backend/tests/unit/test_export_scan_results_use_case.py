@@ -14,12 +14,15 @@ from app.use_cases.scanning.export_scan_results import (
     ExportScanResultsQuery,
     ExportScanResultsResult,
     ExportScanResultsUseCase,
+    _CSV_COLUMNS,
     _format_value,
 )
 
 from tests.unit.use_cases.conftest import (
     FakeFeatureStoreRepository,
+    FakeScanResultRepository,
     FakeUnitOfWork,
+    make_domain_item,
 )
 
 
@@ -172,6 +175,22 @@ class TestHappyPath:
         name_idx = header.index("Company Name")
         assert data_row[name_idx] == "Apple Inc."
 
+    def test_csv_coerces_scalar_market_themes_without_character_splitting(self):
+        feature_store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=feature_store)
+        _setup_bound_scan(uow, feature_store, rows=[
+            _make_feature_row("AAPL", market_themes="AI Infrastructure"),
+        ])
+        uc = ExportScanResultsUseCase()
+
+        result = uc.execute(uow, _make_query())
+        rows = _parse_csv_bytes(result.content)
+
+        header = rows[0]
+        data_row = rows[1]
+        themes_idx = header.index("Market Themes")
+        assert data_row[themes_idx] == "AI Infrastructure"
+
 
 class TestScanNotFound:
     """Use case raises EntityNotFoundError for missing scans."""
@@ -184,18 +203,42 @@ class TestScanNotFound:
             uc.execute(uow, _make_query(scan_id="not-a-scan"))
 
 
-class TestUnboundScanRaises:
-    """Scan exists but has no feature_run_id — raises EntityNotFoundError."""
+class TestUnboundScanFallsBackToLegacy:
+    """Scan exists but has no feature_run_id — export uses legacy scan_results."""
 
-    def test_unbound_scan_raises_feature_run_not_found(self):
-        uow = FakeUnitOfWork()
-        uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
+    def test_unbound_scan_exports_from_legacy_scan_results(self):
+        shared_fields = {
+            "company_name": "Apple Inc.",
+            "market": "US",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "market_themes": ["AI Infrastructure", "Cloud Platforms"],
+        }
+        legacy_uow = FakeUnitOfWork(
+            scan_results=FakeScanResultRepository(items=[make_domain_item("AAPL", **shared_fields)])
+        )
+        legacy_uow.scans.create(scan_id="scan-123", status="completed")  # no feature_run_id
+
+        bound_feature_store = FakeFeatureStoreRepository()
+        bound_uow = FakeUnitOfWork(feature_store=bound_feature_store)
+        _setup_bound_scan(bound_uow, bound_feature_store, rows=[
+            _make_feature_row("AAPL", **shared_fields),
+        ])
+
         uc = ExportScanResultsUseCase()
 
-        with pytest.raises(EntityNotFoundError) as exc_info:
-            uc.execute(uow, _make_query())
+        legacy_rows = _parse_csv_bytes(uc.execute(legacy_uow, _make_query()).content)
+        bound_rows = _parse_csv_bytes(uc.execute(bound_uow, _make_query()).content)
+        header = legacy_rows[0]
+        data_row = legacy_rows[1]
 
-        assert exc_info.value.entity == "FeatureRun"
+        assert header == [column for column, _ in _CSV_COLUMNS]
+        assert header == bound_rows[0]
+        assert data_row == bound_rows[1]
+        assert data_row[header.index("Symbol")] == "AAPL"
+        assert data_row[header.index("Company Name")] == "Apple Inc."
+        assert data_row[header.index("Market")] == "US"
+        assert data_row[header.index("Market Themes")] == "AI Infrastructure | Cloud Platforms"
 
 
 class TestEmptyResults:

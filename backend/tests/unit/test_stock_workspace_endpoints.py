@@ -96,23 +96,28 @@ class _FakeFeatureStore:
 
 
 class _FakeFeatureRuns:
-    def __init__(self, latest_run):
+    def __init__(self, latest_run=None, by_pointer=None):
         self._latest_run = latest_run
+        self._by_pointer = by_pointer or {}
+        self.calls = []
 
-    def get_latest_published(self):
+    def get_latest_published(self, pointer_key="latest_published"):
+        self.calls.append(pointer_key)
+        if self._by_pointer:
+            return self._by_pointer.get(pointer_key)
         return self._latest_run
 
 
 class _FakeUow:
-    def __init__(self, latest_run, item=None, row=None, peers=()):
-        self.feature_runs = _FakeFeatureRuns(latest_run)
-        self.feature_store = _FakeFeatureStore(item, row, peers) if latest_run and item and row else None
+    def __init__(self, latest_run, item=None, row=None, peers=(), runs_by_pointer=None):
+        self.feature_runs = _FakeFeatureRuns(latest_run, by_pointer=runs_by_pointer)
+        self.feature_store = _FakeFeatureStore(item, row, peers) if item and row else None
         self._item = item
         self._row = row
         self._peers = peers
 
     def __enter__(self):
-        if self.feature_store is None and self.feature_runs.get_latest_published() is not None:
+        if self.feature_store is None and self._item and self._row:
             self.feature_store = _FakeFeatureStore(self._item, self._row, self._peers)
         return self
 
@@ -350,6 +355,90 @@ def _make_feature_context():
     return latest_run, feature_item, feature_row, [peer]
 
 
+def _make_feature_context_for_symbol(symbol="NVDA", *, market="US", exchange="NASDAQ", company_name="NVIDIA Corp"):
+    latest_run = FeatureRunDomain(
+        id=77 if market == "US" else 88,
+        as_of_date=date(2026, 4, 2),
+        run_type=RunType.DAILY_SNAPSHOT,
+        status=RunStatus.PUBLISHED,
+        created_at=datetime(2026, 4, 2, 20, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 2, 20, 5, tzinfo=UTC),
+        published_at=datetime(2026, 4, 2, 20, 6, tzinfo=UTC),
+    )
+    feature_item = ScanResultItemDomain(
+        symbol=symbol,
+        composite_score=88.5,
+        rating="Strong Buy",
+        current_price=410.0 if market == "HK" else 921.45,
+        screener_outputs={},
+        screeners_run=["minervini", "canslim"],
+        composite_method="weighted_average",
+        screeners_passed=2,
+        screeners_total=2,
+        extended_fields={
+            "company_name": company_name,
+            "market": market,
+            "exchange": exchange,
+            "gics_sector": "Technology",
+            "gics_industry": "Internet Services" if market == "HK" else "Semiconductors",
+            "ibd_industry_group": "Internet Services" if market == "HK" else "Semiconductors",
+            "ibd_group_rank": 4 if market == "HK" else 3,
+            "market_themes": ["AI Infrastructure"],
+            "rs_rating": 97,
+            "rs_rating_1m": 95,
+            "rs_rating_3m": 98,
+            "rs_rating_12m": 99,
+            "stage": 2,
+            "adr_percent": 4.2,
+            "eps_rating": 96,
+            "minervini_score": 86,
+            "vcp_detected": True,
+            "vcp_score": 78,
+            "vcp_pivot": 420 if market == "HK" else 940,
+            "vcp_ready_for_breakout": True,
+            "ma_alignment": True,
+            "passes_template": True,
+            "eps_growth_qq": 54.2,
+            "sales_growth_qq": 42.1,
+        },
+    )
+    feature_row = FeatureRow(
+        run_id=latest_run.id,
+        symbol=symbol,
+        as_of_date=date(2026, 4, 2),
+        composite_score=88.5,
+        overall_rating=5,
+        passes_count=2,
+        details={
+            "current_price": feature_item.current_price,
+            "screeners_run": ["minervini", "canslim"],
+            "composite_method": "weighted_average",
+            "screeners_passed": 2,
+            "screeners_total": 2,
+            "details": {"screeners": {}},
+        },
+    )
+    peer = ScanResultItemDomain(
+        symbol="9988.HK" if market == "HK" else "AVGO",
+        composite_score=82.1,
+        rating="Buy",
+        current_price=1440.2,
+        screener_outputs={},
+        screeners_run=["minervini"],
+        composite_method="weighted_average",
+        screeners_passed=1,
+        screeners_total=1,
+        extended_fields={
+            "company_name": "Alibaba" if market == "HK" else "Broadcom",
+            "market": market,
+            "exchange": exchange,
+            "rs_rating": 93,
+            "stage": 2,
+        },
+    )
+    return latest_run, feature_item, feature_row, [peer]
+
+
 @pytest.mark.asyncio
 async def test_search_stocks_endpoint_ranks_exact_and_prefix_matches(client, session):
     app.dependency_overrides[get_db] = _override_db(session)
@@ -546,6 +635,153 @@ async def test_decision_dashboard_endpoint_degrades_when_stock_info_is_unavailab
     assert payload["info"]["symbol"] == "NVDA"
     assert "missing_stock_info" in payload["degraded_reasons"]
     assert payload["info"]["name"] is None
+
+
+@pytest.mark.asyncio
+async def test_chart_data_endpoint_uses_market_specific_latest_run_pointer_for_non_us_symbol(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    latest_run, feature_item, feature_row, peers = _make_feature_context_for_symbol(
+        "0700.HK", market="HK", exchange="XHKG", company_name="Tencent Holdings",
+    )
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            name="Tencent Holdings",
+            market="HK",
+            exchange="XHKG",
+            is_active=True,
+            status="active",
+        )
+    )
+    session.commit()
+    fake_uow = _FakeUow(
+        None,
+        feature_item,
+        feature_row,
+        peers,
+        runs_by_pointer={"latest_published_market:HK": latest_run},
+    )
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+
+    response = await client.get("/api/v1/stocks/0700.HK/chart-data")
+
+    assert response.status_code == 200
+    assert response.json()["symbol"] == "0700.HK"
+    assert "latest_published_market:HK" in fake_uow.feature_runs.calls
+
+
+def test_resolve_symbol_market_ignores_inactive_universe_rows(session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            name="Tencent Holdings",
+            market="HK",
+            exchange="XHKG",
+            is_active=False,
+            status="inactive_manual",
+        )
+    )
+    session.commit()
+
+    assert stocks_module._resolve_symbol_market(session, "0700.HK") is None
+
+
+@pytest.mark.asyncio
+async def test_decision_dashboard_uses_market_specific_latest_run_pointer_for_non_us_symbol(client, session, monkeypatch):
+    app.dependency_overrides[get_db] = _override_db(session)
+    latest_run, feature_item, feature_row, peers = _make_feature_context_for_symbol(
+        "0700.HK", market="HK", exchange="XHKG", company_name="Tencent Holdings",
+    )
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            name="Tencent Holdings",
+            market="HK",
+            exchange="XHKG",
+            is_active=True,
+            status="active",
+        )
+    )
+    session.add(
+        MarketBreadth(
+            date=date(2026, 4, 2),
+            stocks_up_4pct=120,
+            stocks_down_4pct=35,
+            ratio_5day=1.6,
+            ratio_10day=1.3,
+            total_stocks_scanned=4800,
+        )
+    )
+    session.commit()
+    fake_uow = _FakeUow(
+        None,
+        feature_item,
+        feature_row,
+        peers,
+        runs_by_pointer={"latest_published_market:HK": latest_run},
+    )
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[stocks_module._get_stock_event_context_service] = lambda: _FakeEventContextService()
+
+    monkeypatch.setattr(stocks_module, "_get_stock_info_payload", lambda symbol: {
+        "symbol": symbol,
+        "name": "Tencent Holdings",
+        "sector": "Technology",
+        "industry": "Internet Services",
+        "current_price": 410.0,
+        "market_cap": 3.9e12,
+        "market": "HK",
+    })
+    monkeypatch.setattr(stocks_module, "_get_stock_fundamentals_payload", lambda symbol, force_refresh=False: {
+        "symbol": symbol,
+        "market_cap": 3.9e12,
+    })
+    monkeypatch.setattr(stocks_module, "_get_stock_technicals_payload", lambda symbol, db, force_refresh=False: {
+        "symbol": symbol,
+        "current_price": 410.0,
+    })
+    monkeypatch.setattr(stocks_module, "_load_price_history", lambda symbol, period="6mo": [
+        {"date": "2026-04-01", "open": 400.0, "high": 420.0, "low": 398.0, "close": 410.0, "volume": 1000000}
+    ])
+
+    response = await client.get("/api/v1/stocks/0700.HK/decision-dashboard")
+
+    assert response.status_code == 200
+    assert response.json()["symbol"] == "0700.HK"
+    assert "latest_published_market:HK" in fake_uow.feature_runs.calls
+
+
+@pytest.mark.asyncio
+async def test_peers_endpoint_uses_market_specific_latest_run_pointer_for_non_us_symbol(client, session):
+    app.dependency_overrides[get_db] = _override_db(session)
+    latest_run, feature_item, feature_row, peers = _make_feature_context_for_symbol(
+        "0700.HK", market="HK", exchange="XHKG", company_name="Tencent Holdings",
+    )
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            name="Tencent Holdings",
+            market="HK",
+            exchange="XHKG",
+            is_active=True,
+            status="active",
+        )
+    )
+    session.commit()
+    fake_uow = _FakeUow(
+        None,
+        feature_item,
+        feature_row,
+        peers,
+        runs_by_pointer={"latest_published_market:HK": latest_run},
+    )
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+
+    response = await client.get("/api/v1/stocks/0700.HK/peers")
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "9988.HK"
+    assert "latest_published_market:HK" in fake_uow.feature_runs.calls
 
 
 @pytest.mark.asyncio

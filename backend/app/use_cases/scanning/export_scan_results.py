@@ -18,6 +18,7 @@ from typing import Any
 from app.domain.common.uow import UnitOfWork
 from app.domain.scanning.filter_spec import FilterSpec, SortSpec
 from app.domain.scanning.models import ExportFormat, ScanResultItemDomain
+from app.infra.serialization import normalize_string_list
 
 from ._resolve import resolve_scan
 
@@ -95,6 +96,7 @@ _CSV_COLUMNS: list[tuple[str, Any]] = [
     # Industry
     ("IBD Industry Group", lambda item: item.extended_fields.get("ibd_industry_group")),
     ("IBD Group Rank", lambda item: item.extended_fields.get("ibd_group_rank")),
+    ("Market Themes", lambda item: " | ".join(normalize_string_list(item.extended_fields.get("market_themes")))),
     ("GICS Sector", lambda item: item.extended_fields.get("gics_sector")),
     ("GICS Industry", lambda item: item.extended_fields.get("gics_industry")),
     # Performance

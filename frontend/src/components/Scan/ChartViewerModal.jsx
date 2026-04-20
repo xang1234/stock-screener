@@ -26,6 +26,14 @@ import SetupEngineDrawer from './SetupEngineDrawer';
 import AddToWatchlistMenu from '../common/AddToWatchlistMenu';
 import { getGroupRankColor } from '../../utils/colorUtils';
 
+const inferMarketFromSymbol = (symbol) => {
+  const normalized = String(symbol || '').toUpperCase();
+  if (normalized.endsWith('.HK')) return 'HK';
+  if (normalized.endsWith('.T')) return 'JP';
+  if (normalized.endsWith('.TW') || normalized.endsWith('.TWO')) return 'TW';
+  return 'US';
+};
+
 /**
  * Full-screen modal for viewing stock charts with keyboard navigation
  *
@@ -177,13 +185,15 @@ function ChartViewerModal({
 
   // Fetch group ranking for current stock's industry group
   const industryGroup = finalStockData?.ibd_industry_group;
+  const groupMarket = finalStockData?.market || inferMarketFromSymbol(currentSymbol);
+  const marketThemes = finalStockData?.market_themes || [];
   const adrValue = finalStockData?.adr_percent ?? fundamentals?.adr_percent ?? null;
   const {
     data: groupRankData,
     isLoading: isGroupRankLoading,
   } = useQuery({
-    queryKey: ['groupRank', industryGroup],
-    queryFn: () => getGroupDetail(industryGroup, 1),
+    queryKey: ['groupRank', groupMarket, industryGroup],
+    queryFn: () => getGroupDetail(industryGroup, 1, groupMarket),
     enabled: open && !!industryGroup,
     staleTime: 300000, // 5 minutes
     retry: false,
@@ -430,7 +440,7 @@ function ChartViewerModal({
                         </Typography>
                       </Box>
                       <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
-                        IBD
+                        Group
                       </Typography>
                     </Box>
 
@@ -476,6 +486,19 @@ function ChartViewerModal({
                       <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', mt: 0.25 }}>
                         Industry
                       </Typography>
+                    </Box>
+                  </Box>
+                )}
+
+                {marketThemes.length > 0 && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxWidth: 240 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                      Market Themes
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      {marketThemes.map((theme) => (
+                        <Chip key={theme} label={theme} size="small" variant="outlined" sx={{ height: 20 }} />
+                      ))}
                     </Box>
                   </Box>
                 )}

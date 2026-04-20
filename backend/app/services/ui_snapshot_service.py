@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.database import is_corruption_error
-from app.domain.analytics.scope import AnalyticsFeature, us_only_tag
+from app.domain.analytics.scope import AnalyticsFeature, market_scope_tag, us_only_tag
 from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank
@@ -634,14 +634,14 @@ class UISnapshotService:
                 date=ranking_date,
                 total_groups=len(rankings),
                 rankings=[GroupRankResponse(**row) for row in rankings],
-                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
+                **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "movers_period": DEFAULT_GROUP_PERIOD,
             "movers": MoversResponse(
                 period=movers["period"],
                 gainers=[GroupRankResponse(**row) for row in movers.get("gainers", [])],
                 losers=[GroupRankResponse(**row) for row in movers.get("losers", [])],
-                **us_only_tag(AnalyticsFeature.IBD_GROUP_RANK),
+                **market_scope_tag("US"),
             ).model_dump(mode="json"),
             "task_controls_enabled": settings.feature_tasks,
         }

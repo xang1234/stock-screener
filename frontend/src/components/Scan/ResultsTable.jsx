@@ -61,6 +61,7 @@ const columns = [
   { id: 'price_change_1d', label: 'Price', sortable: true, width: 110 },
   { id: 'gics_sector', label: 'Sector', sortable: true, width: 80 },
   { id: 'ibd_industry_group', label: 'IBD Industry', sortable: true, width: 140 },
+  { id: 'market_themes', label: 'Themes', sortable: false, width: 180 },
   { id: 'ibd_group_rank', label: 'Grp', sortable: true, width: 45 },
   { id: 'composite_score', label: 'Comp', sortable: true, width: 50 },
   { id: 'minervini_score', label: 'Min', sortable: true, width: 45 },
@@ -217,6 +218,10 @@ const VirtualTableRow = memo(function VirtualTableRow({
 
       <TableCell align="left" sx={{ color: 'text.secondary', width: 140, minWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.ibd_industry_group || '-'}
+      </TableCell>
+
+      <TableCell align="left" sx={{ color: 'text.secondary', width: 180, minWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {row.market_themes?.length ? row.market_themes.join(' · ') : '-'}
       </TableCell>
 
       <TableCell align="center" sx={{
@@ -427,6 +432,11 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.rs_rating === nextProps.row.rs_rating &&
          prevProps.row.current_price === nextProps.row.current_price &&
          prevProps.row.price_change_1d === nextProps.row.price_change_1d &&
+         prevProps.row.gics_sector === nextProps.row.gics_sector &&
+         prevProps.row.ibd_industry_group === nextProps.row.ibd_industry_group &&
+         prevProps.row.ibd_group_rank === nextProps.row.ibd_group_rank &&
+         (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
+         prevProps.row.rating === nextProps.row.rating &&
          prevProps.mcapDisplay === nextProps.mcapDisplay &&
          prevProps.showActions === nextProps.showActions &&
          prevProps.showWatchlistMenu === nextProps.showWatchlistMenu &&
@@ -538,7 +548,7 @@ function ResultsTable({
           overflow: 'auto',
         }}
       >
-        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2573 : 2513 }}>
+        <Table stickyHeader size="small" sx={{ minWidth: showActions ? 2673 : 2613 }}>
           <TableHead>
             <TableRow>
               {visibleColumns.map((column) => (
