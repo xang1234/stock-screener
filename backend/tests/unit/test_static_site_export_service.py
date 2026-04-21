@@ -482,6 +482,44 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     assert any("TW" in warning for warning in manifest["warnings"])
 
 
+def test_build_manifest_orders_india_between_hk_and_jp():
+    market_entries = {
+        "US": {
+            "market": "US",
+            "display_name": "United States",
+            "as_of_date": "2026-04-04",
+            "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+            "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+            "assets": {"charts": {"path": "markets/us/charts/index.json"}},
+        },
+        "IN": {
+            "market": "IN",
+            "display_name": "India",
+            "as_of_date": "2026-04-04",
+            "features": {"scan": True, "breadth": True, "groups": False, "charts": True},
+            "pages": {"scan": {"path": "markets/in/scan/manifest.json"}},
+            "assets": {"charts": {"path": "markets/in/charts/index.json"}},
+        },
+        "HK": {
+            "market": "HK",
+            "display_name": "Hong Kong",
+            "as_of_date": "2026-04-04",
+            "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+            "pages": {"scan": {"path": "markets/hk/scan/manifest.json"}},
+            "assets": {"charts": {"path": "markets/hk/charts/index.json"}},
+        },
+    }
+
+    manifest = StaticSiteExportService._build_manifest(
+        market_entries=market_entries,
+        generated_at="2026-04-04T22:00:00Z",
+        warnings=[],
+    )
+
+    assert manifest["supported_markets"] == ["US", "HK", "IN"]
+    assert list(manifest["markets"]) == ["US", "HK", "IN"]
+
+
 def test_export_marks_optional_sections_unavailable_without_aborting(
     service_and_session_factory,
     monkeypatch,
@@ -1167,3 +1205,18 @@ def test_build_key_markets_skips_change_when_latest_close_is_null(service_and_se
     spy = next(item for item in markets if item["symbol"] == "SPY")
     assert spy["latest_close"] is None
     assert spy["change_1d"] is None
+
+
+def test_build_key_markets_includes_india_defaults(service_and_session_factory, monkeypatch):
+    service, _session_factory = service_and_session_factory
+    history = [
+        {"date": "2026-03-30", "close": 100.0},
+        {"date": "2026-03-31", "close": 101.0},
+    ]
+    monkeypatch.setattr(service, "_get_symbol_price_history", lambda symbol, period="6mo": [symbol, period])
+    monkeypatch.setattr(service, "_serialize_close_history", lambda history_payload, days=30: history)
+
+    markets = service._build_key_markets("IN")  # noqa: SLF001 - intentional unit test coverage
+
+    assert [item["symbol"] for item in markets] == ["^NSEI", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
+    assert all(item["currency"] == "INR" for item in markets)

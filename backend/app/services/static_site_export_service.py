@@ -54,11 +54,12 @@ STATIC_CHART_PRESET_TOP_N = 200
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "JP", "TW")
+STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "TW")
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
     "HK": "Hong Kong",
+    "IN": "India",
     "JP": "Japan",
     "TW": "Taiwan",
 }
@@ -83,6 +84,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "0700.HK", "display_name": "Tencent", "currency": "HKD"},
         {"symbol": "3690.HK", "display_name": "Meituan", "currency": "HKD"},
         {"symbol": "0941.HK", "display_name": "China Mobile", "currency": "HKD"},
+    ),
+    "IN": (
+        {"symbol": "^NSEI", "display_name": "Nifty 50", "currency": "INR"},
+        {"symbol": "NIFTYBEES.NS", "display_name": "Nippon India ETF Nifty 50 BeES", "currency": "INR"},
+        {"symbol": "RELIANCE.NS", "display_name": "Reliance Industries", "currency": "INR"},
+        {"symbol": "TCS.NS", "display_name": "Tata Consultancy Services", "currency": "INR"},
+        {"symbol": "HDFCBANK.NS", "display_name": "HDFC Bank", "currency": "INR"},
     ),
     "JP": (
         {"symbol": "^N225", "display_name": "Nikkei 225", "currency": "JPY"},
