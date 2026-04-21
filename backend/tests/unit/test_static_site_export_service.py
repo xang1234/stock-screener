@@ -254,6 +254,98 @@ def test_export_writes_serializable_manifest_and_page_bundles(
     assert result.warnings == ()
 
 
+def test_export_writes_india_market_bundle_and_root_manifest(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=70,
+            as_of_date=date(2026, 4, 4),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 4, 21, 30, 0),
+            config_json={"universe": {"market": "IN"}},
+        ),
+        pointer_run_id=70,
+        pointer_key="latest_published_market:IN",
+    )
+
+    scan_manifest = {
+        "schema_version": "static-scan-v1",
+        "generated_at": "2026-04-04T22:00:00Z",
+        "as_of_date": "2026-04-04",
+        "run_id": 70,
+        "rows_total": 2,
+        "default_filtered_rows_total": 1,
+        "chunks": [{"path": "markets/in/scan/chunks/chunk-0001.json", "count": 2}],
+        "preview_rows": [{"symbol": "RELIANCE.NS", "composite_score": 97.5}],
+    }
+    breadth_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-04-04T22:00:00Z",
+        "available": True,
+        "payload": {"current": {"date": "2026-04-04"}},
+    }
+    groups_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-04-04T22:00:00Z",
+        "available": True,
+        "payload": {"rankings": {"date": "2026-04-04", "rankings": []}},
+    }
+    home_payload = {
+        "schema_version": STATIC_SITE_SCHEMA_VERSION,
+        "generated_at": "2026-04-04T22:00:00Z",
+        "as_of_date": "2026-04-04",
+        "freshness": {"scan_run_id": 70},
+        "key_markets": [{"symbol": "^NSEI", "display_name": "Nifty 50"}],
+        "scan_summary": {"top_results": [{"symbol": "RELIANCE.NS"}]},
+        "top_groups": [],
+    }
+    chart_manifest = {
+        "path": "markets/in/charts/index.json",
+        "limit": 200,
+        "symbols_total": 2,
+        "available": True,
+        "skipped_symbols": [],
+    }
+
+    monkeypatch.setattr(service, "_load_scan_export_source", lambda *_args, **_kwargs: ([], SimpleNamespace()))
+    monkeypatch.setattr(service, "_export_scan_bundle", lambda **_kwargs: (scan_manifest, []))
+    monkeypatch.setattr(service, "_export_chart_bundle", lambda **_kwargs: chart_manifest)
+    monkeypatch.setattr(service, "_build_breadth_payload", lambda **_kwargs: breadth_payload)
+    monkeypatch.setattr(service, "_build_groups_payload", lambda **_kwargs: groups_payload)
+    monkeypatch.setattr(service, "_build_home_payload", lambda **_kwargs: home_payload)
+
+    output_dir = tmp_path / "static-data"
+    result = service.export(output_dir, markets=("IN",))
+
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    metadata = json.loads(
+        (output_dir / "markets" / "in" / STATIC_MARKET_METADATA_FILENAME).read_text(encoding="utf-8")
+    )
+    scan = json.loads((output_dir / "markets" / "in" / "scan" / "manifest.json").read_text(encoding="utf-8"))
+    breadth = json.loads((output_dir / "markets" / "in" / "breadth.json").read_text(encoding="utf-8"))
+    groups = json.loads((output_dir / "markets" / "in" / "groups.json").read_text(encoding="utf-8"))
+    home = json.loads((output_dir / "markets" / "in" / "home.json").read_text(encoding="utf-8"))
+
+    assert result.manifest == manifest
+    assert manifest["supported_markets"] == ["IN"]
+    assert manifest["markets"]["IN"]["display_name"] == "India"
+    assert manifest["markets"]["IN"]["pages"]["scan"]["path"] == "markets/in/scan/manifest.json"
+    assert manifest["markets"]["IN"]["pages"]["home"]["path"] == "markets/in/home.json"
+    assert manifest["markets"]["IN"]["assets"]["charts"]["path"] == "markets/in/charts/index.json"
+    assert metadata["market"] == "IN"
+    assert metadata["entry"]["display_name"] == "India"
+    assert scan["preview_rows"][0]["symbol"] == "RELIANCE.NS"
+    assert breadth["payload"]["current"]["date"] == "2026-04-04"
+    assert groups["payload"]["rankings"]["date"] == "2026-04-04"
+    assert home["key_markets"][0]["symbol"] == "^NSEI"
+
+
 def test_export_can_write_single_market_artifact_without_root_manifest(
     service_and_session_factory,
     monkeypatch,
