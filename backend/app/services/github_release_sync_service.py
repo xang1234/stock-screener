@@ -187,14 +187,6 @@ class GitHubReleaseSyncService:
         bundle_asset_name = str(manifest.get("bundle_asset_name") or "").strip() or None
         source_revision = str(manifest.get("source_revision") or "").strip() or None
 
-        if current_revision and source_revision and current_revision == source_revision:
-            return self._result(
-                "up_to_date",
-                manifest=manifest,
-                bundle_asset_name=bundle_asset_name,
-                source_revision=source_revision,
-            )
-
         if stale_validator is not None:
             try:
                 is_stale, stale_reason = self._resolve_stale_validation(
@@ -210,6 +202,14 @@ class GitHubReleaseSyncService:
                     source_revision=source_revision,
                     reason=stale_reason,
                 )
+
+        if current_revision and source_revision and current_revision == source_revision:
+            return self._result(
+                "up_to_date",
+                manifest=manifest,
+                bundle_asset_name=bundle_asset_name,
+                source_revision=source_revision,
+            )
 
         bundle_asset = next(
             (

@@ -304,6 +304,11 @@ def test_refresh_all_fundamentals_prefers_github_weekly_bundle(monkeypatch):
         "get_fundamentals_cache",
         lambda: (_ for _ in ()).throw(AssertionError("legacy live fetch should not run")),
     )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
 
     started = []
     completed = []
@@ -314,6 +319,63 @@ def test_refresh_all_fundamentals_prefers_github_weekly_bundle(monkeypatch):
 
     assert result["status"] == "success"
     assert result["source"] == "github"
+    assert result["eps_rating_task_id"] == "eps-task-id"
+    assert started[0]["stage_key"] == "fundamentals"
+    assert completed[0]["stage_key"] == "fundamentals"
+
+
+def test_refresh_all_fundamentals_hybrid_prefers_github_weekly_bundle(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(module.settings, "provider_snapshot_ingestion_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            sync_weekly_reference_from_github=lambda db, market, hydrate_cache, hydrate_mode: {
+                "status": "success",
+                "source": "github",
+                "market": market,
+                "source_revision": "fundamentals_v1_us:20260418120000",
+                "import": {"rows": 1, "hydrated_symbols": 1},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module.calculate_eps_rating_percentiles,
+        "delay",
+        lambda: SimpleNamespace(id="eps-task-id"),
+    )
+    monkeypatch.setattr(
+        module,
+        "HybridFundamentalsService",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("legacy hybrid fetch should not run")
+        ),
+    )
+
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals_hybrid.run(
+        include_finviz=False,
+        market="US",
+    )
+
+    assert result["status"] == "success"
+    assert result["source"] == "github"
+    assert result["eps_rating_task_id"] == "eps-task-id"
     assert started[0]["stage_key"] == "fundamentals"
     assert completed[0]["stage_key"] == "fundamentals"
 

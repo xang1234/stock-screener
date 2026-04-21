@@ -190,3 +190,59 @@ def test_fetch_latest_bundle_rejects_stale_manifest(tmp_path):
 
     assert result["status"] == "stale"
     assert "expected session" in result["reason"]
+
+
+def test_fetch_latest_bundle_checks_staleness_before_up_to_date(tmp_path):
+    manifest = {
+        "schema_version": "daily-price-manifest-v1",
+        "market": "US",
+        "as_of_date": "2026-04-17",
+        "source_revision": "daily_prices_us:20260418120000",
+        "bundle_asset_name": "daily-price-us-20260417.json.gz",
+        "sha256": "unused",
+        "bar_period": "2y",
+        "symbol_count": 10,
+    }
+    session = _FakeSession(
+        {
+            "https://api.github.com/repos/xang1234/stock-screener/releases/tags/daily-price-data": _FakeResponse(
+                json_data={
+                    "assets": [
+                        {
+                            "name": "daily-price-latest-us.json",
+                            "browser_download_url": "https://example.com/manifest.json",
+                        }
+                    ]
+                }
+            ),
+            "https://example.com/manifest.json": _FakeResponse(
+                content=json.dumps(manifest).encode("utf-8")
+            ),
+        }
+    )
+    service = GitHubReleaseSyncService(session=session)
+
+    result = service.fetch_latest_bundle(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="daily-price-data",
+        manifest_asset_name="daily-price-latest-us.json",
+        current_revision="daily_prices_us:20260418120000",
+        expected_manifest_schema="daily-price-manifest-v1",
+        required_manifest_keys=(
+            "market",
+            "as_of_date",
+            "source_revision",
+            "bundle_asset_name",
+            "sha256",
+            "bar_period",
+            "symbol_count",
+        ),
+        stale_validator=lambda parsed_manifest: (
+            parsed_manifest["as_of_date"] != "2026-04-18",
+            "bundle is behind the expected session",
+        ),
+        output_dir=tmp_path,
+    )
+
+    assert result["status"] == "stale"
+    assert "expected session" in result["reason"]

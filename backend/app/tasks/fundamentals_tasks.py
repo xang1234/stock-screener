@@ -290,6 +290,7 @@ def refresh_all_fundamentals(
                     force=True,
                 )
             duration = time.time() - start_time
+            eps_task = calculate_eps_rating_percentiles.delay()
             mark_market_activity_completed(
                 db,
                 market=effective_market,
@@ -308,6 +309,7 @@ def refresh_all_fundamentals(
                 "market": effective_market,
                 "source_revision": github_sync.get("source_revision"),
                 "import": github_sync.get("import"),
+                "eps_rating_task_id": eps_task.id,
                 "duration_seconds": round(duration, 2),
                 "timestamp": datetime.now().isoformat(),
             }
@@ -946,6 +948,7 @@ def refresh_all_fundamentals_hybrid(
                     force=True,
                 )
             duration = time.time() - start_time
+            eps_task = calculate_eps_rating_percentiles.delay()
             mark_market_activity_completed(
                 db,
                 market=effective_market,
@@ -965,6 +968,7 @@ def refresh_all_fundamentals_hybrid(
                 "source_revision": github_sync.get("source_revision"),
                 "import": github_sync.get("import"),
                 "include_finviz": include_finviz,
+                "eps_rating_task_id": eps_task.id,
                 "duration_seconds": round(duration, 2),
                 "duration_minutes": round(duration / 60, 1),
                 "timestamp": datetime.now().isoformat(),
