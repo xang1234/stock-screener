@@ -2,7 +2,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_CAPABILITIES, RuntimeProvider, useRuntime } from './RuntimeContext';
+import {
+  DEFAULT_CAPABILITIES,
+  RuntimeProvider,
+  mergeBootstrapCapabilities,
+  useRuntime,
+} from './RuntimeContext';
 
 const {
   getAppCapabilities,
@@ -43,6 +48,7 @@ function RuntimeProbe() {
     bootstrapState,
     primaryMarket,
     enabledMarkets,
+    supportedMarkets,
     startBootstrap,
   } = useRuntime();
 
@@ -54,6 +60,7 @@ function RuntimeProbe() {
       <div data-testid="bootstrap-state">{bootstrapState}</div>
       <div data-testid="primary-market">{primaryMarket}</div>
       <div data-testid="enabled-markets">{enabledMarkets.join(',')}</div>
+      <div data-testid="supported-markets">{supportedMarkets.join(',')}</div>
       <button
         type="button"
         onClick={() => startBootstrap({ primaryMarket: 'HK', enabledMarkets: ['HK', 'US'] })}
@@ -185,5 +192,55 @@ describe('RuntimeProvider', () => {
         expect.objectContaining({ market: 'US', task_id: null }),
       ]);
     });
+  });
+
+  it('preserves the India market in bootstrap fallback supported markets', async () => {
+    getAppCapabilities
+      .mockResolvedValueOnce({
+        ...DEFAULT_CAPABILITIES,
+        bootstrap_required: true,
+        bootstrap_state: 'not_started',
+      })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    startRuntimeBootstrap.mockResolvedValue({
+      bootstrap_required: true,
+      empty_system: true,
+      primary_market: 'HK',
+      enabled_markets: ['HK', 'US'],
+      bootstrap_state: 'running',
+      supported_markets: null,
+      task_id: 'task-bootstrap-123',
+    });
+
+    const { queryClient } = renderRuntime();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('runtime-ready')).toHaveTextContent('true');
+    });
+
+    queryClient.setQueryData(['appCapabilities'], (previous) => ({
+      ...(previous ?? DEFAULT_CAPABILITIES),
+      supported_markets: null,
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,TW');
+    });
+  });
+});
+
+describe('mergeBootstrapCapabilities', () => {
+  it('falls back to the default supported markets when bootstrap omits them', () => {
+    const merged = mergeBootstrapCapabilities(null, {
+      bootstrap_required: true,
+      primary_market: 'HK',
+      enabled_markets: ['HK', 'US'],
+      bootstrap_state: 'running',
+      supported_markets: null,
+    });
+
+    expect(merged.supported_markets).toEqual(DEFAULT_CAPABILITIES.supported_markets);
   });
 });

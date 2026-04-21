@@ -67,6 +67,19 @@ function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
   }));
 }
 
+export function mergeBootstrapCapabilities(previous, data) {
+  return {
+    ...(previous ?? DEFAULT_CAPABILITIES),
+    bootstrap_required: Boolean(data.bootstrap_required),
+    primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
+    enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
+    bootstrap_state: data.bootstrap_state ?? 'running',
+    supported_markets: data.supported_markets
+      ?? previous?.supported_markets
+      ?? DEFAULT_CAPABILITIES.supported_markets,
+  };
+}
+
 export function RuntimeProvider({ children }) {
   const queryClient = useQueryClient();
 
@@ -114,16 +127,9 @@ export function RuntimeProvider({ children }) {
       startRuntimeBootstrap({ primaryMarket, enabledMarkets })
     ),
     onSuccess: (data) => {
-      queryClient.setQueryData(['appCapabilities'], (previous) => ({
-        ...(previous ?? DEFAULT_CAPABILITIES),
-        bootstrap_required: Boolean(data.bootstrap_required),
-        primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
-        enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
-        bootstrap_state: data.bootstrap_state ?? 'running',
-        supported_markets: data.supported_markets
-          ?? previous?.supported_markets
-          ?? ['US', 'HK', 'JP', 'TW'],
-      }));
+      queryClient.setQueryData(['appCapabilities'], (previous) => (
+        mergeBootstrapCapabilities(previous, data)
+      ));
       queryClient.setQueryData(['runtimeActivity'], (previous) => {
         const primaryMarket = data.primary_market ?? 'US';
         const enabledMarkets = data.enabled_markets ?? [primaryMarket];
