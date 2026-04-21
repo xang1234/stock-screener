@@ -148,7 +148,7 @@ class MarketCalendarService:
             market_open = market_open.tz_localize("UTC")
         if market_close.tzinfo is None:
             market_close = market_close.tz_localize("UTC")
-        return bool(market_open.floor("min") <= minute_utc <= market_close.floor("min"))
+        return bool(market_open.floor("min") <= minute_utc < market_close.floor("min"))
 
     def last_completed_trading_day(self, market: str, now: datetime | None = None) -> date:
         """Return the latest trading day that should already have end-of-day bars."""

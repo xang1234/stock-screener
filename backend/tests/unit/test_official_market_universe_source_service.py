@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -60,6 +61,40 @@ def test_parse_nse_rows_filters_eq_series_and_canonicalizes_symbols():
     assert [row["symbol"] for row in rows] == ["RELIANCE.NS", "TCS.NS"]
     assert all(row["exchange"] == "XNSE" for row in rows)
     assert rows[0]["isin"] == "INE002A01018"
+
+
+def test_parse_bse_rows_requires_explicit_active_equity():
+    service = OfficialMarketUniverseSourceService()
+    content = json.dumps(
+        [
+            {
+                "SCRIP_CD": "500325",
+                "Issuer_Name": "Reliance Industries Ltd",
+                "Status": "Active",
+                "Segment": "Equity",
+                "ISIN_NUMBER": "INE002A01018",
+                "Mktcap": "1950000.0",
+            },
+            {
+                "SCRIP_CD": "500002",
+                "Issuer_Name": "ABB India Limited",
+                "Status": "",
+                "Segment": "Equity",
+                "ISIN_NUMBER": "INE117A01022",
+            },
+            {
+                "SCRIP_CD": "500112",
+                "Issuer_Name": "State Trading Corporation",
+                "Status": "Active",
+                "Segment": "",
+                "ISIN_NUMBER": "INE655A01013",
+            },
+        ]
+    ).encode("utf-8")
+
+    rows = service.parse_bse_rows(content)
+
+    assert [row["symbol"] for row in rows] == ["500325.BO"]
 
 
 def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):

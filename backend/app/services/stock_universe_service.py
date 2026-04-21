@@ -1298,7 +1298,8 @@ class StockUniverseService:
         db.commit()
         details_limit = 25
         canonical_preview = canonical_rows[:details_limit]
-        rejected_preview = [*rejected_rows, *coverage_rejected_rows][:details_limit]
+        all_rejected_rows = [*rejected_rows, *coverage_rejected_rows]
+        rejected_preview = all_rejected_rows[:details_limit]
 
         return {
             "added": added_count,
@@ -1328,7 +1329,7 @@ class StockUniverseService:
                 for row in rejected_preview
             ],
             "canonical_rows_truncated": len(canonical_rows) > details_limit,
-            "rejected_rows_truncated": len(rejected_rows) > details_limit,
+            "rejected_rows_truncated": len(all_rejected_rows) > details_limit,
             "reconciliation": reconciliation,
         }
 
@@ -2706,7 +2707,7 @@ class StockUniverseService:
             1,
         )
         stale_after_seconds = stale_after_hours * 3600
-        reconciliation_markets = {"HK", "JP", "TW"}
+        reconciliation_markets = {"HK", "IN", "JP", "TW"}
 
         by_market: Dict[str, Dict[str, Any]] = {
             market: {
@@ -2716,7 +2717,7 @@ class StockUniverseService:
                 "latest_seen_in_source_at": None,
                 "latest_snapshot": None,
             }
-            for market in ("US", "HK", "JP", "TW")
+            for market in ("US", "HK", "IN", "JP", "TW")
         }
 
         universe_rows = db.query(

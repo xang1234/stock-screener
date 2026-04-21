@@ -505,12 +505,15 @@ class SqlScanResultRepository(ScanResultRepository):
 
         normalized_market = str(meta.get("market") or "").strip().upper()
         should_override_sector = normalized_market not in {"", "US"} and meta.get("sector")
+        should_override_industry = normalized_market not in {"", "US"} and meta.get("industry")
 
         if should_override_sector and enriched.get("gics_sector") != meta.get("sector"):
             enriched["gics_sector"] = meta["sector"]
         elif not enriched.get("gics_sector") and meta.get("sector"):
             enriched["gics_sector"] = meta["sector"]
-        if not enriched.get("gics_industry") and meta.get("industry"):
+        if should_override_industry and enriched.get("gics_industry") != meta.get("industry"):
+            enriched["gics_industry"] = meta["industry"]
+        elif not enriched.get("gics_industry") and meta.get("industry"):
             enriched["gics_industry"] = meta["industry"]
 
         should_override_industry_group = (

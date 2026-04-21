@@ -391,9 +391,9 @@ class OfficialMarketUniverseSourceService:
                 continue
             status = str(row.get("Status") or "").strip().lower()
             segment = str(row.get("Segment") or "").strip().lower()
-            if status and status != "active":
+            if status != "active":
                 continue
-            if segment and segment != "equity":
+            if segment != "equity":
                 continue
 
             name = self._collapse_whitespace(

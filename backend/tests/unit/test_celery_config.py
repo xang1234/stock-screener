@@ -111,3 +111,22 @@ class TestSettingsValidators:
     def test_invalid_minute_negative(self):
         with pytest.raises(ValidationError, match="cache_warm_minute must be 0-59"):
             self._make_settings(cache_warm_minute=-1)
+
+    def test_invalid_india_per_market_hour_too_high(self):
+        with pytest.raises(ValidationError, match="per-market cache_warm_hour must be 0-23"):
+            self._make_settings(cache_warm_hour_in=24)
+
+    def test_invalid_india_per_market_minute_too_high(self):
+        with pytest.raises(ValidationError, match="per-market cache_warm_minute must be 0-59"):
+            self._make_settings(cache_warm_minute_in=60)
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("provider_snapshot_min_active_coverage_in", 1.1),
+            ("provider_snapshot_max_missing_ratio_in", -0.1),
+        ],
+    )
+    def test_invalid_india_provider_snapshot_ratio(self, field_name, value):
+        with pytest.raises(ValidationError, match="provider snapshot ratio must be between 0 and 1"):
+            self._make_settings(**{field_name: value})

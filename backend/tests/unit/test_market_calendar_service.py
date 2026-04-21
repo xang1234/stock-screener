@@ -33,6 +33,21 @@ class _FakeCalendar:
         return ts == pd.Timestamp("2026-04-10 01:30:00+00:00")
 
 
+class _FallbackCalendar:
+    def __init__(self):
+        self.sessions = [pd.Timestamp("2026-04-10")]
+        self.schedule = pd.DataFrame(
+            {
+                "market_open": [pd.Timestamp("2026-04-10 03:45:00+00:00")],
+                "market_close": [pd.Timestamp("2026-04-10 10:00:00+00:00")],
+            },
+            index=self.sessions,
+        )
+
+    def is_session(self, session: pd.Timestamp) -> bool:
+        return any(s.date() == session.date() for s in self.sessions)
+
+
 def test_market_calendar_service_uses_canonical_calendar_ids():
     service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
 
@@ -68,3 +83,12 @@ def test_is_market_open_uses_calendar_open_minute():
 
     assert service.is_market_open("HK", now=open_minute_hkt) is True
     assert service.is_market_open("HK", now=closed_minute_hkt) is False
+
+
+def test_is_market_open_schedule_fallback_treats_close_minute_as_closed():
+    service = MarketCalendarService(calendar_provider=lambda _: _FallbackCalendar())
+    pre_close_ist = datetime.fromisoformat("2026-04-10T15:29:00+05:30")
+    close_minute_ist = datetime.fromisoformat("2026-04-10T15:30:00+05:30")
+
+    assert service.is_market_open("IN", now=pre_close_ist) is True
+    assert service.is_market_open("IN", now=close_minute_ist) is False

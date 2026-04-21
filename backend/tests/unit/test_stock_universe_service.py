@@ -441,6 +441,67 @@ def test_ingest_in_snapshot_rows_filters_bse_only_symbols_with_repeated_yfinance
     db.close()
 
 
+def test_ingest_in_snapshot_rows_truncates_combined_rejected_preview():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    coverage_rows = [
+        {
+            "symbol": f"{500100 + index:06d}.BO",
+            "name": f"BSE Only {index}",
+            "exchange": "XBOM",
+            "sector": "",
+            "industry": "",
+            "market_cap": 1000.0 + index,
+            "isin": f"INE{100000000000 + index:012d}",
+        }
+        for index in range(10)
+    ]
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            row["symbol"]: {"has_error": True, "price_data": None}
+            for row in coverage_rows
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
+
+    invalid_rows = [
+        {
+            "symbol": f"INVALID{index}",
+            "name": "",
+            "exchange": "XNSE",
+            "sector": "",
+            "industry": "",
+            "market_cap": None,
+            "isin": f"INE{200000000000 + index:012d}",
+        }
+        for index in range(20)
+    ]
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[*invalid_rows, *coverage_rows],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+        strict=False,
+    )
+
+    assert stats["rejected"] == 30
+    assert stats["coverage_rejected"] == 10
+    assert len(stats["rejected_rows"]) == 25
+    assert stats["rejected_rows_truncated"] is True
+    assert fake_fetcher.calls == [
+        {
+            "symbols": [row["symbol"] for row in coverage_rows],
+            "period": "1mo",
+            "market": "IN",
+        }
+    ]
+    db.close()
+
+
 def test_ingest_hk_from_csv_reactivates_existing_inactive_symbol():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
@@ -1424,6 +1485,14 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
                 source="jpx_listing",
             ),
             StockUniverse(
+                symbol="RELIANCE.NS",
+                market="IN",
+                exchange="XNSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="in_reference_bundle",
+            ),
+            StockUniverse(
                 symbol="AAPL",
                 market="US",
                 exchange="NASDAQ",
@@ -1493,6 +1562,7 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
 
     audit = stock_universe_service.get_market_audit(db)
     hk = audit["by_market"]["HK"]
+    india = audit["by_market"]["IN"]
     jp = audit["by_market"]["JP"]
     tw = audit["by_market"]["TW"]
     us = audit["by_market"]["US"]
@@ -1503,14 +1573,16 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
     assert hk["latest_snapshot"]["snapshot_id"] == "hk-20260412-a"
     assert hk["latest_snapshot"]["counts"]["removed"] == 1
     assert hk["latest_snapshot"]["is_stale"] is True
+    assert india["snapshot_supported"] is True
+    assert india["latest_snapshot"] is None
     assert jp["snapshot_supported"] is True
     assert jp["latest_snapshot"] is None
     assert tw["latest_snapshot"]["safety"]["quarantined"] is True
     assert us["snapshot_supported"] is False
     assert us["latest_snapshot"] is None
     assert audit["checks"]["stale_after_hours"] == 1
-    assert set(audit["checks"]["stale_markets"]) == {"HK", "JP"}
-    assert audit["checks"]["missing_snapshot_markets"] == ["JP"]
+    assert set(audit["checks"]["stale_markets"]) == {"HK", "IN", "JP"}
+    assert audit["checks"]["missing_snapshot_markets"] == ["IN", "JP"]
     assert audit["checks"]["quarantined_markets"] == ["TW"]
     db.close()
 

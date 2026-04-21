@@ -296,7 +296,7 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
+        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -305,7 +305,7 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
+        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -338,10 +338,12 @@ class Settings(BaseSettings):
     @field_validator(
         'provider_snapshot_min_active_coverage_us',
         'provider_snapshot_min_active_coverage_hk',
+        'provider_snapshot_min_active_coverage_in',
         'provider_snapshot_min_active_coverage_jp',
         'provider_snapshot_min_active_coverage_tw',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
+        'provider_snapshot_max_missing_ratio_in',
         'provider_snapshot_max_missing_ratio_jp',
         'provider_snapshot_max_missing_ratio_tw',
     )
