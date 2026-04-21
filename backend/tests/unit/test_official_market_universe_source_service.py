@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -42,6 +43,133 @@ def test_parse_jp_rows_filters_domestic_equities_and_sets_snapshot_date():
     assert snapshot.snapshot_id == "jpx-data-j-2026-03-31"
     assert [row["symbol"] for row in snapshot.rows] == ["1301.T", "7203.T"]
     assert [row["industry"] for row in snapshot.rows] == ["水産・農林業", "輸送用機器"]
+
+
+def test_parse_nse_rows_filters_eq_series_and_canonicalizes_symbols():
+    service = OfficialMarketUniverseSourceService()
+    content = "\n".join(
+        [
+            "SYMBOL,NAME OF COMPANY,SERIES,DATE OF LISTING,PAID UP VALUE,MARKET LOT,ISIN NUMBER,FACE VALUE",
+            "RELIANCE,Reliance Industries Limited,EQ,29-NOV-1995,10,1,INE002A01018,10",
+            "RELBEES,Reliance ETF,BE,29-NOV-1995,10,1,INE999A01018,10",
+            "TCS,Tata Consultancy Services Limited,EQ,25-AUG-2004,1,1,INE467B01029,1",
+        ]
+    ).encode("utf-8")
+
+    rows = service.parse_nse_rows(content)
+
+    assert [row["symbol"] for row in rows] == ["RELIANCE.NS", "TCS.NS"]
+    assert all(row["exchange"] == "XNSE" for row in rows)
+    assert rows[0]["isin"] == "INE002A01018"
+
+
+def test_parse_bse_rows_requires_explicit_active_equity():
+    service = OfficialMarketUniverseSourceService()
+    content = json.dumps(
+        [
+            {
+                "SCRIP_CD": "500325",
+                "Issuer_Name": "Reliance Industries Ltd",
+                "Status": "Active",
+                "Segment": "Equity",
+                "ISIN_NUMBER": "INE002A01018",
+                "Mktcap": "1950000.0",
+            },
+            {
+                "SCRIP_CD": "500002",
+                "Issuer_Name": "ABB India Limited",
+                "Status": "",
+                "Segment": "Equity",
+                "ISIN_NUMBER": "INE117A01022",
+            },
+            {
+                "SCRIP_CD": "500112",
+                "Issuer_Name": "State Trading Corporation",
+                "Status": "Active",
+                "Segment": "",
+                "ISIN_NUMBER": "INE655A01013",
+            },
+        ]
+    ).encode("utf-8")
+
+    rows = service.parse_bse_rows(content)
+
+    assert [row["symbol"] for row in rows] == ["500325.BO"]
+
+
+def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+
+    monkeypatch.setattr(
+        service,
+        "fetch_nse_snapshot",
+        lambda: OfficialMarketUniverseSnapshot(
+            market="IN",
+            source_name="nse_official",
+            snapshot_id="nse-equity-2026-04-21",
+            snapshot_as_of="2026-04-21",
+            source_metadata={},
+            rows=(
+                {
+                    "symbol": "RELIANCE.NS",
+                    "name": "Reliance Industries Limited",
+                    "exchange": "XNSE",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": "INE002A01018",
+                },
+                {
+                    "symbol": "TCS.NS",
+                    "name": "Tata Consultancy Services Limited",
+                    "exchange": "XNSE",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": None,
+                    "isin": "INE467B01029",
+                },
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "fetch_bse_snapshot",
+        lambda: OfficialMarketUniverseSnapshot(
+            market="IN",
+            source_name="bse_official",
+            snapshot_id="bse-equity-2026-04-21",
+            snapshot_as_of="2026-04-21",
+            source_metadata={},
+            rows=(
+                {
+                    "symbol": "500325.BO",
+                    "name": "Reliance Industries Ltd",
+                    "exchange": "XBOM",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": 1950000.0,
+                    "isin": "INE002A01018",
+                },
+                {
+                    "symbol": "506854.BO",
+                    "name": "TANFAC Industries Ltd.",
+                    "exchange": "XBOM",
+                    "sector": "",
+                    "industry": "",
+                    "market_cap": 4816.33,
+                    "isin": "INE639B01023",
+                },
+            ),
+        ),
+    )
+
+    snapshot = service.fetch_in_snapshot()
+
+    assert snapshot.market == "IN"
+    assert [row["symbol"] for row in snapshot.rows] == ["RELIANCE.NS", "TCS.NS", "506854.BO"]
+    assert snapshot.source_metadata["nse_count"] == 2
+    assert snapshot.source_metadata["bse_count"] == 2
+    assert snapshot.source_metadata["overlap_isin_count"] == 1
 
 
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):

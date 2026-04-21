@@ -722,6 +722,7 @@ def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
                     symbol="7203.T",
                     industry_group="Transportation Equipment",
                     sector="Manufacturing",
+                    industry="Automobiles",
                     themes=("Automation",),
                 )
             return None
@@ -749,6 +750,7 @@ def test_enrich_feature_run_with_ibd_metadata_overrides_non_us_sector():
         row = db.query(StockFeatureDaily).filter_by(run_id=23, symbol="7203.T").one()
 
     assert row.details_json["gics_sector"] == "Manufacturing"
+    assert row.details_json["gics_industry"] == "Automobiles"
     assert row.details_json["ibd_industry_group"] == "Transportation Equipment"
     assert row.details_json["market_themes"] == ["Automation"]
 

@@ -170,7 +170,7 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
     assert row.details["market_themes"] == ["AI Infrastructure", "Cloud"]
 
 
-def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(session: Session):
+def test_persist_orchestrator_results_overrides_non_us_sector_and_industry_with_taxonomy(session: Session):
     session.add(
         StockUniverse(
             symbol="7203.T",
@@ -184,6 +184,7 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
 
     raw = _base_raw_result()
     raw["gics_sector"] = "Consumer Discretionary"
+    raw["gics_industry"] = "Legacy Industry"
     raw["ibd_industry_group"] = "Legacy Autos"
     raw["ibd_group_rank"] = 91
 
@@ -195,6 +196,7 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
                     symbol="7203.T",
                     industry_group="Transportation Equipment",
                     sector="Manufacturing",
+                    industry="Automobiles",
                     themes=("Automation",),
                 )
             return None
@@ -218,9 +220,12 @@ def test_persist_orchestrator_results_overrides_non_us_sector_with_taxonomy(sess
     )
 
     assert row.gics_sector == "Manufacturing"
+    assert row.gics_industry == "Automobiles"
     assert row.ibd_industry_group == "Transportation Equipment"
     assert row.ibd_group_rank == 3
     assert row.details["market_themes"] == ["Automation"]
+
+
 def test_backfill_ibd_metadata_for_existing_scan_rows(session: Session):
     session.add(Scan(scan_id="scan-us-1", status="completed", universe_market="US"))
     session.add_all(

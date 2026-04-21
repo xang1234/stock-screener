@@ -96,6 +96,17 @@ class Settings(BaseSettings):
     hk_universe_source_url: str = (
         "https://www.hkex.com.hk/eng/services/trading/securities/securitieslists/ListOfSecurities.xlsx"
     )
+    nse_universe_source_url: str = (
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    )
+    bse_universe_source_url: str = (
+        "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active&Group=&Scripcode="
+    )
+    india_bse_coverage_gate_enabled: bool = True
+    india_bse_price_verification_period: str = "1mo"
+    india_bse_gate_global_failure_min_symbols: int = 25
+    india_bse_validation_days_back: int = 30
+    india_bse_validation_failures_threshold: int = 3
     jp_universe_source_url: str = (
         "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
     )
@@ -111,10 +122,12 @@ class Settings(BaseSettings):
     # particular market.
     yfinance_rate_limit_us: float | None = None
     yfinance_rate_limit_hk: float | None = None
+    yfinance_rate_limit_in: float | None = None
     yfinance_rate_limit_jp: float | None = None
     yfinance_rate_limit_tw: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
+    finviz_rate_limit_in: float | None = None
     finviz_rate_limit_jp: float | None = None
     finviz_rate_limit_tw: float | None = None
 
@@ -122,6 +135,7 @@ class Settings(BaseSettings):
     # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
     yfinance_batch_size_us: int | None = None
     yfinance_batch_size_hk: int | None = None
+    yfinance_batch_size_in: int | None = None
     yfinance_batch_size_jp: int | None = None
     yfinance_batch_size_tw: int | None = None
 
@@ -129,6 +143,7 @@ class Settings(BaseSettings):
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
     yfinance_backoff_max_s_us: int | None = None
     yfinance_backoff_max_s_hk: int | None = None
+    yfinance_backoff_max_s_in: int | None = None
     yfinance_backoff_max_s_jp: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
 
@@ -194,6 +209,8 @@ class Settings(BaseSettings):
     cache_warm_minute_us: int = 30
     cache_warm_hour_hk: int = 4
     cache_warm_minute_hk: int = 30
+    cache_warm_hour_in: int = 7
+    cache_warm_minute_in: int = 30
     cache_warm_hour_jp: int = 2
     cache_warm_minute_jp: int = 30
     cache_warm_hour_tw: int = 1
@@ -246,10 +263,12 @@ class Settings(BaseSettings):
     provider_snapshot_on_demand_fallback_enabled: bool = True
     provider_snapshot_min_active_coverage_us: float = 0.98
     provider_snapshot_min_active_coverage_hk: float = 0.70
+    provider_snapshot_min_active_coverage_in: float = 0.60
     provider_snapshot_min_active_coverage_jp: float = 0.60
     provider_snapshot_min_active_coverage_tw: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
+    provider_snapshot_max_missing_ratio_in: float = 0.40
     provider_snapshot_max_missing_ratio_jp: float = 0.40
     provider_snapshot_max_missing_ratio_tw: float = 0.30
 
@@ -277,7 +296,7 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
+        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -286,7 +305,7 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
+        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -319,10 +338,12 @@ class Settings(BaseSettings):
     @field_validator(
         'provider_snapshot_min_active_coverage_us',
         'provider_snapshot_min_active_coverage_hk',
+        'provider_snapshot_min_active_coverage_in',
         'provider_snapshot_min_active_coverage_jp',
         'provider_snapshot_min_active_coverage_tw',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
+        'provider_snapshot_max_missing_ratio_in',
         'provider_snapshot_max_missing_ratio_jp',
         'provider_snapshot_max_missing_ratio_tw',
     )
@@ -330,6 +351,25 @@ class Settings(BaseSettings):
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
         if not 0.0 <= v <= 1.0:
             raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
+        return v
+
+    @field_validator('india_bse_price_verification_period')
+    @classmethod
+    def validate_india_bse_price_verification_period(cls, v: str) -> str:
+        normalized = str(v or "").strip()
+        if not normalized:
+            raise ValueError("india_bse_price_verification_period must not be blank")
+        return normalized
+
+    @field_validator(
+        'india_bse_gate_global_failure_min_symbols',
+        'india_bse_validation_days_back',
+        'india_bse_validation_failures_threshold',
+    )
+    @classmethod
+    def validate_positive_india_bse_gate_settings(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"India BSE gate numeric settings must be > 0, got {v}")
         return v
 
     @model_validator(mode="after")
@@ -392,6 +432,7 @@ class Settings(BaseSettings):
         mapping = {
             "US": (self.cache_warm_hour_us, self.cache_warm_minute_us),
             "HK": (self.cache_warm_hour_hk, self.cache_warm_minute_hk),
+            "IN": (self.cache_warm_hour_in, self.cache_warm_minute_in),
             "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
         }

@@ -200,6 +200,7 @@ def _enrich_feature_run_with_ibd_metadata(
         ranks_by_group: dict[str, int] = {}
         market_themes_by_symbol: dict[str, list[str]] = {}
         sector_by_symbol: dict[str, str | None] = {}
+        industry_by_symbol: dict[str, str | None] = {}
 
         if market == "US":
             industries_by_symbol = {
@@ -230,6 +231,7 @@ def _enrich_feature_run_with_ibd_metadata(
                 entry = taxonomy_service.get(row.symbol, market=market)
                 industries_by_symbol[row.symbol] = entry.industry_group if entry else None
                 sector_by_symbol[row.symbol] = entry.sector if entry else None
+                industry_by_symbol[row.symbol] = entry.industry if entry else None
                 market_themes_by_symbol[row.symbol] = entry.themes_list() if entry else []
                 serialized_rows.append(
                     {
@@ -274,10 +276,16 @@ def _enrich_feature_run_with_ibd_metadata(
             group_rank = ranks_by_group.get(industry_group) if industry_group else None
             market_themes = list(market_themes_by_symbol.get(row.symbol) or [])
             sector = sector_by_symbol.get(row.symbol)
+            industry = industry_by_symbol.get(row.symbol)
             sector_changed = bool(
                 market != "US"
                 and sector
                 and details.get("gics_sector") != sector
+            )
+            industry_changed = bool(
+                market != "US"
+                and industry
+                and details.get("gics_industry") != industry
             )
             if industry_group is None:
                 missing_industry_rows += 1
@@ -289,12 +297,15 @@ def _enrich_feature_run_with_ibd_metadata(
                 or details.get("ibd_group_rank") != group_rank
                 or list(details.get("market_themes") or []) != market_themes
                 or sector_changed
+                or industry_changed
             ):
                 details["ibd_industry_group"] = industry_group
                 details["ibd_group_rank"] = group_rank
                 details["market_themes"] = market_themes
                 if sector_changed:
                     details["gics_sector"] = sector
+                if industry_changed:
+                    details["gics_industry"] = industry
                 row.details_json = details
                 updated_rows += 1
 

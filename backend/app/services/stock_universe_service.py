@@ -9,13 +9,14 @@ import hashlib
 import io
 import json
 import os
+from types import SimpleNamespace
 from uuid import uuid4
 import pandas as pd
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 from finvizfinance.screener.overview import Overview
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, or_
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..models.stock_universe import (
     StockUniverse,
@@ -27,6 +28,7 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..models.ticker_validation import TickerValidationLog
 from ..schemas.universe import IndexName
 from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "US": ("NYSE", "NASDAQ", "AMEX"),
     "HK": ("HKEX", "SEHK", "XHKG"),
+    "IN": ("NSE", "XNSE", "BSE", "XBOM"),
     "JP": ("TSE", "JPX", "XTKS"),
     "TW": ("TWSE", "TPEX", "XTAI"),
 }
@@ -53,6 +56,7 @@ class StockUniverseService:
         self._hk_ingestion = hk_universe_ingestion_adapter
         self._jp_ingestion = jp_universe_ingestion_adapter
         self._tw_ingestion = tw_universe_ingestion_adapter
+        self._bulk_fetcher = None
 
     @staticmethod
     def _utc_iso(value: datetime | None) -> str | None:
@@ -157,6 +161,257 @@ class StockUniverseService:
         # callers must populate any required non-server defaults up front.
         if objects:
             db.bulk_save_objects(objects)
+
+    @staticmethod
+    def _parse_optional_float(value: Any) -> float | None:
+        raw = str(value or "").strip().replace(",", "")
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    def _get_bulk_fetcher(self):
+        if self._bulk_fetcher is None:
+            from .bulk_data_fetcher import BulkDataFetcher
+
+            self._bulk_fetcher = BulkDataFetcher()
+        return self._bulk_fetcher
+
+    @staticmethod
+    def _is_india_bse_exchange(exchange: str | None) -> bool:
+        return str(exchange or "").strip().upper() in {"BSE", "XBOM"}
+
+    @staticmethod
+    def _has_verified_yfinance_price_coverage(result: Mapping[str, Any] | None) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        if bool(result.get("has_error")):
+            return False
+        price_data = result.get("price_data")
+        if price_data is None:
+            return False
+        try:
+            return len(price_data) > 0
+        except TypeError:
+            return False
+
+    def _india_bse_symbols_with_unresolved_yfinance_failures(
+        self,
+        db: Session,
+        *,
+        symbols: Iterable[str],
+    ) -> set[str]:
+        normalized_symbols = sorted(
+            {
+                str(symbol or "").strip().upper()
+                for symbol in symbols
+                if str(symbol or "").strip()
+            }
+        )
+        if not normalized_symbols:
+            return set()
+
+        cutoff = datetime.utcnow() - timedelta(days=settings.india_bse_validation_days_back)
+        rows = (
+            db.query(TickerValidationLog.symbol)
+            .filter(
+                TickerValidationLog.symbol.in_(normalized_symbols),
+                TickerValidationLog.is_resolved.is_(False),
+                TickerValidationLog.detected_at >= cutoff,
+                TickerValidationLog.consecutive_failures
+                >= settings.india_bse_validation_failures_threshold,
+                TickerValidationLog.data_source.in_(("yfinance", "both")),
+                TickerValidationLog.error_type.in_(
+                    ("no_data", "empty_info", "invalid_response", "delisted")
+                ),
+            )
+            .distinct()
+            .all()
+        )
+        return {str(row[0]).strip().upper() for row in rows if row and row[0]}
+
+    def _filter_india_bse_rows_for_downstream_support(
+        self,
+        db: Session,
+        rows: Iterable[SimpleNamespace],
+    ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
+        normalized_rows = list(rows)
+        if not settings.india_bse_coverage_gate_enabled:
+            return normalized_rows, []
+
+        bse_rows = [row for row in normalized_rows if self._is_india_bse_exchange(row.exchange)]
+        if not bse_rows:
+            return normalized_rows, []
+
+        blocked_symbols = self._india_bse_symbols_with_unresolved_yfinance_failures(
+            db,
+            symbols=(row.symbol for row in bse_rows),
+        )
+        symbols_to_verify = [row.symbol for row in bse_rows if row.symbol not in blocked_symbols]
+        verification_results: dict[str, dict[str, Any]] = {}
+        if symbols_to_verify:
+            verification_results = self._get_bulk_fetcher().fetch_prices_in_batches(
+                symbols_to_verify,
+                period=settings.india_bse_price_verification_period,
+                market="IN",
+            )
+            verified_count = sum(
+                1
+                for symbol in symbols_to_verify
+                if self._has_verified_yfinance_price_coverage(verification_results.get(symbol))
+            )
+            if (
+                verified_count == 0
+                and len(symbols_to_verify) >= settings.india_bse_gate_global_failure_min_symbols
+            ):
+                raise ValueError(
+                    "India BSE coverage gate could not verify any BSE-only symbols via yfinance"
+                )
+
+        accepted_rows: list[SimpleNamespace] = []
+        rejected_rows: list[SimpleNamespace] = []
+        for row in normalized_rows:
+            if not self._is_india_bse_exchange(row.exchange):
+                accepted_rows.append(row)
+                continue
+            if row.symbol in blocked_symbols:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row.source_row_number,
+                        source_symbol=row.source_symbol,
+                        symbol=row.symbol,
+                        reason="unresolved_yfinance_validation_failures",
+                    )
+                )
+                continue
+            if not self._has_verified_yfinance_price_coverage(verification_results.get(row.symbol)):
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row.source_row_number,
+                        source_symbol=row.source_symbol,
+                        symbol=row.symbol,
+                        reason="missing_yfinance_price_coverage",
+                    )
+                )
+                continue
+            accepted_rows.append(row)
+
+        return accepted_rows, rejected_rows
+
+    def _canonicalize_in_snapshot_rows(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+    ) -> tuple[list[SimpleNamespace], list[SimpleNamespace]]:
+        normalized_source_name = str(source_name or "").strip().lower().replace("-", "_")
+        if not normalized_source_name:
+            raise ValueError("source_name must be provided")
+
+        canonical_rows: list[SimpleNamespace] = []
+        rejected_rows: list[SimpleNamespace] = []
+        seen_symbols: set[str] = set()
+
+        for row_number, raw_row in enumerate(rows, start=1):
+            row = dict(raw_row or {})
+            source_symbol = (
+                str(row.get("symbol") or row.get("local_code") or row.get("ticker") or "")
+                .strip()
+                .upper()
+            )
+            if not source_symbol:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol="",
+                        reason="missing symbol",
+                    )
+                )
+                continue
+
+            exchange = str(row.get("exchange") or "").strip().upper() or None
+            name = str(row.get("name") or "").strip()
+            isin = str(row.get("isin") or "").strip().upper()
+            if not name:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol=source_symbol,
+                        reason="missing name",
+                    )
+                )
+                continue
+
+            try:
+                identity = self._security_master.resolve_identity(
+                    symbol=source_symbol,
+                    market="IN",
+                    exchange=exchange,
+                )
+            except Exception as exc:
+                rejected_rows.append(
+                    SimpleNamespace(
+                        source_row_number=row_number,
+                        source_symbol=source_symbol,
+                        reason=str(exc),
+                    )
+                )
+                continue
+
+            if identity.canonical_symbol in seen_symbols:
+                continue
+            seen_symbols.add(identity.canonical_symbol)
+
+            row_payload = {
+                "symbol": identity.canonical_symbol,
+                "name": name,
+                "market": identity.market,
+                "exchange": identity.exchange,
+                "currency": identity.currency,
+                "timezone": identity.timezone,
+                "local_code": identity.local_code,
+                "sector": str(row.get("sector") or "").strip(),
+                "industry": str(row.get("industry") or "").strip(),
+                "market_cap": self._parse_optional_float(row.get("market_cap")),
+            }
+            lineage_payload = {
+                "source_name": normalized_source_name,
+                "source_symbol": source_symbol,
+                "source_row_number": row_number,
+                "snapshot_id": snapshot_id,
+                "snapshot_as_of": snapshot_as_of,
+                "source_metadata": dict(source_metadata or {}),
+                "raw_row": row,
+                "isin": isin,
+            }
+            canonical_rows.append(
+                SimpleNamespace(
+                    **row_payload,
+                    source_name=normalized_source_name,
+                    source_symbol=source_symbol,
+                    source_row_number=row_number,
+                    snapshot_id=snapshot_id,
+                    snapshot_as_of=snapshot_as_of,
+                    source_metadata={
+                        **dict(source_metadata or {}),
+                        **({"isin": isin} if isin else {}),
+                        **(
+                            {"security_id": str(row.get("security_id") or "").strip().upper()}
+                            if str(row.get("security_id") or "").strip()
+                            else {}
+                        ),
+                    },
+                    lineage_hash=self._sha256_text(self._stable_json(lineage_payload)),
+                    row_hash=self._sha256_text(self._stable_json(row_payload)),
+                )
+            )
+
+        return canonical_rows, rejected_rows
 
     def _apply_status_transition(
         self,
@@ -899,6 +1154,211 @@ class StockUniverseService:
         updated_reconciliation["artifact_hash"] = run.artifact_hash
         updated_reconciliation["safety"] = safety
         return updated_reconciliation
+
+    def ingest_in_snapshot_rows(
+        self,
+        db: Session,
+        *,
+        rows: Iterable[dict[str, Any]],
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest IN rows with exchange-aware canonicalization and lineage metadata."""
+        canonical_rows, rejected_rows = self._canonicalize_in_snapshot_rows(
+            rows,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+        )
+
+        if strict and rejected_rows:
+            sample = "; ".join(
+                f"row {row.source_row_number}: {row.reason}"
+                for row in rejected_rows[:3]
+            )
+            raise ValueError(
+                f"IN ingestion rejected {len(rejected_rows)} row(s). {sample}"
+            )
+
+        canonical_rows, coverage_rejected_rows = self._filter_india_bse_rows_for_downstream_support(
+            db,
+            canonical_rows,
+        )
+        now = datetime.utcnow()
+        canonical_symbols = [row.symbol for row in canonical_rows]
+        coverage_rejected_symbols = [
+            row.symbol for row in coverage_rejected_rows if getattr(row, "symbol", None)
+        ]
+        lookup_symbols = [*canonical_symbols, *coverage_rejected_symbols]
+        existing_rows = {
+            row.symbol: row
+            for row in db.query(StockUniverse).filter(
+                StockUniverse.symbol.in_(lookup_symbols)
+            ).all()
+        } if lookup_symbols else {}
+
+        added_count = 0
+        updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
+
+        for row in canonical_rows:
+            event_payload = {
+                "source_name": row.source_name,
+                "source_symbol": row.source_symbol,
+                "source_row_number": row.source_row_number,
+                "snapshot_id": row.snapshot_id,
+                "snapshot_as_of": row.snapshot_as_of,
+                "source_metadata": row.source_metadata,
+                "lineage_hash": row.lineage_hash,
+                "row_hash": row.row_hash,
+            }
+            reason = f"Present in IN source snapshot {row.snapshot_id}"
+            existing = existing_rows.get(row.symbol)
+
+            if existing is not None:
+                existing.name = row.name or existing.name
+                existing.market = row.market
+                existing.exchange = row.exchange
+                existing.currency = row.currency
+                existing.timezone = row.timezone
+                existing.local_code = row.local_code or existing.local_code
+                existing.sector = row.sector or existing.sector
+                existing.industry = row.industry or existing.industry
+                if row.market_cap is not None:
+                    existing.market_cap = row.market_cap
+                self._apply_status_transition(
+                    db,
+                    existing,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="in_ingest",
+                    reason=reason,
+                    now=now,
+                    payload=event_payload,
+                    source="in_ingest",
+                    clear_failures=True,
+                    seen_in_source=True,
+                )
+                updated_count += 1
+                continue
+
+            new_rows.append(
+                StockUniverse(
+                    symbol=row.symbol,
+                    name=row.name,
+                    market=row.market,
+                    exchange=row.exchange,
+                    currency=row.currency,
+                    timezone=row.timezone,
+                    local_code=row.local_code,
+                    sector=row.sector,
+                    industry=row.industry,
+                    market_cap=row.market_cap,
+                    is_active=True,
+                    status=UNIVERSE_STATUS_ACTIVE,
+                    status_reason=reason,
+                    source="in_ingest",
+                    consecutive_fetch_failures=0,
+                    added_at=now,
+                    first_seen_at=now,
+                    last_seen_in_source_at=now,
+                    updated_at=now,
+                )
+            )
+            new_events.append(
+                self._build_status_event_record(
+                    symbol=row.symbol,
+                    old_status=None,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="in_ingest",
+                    reason=reason,
+                    payload=event_payload,
+                )
+            )
+            added_count += 1
+
+        for rejected_row in coverage_rejected_rows:
+            existing = existing_rows.get(rejected_row.symbol)
+            if existing is None or self._normalize_status(existing) != UNIVERSE_STATUS_ACTIVE:
+                continue
+            self._apply_status_transition(
+                db,
+                existing,
+                new_status=UNIVERSE_STATUS_INACTIVE_NO_DATA,
+                trigger_source="in_ingest_coverage_gate",
+                reason=f"Rejected by IN BSE coverage gate: {rejected_row.reason}",
+                now=now,
+                payload={
+                    "source_name": source_name,
+                    "source_symbol": rejected_row.source_symbol,
+                    "source_row_number": rejected_row.source_row_number,
+                    "snapshot_id": snapshot_id,
+                    "snapshot_as_of": snapshot_as_of,
+                    "symbol": rejected_row.symbol,
+                    "reason": rejected_row.reason,
+                },
+                source="in_ingest",
+            )
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
+
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="IN",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="IN",
+            snapshot_id=snapshot_id,
+            trigger_source="in_ingest",
+            reconciliation=reconciliation,
+            now=now,
+        )
+        db.commit()
+        details_limit = 25
+        canonical_preview = canonical_rows[:details_limit]
+        all_rejected_rows = [*rejected_rows, *coverage_rejected_rows]
+        rejected_preview = all_rejected_rows[:details_limit]
+
+        return {
+            "added": added_count,
+            "updated": updated_count,
+            "total": len(canonical_rows),
+            "rejected": len(rejected_rows) + len(coverage_rejected_rows),
+            "coverage_rejected": len(coverage_rejected_rows),
+            "source_name": source_name,
+            "snapshot_id": snapshot_id,
+            "canonical_rows": [
+                {
+                    "symbol": row.symbol,
+                    "local_code": row.local_code,
+                    "exchange": row.exchange,
+                    "source_symbol": row.source_symbol,
+                    "lineage_hash": row.lineage_hash,
+                    "row_hash": row.row_hash,
+                }
+                for row in canonical_preview
+            ],
+            "rejected_rows": [
+                {
+                    "source_row_number": row.source_row_number,
+                    "source_symbol": row.source_symbol,
+                    "reason": row.reason,
+                }
+                for row in rejected_preview
+            ],
+            "canonical_rows_truncated": len(canonical_rows) > details_limit,
+            "rejected_rows_truncated": len(all_rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
+        }
 
     @staticmethod
     def _parse_hk_csv_rows(csv_content: str) -> list[dict[str, Any]]:
@@ -2274,7 +2734,7 @@ class StockUniverseService:
             1,
         )
         stale_after_seconds = stale_after_hours * 3600
-        reconciliation_markets = {"HK", "JP", "TW"}
+        reconciliation_markets = {"HK", "IN", "JP", "TW"}
 
         by_market: Dict[str, Dict[str, Any]] = {
             market: {
@@ -2284,7 +2744,7 @@ class StockUniverseService:
                 "latest_seen_in_source_at": None,
                 "latest_snapshot": None,
             }
-            for market in ("US", "HK", "JP", "TW")
+            for market in ("US", "HK", "IN", "JP", "TW")
         }
 
         universe_rows = db.query(

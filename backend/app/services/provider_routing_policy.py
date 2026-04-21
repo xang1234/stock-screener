@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.04.12.2"
+POLICY_VERSION = "2026.04.21.1"
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream
@@ -79,11 +79,12 @@ KNOWN_PROVIDERS: FrozenSet[str] = frozenset(
 
 MARKET_US = "US"
 MARKET_HK = "HK"
+MARKET_IN = "IN"
 MARKET_JP = "JP"
 MARKET_TW = "TW"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_JP, MARKET_TW}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -105,6 +106,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # HK / JP / TW: yfinance only. finviz screener is US-only and the
     # alphavantage free tier does not cover these markets.
     MARKET_HK: (PROVIDER_YFINANCE,),
+    # IN: yfinance only. BSE-only .BO listings are admitted into the active
+    # universe only after India ingest verifies Yahoo price coverage and skips
+    # symbols with repeated unresolved Yahoo validation failures.
+    MARKET_IN: (PROVIDER_YFINANCE,),
     MARKET_JP: (PROVIDER_YFINANCE,),
     MARKET_TW: (PROVIDER_YFINANCE,),
 }

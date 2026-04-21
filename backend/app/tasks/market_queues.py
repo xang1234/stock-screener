@@ -1,7 +1,7 @@
 """
 Per-market Celery queue topology.
 
-Partitions data_fetch and user_scans work by market (US/HK/JP/TW) so that one
+Partitions data_fetch and user_scans work by market (US/HK/IN/JP/TW) so that one
 market's refresh pipeline cannot stall throughput for another market. Pairs
 with the market-scoped DataFetchLock in data_fetch_lock.py.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Iterable, List, Optional
 
 
-SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "JP", "TW")
+SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "TW")
 
 SHARED_SENTINEL = "SHARED"
 

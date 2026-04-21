@@ -111,3 +111,38 @@ class TestSettingsValidators:
     def test_invalid_minute_negative(self):
         with pytest.raises(ValidationError, match="cache_warm_minute must be 0-59"):
             self._make_settings(cache_warm_minute=-1)
+
+    def test_invalid_india_per_market_hour_too_high(self):
+        with pytest.raises(ValidationError, match="per-market cache_warm_hour must be 0-23"):
+            self._make_settings(cache_warm_hour_in=24)
+
+    def test_invalid_india_per_market_minute_too_high(self):
+        with pytest.raises(ValidationError, match="per-market cache_warm_minute must be 0-59"):
+            self._make_settings(cache_warm_minute_in=60)
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("provider_snapshot_min_active_coverage_in", 1.1),
+            ("provider_snapshot_max_missing_ratio_in", -0.1),
+        ],
+    )
+    def test_invalid_india_provider_snapshot_ratio(self, field_name, value):
+        with pytest.raises(ValidationError, match="provider snapshot ratio must be between 0 and 1"):
+            self._make_settings(**{field_name: value})
+
+    def test_india_bse_price_verification_period_must_not_be_blank(self):
+        with pytest.raises(ValidationError, match="india_bse_price_verification_period must not be blank"):
+            self._make_settings(india_bse_price_verification_period="   ")
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("india_bse_gate_global_failure_min_symbols", 0),
+            ("india_bse_validation_days_back", -1),
+            ("india_bse_validation_failures_threshold", 0),
+        ],
+    )
+    def test_india_bse_gate_numeric_settings_must_be_positive(self, field_name, value):
+        with pytest.raises(ValidationError, match="India BSE gate numeric settings must be > 0"):
+            self._make_settings(**{field_name: value})

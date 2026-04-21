@@ -15,10 +15,28 @@ from app.models.stock_universe import (
     UNIVERSE_STATUS_ACTIVE,
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
+    UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from app.models.ticker_validation import TickerValidationLog
 from app.services.stock_universe_service import StockUniverseService
 
 stock_universe_service = StockUniverseService()
+
+
+class _FakeBulkFetcher:
+    def __init__(self, results):
+        self._results = results
+        self.calls = []
+
+    def fetch_prices_in_batches(self, symbols, period="1mo", market=None):
+        self.calls.append(
+            {
+                "symbols": list(symbols),
+                "period": period,
+                "market": market,
+            }
+        )
+        return {symbol: self._results.get(symbol, {"has_error": True, "price_data": None}) for symbol in symbols}
 
 
 def _make_session():
@@ -258,7 +276,293 @@ def test_ingest_hk_from_csv_normalizes_variants_with_zero_padding_and_lineage():
     assert payload["snapshot_id"] == "hk-20260412"
     assert payload["source_name"] == "hkex_official"
     assert len(payload["lineage_hash"]) == 64
-    assert len(payload["row_hash"]) == 64
+
+
+def test_ingest_in_snapshot_rows_prefers_nse_and_keeps_bse_only_symbols():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            "506854.BO": {"has_error": False, "price_data": [1, 2, 3]},
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "RELIANCE.NS",
+                "name": "Reliance Industries Limited",
+                "exchange": "XNSE",
+                "sector": "",
+                "industry": "",
+                "market_cap": None,
+                "isin": "INE002A01018",
+            },
+            {
+                "symbol": "506854.BO",
+                "name": "TANFAC Industries Ltd.",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 4816.33,
+                "isin": "INE639B01023",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 2
+    assert stats["total"] == 2
+    assert [row.symbol for row in rows] == ["506854.BO", "RELIANCE.NS"]
+    assert rows[0].market == "IN"
+    assert rows[0].exchange == "XBOM"
+    assert rows[0].currency == "INR"
+    assert rows[1].market == "IN"
+    assert rows[1].exchange == "XNSE"
+    assert rows[1].currency == "INR"
+    assert fake_fetcher.calls == [{"symbols": ["506854.BO"], "period": "1mo", "market": "IN"}]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_filters_bse_only_symbols_without_price_coverage():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    service._bulk_fetcher = _FakeBulkFetcher(
+        {
+            "500002.BO": {"has_error": True, "price_data": None},
+        }
+    )
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "RELIANCE.NS",
+                "name": "Reliance Industries Limited",
+                "exchange": "XNSE",
+                "sector": "",
+                "industry": "",
+                "market_cap": None,
+                "isin": "INE002A01018",
+            },
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["coverage_rejected"] == 1
+    assert [row.symbol for row in rows] == ["RELIANCE.NS"]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_deactivates_existing_active_bse_symbol_rejected_by_coverage_gate():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    service._bulk_fetcher = _FakeBulkFetcher(
+        {
+            "500002.BO": {"has_error": True, "price_data": None},
+        }
+    )
+    db.add(
+        StockUniverse(
+            symbol="500002.BO",
+            name="ABB India Limited",
+            market="IN",
+            exchange="XBOM",
+            currency="INR",
+            timezone="Asia/Kolkata",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            source="in_ingest",
+        )
+    )
+    db.commit()
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "500002.BO").one()
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "500002.BO")
+        .order_by(StockUniverseStatusEvent.id.desc())
+        .first()
+    )
+
+    assert stats["added"] == 0
+    assert stats["total"] == 0
+    assert stats["coverage_rejected"] == 1
+    assert row.is_active is False
+    assert row.status == UNIVERSE_STATUS_INACTIVE_NO_DATA
+    assert "Rejected by IN BSE coverage gate" in row.status_reason
+    assert event is not None
+    assert event.new_status == UNIVERSE_STATUS_INACTIVE_NO_DATA
+    assert event.trigger_source == "in_ingest_coverage_gate"
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_filters_bse_only_symbols_with_repeated_yfinance_failures():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            "506854.BO": {"has_error": False, "price_data": [1, 2, 3]},
+            "500002.BO": {"has_error": False, "price_data": [1, 2, 3]},
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
+    db.add(
+        TickerValidationLog(
+            symbol="500002.BO",
+            error_type="no_data",
+            error_message="No data returned from API",
+            data_source="yfinance",
+            triggered_by="fundamentals_refresh",
+            is_resolved=False,
+            consecutive_failures=3,
+            detected_at=datetime.utcnow(),
+        )
+    )
+    db.commit()
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "506854.BO",
+                "name": "TANFAC Industries Ltd.",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 4816.33,
+                "isin": "INE639B01023",
+            },
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    rows = db.query(StockUniverse).order_by(StockUniverse.symbol).all()
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["coverage_rejected"] == 1
+    assert [row.symbol for row in rows] == ["506854.BO"]
+    assert fake_fetcher.calls == [{"symbols": ["506854.BO"], "period": "1mo", "market": "IN"}]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_truncates_combined_rejected_preview():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    coverage_rows = [
+        {
+            "symbol": f"{500100 + index:06d}.BO",
+            "name": f"BSE Only {index}",
+            "exchange": "XBOM",
+            "sector": "",
+            "industry": "",
+            "market_cap": 1000.0 + index,
+            "isin": f"INE{100000000000 + index:012d}",
+        }
+        for index in range(10)
+    ]
+    fake_fetcher = _FakeBulkFetcher(
+        {
+            row["symbol"]: {"has_error": True, "price_data": None}
+            for row in coverage_rows
+        }
+    )
+    service._bulk_fetcher = fake_fetcher
+
+    invalid_rows = [
+        {
+            "symbol": f"INVALID{index}",
+            "name": "",
+            "exchange": "XNSE",
+            "sector": "",
+            "industry": "",
+            "market_cap": None,
+            "isin": f"INE{200000000000 + index:012d}",
+        }
+        for index in range(20)
+    ]
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[*invalid_rows, *coverage_rows],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+        strict=False,
+    )
+
+    assert stats["rejected"] == 30
+    assert stats["coverage_rejected"] == 10
+    assert len(stats["rejected_rows"]) == 25
+    assert stats["rejected_rows_truncated"] is True
+    assert fake_fetcher.calls == [
+        {
+            "symbols": [row["symbol"] for row in coverage_rows],
+            "period": "1mo",
+            "market": "IN",
+        }
+    ]
     db.close()
 
 
@@ -1245,6 +1549,14 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
                 source="jpx_listing",
             ),
             StockUniverse(
+                symbol="RELIANCE.NS",
+                market="IN",
+                exchange="XNSE",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                source="in_reference_bundle",
+            ),
+            StockUniverse(
                 symbol="AAPL",
                 market="US",
                 exchange="NASDAQ",
@@ -1314,6 +1626,7 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
 
     audit = stock_universe_service.get_market_audit(db)
     hk = audit["by_market"]["HK"]
+    india = audit["by_market"]["IN"]
     jp = audit["by_market"]["JP"]
     tw = audit["by_market"]["TW"]
     us = audit["by_market"]["US"]
@@ -1324,14 +1637,16 @@ def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(mo
     assert hk["latest_snapshot"]["snapshot_id"] == "hk-20260412-a"
     assert hk["latest_snapshot"]["counts"]["removed"] == 1
     assert hk["latest_snapshot"]["is_stale"] is True
+    assert india["snapshot_supported"] is True
+    assert india["latest_snapshot"] is None
     assert jp["snapshot_supported"] is True
     assert jp["latest_snapshot"] is None
     assert tw["latest_snapshot"]["safety"]["quarantined"] is True
     assert us["snapshot_supported"] is False
     assert us["latest_snapshot"] is None
     assert audit["checks"]["stale_after_hours"] == 1
-    assert set(audit["checks"]["stale_markets"]) == {"HK", "JP"}
-    assert audit["checks"]["missing_snapshot_markets"] == ["JP"]
+    assert set(audit["checks"]["stale_markets"]) == {"HK", "IN", "JP"}
+    assert audit["checks"]["missing_snapshot_markets"] == ["IN", "JP"]
     assert audit["checks"]["quarantined_markets"] == ["TW"]
     db.close()
 

@@ -26,6 +26,7 @@ class TestNormalizeMarket:
     @pytest.mark.parametrize("raw,expected", [
         ("US", "US"), ("us", "US"), ("Us", "US"), (" us ", "US"),
         ("HK", "HK"), ("hk", "HK"),
+        ("IN", "IN"), ("in", "IN"),
         ("JP", "JP"), ("TW", "TW"),
         (None, SHARED_SENTINEL), ("", SHARED_SENTINEL), ("  ", SHARED_SENTINEL),
         ("SHARED", SHARED_SENTINEL), ("shared", SHARED_SENTINEL),
@@ -47,6 +48,7 @@ class TestQueueForMarket:
     @pytest.mark.parametrize("market,expected", [
         ("US", "data_fetch_us"),
         ("HK", "data_fetch_hk"),
+        ("IN", "data_fetch_in"),
         ("JP", "data_fetch_jp"),
         ("TW", "data_fetch_tw"),
         (None, "data_fetch_shared"),
@@ -59,6 +61,7 @@ class TestQueueForMarket:
     @pytest.mark.parametrize("market,expected", [
         ("US", "user_scans_us"),
         ("HK", "user_scans_hk"),
+        ("IN", "user_scans_in"),
         (None, "user_scans_shared"),
     ])
     def test_user_scans_queue(self, market, expected):
@@ -72,6 +75,7 @@ class TestQueueForMarket:
     @pytest.mark.parametrize("market,expected", [
         ("US", "market_jobs_us"),
         ("HK", "market_jobs_hk"),
+        ("IN", "market_jobs_in"),
         ("JP", "market_jobs_jp"),
         ("TW", "market_jobs_tw"),
     ])

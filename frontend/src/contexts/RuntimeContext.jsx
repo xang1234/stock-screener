@@ -37,7 +37,7 @@ export const DEFAULT_CAPABILITIES = {
   primary_market: 'US',
   enabled_markets: ['US'],
   bootstrap_state: 'not_started',
-  supported_markets: ['US', 'HK', 'JP', 'TW'],
+  supported_markets: ['US', 'HK', 'IN', 'JP', 'TW'],
   api_base_path: '/api',
 };
 
@@ -65,6 +65,19 @@ function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
     task_id: market === primaryMarket ? (taskId ?? null) : null,
     updated_at: null,
   }));
+}
+
+export function mergeBootstrapCapabilities(previous, data) {
+  return {
+    ...(previous ?? DEFAULT_CAPABILITIES),
+    bootstrap_required: Boolean(data.bootstrap_required),
+    primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
+    enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
+    bootstrap_state: data.bootstrap_state ?? 'running',
+    supported_markets: data.supported_markets
+      ?? previous?.supported_markets
+      ?? DEFAULT_CAPABILITIES.supported_markets,
+  };
 }
 
 export function RuntimeProvider({ children }) {
@@ -114,16 +127,9 @@ export function RuntimeProvider({ children }) {
       startRuntimeBootstrap({ primaryMarket, enabledMarkets })
     ),
     onSuccess: (data) => {
-      queryClient.setQueryData(['appCapabilities'], (previous) => ({
-        ...(previous ?? DEFAULT_CAPABILITIES),
-        bootstrap_required: Boolean(data.bootstrap_required),
-        primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
-        enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
-        bootstrap_state: data.bootstrap_state ?? 'running',
-        supported_markets: data.supported_markets
-          ?? previous?.supported_markets
-          ?? ['US', 'HK', 'JP', 'TW'],
-      }));
+      queryClient.setQueryData(['appCapabilities'], (previous) => (
+        mergeBootstrapCapabilities(previous, data)
+      ));
       queryClient.setQueryData(['runtimeActivity'], (previous) => {
         const primaryMarket = data.primary_market ?? 'US';
         const enabledMarkets = data.enabled_markets ?? [primaryMarket];
@@ -188,7 +194,7 @@ export function RuntimeProvider({ children }) {
       primaryMarket: capabilities.primary_market ?? 'US',
       enabledMarkets: capabilities.enabled_markets ?? ['US'],
       bootstrapState: capabilities.bootstrap_state ?? 'not_started',
-      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'JP', 'TW'],
+      supportedMarkets: capabilities.supported_markets ?? ['US', 'HK', 'IN', 'JP', 'TW'],
       login: (password) => loginMutation.mutateAsync({ password }),
       logout: () => logoutMutation.mutateAsync(),
       startBootstrap: ({ primaryMarket, enabledMarkets }) => (

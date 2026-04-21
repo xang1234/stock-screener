@@ -325,7 +325,7 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
 def _check_g3_benchmark(ctx: GateContext) -> GateResult:
     """G3 — Benchmark/Calendar Correctness.
 
-    Self-check: the benchmark_registry_service must map each ASIA market to
+    Self-check: the benchmark_registry_service must map each supported market to
     its index symbol (no SPY leakage). This is the same invariant exercised
     by unit tests; the gate runner re-asserts it at evidence-capture time.
     """
@@ -339,8 +339,14 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
             detail=f"Benchmark/calendar dependency import failed: {exc}",
         )
 
-    expected = {"US": "SPY", "HK": "^HSI", "JP": "^N225", "TW": "^TWII"}
-    expected_calendar_ids = {"US": "XNYS", "HK": "XHKG", "JP": "XTKS", "TW": "XTAI"}
+    expected = {"US": "SPY", "HK": "^HSI", "IN": "^NSEI", "JP": "^N225", "TW": "^TWII"}
+    expected_calendar_ids = {
+        "US": "XNYS",
+        "HK": "XHKG",
+        "IN": "XNSE",
+        "JP": "XTKS",
+        "TW": "XTAI",
+    }
     markets = ctx.enabled_markets
     benchmark_mismatches = {}
     calendar_id_mismatches = {}

@@ -589,9 +589,33 @@ async def get_stock_industry(
         Industry classification (sector, industry, ibd_industry_group)
     """
     from ...services.ibd_industry_service import IBDIndustryService
+    from ...services.market_taxonomy_service import get_market_taxonomy_service
+    from ...models.stock_universe import StockUniverse
+
+    normalized_symbol = symbol.upper()
+    universe_row = (
+        db.query(StockUniverse.market, StockUniverse.exchange)
+        .filter(StockUniverse.symbol == normalized_symbol)
+        .first()
+    )
+    market = str(getattr(universe_row, "market", "") or "").strip().upper()
+    exchange = getattr(universe_row, "exchange", None)
+    if market not in {"", "US"}:
+        entry = get_market_taxonomy_service().get(
+            normalized_symbol,
+            market=market,
+            exchange=exchange,
+        )
+        if entry is not None:
+            return {
+                "symbol": normalized_symbol,
+                "sector": entry.sector,
+                "industry": entry.industry,
+                "ibd_industry_group": entry.industry_group,
+            }
 
     fetcher = _build_data_fetcher(db)
-    classification = fetcher.get_industry_classification(symbol.upper())
+    classification = fetcher.get_industry_classification(normalized_symbol)
 
     if not classification:
         raise HTTPException(
@@ -601,7 +625,7 @@ async def get_stock_industry(
 
     # Add IBD industry group if available
     try:
-        ibd_group = IBDIndustryService.get_industry_group(db, symbol.upper())
+        ibd_group = IBDIndustryService.get_industry_group(db, normalized_symbol)
         classification['ibd_industry_group'] = ibd_group
     except Exception as e:
         logger.warning(f"Could not fetch IBD industry group for {symbol}: {e}")

@@ -10,9 +10,18 @@ def _patch_data_fetch_lock(monkeypatch):
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
+    fake_coordination = MagicMock()
+    fake_coordination.acquire_market_workload.return_value = (True, False)
+    fake_coordination.release_market_workload.return_value = True
+    fake_coordination.acquire_external_fetch.return_value = (True, False)
+    fake_coordination.release_external_fetch.return_value = True
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_data_fetch_lock",
         lambda: fake_lock,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_workload_coordination",
+        lambda: fake_coordination,
     )
     return fake_lock
 

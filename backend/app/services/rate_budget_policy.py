@@ -53,8 +53,8 @@ class RateBudgetPolicy:
     # Per-market batch sizes. Keep the defaults uniform unless operators
     # explicitly override them via settings.
     _DEFAULT_BATCH_SIZE: Dict[str, Dict[str, int]] = {
-        "yfinance": {"US": 50, "HK": 50, "JP": 50, "TW": 50},
-        "finviz":   {"US": 100, "HK": 50, "JP": 50, "TW": 50},
+        "yfinance": {"US": 50, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
+        "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
     }
 
     # Per-market backoff caps. Non-US markets get longer caps because
@@ -64,12 +64,14 @@ class RateBudgetPolicy:
         "yfinance": {
             "US": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "HK": {"base_s": 60, "max_s": 600, "factor": 2.0},
+            "IN": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "JP": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 600, "factor": 2.0},
         },
         "finviz": {
             "US": {"base_s": 30, "max_s": 240, "factor": 2.0},
             "HK": {"base_s": 60, "max_s": 480, "factor": 2.0},
+            "IN": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "JP": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 480, "factor": 2.0},
         },

@@ -75,3 +75,28 @@ def test_normalize_symbol_strips_dollar_prefix():
     resolver = SecurityMasterResolver()
 
     assert resolver.normalize_symbol("$nvda") == "NVDA"
+
+
+def test_resolve_identity_defaults_india_market_to_nse_suffix():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="reliance", market="in")
+
+    assert identity.market == "IN"
+    assert identity.currency == "INR"
+    assert identity.timezone == "Asia/Kolkata"
+    assert identity.canonical_symbol == "RELIANCE.NS"
+    assert identity.local_code == "RELIANCE"
+
+
+def test_resolve_identity_uses_bse_suffix_for_explicit_bse_exchange():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="500325", exchange="xbom")
+
+    assert identity.market == "IN"
+    assert identity.exchange == "XBOM"
+    assert identity.currency == "INR"
+    assert identity.timezone == "Asia/Kolkata"
+    assert identity.canonical_symbol == "500325.BO"
+    assert identity.local_code == "500325"

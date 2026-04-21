@@ -25,6 +25,7 @@ class Market(str, Enum):
     """Supported market scopes."""
     US = "US"
     HK = "HK"
+    IN = "IN"
     JP = "JP"
     TW = "TW"
 
@@ -186,6 +187,7 @@ class UniverseDefinition(BaseModel):
             market_labels = {
                 Market.US: "US Market",
                 Market.HK: "Hong Kong Market",
+                Market.IN: "India Market",
                 Market.JP: "Japan Market",
                 Market.TW: "Taiwan Market",
             }
@@ -299,6 +301,7 @@ class UniverseDefinition(BaseModel):
         market_map = {
             "us": Market.US,
             "hk": Market.HK,
+            "in": Market.IN,
             "jp": Market.JP,
             "tw": Market.TW,
         }
@@ -309,7 +312,7 @@ class UniverseDefinition(BaseModel):
             raw_market = u.split(":", 1)[1].strip().lower()
             if raw_market in market_map:
                 return cls(type=UniverseType.MARKET, market=market_map[raw_market])
-            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, JP, TW")
+            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, TW")
         elif u in exchange_map:
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":
@@ -325,6 +328,6 @@ class UniverseDefinition(BaseModel):
                 return cls(type=UniverseType.CUSTOM, symbols=symbols)
             raise ValueError(
                 f"Unknown universe '{universe}' and no symbols provided. "
-                f"Valid values: all, market:us, market:hk, market:jp, market:tw, "
+                f"Valid values: all, market:us, market:hk, market:in, market:jp, market:tw, "
                 f"nyse, nasdaq, amex, sp500, custom, test"
             )
