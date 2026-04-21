@@ -16,12 +16,13 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..wiring.bootstrap import get_stock_universe_service
+from ..wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 
 _OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "TW"})
+_GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
@@ -217,6 +218,39 @@ def refresh_stock_universe(
             message="Refreshing stock universe",
         )
         stock_universe_service = get_stock_universe_service()
+        github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
+            db,
+            market=effective_market,
+            hydrate_cache=True,
+            hydrate_mode="static",
+        )
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            _emit_universe_drift(effective_market, prior_size)
+            imported_total = (
+                (github_sync.get("import") or {}).get("universe_rows")
+                or _count_active_universe(effective_market)
+            )
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "refresh_stock_universe"),
+                task_id=getattr(getattr(self, "request", None), "id", None),
+                current=imported_total,
+                total=imported_total,
+                message="Universe refresh completed from GitHub bundle",
+            )
+            return {
+                "status": "success",
+                "source": "github",
+                "github_sync_status": github_sync.get("status"),
+                "market": effective_market,
+                "source_revision": github_sync.get("source_revision"),
+                "import": github_sync.get("import"),
+                "timestamp": datetime.now().isoformat(),
+            }
+
         stats = stock_universe_service.populate_universe(db, exchange_filter=exchange_filter)
 
         logger.info("=" * 60)
@@ -339,6 +373,47 @@ def refresh_official_market_universe(
         finally:
             activity_db.close()
         prior_size = _count_active_universe(_market)
+        sync_db = SessionLocal()
+        try:
+            github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
+                sync_db,
+                market=_market,
+                hydrate_cache=True,
+                hydrate_mode="static",
+            )
+        finally:
+            sync_db.close()
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            _emit_universe_drift(_market, prior_size)
+            activity_db = SessionLocal()
+            try:
+                imported_total = (
+                    (github_sync.get("import") or {}).get("universe_rows")
+                    or _count_active_universe(_market)
+                )
+                mark_market_activity_completed(
+                    activity_db,
+                    market=_market,
+                    stage_key="universe",
+                    lifecycle=activity_lifecycle,
+                    task_name=getattr(self, "name", task_name),
+                    task_id=task_id,
+                    current=imported_total,
+                    total=imported_total,
+                    message="Official universe refresh completed from GitHub bundle",
+                )
+            finally:
+                activity_db.close()
+            return {
+                "status": "success",
+                "source": "github",
+                "github_sync_status": github_sync.get("status"),
+                "market": _market,
+                "source_revision": github_sync.get("source_revision"),
+                "import": github_sync.get("import"),
+                "timestamp": datetime.now().isoformat(),
+            }
+
         snapshot = OfficialMarketUniverseSourceService().fetch_market_snapshot(_market)
         stats = _ingest_official_snapshot(snapshot)
         _emit_universe_drift(_market, prior_size)

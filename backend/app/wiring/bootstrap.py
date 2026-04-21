@@ -42,10 +42,13 @@ if TYPE_CHECKING:
     from app.services.eps_rating_service import EPSRatingService
     from app.services.finviz_service import FinvizService
     from app.services.fundamentals_cache_service import FundamentalsCacheService
+    from app.services.github_release_sync_service import GitHubReleaseSyncService
     from app.services.hybrid_fundamentals_service import HybridFundamentalsService
     from app.services.ibd_group_rank_service import IBDGroupRankService
     from app.services.llm.groq_key_manager import GroqKeyManager
     from app.services.llm.zai_key_manager import ZAIKeyManager
+    from app.services.daily_price_bundle_service import DailyPriceBundleService
+    from app.services.market_calendar_service import MarketCalendarService
     from app.services.price_cache_service import PriceCacheService
     from app.services.provider_snapshot_service import ProviderSnapshotService
     from app.services.rate_limiter import RedisRateLimiter
@@ -103,6 +106,8 @@ class RuntimeServices:
         self._groq_key_manager: GroqKeyManager | None = None
         self._zai_key_manager: ZAIKeyManager | None = None
         self._rate_limiter: RedisRateLimiter | None = None
+        self._market_calendar_service: MarketCalendarService | None = None
+        self._github_release_sync_service: GitHubReleaseSyncService | None = None
         self._security_master_resolver: SecurityMasterResolver | None = None
         self._eps_rating_service: EPSRatingService | None = None
         self._yfinance_service: YFinanceService | None = None
@@ -112,6 +117,7 @@ class RuntimeServices:
         self._stock_universe_service: StockUniverseService | None = None
         self._ticker_validation_service: TickerValidationService | None = None
         self._provider_snapshot_service: ProviderSnapshotService | None = None
+        self._daily_price_bundle_service: DailyPriceBundleService | None = None
         self._hybrid_fundamentals_service: HybridFundamentalsService | None = None
         self._stock_data_provider: DataPrepStockDataProvider | None = None
         self._scan_orchestrator: ScanOrchestrator | None = None
@@ -242,6 +248,27 @@ class RuntimeServices:
                     self._rate_limiter = RedisRateLimiter()
         return self._rate_limiter
 
+    def market_calendar_service(self) -> MarketCalendarService:
+        if self._market_calendar_service is None:
+            with self._init_lock:
+                if self._market_calendar_service is None:
+                    from app.services.market_calendar_service import MarketCalendarService
+
+                    self._market_calendar_service = MarketCalendarService()
+        return self._market_calendar_service
+
+    def github_release_sync_service(self) -> GitHubReleaseSyncService:
+        if self._github_release_sync_service is None:
+            with self._init_lock:
+                if self._github_release_sync_service is None:
+                    from app.services.github_release_sync_service import GitHubReleaseSyncService
+                    from app.config import settings
+
+                    self._github_release_sync_service = GitHubReleaseSyncService(
+                        api_base=settings.github_data_api_base,
+                    )
+        return self._github_release_sync_service
+
     def security_master_resolver(self) -> SecurityMasterResolver:
         if self._security_master_resolver is None:
             with self._init_lock:
@@ -341,6 +368,18 @@ class RuntimeServices:
                     )
         return self._provider_snapshot_service
 
+    def daily_price_bundle_service(self) -> DailyPriceBundleService:
+        if self._daily_price_bundle_service is None:
+            with self._init_lock:
+                if self._daily_price_bundle_service is None:
+                    from app.services.daily_price_bundle_service import DailyPriceBundleService
+
+                    self._daily_price_bundle_service = DailyPriceBundleService(
+                        price_cache=self.cache_bundle().price,
+                        market_calendar=self.market_calendar_service(),
+                    )
+        return self._daily_price_bundle_service
+
     def hybrid_fundamentals_service(self) -> HybridFundamentalsService:
         if self._hybrid_fundamentals_service is None:
             with self._init_lock:
@@ -390,6 +429,8 @@ class RuntimeServices:
             self._groq_key_manager = None
             self._zai_key_manager = None
             self._rate_limiter = None
+            self._market_calendar_service = None
+            self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None
             self._yfinance_service = None
@@ -399,6 +440,7 @@ class RuntimeServices:
             self._stock_universe_service = None
             self._ticker_validation_service = None
             self._provider_snapshot_service = None
+            self._daily_price_bundle_service = None
             self._hybrid_fundamentals_service = None
             self._stock_data_provider = None
             self._scan_orchestrator = None
@@ -582,6 +624,16 @@ def get_rate_limiter() -> RedisRateLimiter:
     return _resolve_runtime_services().rate_limiter()
 
 
+def get_market_calendar_service() -> MarketCalendarService:
+    """Return process-scoped market calendar service."""
+    return _resolve_runtime_services().market_calendar_service()
+
+
+def get_github_release_sync_service() -> GitHubReleaseSyncService:
+    """Return process-scoped GitHub release sync service."""
+    return _resolve_runtime_services().github_release_sync_service()
+
+
 def get_security_master_resolver() -> SecurityMasterResolver:
     """Return process-scoped SecurityMaster resolver."""
     return _resolve_runtime_services().security_master_resolver()
@@ -625,6 +677,11 @@ def get_ticker_validation_service() -> TickerValidationService:
 def get_provider_snapshot_service() -> ProviderSnapshotService:
     """Return process-scoped provider snapshot service."""
     return _resolve_runtime_services().provider_snapshot_service()
+
+
+def get_daily_price_bundle_service() -> DailyPriceBundleService:
+    """Return process-scoped daily price bundle service."""
+    return _resolve_runtime_services().daily_price_bundle_service()
 
 
 def get_hybrid_fundamentals_service() -> HybridFundamentalsService:

@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 PROGRESS_PUBLISH_EVERY_STOCKS = 25
 PROGRESS_PUBLISH_EVERY_SECONDS = 2.0
+_GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 
 
 def _retry_transient_failure(task, task_name: str, exc: Exception) -> None:
@@ -267,6 +268,51 @@ def refresh_all_fundamentals(
             task_id=task_id,
             message="Refreshing fundamentals",
         )
+        github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
+            db,
+            market=effective_market,
+            hydrate_cache=True,
+            hydrate_mode="static",
+        )
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))
+            if total_stocks > 0:
+                _maybe_publish_fundamentals_progress(
+                    db,
+                    market=effective_market,
+                    lifecycle=activity_lifecycle,
+                    task_name=task_name,
+                    task_id=task_id,
+                    current=total_stocks,
+                    total=total_stocks,
+                    message="Refreshing fundamentals",
+                    progress_state=progress_state,
+                    force=True,
+                )
+            duration = time.time() - start_time
+            eps_task = calculate_eps_rating_percentiles.delay()
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=total_stocks if total_stocks > 0 else None,
+                total=total_stocks if total_stocks > 0 else None,
+                message="Fundamentals refresh completed from GitHub bundle",
+            )
+            return {
+                "status": "success",
+                "source": "github",
+                "github_sync_status": github_sync.get("status"),
+                "market": effective_market,
+                "source_revision": github_sync.get("source_revision"),
+                "import": github_sync.get("import"),
+                "eps_rating_task_id": eps_task.id,
+                "duration_seconds": round(duration, 2),
+                "timestamp": datetime.now().isoformat(),
+            }
         if settings.provider_snapshot_cutover_enabled:
             total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))
             _maybe_publish_fundamentals_progress(
@@ -880,6 +926,53 @@ def refresh_all_fundamentals_hybrid(
             task_id=task_id,
             message="Refreshing fundamentals",
         )
+        github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
+            db,
+            market=effective_market,
+            hydrate_cache=True,
+            hydrate_mode="static",
+        )
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))
+            if total_stocks > 0:
+                _maybe_publish_fundamentals_progress(
+                    db,
+                    market=effective_market,
+                    lifecycle=activity_lifecycle,
+                    task_name=task_name,
+                    task_id=task_id,
+                    current=total_stocks,
+                    total=total_stocks,
+                    message="Refreshing fundamentals",
+                    progress_state=progress_state,
+                    force=True,
+                )
+            duration = time.time() - start_time
+            eps_task = calculate_eps_rating_percentiles.delay()
+            mark_market_activity_completed(
+                db,
+                market=effective_market,
+                stage_key="fundamentals",
+                lifecycle=activity_lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                current=total_stocks if total_stocks > 0 else None,
+                total=total_stocks if total_stocks > 0 else None,
+                message="Fundamentals refresh completed from GitHub bundle",
+            )
+            return {
+                "status": "success",
+                "source": "github",
+                "github_sync_status": github_sync.get("status"),
+                "market": effective_market,
+                "source_revision": github_sync.get("source_revision"),
+                "import": github_sync.get("import"),
+                "include_finviz": include_finviz,
+                "eps_rating_task_id": eps_task.id,
+                "duration_seconds": round(duration, 2),
+                "duration_minutes": round(duration / 60, 1),
+                "timestamp": datetime.now().isoformat(),
+            }
         if settings.provider_snapshot_cutover_enabled or settings.provider_snapshot_ingestion_enabled:
             publish = settings.provider_snapshot_cutover_enabled
             total_stocks = len(_load_active_universe_stocks(db, market=scoped_market))

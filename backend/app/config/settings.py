@@ -271,6 +271,16 @@ class Settings(BaseSettings):
     provider_snapshot_max_missing_ratio_in: float = 0.40
     provider_snapshot_max_missing_ratio_jp: float = 0.40
     provider_snapshot_max_missing_ratio_tw: float = 0.30
+    market_data_source_mode: str = "github_first"  # github_first | live_only
+    github_data_repository: str = "xang1234/stock-screener"
+    github_data_api_base: str = "https://api.github.com"
+    github_data_token: str = ""
+    github_data_timeout_seconds: int = 60
+    github_weekly_reference_release_tag: str = "weekly-reference-data"
+    github_weekly_reference_max_age_days: int = 8
+    github_daily_price_release_tag: str = "daily-price-data"
+    github_daily_price_max_age_days: int = 4
+    github_daily_price_redis_warm_symbols: int = 50
 
     # Hermes / MCP integration
     hermes_api_base: str = "http://127.0.0.1:8642/v1"
@@ -351,6 +361,29 @@ class Settings(BaseSettings):
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
         if not 0.0 <= v <= 1.0:
             raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
+        return v
+
+    @field_validator("market_data_source_mode")
+    @classmethod
+    def validate_market_data_source_mode(cls, v: str) -> str:
+        normalized = str(v or "").strip().lower()
+        if normalized not in {"github_first", "live_only"}:
+            raise ValueError(
+                "market_data_source_mode must be 'github_first' or 'live_only', "
+                f"got {v!r}"
+            )
+        return normalized
+
+    @field_validator(
+        "github_data_timeout_seconds",
+        "github_weekly_reference_max_age_days",
+        "github_daily_price_max_age_days",
+        "github_daily_price_redis_warm_symbols",
+    )
+    @classmethod
+    def validate_non_negative_github_sync_settings(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"GitHub sync numeric settings must be >= 0, got {v}")
         return v
 
     @field_validator('india_bse_price_verification_period')

@@ -29,11 +29,16 @@ from ..services.market_activity_service import (
 )
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
-from ..wiring.bootstrap import get_rate_limiter, get_stock_universe_service
+from ..wiring.bootstrap import (
+    get_daily_price_bundle_service,
+    get_rate_limiter,
+    get_stock_universe_service,
+)
 from ..services.security_master_service import security_master_resolver
 from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
+_GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 
 _SMART_REFRESH_TIME_WINDOW_BYPASS: ContextVar[bool] = ContextVar(
     "smart_refresh_time_window_bypass",
@@ -1546,13 +1551,14 @@ def smart_refresh_cache(
             return {'skipped': True, 'reason': 'Not a trading day', 'date': today.isoformat(), 'mode': mode}
 
     price_cache = get_price_cache()
-    bulk_fetcher = BulkDataFetcher()
     db = SessionLocal()
 
     refreshed = 0
     processed = 0
     failed = 0
     failed_symbols = []
+    github_sync: dict | None = None
+    used_github_seed = False
 
     try:
         mark_market_activity_started(
@@ -1580,17 +1586,68 @@ def smart_refresh_cache(
         if market is not None:
             _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
         _uni_q = _uni_q.order_by(StockUniverse.market_cap.desc().nullslast())
+        all_symbols = [r.symbol for r in _uni_q.all()]
 
-        if mode == "full":
+        github_sync = get_daily_price_bundle_service().sync_from_github(
+            db,
+            market=effective_market,
+        )
+        if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
+            used_github_seed = True
+            symbols = get_daily_price_bundle_service().symbols_missing_as_of(
+                db,
+                symbols=all_symbols,
+                as_of_date=str(github_sync.get("as_of_date") or ""),
+            )
+            if symbols:
+                logger.info(
+                    "GitHub daily price bundle synced for %s; falling back to live refresh for %d missing/stale symbols",
+                    effective_market,
+                    len(symbols),
+                    extra=_log_extra,
+                )
+            else:
+                message = "GitHub daily price bundle is current - no live fetch needed"
+                price_cache.save_warmup_metadata(
+                    "completed",
+                    len(all_symbols),
+                    len(all_symbols),
+                    market=market,
+                )
+                price_cache.complete_warmup_heartbeat("completed", market=market)
+                mark_market_activity_completed(
+                    db,
+                    market=effective_market,
+                    stage_key="prices",
+                    lifecycle=activity_lifecycle,
+                    task_name=getattr(self, "name", "smart_refresh_cache"),
+                    task_id=getattr(getattr(self, "request", None), "id", None),
+                    current=len(all_symbols) if all_symbols else 0,
+                    total=len(all_symbols) if all_symbols else 0,
+                    message=message,
+                )
+                return {
+                    "status": "completed",
+                    "source": "github",
+                    "github_sync_status": github_sync.get("status"),
+                    "source_revision": github_sync.get("source_revision"),
+                    "refreshed": 0,
+                    "failed": 0,
+                    "total": 0,
+                    "message": message,
+                    "mode": mode,
+                    "completed_at": datetime.now().isoformat(),
+                }
+        elif mode == "full":
             # Full refresh: ALL active symbols for the market, ordered by market cap DESC
-            symbols = [r.symbol for r in _uni_q.all()]
+            symbols = all_symbols
             logger.info(
                 "Full refresh: %d symbols (market cap order) %s",
                 len(symbols), market_tag(market), extra=_log_extra,
             )
         else:
             # Auto mode: Full universe for market, skip recently-refreshed symbols
-            symbols = [r.symbol for r in _uni_q.all()]
+            symbols = all_symbols
             logger.info(
                 "Auto refresh: %d active symbols (full universe, market cap order) %s",
                 len(symbols), market_tag(market), extra=_log_extra,
@@ -1634,6 +1691,7 @@ def smart_refresh_cache(
         total = len(symbols)
         batch_size = 100
         total_batches = (total + batch_size - 1) // batch_size if total > 0 else 0
+        bulk_fetcher = BulkDataFetcher()
 
         # Write initial heartbeat before batch loop to prevent false "stuck" detection.
         # Without this, the health endpoint sees lock held + no heartbeat = stuck.
@@ -1786,6 +1844,9 @@ def smart_refresh_cache(
 
         return {
             "status": status,
+            "source": "github+live" if used_github_seed else "live",
+            "github_sync_status": github_sync.get("status") if github_sync else None,
+            "source_revision": github_sync.get("source_revision") if github_sync else None,
             "refreshed": refreshed,
             "failed": failed,
             "total": total,

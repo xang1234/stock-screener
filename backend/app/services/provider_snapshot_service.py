@@ -7,7 +7,9 @@ import hashlib
 import importlib
 import json
 import logging
-from datetime import datetime
+import shutil
+import tempfile
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Literal, Optional
 
@@ -24,6 +26,7 @@ from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
 from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
+from .github_release_sync_service import GitHubReleaseSyncService
 from .security_master_service import security_master_resolver
 from .technical_calculator_service import TechnicalCalculatorService
 
@@ -907,6 +910,92 @@ class ProviderSnapshotService:
             ),
             "snapshot_coverage": coverage,
             "parity_summary": parity,
+        }
+
+    def _validate_weekly_reference_manifest_freshness(
+        self,
+        manifest: dict[str, Any],
+    ) -> tuple[bool, str | None]:
+        as_of_raw = str(manifest.get("as_of_date") or "")
+        if not as_of_raw:
+            raise ValueError("Weekly reference manifest is missing as_of_date")
+        as_of_date = date.fromisoformat(as_of_raw)
+        max_age_days = max(int(settings.github_weekly_reference_max_age_days or 0), 0)
+        if max_age_days and (date.today() - as_of_date).days > max_age_days:
+            return (
+                True,
+                f"Weekly reference bundle is older than the configured max age of {max_age_days} day(s)",
+            )
+        return False, None
+
+    def sync_weekly_reference_from_github(
+        self,
+        db: Session,
+        *,
+        market: str,
+        hydrate_cache: bool = True,
+        hydrate_mode: Literal["static", "full"] = "static",
+        github_sync_service: GitHubReleaseSyncService | None = None,
+    ) -> Dict[str, Any]:
+        normalized_market = str(market or "").strip().upper()
+        if normalized_market not in WEEKLY_REFERENCE_MARKETS:
+            return {
+                "status": "unsupported_market",
+                "market": normalized_market,
+                "source": "github",
+            }
+
+        snapshot_key = self.snapshot_key_for_market(normalized_market)
+        current_run = self.get_published_run(db, snapshot_key=snapshot_key)
+        current_revision = current_run.source_revision if current_run is not None else None
+        sync_service = github_sync_service or GitHubReleaseSyncService(
+            api_base=settings.github_data_api_base
+        )
+        download_dir = Path(
+            tempfile.mkdtemp(prefix=f"weekly-reference-{normalized_market.lower()}-")
+        )
+        sync_result = sync_service.fetch_latest_bundle(
+            repository_full_name=settings.github_data_repository,
+            release_tag=settings.github_weekly_reference_release_tag or self.WEEKLY_REFERENCE_RELEASE_TAG,
+            manifest_asset_name=self.weekly_reference_latest_manifest_name_for_market(normalized_market),
+            source_mode=settings.market_data_source_mode,
+            current_revision=current_revision,
+            expected_manifest_schema=self.WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION,
+            required_manifest_keys=(
+                "market",
+                "as_of_date",
+                "source_revision",
+                "bundle_asset_name",
+                "sha256",
+            ),
+            stale_validator=self._validate_weekly_reference_manifest_freshness,
+            github_token=settings.github_data_token,
+            request_timeout_seconds=settings.github_data_timeout_seconds,
+            output_dir=download_dir,
+        )
+        sync_result["source"] = "github"
+        sync_result["market"] = normalized_market
+
+        bundle_path = sync_result.get("bundle_path")
+        if sync_result.get("status") != "success":
+            shutil.rmtree(download_dir, ignore_errors=True)
+            return sync_result
+
+        try:
+            import_stats = self.import_weekly_reference_bundle(
+                db,
+                input_path=Path(str(bundle_path)),
+                hydrate_cache=hydrate_cache,
+                hydrate_mode=hydrate_mode,
+            )
+        finally:
+            if bundle_path:
+                Path(str(bundle_path)).unlink(missing_ok=True)
+            shutil.rmtree(download_dir, ignore_errors=True)
+
+        return {
+            **sync_result,
+            "import": import_stats,
         }
 
     def export_weekly_reference_bundle(
