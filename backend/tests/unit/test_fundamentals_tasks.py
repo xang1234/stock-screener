@@ -8,6 +8,8 @@ from celery.exceptions import Retry, SoftTimeLimitExceeded
 
 
 def _patch_serialized_lock(monkeypatch):
+    import app.services.provider_snapshot_service as provider_snapshot_module
+
     fake_lock = MagicMock()
     fake_lock.acquire.return_value = (True, False)
     fake_lock.release.return_value = True
@@ -23,6 +25,11 @@ def _patch_serialized_lock(monkeypatch):
     monkeypatch.setattr(
         "app.wiring.bootstrap.get_workload_coordination",
         lambda: fake_coordination,
+    )
+    monkeypatch.setattr(
+        provider_snapshot_module.settings,
+        "market_data_source_mode",
+        "live_only",
     )
 
 
@@ -265,6 +272,50 @@ def test_refresh_all_fundamentals_publishes_market_activity(monkeypatch):
     assert started[0]["lifecycle"] == "weekly_refresh"
     assert completed[0]["stage_key"] == "fundamentals"
     assert completed[0]["market"] == "US"
+
+
+def test_refresh_all_fundamentals_prefers_github_weekly_bundle(monkeypatch):
+    import app.tasks.fundamentals_tasks as module
+
+    fake_db = MagicMock()
+    fake_query = MagicMock()
+    fake_query.filter.return_value.all.return_value = [
+        SimpleNamespace(symbol="AAPL", market="US")
+    ]
+    fake_db.query.return_value = fake_query
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(module.settings, "provider_snapshot_cutover_enabled", False)
+    monkeypatch.setattr(
+        module,
+        "get_provider_snapshot_service",
+        lambda: SimpleNamespace(
+            sync_weekly_reference_from_github=lambda db, market, hydrate_cache, hydrate_mode: {
+                "status": "success",
+                "source": "github",
+                "market": market,
+                "source_revision": "fundamentals_v1_us:20260418120000",
+                "import": {"rows": 1, "hydrated_symbols": 1},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_fundamentals_cache",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy live fetch should not run")),
+    )
+
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.refresh_all_fundamentals.run(market="US")
+
+    assert result["status"] == "success"
+    assert result["source"] == "github"
+    assert started[0]["stage_key"] == "fundamentals"
+    assert completed[0]["stage_key"] == "fundamentals"
 
 
 def test_refresh_all_fundamentals_publishes_running_progress(monkeypatch):

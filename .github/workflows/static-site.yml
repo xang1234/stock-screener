@@ -12,13 +12,29 @@ concurrency:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
 jobs:
+  ensure_daily_price_release:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure daily price release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view daily-price-data \
+            --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+          gh release create daily-price-data \
+            --repo "${{ github.repository }}" \
+            --title "Daily Price Data" \
+            --notes "Automated daily market-scoped OHLCV bundles for runtime bootstrap and refresh."
+
   build-market:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: ensure_daily_price_release
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
@@ -189,6 +205,29 @@ jobs:
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}"
+
+      - name: Build daily price bundle
+        run: |
+          cd backend
+          python -m app.scripts.build_daily_price_bundle \
+            --market "${{ matrix.market }}" \
+            --output-dir /tmp/daily-price
+
+      - name: Upload daily price assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKET_LOWER="$(echo "${{ matrix.market }}" | tr '[:upper:]' '[:lower:]')"
+          BUNDLE_PATH="$(find /tmp/daily-price -maxdepth 1 -name "daily-price-${MARKET_LOWER}-*.json.gz" | head -n 1)"
+          MANIFEST_PATH="/tmp/daily-price/daily-price-latest-${MARKET_LOWER}.json"
+
+          if [ -z "$BUNDLE_PATH" ] || [ ! -f "$MANIFEST_PATH" ]; then
+            echo "Missing daily price bundle outputs" >&2
+            exit 1
+          fi
+
+          gh release upload daily-price-data "$BUNDLE_PATH" --clobber
+          gh release upload daily-price-data "$MANIFEST_PATH" --clobber
 
       - name: Upload market artifact
         uses: actions/upload-artifact@v4

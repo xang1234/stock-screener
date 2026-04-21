@@ -306,6 +306,63 @@ def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
     assert progress_updates[-1]["percent"] == pytest.approx(100.0)
 
 
+def test_smart_refresh_cache_prefers_github_daily_bundle_and_skips_live_fetch(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    symbols = [SimpleNamespace(symbol="AAPL"), SimpleNamespace(symbol="MSFT")]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_query.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_db.query.return_value = fake_query
+    fake_price_cache = MagicMock()
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 4, 21)),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: (_ for _ in ()).throw(AssertionError("live batch fetch should not run")),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_daily_price_bundle_service",
+        lambda: SimpleNamespace(
+            sync_from_github=lambda db, market, warm_redis_symbols=None: {
+                "status": "success",
+                "source": "github",
+                "market": market,
+                "as_of_date": "2026-04-21",
+                "source_revision": "daily_prices_us:20260421120000",
+            },
+            symbols_missing_as_of=lambda db, symbols, as_of_date: [],
+        ),
+    )
+
+    started = []
+    completed = []
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: started.append(kwargs))
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: completed.append(kwargs))
+
+    result = module.smart_refresh_cache.run.__wrapped__(
+        module.smart_refresh_cache, "full", market="US"
+    )
+
+    assert result["status"] == "completed"
+    assert result["source"] == "github"
+    assert result["refreshed"] == 0
+    assert started[0]["stage_key"] == "prices"
+    assert completed[0]["stage_key"] == "prices"
+
+
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 
