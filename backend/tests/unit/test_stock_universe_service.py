@@ -15,6 +15,7 @@ from app.models.stock_universe import (
     UNIVERSE_STATUS_ACTIVE,
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_MANUAL,
+    UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
 from app.models.ticker_validation import TickerValidationLog
 from app.services.stock_universe_service import StockUniverseService
@@ -375,6 +376,69 @@ def test_ingest_in_snapshot_rows_filters_bse_only_symbols_without_price_coverage
     assert stats["total"] == 1
     assert stats["coverage_rejected"] == 1
     assert [row.symbol for row in rows] == ["RELIANCE.NS"]
+    db.close()
+
+
+def test_ingest_in_snapshot_rows_deactivates_existing_active_bse_symbol_rejected_by_coverage_gate():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+    service._bulk_fetcher = _FakeBulkFetcher(
+        {
+            "500002.BO": {"has_error": True, "price_data": None},
+        }
+    )
+    db.add(
+        StockUniverse(
+            symbol="500002.BO",
+            name="ABB India Limited",
+            market="IN",
+            exchange="XBOM",
+            currency="INR",
+            timezone="Asia/Kolkata",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+            source="in_ingest",
+        )
+    )
+    db.commit()
+
+    stats = service.ingest_in_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "500002.BO",
+                "name": "ABB India Limited",
+                "exchange": "XBOM",
+                "sector": "",
+                "industry": "",
+                "market_cap": 151635.28,
+                "isin": "INE117A01022",
+            },
+        ],
+        source_name="in_reference_bundle",
+        snapshot_id="in-reference-bundle-2026-04-21",
+        snapshot_as_of="2026-04-21",
+        source_metadata={"overlap_isin_count": 0},
+    )
+
+    row = db.query(StockUniverse).filter(StockUniverse.symbol == "500002.BO").one()
+    event = (
+        db.query(StockUniverseStatusEvent)
+        .filter(StockUniverseStatusEvent.symbol == "500002.BO")
+        .order_by(StockUniverseStatusEvent.id.desc())
+        .first()
+    )
+
+    assert stats["added"] == 0
+    assert stats["total"] == 0
+    assert stats["coverage_rejected"] == 1
+    assert row.is_active is False
+    assert row.status == UNIVERSE_STATUS_INACTIVE_NO_DATA
+    assert "Rejected by IN BSE coverage gate" in row.status_reason
+    assert event is not None
+    assert event.new_status == UNIVERSE_STATUS_INACTIVE_NO_DATA
+    assert event.trigger_source == "in_ingest_coverage_gate"
     db.close()
 
 

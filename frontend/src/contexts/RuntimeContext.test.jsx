@@ -226,6 +226,10 @@ describe('RuntimeProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
 
     await waitFor(() => {
+      expect(startRuntimeBootstrap).toHaveBeenCalledTimes(1);
+      expect(queryClient.getQueryData(['appCapabilities'])?.supported_markets).toEqual(
+        DEFAULT_CAPABILITIES.supported_markets
+      );
       expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,TW');
     });
   });

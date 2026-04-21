@@ -1190,12 +1190,16 @@ class StockUniverseService:
         )
         now = datetime.utcnow()
         canonical_symbols = [row.symbol for row in canonical_rows]
+        coverage_rejected_symbols = [
+            row.symbol for row in coverage_rejected_rows if getattr(row, "symbol", None)
+        ]
+        lookup_symbols = [*canonical_symbols, *coverage_rejected_symbols]
         existing_rows = {
             row.symbol: row
             for row in db.query(StockUniverse).filter(
-                StockUniverse.symbol.in_(canonical_symbols)
+                StockUniverse.symbol.in_(lookup_symbols)
             ).all()
-        } if canonical_symbols else {}
+        } if lookup_symbols else {}
 
         added_count = 0
         updated_count = 0
@@ -1276,6 +1280,29 @@ class StockUniverseService:
                 )
             )
             added_count += 1
+
+        for rejected_row in coverage_rejected_rows:
+            existing = existing_rows.get(rejected_row.symbol)
+            if existing is None or self._normalize_status(existing) != UNIVERSE_STATUS_ACTIVE:
+                continue
+            self._apply_status_transition(
+                db,
+                existing,
+                new_status=UNIVERSE_STATUS_INACTIVE_NO_DATA,
+                trigger_source="in_ingest_coverage_gate",
+                reason=f"Rejected by IN BSE coverage gate: {rejected_row.reason}",
+                now=now,
+                payload={
+                    "source_name": source_name,
+                    "source_symbol": rejected_row.source_symbol,
+                    "source_row_number": rejected_row.source_row_number,
+                    "snapshot_id": snapshot_id,
+                    "snapshot_as_of": snapshot_as_of,
+                    "symbol": rejected_row.symbol,
+                    "reason": rejected_row.reason,
+                },
+                source="in_ingest",
+            )
 
         self._bulk_insert_records(db, new_rows)
         self._bulk_insert_records(db, new_events)

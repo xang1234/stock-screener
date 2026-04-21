@@ -48,6 +48,10 @@ class _FallbackCalendar:
         return any(s.date() == session.date() for s in self.sessions)
 
 
+class _ProviderCalendar:
+    pass
+
+
 def test_market_calendar_service_uses_canonical_calendar_ids():
     service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
 
@@ -92,3 +96,14 @@ def test_is_market_open_schedule_fallback_treats_close_minute_as_closed():
 
     assert service.is_market_open("IN", now=pre_close_ist) is True
     assert service.is_market_open("IN", now=close_minute_ist) is False
+
+
+def test_india_pmc_lookup_uses_provider_specific_calendar_id():
+    calls = []
+    service = MarketCalendarService()
+    service._pmc_provider = lambda calendar_id: calls.append(calendar_id) or _ProviderCalendar()
+    service._xcals_provider = lambda calendar_id: calls.append(calendar_id) or _ProviderCalendar()
+
+    service._get_calendar("IN")
+
+    assert calls == ["NSE"]

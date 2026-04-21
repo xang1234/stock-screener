@@ -130,3 +130,19 @@ class TestSettingsValidators:
     def test_invalid_india_provider_snapshot_ratio(self, field_name, value):
         with pytest.raises(ValidationError, match="provider snapshot ratio must be between 0 and 1"):
             self._make_settings(**{field_name: value})
+
+    def test_india_bse_price_verification_period_must_not_be_blank(self):
+        with pytest.raises(ValidationError, match="india_bse_price_verification_period must not be blank"):
+            self._make_settings(india_bse_price_verification_period="   ")
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("india_bse_gate_global_failure_min_symbols", 0),
+            ("india_bse_validation_days_back", -1),
+            ("india_bse_validation_failures_threshold", 0),
+        ],
+    )
+    def test_india_bse_gate_numeric_settings_must_be_positive(self, field_name, value):
+        with pytest.raises(ValidationError, match="India BSE gate numeric settings must be > 0"):
+            self._make_settings(**{field_name: value})

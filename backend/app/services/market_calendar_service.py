@@ -35,6 +35,9 @@ class MarketCalendarService:
         "JP": "Asia/Tokyo",
         "TW": "Asia/Taipei",
     }
+    PROVIDER_CALENDAR_ID_BY_MARKET: dict[str, str] = {
+        "IN": "NSE",
+    }
 
     def __init__(self, calendar_provider=None):
         self._calendar_provider = calendar_provider
@@ -68,15 +71,22 @@ class MarketCalendarService:
         normalized = self.normalize_market(market)
         calendar_id = self.CALENDAR_ID_BY_MARKET[normalized]
         provider = self._calendar_provider
+        uses_pmc_provider = False
         if provider is None:
-            provider = self._pmc_provider if normalized == "IN" else self._xcals_provider
+            uses_pmc_provider = normalized == "IN"
+            provider = self._pmc_provider if uses_pmc_provider else self._xcals_provider
         if provider is None:
             required_package = (
                 "pandas_market_calendars" if normalized == "IN" else "exchange_calendars"
             )
             raise RuntimeError(f"{required_package} is required for MarketCalendarService")
+        provider_calendar_id = (
+            self.PROVIDER_CALENDAR_ID_BY_MARKET.get(normalized, calendar_id)
+            if uses_pmc_provider
+            else calendar_id
+        )
         if calendar_id not in self._calendar_cache:
-            self._calendar_cache[calendar_id] = provider(calendar_id)
+            self._calendar_cache[calendar_id] = provider(provider_calendar_id)
         return self._calendar_cache[calendar_id]
 
     @staticmethod

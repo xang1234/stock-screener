@@ -353,6 +353,25 @@ class Settings(BaseSettings):
             raise ValueError(f"provider snapshot ratio must be between 0 and 1, got {v}")
         return v
 
+    @field_validator('india_bse_price_verification_period')
+    @classmethod
+    def validate_india_bse_price_verification_period(cls, v: str) -> str:
+        normalized = str(v or "").strip()
+        if not normalized:
+            raise ValueError("india_bse_price_verification_period must not be blank")
+        return normalized
+
+    @field_validator(
+        'india_bse_gate_global_failure_min_symbols',
+        'india_bse_validation_days_back',
+        'india_bse_validation_failures_threshold',
+    )
+    @classmethod
+    def validate_positive_india_bse_gate_settings(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"India BSE gate numeric settings must be > 0, got {v}")
+        return v
+
     @model_validator(mode="after")
     def apply_legacy_twitter_delay_fallback(self) -> "Settings":
         legacy_delay = os.getenv("SOTWE_REQUEST_DELAY")
