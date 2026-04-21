@@ -22,6 +22,10 @@ from app.models.stock import StockPrice
 from app.models.stock_universe import StockUniverse
 
 
+def test_static_export_markets_include_india():
+    assert export_script.STATIC_EXPORT_MARKETS == ("US", "HK", "IN", "JP", "TW")
+
+
 def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     calls: list[str] = []
 
