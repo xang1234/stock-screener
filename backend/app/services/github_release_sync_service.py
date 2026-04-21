@@ -157,11 +157,21 @@ class GitHubReleaseSyncService:
                 github_token=github_token,
                 request_timeout_seconds=request_timeout_seconds,
             )
-            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            manifest_payload = json.loads(manifest_bytes.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             return self._result("invalid_manifest", error=str(exc))
         except requests.RequestException as exc:
             return self._result("network_error", error=str(exc))
+
+        if not isinstance(manifest_payload, dict):
+            return self._result(
+                "invalid_manifest",
+                error=(
+                    "Manifest must be a JSON object, "
+                    f"got {type(manifest_payload).__name__}"
+                ),
+            )
+        manifest = manifest_payload
 
         if expected_manifest_schema and manifest.get("schema_version") != expected_manifest_schema:
             return self._result(
@@ -184,8 +194,25 @@ class GitHubReleaseSyncService:
                 error=f"Manifest is missing required keys: {', '.join(sorted(missing_keys))}",
             )
 
-        bundle_asset_name = str(manifest.get("bundle_asset_name") or "").strip() or None
+        raw_bundle_asset_name = str(manifest.get("bundle_asset_name") or "").strip()
+        bundle_asset_name = raw_bundle_asset_name or None
         source_revision = str(manifest.get("source_revision") or "").strip() or None
+
+        if (
+            bundle_asset_name is not None
+            and (
+                bundle_asset_name in {".", ".."}
+                or "/" in bundle_asset_name
+                or "\\" in bundle_asset_name
+            )
+        ):
+            return self._result(
+                "invalid_manifest",
+                manifest=manifest,
+                bundle_asset_name=bundle_asset_name,
+                source_revision=source_revision,
+                error=f"Invalid bundle asset name: {bundle_asset_name!r}",
+            )
 
         if stale_validator is not None:
             try:

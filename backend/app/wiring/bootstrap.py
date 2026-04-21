@@ -429,6 +429,8 @@ class RuntimeServices:
             self._groq_key_manager = None
             self._zai_key_manager = None
             self._rate_limiter = None
+            self._market_calendar_service = None
+            self._github_release_sync_service = None
             self._security_master_resolver = None
             self._eps_rating_service = None
             self._yfinance_service = None
@@ -438,6 +440,7 @@ class RuntimeServices:
             self._stock_universe_service = None
             self._ticker_validation_service = None
             self._provider_snapshot_service = None
+            self._daily_price_bundle_service = None
             self._hybrid_fundamentals_service = None
             self._stock_data_provider = None
             self._scan_orchestrator = None

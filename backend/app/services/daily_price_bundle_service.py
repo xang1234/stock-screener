@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import shutil
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -340,7 +341,9 @@ class DailyPriceBundleService:
             else warm_redis_symbols
         )
         redis_warmed_symbols = 0
-        if redis_target and batch_data:
+        # Bundles currently ship 2y bars. Avoid overwriting the standard 5y
+        # Redis cache entries with truncated history during import.
+        if redis_target and batch_data and bar_period == "5y":
             warm_symbols = [
                 row.symbol
                 for row in (
@@ -452,11 +455,39 @@ class DailyPriceBundleService:
         )
         sync_result["source"] = "github"
         sync_result["market"] = normalized_market
-
         bundle_path = sync_result.get("bundle_path")
+        manifest = sync_result.get("manifest")
+        if isinstance(manifest, dict):
+            manifest_market_raw = str(manifest.get("market") or "").strip()
+            try:
+                manifest_market = self.normalize_market(manifest_market_raw)
+            except ValueError as exc:
+                if bundle_path:
+                    Path(str(bundle_path)).unlink(missing_ok=True)
+                shutil.rmtree(download_dir, ignore_errors=True)
+                return {
+                    **sync_result,
+                    "status": "invalid_manifest",
+                    "error": str(exc),
+                }
+            if manifest_market != normalized_market:
+                if bundle_path:
+                    Path(str(bundle_path)).unlink(missing_ok=True)
+                shutil.rmtree(download_dir, ignore_errors=True)
+                return {
+                    **sync_result,
+                    "status": "invalid_manifest",
+                    "error": (
+                        f"Daily price manifest market {manifest_market!r} "
+                        f"does not match requested market {normalized_market!r}"
+                    ),
+                }
+            sync_result.setdefault("as_of_date", manifest.get("as_of_date"))
+            sync_result.setdefault("bar_period", manifest.get("bar_period"))
+            sync_result.setdefault("symbol_count", manifest.get("symbol_count"))
+
         if sync_result.get("status") != "success":
-            if download_dir.exists():
-                download_dir.rmdir()
+            shutil.rmtree(download_dir, ignore_errors=True)
             return sync_result
 
         try:
@@ -468,7 +499,7 @@ class DailyPriceBundleService:
         finally:
             if bundle_path:
                 Path(str(bundle_path)).unlink(missing_ok=True)
-            download_dir.rmdir()
+            shutil.rmtree(download_dir, ignore_errors=True)
 
         return {
             **sync_result,

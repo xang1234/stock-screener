@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -132,3 +134,122 @@ def test_daily_price_bundle_round_trips_and_preserves_other_market_rows(tmp_path
 
     export_db.close()
     import_db.close()
+
+
+def test_sync_from_github_up_to_date_exposes_manifest_metadata():
+    session_factory = _make_session()
+    db = session_factory()
+    service = _make_service(session_factory)
+
+    result = service.sync_from_github(
+        db,
+        market="US",
+        github_sync_service=SimpleNamespace(
+            fetch_latest_bundle=lambda **kwargs: {
+                "status": "up_to_date",
+                "manifest": {
+                    "market": "US",
+                    "as_of_date": "2026-04-18",
+                    "source_revision": "daily_prices_us:20260418120000",
+                    "bundle_asset_name": "daily-price-us-20260418.json.gz",
+                    "bar_period": "2y",
+                    "symbol_count": 2,
+                },
+                "bundle_path": None,
+                "bundle_asset_name": "daily-price-us-20260418.json.gz",
+                "source_revision": "daily_prices_us:20260418120000",
+            }
+        ),
+    )
+
+    assert result["status"] == "up_to_date"
+    assert result["as_of_date"] == "2026-04-18"
+    assert result["bar_period"] == "2y"
+    assert result["symbol_count"] == 2
+    db.close()
+
+
+def test_sync_from_github_rejects_manifest_market_mismatch():
+    session_factory = _make_session()
+    db = session_factory()
+    service = _make_service(session_factory)
+
+    result = service.sync_from_github(
+        db,
+        market="US",
+        github_sync_service=SimpleNamespace(
+            fetch_latest_bundle=lambda **kwargs: {
+                "status": "up_to_date",
+                "manifest": {
+                    "market": "HK",
+                    "as_of_date": "2026-04-18",
+                    "source_revision": "daily_prices_hk:20260418120000",
+                    "bundle_asset_name": "daily-price-hk-20260418.json.gz",
+                    "bar_period": "2y",
+                    "symbol_count": 2,
+                },
+                "bundle_path": None,
+                "bundle_asset_name": "daily-price-hk-20260418.json.gz",
+                "source_revision": "daily_prices_hk:20260418120000",
+            }
+        ),
+    )
+
+    assert result["status"] == "invalid_manifest"
+    assert "does not match requested market" in str(result["error"])
+    db.close()
+
+
+def test_import_daily_price_bundle_skips_redis_warm_for_two_year_bundle(tmp_path):
+    session_factory = _make_session()
+    db = session_factory()
+    db.add(_stock_row("AAPL", "US", "NASDAQ", 1000.0))
+    db.commit()
+
+    price_cache = SimpleNamespace(
+        _store_batch_in_database=MagicMock(),
+        store_batch_in_cache=MagicMock(return_value=1),
+    )
+    service = DailyPriceBundleService(price_cache=price_cache)
+    bundle_path = tmp_path / "daily-price-us.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "schema_version": service.DAILY_PRICE_BUNDLE_SCHEMA_VERSION,
+                "market": "US",
+                "generated_at": "2026-04-18T12:00:00Z",
+                "as_of_date": "2026-04-18",
+                "bar_period": service.DAILY_PRICE_BAR_PERIOD,
+                "source_revision": "daily_prices_us:20260418120000",
+                "symbol_count": 1,
+                "rows": [
+                    {
+                        "symbol": "AAPL",
+                        "prices": [
+                            {
+                                "date": "2026-04-18",
+                                "open": 100.0,
+                                "high": 101.0,
+                                "low": 99.0,
+                                "close": 100.5,
+                                "adj_close": 100.0,
+                                "volume": 1_000_000,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.import_daily_price_bundle(
+        db,
+        input_path=bundle_path,
+        warm_redis_symbols=1,
+    )
+
+    assert result["redis_warmed_symbols"] == 0
+    price_cache._store_batch_in_database.assert_called_once()
+    price_cache.store_batch_in_cache.assert_not_called()
+    db.close()

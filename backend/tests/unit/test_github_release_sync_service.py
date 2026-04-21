@@ -246,3 +246,50 @@ def test_fetch_latest_bundle_checks_staleness_before_up_to_date(tmp_path):
 
     assert result["status"] == "stale"
     assert "expected session" in result["reason"]
+
+
+def test_fetch_latest_bundle_rejects_bundle_asset_name_with_path_separator(tmp_path):
+    bundle_bytes = b"bundle-payload"
+    manifest = {
+        "schema_version": "weekly-reference-manifest-v1",
+        "market": "US",
+        "as_of_date": "2026-04-18",
+        "source_revision": "fundamentals_v1_us:20260418120000",
+        "bundle_asset_name": "nested/weekly-reference-us-20260418.json.gz",
+        "sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+    }
+    session = _FakeSession(
+        {
+            "https://api.github.com/repos/xang1234/stock-screener/releases/tags/weekly-reference-data": _FakeResponse(
+                json_data={
+                    "assets": [
+                        {
+                            "name": "weekly-reference-latest-us.json",
+                            "browser_download_url": "https://example.com/manifest.json",
+                        },
+                        {
+                            "name": "nested/weekly-reference-us-20260418.json.gz",
+                            "browser_download_url": "https://example.com/bundle.json.gz",
+                        },
+                    ]
+                }
+            ),
+            "https://example.com/manifest.json": _FakeResponse(
+                content=json.dumps(manifest).encode("utf-8")
+            ),
+            "https://example.com/bundle.json.gz": _FakeResponse(content=bundle_bytes),
+        }
+    )
+    service = GitHubReleaseSyncService(session=session)
+
+    result = service.fetch_latest_bundle(
+        repository_full_name="xang1234/stock-screener",
+        release_tag="weekly-reference-data",
+        manifest_asset_name="weekly-reference-latest-us.json",
+        expected_manifest_schema="weekly-reference-manifest-v1",
+        required_manifest_keys=("market", "as_of_date", "source_revision", "bundle_asset_name", "sha256"),
+        output_dir=tmp_path,
+    )
+
+    assert result["status"] == "invalid_manifest"
+    assert "bundle asset name" in str(result["error"]).lower()

@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import logging
+import shutil
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
@@ -977,8 +978,7 @@ class ProviderSnapshotService:
 
         bundle_path = sync_result.get("bundle_path")
         if sync_result.get("status") != "success":
-            if download_dir.exists():
-                download_dir.rmdir()
+            shutil.rmtree(download_dir, ignore_errors=True)
             return sync_result
 
         try:
@@ -991,8 +991,7 @@ class ProviderSnapshotService:
         finally:
             if bundle_path:
                 Path(str(bundle_path)).unlink(missing_ok=True)
-            if download_dir.exists():
-                download_dir.rmdir()
+            shutil.rmtree(download_dir, ignore_errors=True)
 
         return {
             **sync_result,

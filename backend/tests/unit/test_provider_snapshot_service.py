@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import tempfile
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -1310,6 +1311,51 @@ def test_import_weekly_reference_bundle_canonicalizes_snapshot_row_symbol(tmp_pa
     assert payload["currency"] == "TWD"
     assert payload["timezone"] == "Asia/Taipei"
     assert payload["local_code"] == "3008"
+    db.close()
+
+
+def test_sync_weekly_reference_from_github_preserves_import_error_when_download_dir_has_extra_files(
+    tmp_path,
+):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = _make_provider_snapshot_service()
+
+    download_dir = tmp_path / "weekly-reference-download"
+    download_dir.mkdir()
+    bundle_path = download_dir / "weekly-reference-us-20260411.json.gz"
+    bundle_path.write_bytes(b"bundle")
+    (download_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    original_mkdtemp = tempfile.mkdtemp
+
+    try:
+        tempfile.mkdtemp = lambda prefix="": str(download_dir)
+        service.import_weekly_reference_bundle = MagicMock(side_effect=RuntimeError("import failed"))
+
+        with pytest.raises(RuntimeError, match="import failed"):
+            service.sync_weekly_reference_from_github(
+                db,
+                market="US",
+                github_sync_service=SimpleNamespace(
+                    fetch_latest_bundle=lambda **kwargs: {
+                        "status": "success",
+                        "bundle_path": str(bundle_path),
+                        "bundle_asset_name": bundle_path.name,
+                        "source_revision": "fundamentals_v1_us:20260411120000",
+                        "manifest": {
+                            "market": "US",
+                            "as_of_date": "2026-04-11",
+                            "bundle_asset_name": bundle_path.name,
+                            "source_revision": "fundamentals_v1_us:20260411120000",
+                            "sha256": "unused",
+                        },
+                    }
+                ),
+            )
+    finally:
+        tempfile.mkdtemp = original_mkdtemp
+
     db.close()
 
 
