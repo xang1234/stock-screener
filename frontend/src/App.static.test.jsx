@@ -330,7 +330,12 @@ describe('App static mode', () => {
   ])('renders the static hash route %s without any /api requests', async (hash, heading) => {
     await renderStaticAppAtHash(hash);
 
-    expect(await screen.findByText(heading, {}, { timeout: 10000 })).toBeInTheDocument();
+    const headingMatcher = (_content, element) => {
+      if (!element) return false;
+      const hasText = (el) => el.textContent?.includes(heading);
+      return hasText(element) && Array.from(element.children).every((child) => !hasText(child));
+    };
+    expect(await screen.findByText(headingMatcher, {}, { timeout: 10000 })).toBeInTheDocument();
     expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
     expect(screen.queryByText('Sign out')).not.toBeInTheDocument();
 
