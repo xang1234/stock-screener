@@ -17,18 +17,23 @@ class IBDIndustryService:
     @staticmethod
     def resolve_tracked_csv_path(csv_path: str | Path | None = None) -> Path:
         """Resolve the tracked IBD CSV, falling back to the repo copy when needed."""
-        configured_path = Path(csv_path or settings.ibd_industry_csv_path)
+        settings_path = Path(settings.ibd_industry_csv_path)
+        configured_path = Path(csv_path) if csv_path is not None else settings_path
         if configured_path.exists():
             return configured_path
 
         fallback_path = get_project_root() / "data" / "IBD_industry_group.csv"
-        if fallback_path.exists() and fallback_path != configured_path:
+        should_fallback = csv_path is None or configured_path == settings_path
+        if should_fallback and fallback_path.exists() and fallback_path != configured_path:
             logger.warning(
                 "Configured IBD industry CSV path %s is missing; falling back to tracked CSV at %s",
                 configured_path,
                 fallback_path,
             )
             return fallback_path
+
+        if csv_path is not None:
+            raise FileNotFoundError(f"IBD industry CSV file not found at {configured_path}")
 
         return configured_path
 

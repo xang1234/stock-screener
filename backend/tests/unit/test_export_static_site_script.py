@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 import sys
 
@@ -12,9 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import app.scripts.export_static_site as export_script
-import app.tasks.breadth_tasks as breadth_tasks
 import app.tasks.fundamentals_tasks as fundamentals_tasks
-import app.tasks.group_rank_tasks as group_rank_tasks
 import app.tasks.universe_tasks as universe_tasks
 from app.database import Base
 from app.interfaces.tasks import feature_store_tasks

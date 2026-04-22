@@ -1,5 +1,4 @@
 import importlib
-from pathlib import Path
 
 import app.services.ibd_industry_service as ibd_industry_service
 from app.config.settings import Settings
@@ -107,6 +106,66 @@ def test_ibd_industry_loader_falls_back_to_project_data_when_override_is_missing
         {"symbol": "AAPL", "industry_group": "Software"},
         {"symbol": "MSFT", "industry_group": "Software"},
     ]
+
+
+def test_ibd_industry_loader_does_not_fallback_for_explicit_missing_path(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fallback = tmp_path / "data" / "IBD_industry_group.csv"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("aapl,Software\nmsft,Software\n", encoding="utf-8")
+    missing_override = tmp_path / "missing" / "ibd.csv"
+    explicit_missing_path = tmp_path / "manual" / "ibd.csv"
+
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.execute_calls = 0
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def execute(self, _statement) -> None:
+            self.execute_calls += 1
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+
+        def bulk_insert_mappings(self, model, rows) -> None:
+            raise AssertionError(f"Unexpected bulk insert for {model}: {rows}")
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    monkeypatch.setattr(ibd_industry_service, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        ibd_industry_service.settings,
+        "ibd_industry_csv_path",
+        str(missing_override),
+    )
+
+    try:
+        ibd_industry_service.IBDIndustryService.resolve_tracked_csv_path(
+            explicit_missing_path,
+        )
+    except FileNotFoundError as exc:
+        assert str(explicit_missing_path) in str(exc)
+    else:
+        raise AssertionError("Expected explicit missing path resolution to raise FileNotFoundError")
+
+    fake_db = _FakeDb()
+    try:
+        ibd_industry_service.IBDIndustryService.load_from_csv(
+            fake_db,
+            csv_path=explicit_missing_path,
+        )
+    except FileNotFoundError as exc:
+        assert str(explicit_missing_path) in str(exc)
+    else:
+        raise AssertionError("Expected explicit missing CSV path to raise FileNotFoundError")
+
+    assert fake_db.execute_calls == 0
+    assert fake_db.commit_calls == 0
+    assert fake_db.rollback_calls == 0
 
 
 def test_get_project_root_detects_container_style_runtime_layout(tmp_path) -> None:
