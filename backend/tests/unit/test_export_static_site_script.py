@@ -96,6 +96,58 @@ def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
     }
 
 
+def test_run_daily_refresh_uses_resolved_tracked_ibd_csv_path(monkeypatch, tmp_path):
+    calls: list[str] = []
+    resolved_csv = tmp_path / "data" / "IBD_industry_group.csv"
+    resolved_csv.parent.mkdir(parents=True, exist_ok=True)
+    resolved_csv.write_text("AAPL,Software\n", encoding="utf-8")
+
+    def make_task(name: str):
+        return SimpleNamespace(
+            run=lambda **kwargs: calls.append(name) or {"task": name, "kwargs": kwargs},
+        )
+
+    load_calls: list[tuple[object, Path | None]] = []
+
+    monkeypatch.setattr(universe_tasks, "refresh_stock_universe", make_task("universe_refresh"))
+    monkeypatch.setattr(fundamentals_tasks, "refresh_all_fundamentals", make_task("fundamentals_refresh"))
+    monkeypatch.setattr(
+        feature_store_tasks,
+        "build_daily_snapshot",
+        SimpleNamespace(
+            run=lambda **kwargs: calls.append("feature_snapshot")
+            or {"run_id": 77, "kwargs": kwargs}
+        ),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_refresh_static_daily_prices",
+        lambda *, as_of_date, market=None: calls.append("price_refresh") or {"task": "price_refresh", "market": market, "as_of_date": as_of_date.isoformat()},
+    )
+    monkeypatch.setattr(
+        export_script,
+        "_resolve_latest_completed_us_trading_date",
+        lambda: date(2026, 4, 2),
+    )
+    monkeypatch.setattr(export_script, "_tracked_ibd_csv_path", lambda: resolved_csv)
+    monkeypatch.setattr(
+        export_script.IBDIndustryService,
+        "load_from_csv",
+        lambda db, csv_path=None: load_calls.append((db, csv_path)) or 10105,
+    )
+    monkeypatch.setattr(export_script, "_upsert_feature_run_pointer", lambda **_kwargs: None)
+
+    results, warnings = export_script._run_daily_refresh()  # noqa: SLF001 - intentional unit test coverage
+
+    assert warnings == []
+    assert load_calls
+    assert load_calls[0][1] == resolved_csv
+    assert results["ibd_seed_refresh"] == {
+        "csv_path": str(resolved_csv),
+        "loaded": 10105,
+    }
+
+
 def test_run_daily_refresh_can_hydrate_imported_snapshot_without_live_fundamentals(monkeypatch):
     calls: list[str] = []
 

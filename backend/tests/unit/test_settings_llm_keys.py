@@ -3,6 +3,7 @@ from pathlib import Path
 
 import app.services.ibd_industry_service as ibd_industry_service
 from app.config.settings import Settings
+from app.models.industry import IBDIndustryGroup
 from app.scripts import export_static_site
 from app.tasks import industry_tasks
 
@@ -57,6 +58,55 @@ def test_ibd_industry_csv_path_falls_back_to_project_data_when_override_is_missi
 
     assert industry_tasks._tracked_ibd_csv_path() == fallback
     assert export_static_site._tracked_ibd_csv_path() == fallback
+
+
+def test_ibd_industry_loader_falls_back_to_project_data_when_override_is_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fallback = tmp_path / "data" / "IBD_industry_group.csv"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("aapl,Software\nmsft,Software\n", encoding="utf-8")
+    missing_override = tmp_path / "missing" / "ibd.csv"
+
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.inserted: list[dict[str, str]] = []
+            self.execute_calls = 0
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def execute(self, _statement) -> None:
+            self.execute_calls += 1
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+
+        def bulk_insert_mappings(self, model, rows) -> None:
+            assert model is IBDIndustryGroup
+            self.inserted.extend(rows)
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    monkeypatch.setattr(ibd_industry_service, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        ibd_industry_service.settings,
+        "ibd_industry_csv_path",
+        str(missing_override),
+    )
+
+    fake_db = _FakeDb()
+    loaded = ibd_industry_service.IBDIndustryService.load_from_csv(fake_db)
+
+    assert loaded == 2
+    assert fake_db.execute_calls == 1
+    assert fake_db.commit_calls == 2
+    assert fake_db.rollback_calls == 0
+    assert fake_db.inserted == [
+        {"symbol": "AAPL", "industry_group": "Software"},
+        {"symbol": "MSFT", "industry_group": "Software"},
+    ]
 
 
 def test_get_project_root_detects_container_style_runtime_layout(tmp_path) -> None:
