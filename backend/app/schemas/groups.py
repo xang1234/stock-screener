@@ -22,6 +22,7 @@ class GroupRankResponse(BaseModel):
 
     # Top performer
     top_symbol: Optional[str] = Field(None, description="Best performing stock in group")
+    top_symbol_name: Optional[str] = Field(None, description="Company name of top stock")
     top_rs_rating: Optional[float] = Field(None, description="RS rating of top stock")
 
     # Rank changes (positive = improved, negative = declined)
@@ -55,6 +56,7 @@ class ConstituentStock(BaseModel):
     """Stock within an industry group with metrics"""
 
     symbol: str = Field(..., description="Stock ticker symbol")
+    company_name: Optional[str] = Field(None, description="Company name")
     price: Optional[float] = Field(None, description="Current price")
     rs_rating: Optional[float] = Field(None, description="RS Rating (weighted)")
     rs_rating_1m: Optional[float] = Field(None, description="1-month RS Rating")
@@ -85,6 +87,7 @@ class GroupDetailResponse(ScopedResponseMixin):
     num_stocks: int = Field(..., description="Number of stocks in group")
     pct_rs_above_80: Optional[float] = Field(None, description="Percent of stocks with RS > 80")
     top_symbol: Optional[str] = Field(None, description="Best performing stock")
+    top_symbol_name: Optional[str] = Field(None, description="Company name of top stock")
     top_rs_rating: Optional[float] = Field(None, description="RS of top stock")
 
     # Rank changes

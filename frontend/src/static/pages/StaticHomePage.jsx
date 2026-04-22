@@ -22,6 +22,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import StaticChartViewerModal from '../StaticChartViewerModal';
 import RankChangeCell from '../../components/shared/RankChangeCell';
+import TickerCell from '../../components/common/TickerCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { useStaticMarket } from '../StaticMarketContext';
@@ -206,7 +207,9 @@ function StaticHomePage() {
                   }}
                   sx={{ cursor: chartEnabledSymbols.has(row.symbol) ? 'pointer' : 'default' }}
                 >
-                  <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
+                  <TableCell align="center">
+                    <TickerCell symbol={row.symbol} companyName={row.company_name} align="center" />
+                  </TableCell>
                   <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
                   <TableCell align="center">{row.current_price != null ? `$${formatNumber(row.current_price, 2)}` : '-'}</TableCell>
                   <TableCell align="center">{row.rating}</TableCell>
@@ -266,6 +269,7 @@ function StaticHomePage() {
                 <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
                 <TableCell align="right">1W</TableCell>
+                <TableCell align="right">1M</TableCell>
                 <TableCell>Top Stock</TableCell>
               </TableRow>
             </TableHead>
@@ -275,8 +279,9 @@ function StaticHomePage() {
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{group.rank}</TableCell>
                   <TableCell>{group.industry_group}</TableCell>
                   <TableCell align="right"><RankChangeCell value={group.rank_change_1w} /></TableCell>
-                  <TableCell sx={{ fontWeight: 500, fontFamily: 'monospace', fontSize: '11px' }}>
-                    {group.top_symbol || '-'}
+                  <TableCell align="right"><RankChangeCell value={group.rank_change_1m} /></TableCell>
+                  <TableCell sx={{ fontSize: '11px' }}>
+                    <TickerCell symbol={group.top_symbol} companyName={group.top_symbol_name} />
                   </TableCell>
                 </TableRow>
               ))}

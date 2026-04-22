@@ -429,7 +429,28 @@ class IBDGroupRankService:
 
             result.append(item)
 
+        self._annotate_top_symbol_names(db, result)
         return result
+
+    @staticmethod
+    def _annotate_top_symbol_names(db: Session, rows: List[Dict]) -> None:
+        top_symbols = {row["top_symbol"] for row in rows if row.get("top_symbol")}
+        if not top_symbols:
+            for row in rows:
+                row.setdefault("top_symbol_name", None)
+            return
+        name_map: Dict[str, str | None] = {}
+        try:
+            for symbol, name in (
+                db.query(StockUniverse.symbol, StockUniverse.name)
+                .filter(StockUniverse.symbol.in_(top_symbols))
+                .all()
+            ):
+                name_map[symbol] = name
+        except Exception:
+            logger.warning("Failed to annotate top_symbol_name for group rankings", exc_info=True)
+        for row in rows:
+            row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
 
     def _get_historical_ranks_batch(
         self,
@@ -577,6 +598,19 @@ class IBDGroupRankService:
             current.num_stocks_rs_above_80, current.num_stocks
         )
 
+        top_symbol_name = None
+        if current.top_symbol:
+            try:
+                top_symbol_name = (
+                    db.query(StockUniverse.name)
+                    .filter(StockUniverse.symbol == current.top_symbol)
+                    .scalar()
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to look up top_symbol_name for %s", current.top_symbol, exc_info=True
+                )
+
         return {
             'industry_group': industry_group,
             'current_rank': current.rank,
@@ -587,6 +621,7 @@ class IBDGroupRankService:
             'num_stocks': current.num_stocks,
             'pct_rs_above_80': pct_above_80,
             'top_symbol': current.top_symbol,
+            'top_symbol_name': top_symbol_name,
             'top_rs_rating': current.top_rs_rating,
             **rank_changes,
             'history': history,
@@ -620,18 +655,26 @@ class IBDGroupRankService:
                 logger.warning("No completed scans found for constituent stocks")
                 return []
 
-            # Get scan results for this industry group
-            results = db.query(ScanResult).filter(
-                and_(
-                    ScanResult.scan_id == latest_scan.scan_id,
-                    ScanResult.ibd_industry_group == industry_group
+            # Get scan results for this industry group, left-joined with
+            # stock_universe to pick up company names for display
+            results = (
+                db.query(ScanResult, StockUniverse.name.label("company_name"))
+                .outerjoin(StockUniverse, StockUniverse.symbol == ScanResult.symbol)
+                .filter(
+                    and_(
+                        ScanResult.scan_id == latest_scan.scan_id,
+                        ScanResult.ibd_industry_group == industry_group,
+                    )
                 )
-            ).order_by(desc(ScanResult.rs_rating)).all()
+                .order_by(desc(ScanResult.rs_rating))
+                .all()
+            )
 
             stocks = []
-            for r in results:
+            for r, company_name in results:
                 stocks.append({
                     'symbol': r.symbol,
+                    'company_name': company_name,
                     'price': r.price,
                     'rs_rating': r.rs_rating,
                     'rs_rating_1m': r.rs_rating_1m,

@@ -17,6 +17,7 @@ import {
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
 import StaticGroupDetailModal from '../StaticGroupDetailModal';
 import RankChangeCell from '../../components/shared/RankChangeCell';
+import TickerCell from '../../components/common/TickerCell';
 import { useStaticMarket } from '../StaticMarketContext';
 
 function MoversCard({ title, rows }) {
@@ -148,8 +149,8 @@ function StaticGroupsPage() {
                   <TableCell align="right"><RankChangeCell value={row.rank_change_1m} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_3m} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={row.rank_change_6m} /></TableCell>
-                  <TableCell sx={{ fontWeight: 500, color: 'text.secondary', fontSize: '12px' }}>
-                    {row.top_symbol || '-'}
+                  <TableCell sx={{ fontSize: '12px' }}>
+                    <TickerCell symbol={row.top_symbol} companyName={row.top_symbol_name} />
                   </TableCell>
                 </TableRow>
               ))}
