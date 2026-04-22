@@ -20,6 +20,7 @@ import Brightness7Icon from '@mui/icons-material/Brightness7';
 import { ColorModeContext } from '../contexts/ColorModeContext';
 import { useStaticMarket } from './StaticMarketContext';
 import { getStaticSupportedMarkets, resolveStaticMarketEntry, useStaticManifest } from './dataClient';
+import { marketFlag } from './marketFlags';
 
 const NAV_ITEMS = [
   { path: '/', label: 'Daily' },
@@ -72,9 +73,10 @@ function StaticLayout({ children }) {
               >
                 {supportedMarkets.map((market) => {
                   const label = manifestQuery.data?.markets?.[market]?.display_name || market;
+                  const flag = marketFlag(market);
                   return (
                     <MenuItem key={market} value={market}>
-                      {label}
+                      {flag ? `${flag}  ${label}` : label}
                     </MenuItem>
                   );
                 })}

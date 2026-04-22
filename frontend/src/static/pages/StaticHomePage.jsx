@@ -26,6 +26,7 @@ import TickerCell from '../../components/common/TickerCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { useStaticMarket } from '../StaticMarketContext';
+import { marketFlag } from '../marketFlags';
 
 const EMPTY_RESULTS = [];
 
@@ -84,6 +85,7 @@ function StaticHomePage() {
   const home = homeQuery.data;
   const freshness = home?.freshness || {};
   const marketDisplay = home?.market_display_name || marketEntry.display_name;
+  const flag = marketFlag(marketEntry.market);
 
   const handleRowClick = (symbol) => {
     if (chartEnabledSymbols.has(symbol)) {
@@ -106,7 +108,7 @@ function StaticHomePage() {
         }}
       >
         <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px' }}>
-          {marketDisplay} Snapshot
+          {flag ? `${flag}  ` : ''}{marketDisplay} Snapshot
         </Typography>
         <Typography
           variant="caption"
@@ -185,8 +187,8 @@ function StaticHomePage() {
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
                 <TableCell align="center">Rating</TableCell>
-                <TableCell align="center">Price Trend</TableCell>
-                <TableCell align="center">RS Trend</TableCell>
+                <TableCell align="center">Price Trend (30d)</TableCell>
+                <TableCell align="center">RS Trend (30d)</TableCell>
                 <TableCell align="center">IBD Group</TableCell>
                 <TableCell align="center">Grp Rank</TableCell>
               </TableRow>
@@ -221,7 +223,7 @@ function StaticHomePage() {
                           trend={row.price_trend}
                           change1d={row.price_change_1d}
                           industry={row.ibd_industry_group}
-                          width={130}
+                          width={195}
                           height={28}
                         />
                       </Box>
@@ -233,7 +235,7 @@ function StaticHomePage() {
                         <RSSparkline
                           data={row.rs_sparkline_data}
                           trend={row.rs_trend}
-                          width={78}
+                          width={117}
                           height={20}
                         />
                       </Box>
