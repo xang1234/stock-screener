@@ -92,14 +92,40 @@ def _map_orchestrator_to_feature_row(
     ``$.rs_rating`` and ``$.minervini_score`` resolve correctly in the
     feature store query builder.
     """
+    rating = result_dict.get("rating")
+    if rating == "Insufficient Data":
+        overall_rating = None
+    elif rating is None:
+        overall_rating = None
+    else:
+        overall_rating = RATING_TO_INT.get(rating, RATING_TO_INT["Watch"])
+
     return FeatureRowWrite(
         symbol=symbol,
         as_of_date=as_of_date,
         composite_score=result_dict.get("composite_score"),
-        overall_rating=RATING_TO_INT.get(result_dict.get("rating", ""), 3),
+        overall_rating=overall_rating,
         passes_count=result_dict.get("screeners_passed"),
         details=result_dict,
     )
+
+
+def _resolve_result_status(result_dict: object) -> str:
+    """Normalize legacy and new scanner payloads into snapshot persistence states."""
+    if not isinstance(result_dict, dict):
+        return "error"
+
+    explicit_status = result_dict.get("result_status")
+    if explicit_status in {"ok", "insufficient_history", "error"}:
+        return explicit_status
+
+    if "error" in result_dict:
+        return "error"
+
+    if result_dict.get("rating") == "Insufficient Data":
+        return "insufficient_history"
+
+    return "ok"
 
 
 def _serialize_universe_definition(universe_def: object) -> dict[str, object]:
@@ -472,7 +498,8 @@ class BuildDailyFeatureSnapshotUseCase:
                         composite_method=cmd.composite_method,
                         **scan_kwargs,
                     )
-                    if result and "error" not in result:
+                    result_status = _resolve_result_status(result)
+                    if result and result_status != "error":
                         row = _map_orchestrator_to_feature_row(
                             sym, cmd.as_of_date, result
                         )

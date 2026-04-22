@@ -30,6 +30,20 @@ from app.domain.scanning.ports import StockDataProvider
 
 logger = logging.getLogger(__name__)
 
+LISTING_ONLY_MIN_BARS = 30
+FULL_SCAN_MIN_BARS = 252
+IPO_BONUS_MIN_SCORE = 60.0
+IPO_BONUS_MAX = 15.0
+_DEFAULT_SCREENER_MIN_BARS = 100
+_SCREENER_MIN_BARS: dict[str, int] = {
+    "ipo": 30,
+    "setup_engine": 100,
+    "custom": 200,
+    "minervini": 240,
+    "canslim": 240,
+    "volume_breakthrough": 252,
+}
+
 
 def _series_last_float(series) -> float | None:
     if series is None or len(series) == 0:
@@ -123,6 +137,32 @@ def _to_domain_output(name: str, result: ScreenerResult) -> ScreenerOutputDomain
         breakdown=result.breakdown,
         details=result.details,
     )
+
+
+def _history_bar_count(stock_data: StockData) -> int:
+    price_data = stock_data.price_data
+    if price_data is None or getattr(price_data, "empty", True):
+        return 0
+    return int(len(price_data))
+
+
+def _required_bars_for_screener(name: str) -> int:
+    return _SCREENER_MIN_BARS.get(name, _DEFAULT_SCREENER_MIN_BARS)
+
+
+def _compute_ipo_bonus(ipo_score: float | None, history_bars: int) -> float:
+    if (
+        ipo_score is None
+        or ipo_score < IPO_BONUS_MIN_SCORE
+        or history_bars < LISTING_ONLY_MIN_BARS
+        or history_bars >= FULL_SCAN_MIN_BARS
+    ):
+        return 0.0
+    raw_bonus = IPO_BONUS_MAX * (
+        (FULL_SCAN_MIN_BARS - history_bars)
+        / (FULL_SCAN_MIN_BARS - LISTING_ONLY_MIN_BARS)
+    )
+    return round(max(0.0, raw_bonus), 2)
 
 
 class ScanOrchestrator:
@@ -235,18 +275,32 @@ class ScanOrchestrator:
                 # Fetch data ONCE
                 stock_data = self._data_provider.prepare_data(symbol, requirements)
 
-            # 4. Validate data
-            if not stock_data.has_sufficient_data():
-                return self._insufficient_data_result(
-                    symbol,
-                    stock_data.get_error_summary() or "Insufficient data"
-                )
+            history_bars = _history_bar_count(stock_data)
 
-            if stock_data.precomputed_scan_context is None:
+            if stock_data.precomputed_scan_context is None and history_bars > 0:
                 stock_data.precomputed_scan_context = _build_precomputed_scan_context(stock_data)
 
-            # 5. Run all screeners in parallel on the same data
+            unavailable_screeners: list[str] = []
+            runnable_screeners: dict[str, BaseStockScreener] = {}
+            for name, screener in screeners.items():
+                if history_bars < _required_bars_for_screener(name):
+                    unavailable_screeners.append(name)
+                    continue
+                runnable_screeners[name] = screener
+
+            if history_bars < LISTING_ONLY_MIN_BARS or not runnable_screeners:
+                return self._insufficient_data_result(
+                    symbol,
+                    stock_data,
+                    composite_method=composite_method,
+                    history_bars=history_bars,
+                    unavailable_screeners=screener_names,
+                    reason=stock_data.get_error_summary() or "Insufficient price history",
+                )
+
+            # 5. Run applicable screeners in parallel on the same data
             screener_results: Dict[str, ScreenerResult] = {}
+            hard_error_screeners: list[str] = []
 
             def run_screener(name: str, screener: BaseStockScreener) -> tuple[str, Optional[ScreenerResult]]:
                 """Run a single screener and return (name, result) tuple."""
@@ -262,25 +316,49 @@ class ScanOrchestrator:
                     return (name, None)
 
             # Execute screeners in parallel (max 5 workers for 5 screeners)
-            with ThreadPoolExecutor(max_workers=min(len(screeners), 5)) as executor:
+            with ThreadPoolExecutor(max_workers=min(len(runnable_screeners), 5)) as executor:
                 # Submit all screener tasks
                 futures = {
                     executor.submit(run_screener, name, screener): name
-                    for name, screener in screeners.items()
+                    for name, screener in runnable_screeners.items()
                 }
 
                 # Collect results as they complete
                 for future in as_completed(futures):
                     name, result = future.result()
-                    if result is not None:
+                    if result is None:
+                        hard_error_screeners.append(name)
+                    elif result.rating == "Insufficient Data":
+                        unavailable_screeners.append(name)
+                    else:
                         screener_results[name] = result
 
             if not screener_results:
-                return self._error_result(symbol, "All screeners failed")
+                if hard_error_screeners:
+                    return self._error_result(symbol, "All screeners failed")
+                return self._insufficient_data_result(
+                    symbol,
+                    stock_data,
+                    composite_method=composite_method,
+                    history_bars=history_bars,
+                    unavailable_screeners=screener_names,
+                    reason=stock_data.get_error_summary() or "Insufficient data for applicable screeners",
+                )
 
             # 6. Calculate composite score using domain functions
             domain_outputs = {name: _to_domain_output(name, r) for name, r in screener_results.items()}
             composite_score = calculate_composite_score(domain_outputs, method_enum)
+            ipo_score = screener_results.get("ipo").score if screener_results.get("ipo") is not None else None
+            ipo_bonus = _compute_ipo_bonus(ipo_score, history_bars)
+            composite_reason = None
+            scan_mode = "full"
+            data_status = "complete"
+            if history_bars < FULL_SCAN_MIN_BARS:
+                scan_mode = "ipo_weighted"
+                data_status = "insufficient_history"
+                if ipo_bonus > 0:
+                    composite_score = min(100.0, composite_score + ipo_bonus)
+                    composite_reason = "ipo_uplift"
 
             # 7. Determine overall rating
             rating_category = calculate_overall_rating(composite_score, domain_outputs)
@@ -305,6 +383,19 @@ class ScanOrchestrator:
                 composite_score,
                 overall_rating,
                 composite_method,
+                applicable_screeners=[
+                    name for name in screener_names if name in screener_results
+                ],
+                unavailable_screeners=[
+                    name for name in screener_names
+                    if name in unavailable_screeners
+                ],
+                history_bars=history_bars,
+                scan_mode=scan_mode,
+                data_status=data_status,
+                is_scannable=True,
+                ipo_bonus=ipo_bonus,
+                composite_reason=composite_reason,
                 quality_downgrade_reason=adjustment.reason,
                 field_completeness_score=completeness,
             )
@@ -323,6 +414,14 @@ class ScanOrchestrator:
         composite_score: float,
         overall_rating: str,
         composite_method: str,
+        applicable_screeners: list[str],
+        unavailable_screeners: list[str],
+        history_bars: int,
+        scan_mode: str,
+        data_status: str,
+        is_scannable: bool,
+        ipo_bonus: float,
+        composite_reason: str | None,
         quality_downgrade_reason: Optional[str] = None,
         field_completeness_score: Optional[int] = None,
     ) -> Dict:
@@ -398,6 +497,15 @@ class ScanOrchestrator:
             "composite_method": composite_method,
             "screeners_passed": sum(1 for r in screener_results.values() if r.passes),
             "screeners_total": len(screener_results),
+            "result_status": "ok",
+            "data_status": data_status,
+            "is_scannable": is_scannable,
+            "scan_mode": scan_mode,
+            "history_bars": history_bars,
+            "applicable_screeners": list(applicable_screeners),
+            "unavailable_screeners": list(unavailable_screeners),
+            "composite_reason": composite_reason,
+            "ipo_bonus": ipo_bonus,
 
             # T4 quality-aware fallback surface (top-level so API consumers
             # don't have to drill into details — mirrors how ``rating`` is
@@ -601,15 +709,61 @@ class ScanOrchestrator:
             "error": f"Scan error: {error}",
             "current_price": None,
             "screeners_run": [],
+            "result_status": "error",
+            "data_status": "error",
+            "is_scannable": False,
+            "scan_mode": "listing_only",
+            "history_bars": 0,
+            "applicable_screeners": [],
+            "unavailable_screeners": [],
+            "composite_reason": None,
+            "ipo_bonus": 0.0,
         }
 
-    def _insufficient_data_result(self, symbol: str, reason: str) -> Dict:
+    def _insufficient_data_result(
+        self,
+        symbol: str,
+        stock_data: StockData,
+        *,
+        composite_method: str,
+        history_bars: int,
+        unavailable_screeners: list[str],
+        reason: str,
+    ) -> Dict:
         """Return result for insufficient data."""
-        return {
+        result = {
             "symbol": symbol,
-            "composite_score": 0,
+            "composite_score": None,
             "rating": "Insufficient Data",
-            "error": reason,
-            "current_price": None,
+            "reason": reason,
+            "current_price": stock_data.get_current_price(),
             "screeners_run": [],
+            "composite_method": composite_method,
+            "screeners_passed": 0,
+            "screeners_total": 0,
+            "result_status": "insufficient_history",
+            "data_status": "insufficient_history",
+            "is_scannable": False,
+            "scan_mode": "listing_only",
+            "history_bars": history_bars,
+            "applicable_screeners": [],
+            "unavailable_screeners": list(unavailable_screeners),
+            "composite_reason": None,
+            "ipo_bonus": 0.0,
+            "details": {
+                "screeners": {},
+                "data_errors": stock_data.fetch_errors if stock_data.fetch_errors else None,
+            },
         }
+        if stock_data.fundamentals:
+            if stock_data.fundamentals.get("market_cap"):
+                result["market_cap"] = stock_data.fundamentals["market_cap"]
+            if stock_data.fundamentals.get("eps_rating") is not None:
+                result["eps_rating"] = stock_data.fundamentals["eps_rating"]
+            if stock_data.fundamentals.get("ipo_date"):
+                result["ipo_date"] = stock_data.fundamentals["ipo_date"]
+            if stock_data.fundamentals.get("sector"):
+                result["gics_sector"] = stock_data.fundamentals["sector"]
+            if stock_data.fundamentals.get("industry"):
+                result["gics_industry"] = stock_data.fundamentals["industry"]
+        return result

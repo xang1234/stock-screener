@@ -209,6 +209,28 @@ describe('ResultsTable', () => {
       expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
       expect(screen.getByText('FULL')).toBeInTheDocument();
     });
+
+    it('renders a young-IPO status chip and suppresses chart actions for non-scannable rows', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[{
+            ...fullSeRow,
+            symbol: '0100.HK',
+            company_name: 'MINIMAX-W',
+            scan_mode: 'listing_only',
+            data_status: 'insufficient_history',
+            is_scannable: false,
+          }]}
+          showActions={true}
+          showWatchlistMenu={false}
+          isChartEnabled={() => true}
+        />
+      );
+
+      expect(screen.getByText('New IPO')).toBeInTheDocument();
+      expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
+    });
   });
 
   // ── interactions ─────────────────────────────────────────────────────

@@ -165,7 +165,7 @@ class ScanResultItemDomain:
 
     # Core
     symbol: Ticker
-    composite_score: Score  # 0-100, validated below
+    composite_score: Score | None  # 0-100 when present
     rating: str
     current_price: float | None
 
@@ -185,6 +185,8 @@ class ScanResultItemDomain:
     data_errors: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
+        if self.composite_score is None:
+            return
         if not (0.0 <= self.composite_score <= 100.0):
             raise ValueError(
                 f"composite_score must be 0-100, got {self.composite_score}"

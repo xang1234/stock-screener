@@ -655,8 +655,10 @@ def _map_feature_to_scan_result(
     """
     d: dict[str, Any] = row.details_json or {}
 
-    raw_score = row.composite_score or 0
-    clamped_score = max(0.0, min(100.0, float(raw_score)))
+    raw_score = row.composite_score
+    clamped_score = (
+        None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
+    )
 
     rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
 
@@ -670,6 +672,14 @@ def _map_feature_to_scan_result(
         "field_availability": joined.get("field_availability"),
         "growth_reporting_cadence": joined.get("growth_reporting_cadence"),
         "growth_metric_basis": joined.get("growth_metric_basis"),
+        "data_status": d.get("data_status"),
+        "is_scannable": d.get("is_scannable"),
+        "scan_mode": d.get("scan_mode"),
+        "history_bars": d.get("history_bars"),
+        "applicable_screeners": d.get("applicable_screeners"),
+        "unavailable_screeners": d.get("unavailable_screeners"),
+        "composite_reason": d.get("composite_reason"),
+        "ipo_bonus": d.get("ipo_bonus"),
         "minervini_score": d.get("minervini_score"),
         "canslim_score": d.get("canslim_score"),
         "ipo_score": d.get("ipo_score"),

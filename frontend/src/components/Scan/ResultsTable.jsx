@@ -105,6 +105,26 @@ const columns = [
   { id: 'rating', label: 'Rate', sortable: false, width: 80 },
 ];
 
+const getStatusChipProps = (row) => {
+  if (row.scan_mode === 'listing_only' || row.is_scannable === false) {
+    return {
+      label: 'New IPO',
+      color: 'warning',
+      title: 'Visible in the scan table, but not yet scannable because price history is still limited.',
+    };
+  }
+  if (row.scan_mode === 'ipo_weighted') {
+    return {
+      label: 'IPO Weighted',
+      color: 'info',
+      title: row.composite_reason === 'ipo_uplift'
+        ? 'Composite uses applicable screeners plus an IPO uplift while the stock is still young.'
+        : 'Composite uses only the screeners that have enough history to run.',
+    };
+  }
+  return null;
+};
+
 /**
  * Memoized table row component to prevent unnecessary re-renders
  */
@@ -118,6 +138,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
   chartEnabled,
   mcapDisplay,
 }) {
+  const statusChip = getStatusChipProps(row);
   const handleRowClick = useCallback(() => {
     if (!chartEnabled) {
       return;
@@ -189,6 +210,15 @@ const VirtualTableRow = memo(function VirtualTableRow({
             >
               {row.company_name}
             </Typography>
+          ) : null}
+          {statusChip ? (
+            <Chip
+              label={statusChip.label}
+              color={statusChip.color}
+              size="small"
+              title={statusChip.title}
+              sx={{ alignSelf: 'flex-start', height: 18, fontSize: 10, mt: 0.25 }}
+            />
           ) : null}
         </Box>
       </TableCell>
@@ -436,6 +466,10 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.gics_sector === nextProps.row.gics_sector &&
          prevProps.row.ibd_industry_group === nextProps.row.ibd_industry_group &&
          prevProps.row.ibd_group_rank === nextProps.row.ibd_group_rank &&
+         prevProps.row.scan_mode === nextProps.row.scan_mode &&
+         prevProps.row.data_status === nextProps.row.data_status &&
+         prevProps.row.is_scannable === nextProps.row.is_scannable &&
+         prevProps.row.composite_reason === nextProps.row.composite_reason &&
          (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
          prevProps.row.rating === nextProps.row.rating &&
          prevProps.mcapDisplay === nextProps.mcapDisplay &&
@@ -594,7 +628,10 @@ function ResultsTable({
                   onOpenChart={onOpenChart}
                   showActions={showActions}
                   showWatchlistMenu={showWatchlistMenu}
-                  chartEnabled={isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)}
+                  chartEnabled={
+                    (isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)) &&
+                    row.is_scannable !== false
+                  }
                   mcapDisplay={mcapDisplay}
                 />
               );

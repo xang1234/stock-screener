@@ -502,6 +502,70 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert [row["symbol"] for row in second_chunk["rows"]] == ["SYM3", "SYM4"]
 
 
+def test_export_scan_bundle_prioritizes_full_rows_before_ipo_weighted_and_listing_only(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=12,
+            as_of_date=date(2026, 3, 31),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 3, 31, 21, 30, 0),
+        ),
+        pointer_run_id=12,
+    )
+
+    rows = [
+        SimpleNamespace(symbol="IPO95", scan_mode="ipo_weighted", composite_score=95.0, volume=150_000_000),
+        SimpleNamespace(symbol="FULL80", scan_mode="full", composite_score=80.0, volume=150_000_000),
+        SimpleNamespace(symbol="NEW1", scan_mode="listing_only", composite_score=None, volume=None),
+        SimpleNamespace(symbol="FULL70", scan_mode="full", composite_score=70.0, volume=150_000_000),
+    ]
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "query_all_as_scan_results",
+        lambda self, *_args, **_kwargs: rows,
+    )
+    monkeypatch.setattr(
+        export_module.SqlFeatureStoreRepository,
+        "get_filter_options_for_run",
+        lambda self, _run_id: SimpleNamespace(
+            ibd_industries=(),
+            gics_sectors=(),
+            ratings=("Strong Buy", "Buy", "Insufficient Data"),
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_serialize_scan_row",
+        lambda row: {
+            "symbol": row.symbol,
+            "scan_mode": row.scan_mode,
+            "data_status": "complete" if row.scan_mode == "full" else "insufficient_history",
+            "composite_score": row.composite_score,
+            "volume": row.volume,
+        },
+    )
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 12)
+        manifest, _serialized = service._export_scan_bundle(
+            db=db,
+            output_dir=tmp_path,
+            generated_at="2026-03-31T22:00:00Z",
+            run=run,
+        )
+
+    assert [row["symbol"] for row in manifest["initial_rows"]] == ["FULL80", "FULL70", "IPO95"]
+    chunk = json.loads((tmp_path / "scan" / "chunks" / "chunk-0001.json").read_text(encoding="utf-8"))
+    assert [row["symbol"] for row in chunk["rows"]] == ["FULL80", "FULL70", "IPO95", "NEW1"]
+
+
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     artifacts_dir = tmp_path / "artifacts"
     us_dir = artifacts_dir / "job-us" / "markets" / "us"
@@ -854,7 +918,7 @@ def test_compute_breadth_metrics_uses_full_history_for_shifted_ranges(service_an
     service, _session_factory = service_and_session_factory
     all_dates = pd.date_range("2025-10-01", periods=200, freq="D")
     canonical_dates = [ts.date() for ts in all_dates[-120:]]
-    closes = [100.0 + index for index, _ in enumerate(all_dates)]
+    closes = [100.0 * (1.02 ** index) for index, _ in enumerate(all_dates)]
     price_data = {
         "AAA": pd.DataFrame({"Close": closes}, index=all_dates),
     }

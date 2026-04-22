@@ -178,4 +178,33 @@ describe('static scan client', () => {
     expect(sortedByScore.map((row) => row.symbol)).toEqual(['SNOW', 'MSFT', 'NVDA']);
     expect(pageTwo.map((row) => row.symbol)).toEqual(['MSFT']);
   });
+
+  it('keeps searched listing-only IPO rows visible despite the default min-volume filter', () => {
+    const filters = applyScanFilterDefaults({ minVolume: 100_000_000 });
+    filters.symbolSearch = '0100';
+
+    const filtered = filterStaticScanRows([
+      {
+        symbol: '0100.HK',
+        company_name: 'MINIMAX-W',
+        scan_mode: 'listing_only',
+        data_status: 'insufficient_history',
+        is_scannable: false,
+        volume: null,
+      },
+    ], filters);
+
+    expect(filtered.map((row) => row.symbol)).toEqual(['0100.HK']);
+  });
+
+  it('sorts full rows ahead of ipo-weighted rows and listing-only rows for composite score', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'IPO95', scan_mode: 'ipo_weighted', composite_score: 95 },
+      { symbol: 'FULL80', scan_mode: 'full', composite_score: 80 },
+      { symbol: 'NEW1', scan_mode: 'listing_only', composite_score: null },
+      { symbol: 'FULL70', scan_mode: 'full', composite_score: 70 },
+    ], 'composite_score', 'desc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['FULL80', 'FULL70', 'IPO95', 'NEW1']);
+  });
 });

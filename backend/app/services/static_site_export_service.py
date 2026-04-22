@@ -564,10 +564,11 @@ class StaticSiteExportService:
         chunk_dir = scan_dir / "chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        chunk_refs: list[dict[str, Any]] = []
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
         self._annotate_percentile_ranks(serialized_rows)
+        serialized_rows = self._sort_static_scan_rows(serialized_rows)
         default_filtered_rows = self._apply_static_default_filters(serialized_rows)
+        chunk_refs: list[dict[str, Any]] = []
         for index in range(0, len(serialized_rows), SCAN_CHUNK_SIZE):
             chunk_rows = serialized_rows[index:index + SCAN_CHUNK_SIZE]
             chunk_num = (index // SCAN_CHUNK_SIZE) + 1
@@ -1596,6 +1597,34 @@ class StaticSiteExportService:
             for row in rows
             if row.get("volume") is not None and row["volume"] >= min_volume
         ]
+
+    @staticmethod
+    def _static_scan_mode_sort_priority(row: dict[str, Any]) -> int:
+        mode = row.get("scan_mode")
+        if mode == "full":
+            return 0
+        if mode == "ipo_weighted":
+            return 1
+        if mode == "listing_only":
+            return 2
+        return 0
+
+    @classmethod
+    def _sort_static_scan_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        def _score_key(row: dict[str, Any]) -> float:
+            score = row.get("composite_score")
+            if score is None:
+                return float("-inf")
+            return float(score)
+
+        return sorted(
+            rows,
+            key=lambda row: (
+                cls._static_scan_mode_sort_priority(row),
+                -_score_key(row) if row.get("scan_mode") != "listing_only" else 0,
+                row.get("symbol") or "",
+            ),
+        )
 
     def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
         if data is None or getattr(data, "empty", True):

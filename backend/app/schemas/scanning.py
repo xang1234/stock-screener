@@ -89,7 +89,7 @@ class ScanResultItem(BaseModel):
 
     symbol: str
     company_name: Optional[str] = None
-    composite_score: float
+    composite_score: Optional[float] = None
     rating: str
 
     # Individual screener scores
@@ -206,6 +206,14 @@ class ScanResultItem(BaseModel):
     field_availability: Optional[Dict[str, Dict[str, Any]]] = None
     growth_reporting_cadence: Optional[str] = None
     growth_metric_basis: Optional[str] = None
+    data_status: Optional[str] = None
+    is_scannable: Optional[bool] = None
+    scan_mode: Optional[str] = None
+    history_bars: Optional[int] = None
+    applicable_screeners: List[str] = Field(default_factory=list)
+    unavailable_screeners: List[str] = Field(default_factory=list)
+    composite_reason: Optional[str] = None
+    ipo_bonus: Optional[float] = None
 
     @classmethod
     def from_domain(
@@ -319,6 +327,14 @@ class ScanResultItem(BaseModel):
             field_availability=ef.get("field_availability"),
             growth_reporting_cadence=ef.get("growth_reporting_cadence"),
             growth_metric_basis=ef.get("growth_metric_basis"),
+            data_status=ef.get("data_status"),
+            is_scannable=ef.get("is_scannable"),
+            scan_mode=ef.get("scan_mode"),
+            history_bars=ef.get("history_bars"),
+            applicable_screeners=normalize_string_list(ef.get("applicable_screeners")),
+            unavailable_screeners=normalize_string_list(ef.get("unavailable_screeners")),
+            composite_reason=ef.get("composite_reason"),
+            ipo_bonus=ef.get("ipo_bonus"),
         )
 
 
