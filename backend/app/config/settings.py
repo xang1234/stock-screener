@@ -31,18 +31,30 @@ def _get_project_root(source_path: str | Path | None = None) -> Path:
             score += 2
         return score
 
-    ranked_candidates = [
-        (candidate, _score(candidate))
-        for candidate in candidates
-    ]
-    ranked_candidates = [
+    for expected_suffix in (
+        Path("backend/app/config/settings.py"),
+        Path("app/config/settings.py"),
+    ):
+        for candidate in candidates:
+            if candidate / expected_suffix == resolved_path and (candidate / "data").exists():
+                return candidate
+
+    ranked_candidates = [(candidate, _score(candidate)) for candidate in candidates]
+
+    # Prefer the nearest strong match so nested checkouts don't resolve to a
+    # higher-level workspace that happens to expose more marker directories.
+    for candidate, score in ranked_candidates:
+        if score >= 3:
+            return candidate
+
+    fallback_candidates = [
         (candidate, score)
         for candidate, score in ranked_candidates
         if score > 0
     ]
-    if ranked_candidates:
+    if fallback_candidates:
         return max(
-            ranked_candidates,
+            fallback_candidates,
             key=lambda item: (item[1], len(item[0].parts)),
         )[0]
 

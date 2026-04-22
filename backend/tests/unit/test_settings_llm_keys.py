@@ -175,3 +175,36 @@ def test_get_project_root_detects_container_style_runtime_layout(tmp_path) -> No
     (tmp_path / "app" / "data").mkdir(parents=True, exist_ok=True)
 
     assert settings_module._get_project_root(settings_path) == tmp_path / "app"
+
+
+def test_get_project_root_prefers_repo_root_over_backend_subdir_with_matching_markers(tmp_path) -> None:
+    repo_root = tmp_path / "stock-screener"
+    settings_path = repo_root / "backend" / "app" / "config" / "settings.py"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("# test", encoding="utf-8")
+
+    (repo_root / "data").mkdir(parents=True, exist_ok=True)
+    (repo_root / "frontend").mkdir(parents=True, exist_ok=True)
+    (repo_root / "backend" / "data").mkdir(parents=True, exist_ok=True)
+
+    assert settings_module._get_project_root(settings_path) == repo_root
+
+
+def test_get_project_root_prefers_nearest_strong_match_in_nested_workspace(tmp_path) -> None:
+    outer_workspace = tmp_path / "workspace"
+    inner_repo = outer_workspace / "projects" / "stock-screener"
+    settings_path = inner_repo / "backend" / "app" / "config" / "settings.py"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("# test", encoding="utf-8")
+
+    # Outer workspace looks more "complete", but should not win over the
+    # nearer repo root for this checkout.
+    (outer_workspace / "data").mkdir(parents=True, exist_ok=True)
+    (outer_workspace / "frontend").mkdir(parents=True, exist_ok=True)
+    (outer_workspace / "backend").mkdir(parents=True, exist_ok=True)
+    (outer_workspace / "docker-compose.yml").write_text("version: '3'", encoding="utf-8")
+
+    (inner_repo / "data").mkdir(parents=True, exist_ok=True)
+    (inner_repo / "backend").mkdir(parents=True, exist_ok=True)
+
+    assert settings_module._get_project_root(settings_path) == inner_repo
