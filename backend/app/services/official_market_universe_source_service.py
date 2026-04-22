@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import re
+import time
 from typing import Any, Iterable
 
 from bs4 import BeautifulSoup
@@ -39,6 +40,7 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
 )
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
+_HTTP_GET_MAX_ATTEMPTS = 3
 _NSE_SOURCE_HEADERS = {
     "Accept": "text/csv,*/*",
     "Referer": "https://www.nseindia.com/",
@@ -526,14 +528,11 @@ class OfficialMarketUniverseSourceService:
             headers.update(extra_headers)
         fetched_at = datetime.now(UTC).isoformat()
         try:
-            response = requests.get(url, headers=headers, timeout=self._timeout_seconds)
-            response.raise_for_status()
-            return _FetchedSource(
-                url=response.url or url,
-                content=response.content,
+            return self._http_get_with_retries(
+                url,
+                headers=headers,
                 fetched_at=fetched_at,
-                last_modified=response.headers.get("Last-Modified"),
-                tls_verification_disabled=False,
+                verify_tls=True,
             )
         except requests.exceptions.SSLError:
             if not allow_insecure_fallback:
@@ -543,20 +542,52 @@ class OfficialMarketUniverseSourceService:
                 url,
             )
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            response = requests.get(
+            return self._http_get_with_retries(
                 url,
                 headers=headers,
-                timeout=self._timeout_seconds,
-                verify=False,
-            )
-            response.raise_for_status()
-            return _FetchedSource(
-                url=response.url or url,
-                content=response.content,
                 fetched_at=fetched_at,
-                last_modified=response.headers.get("Last-Modified"),
-                tls_verification_disabled=True,
+                verify_tls=False,
             )
+
+    def _http_get_with_retries(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        fetched_at: str,
+        verify_tls: bool,
+    ) -> _FetchedSource:
+        request_kwargs: dict[str, Any] = {
+            "headers": headers,
+            "timeout": self._timeout_seconds,
+        }
+        if not verify_tls:
+            request_kwargs["verify"] = False
+
+        for attempt in range(1, _HTTP_GET_MAX_ATTEMPTS + 1):
+            try:
+                response = requests.get(url, **request_kwargs)
+                response.raise_for_status()
+                return _FetchedSource(
+                    url=response.url or url,
+                    content=response.content,
+                    fetched_at=fetched_at,
+                    last_modified=response.headers.get("Last-Modified"),
+                    tls_verification_disabled=not verify_tls,
+                )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                if attempt >= _HTTP_GET_MAX_ATTEMPTS:
+                    raise
+                backoff_seconds = float(attempt)
+                logger.warning(
+                    "Retrying official universe fetch for %s after attempt %s/%s",
+                    url,
+                    attempt,
+                    _HTTP_GET_MAX_ATTEMPTS,
+                )
+                time.sleep(backoff_seconds)
+
+        raise RuntimeError(f"Unreachable retry loop for official universe fetch {url}")
 
     @staticmethod
     def _read_excel_bytes(content: bytes, *, engine: str | None = None) -> pd.DataFrame:

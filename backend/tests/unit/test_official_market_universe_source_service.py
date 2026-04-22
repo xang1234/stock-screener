@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from celery.exceptions import Retry
 import pytest
+import requests
 
 from app.services.official_market_universe_source_service import (
     OfficialMarketUniverseSourceService,
@@ -270,6 +271,92 @@ def test_fetch_tw_snapshot_requires_explicit_opt_in_for_insecure_tls(monkeypatch
         ("https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=2", False),
         ("https://isin.twse.com.tw/isin/e_C_public.jsp?strMode=4", False),
     ]
+
+
+def test_http_get_retries_timeouts_before_succeeding(monkeypatch):
+    service = OfficialMarketUniverseSourceService(timeout_seconds=7)
+    calls: list[dict[str, object]] = []
+    sleeps: list[float] = []
+
+    class _Response:
+        url = "https://example.com/final"
+        content = b"ok"
+        headers = {"Last-Modified": "Wed, 16 Apr 2026 00:00:00 GMT"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    responses = iter(
+        [
+            requests.exceptions.ReadTimeout("slow upstream"),
+            _Response(),
+        ]
+    )
+
+    def fake_get(url, headers, timeout, verify=True):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "timeout": timeout,
+                "verify": verify,
+            }
+        )
+        value = next(responses)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.requests.get",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    fetched = service._http_get("https://example.com/source.csv")
+
+    assert fetched.url == "https://example.com/final"
+    assert fetched.content == b"ok"
+    assert len(calls) == 2
+    assert calls[0]["timeout"] == 7
+    assert calls[0]["verify"] is True
+    assert calls[1]["verify"] is True
+    assert sleeps == [1.0]
+
+
+def test_http_get_raises_after_exhausting_timeout_retries(monkeypatch):
+    service = OfficialMarketUniverseSourceService(timeout_seconds=7)
+    calls: list[dict[str, object]] = []
+    sleeps: list[float] = []
+
+    def fake_get(url, headers, timeout, verify=True):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "timeout": timeout,
+                "verify": verify,
+            }
+        )
+        raise requests.exceptions.ReadTimeout("still timing out")
+
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.requests.get",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        "app.services.official_market_universe_source_service.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    with pytest.raises(requests.exceptions.ReadTimeout, match="still timing out"):
+        service._http_get("https://example.com/source.csv")
+
+    assert len(calls) == 3
+    assert sleeps == [1.0, 2.0]
 
 
 def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
