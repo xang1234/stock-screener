@@ -168,6 +168,57 @@ def test_ibd_industry_loader_does_not_fallback_for_explicit_missing_path(
     assert fake_db.rollback_calls == 0
 
 
+def test_ibd_industry_loader_treats_empty_csv_path_as_unset(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fallback = tmp_path / "data" / "IBD_industry_group.csv"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("aapl,Software\nmsft,Software\n", encoding="utf-8")
+    missing_override = tmp_path / "missing" / "ibd.csv"
+
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.inserted: list[dict[str, str]] = []
+            self.execute_calls = 0
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def execute(self, _statement) -> None:
+            self.execute_calls += 1
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+
+        def bulk_insert_mappings(self, model, rows) -> None:
+            assert model is IBDIndustryGroup
+            self.inserted.extend(rows)
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    monkeypatch.setattr(ibd_industry_service, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        ibd_industry_service.settings,
+        "ibd_industry_csv_path",
+        str(missing_override),
+    )
+
+    assert ibd_industry_service.IBDIndustryService.resolve_tracked_csv_path("") == fallback
+
+    fake_db = _FakeDb()
+    loaded = ibd_industry_service.IBDIndustryService.load_from_csv(fake_db, csv_path="")
+
+    assert loaded == 2
+    assert fake_db.execute_calls == 1
+    assert fake_db.commit_calls == 2
+    assert fake_db.rollback_calls == 0
+    assert fake_db.inserted == [
+        {"symbol": "AAPL", "industry_group": "Software"},
+        {"symbol": "MSFT", "industry_group": "Software"},
+    ]
+
+
 def test_get_project_root_detects_container_style_runtime_layout(tmp_path) -> None:
     settings_path = tmp_path / "app" / "app" / "config" / "settings.py"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
