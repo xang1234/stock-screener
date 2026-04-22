@@ -436,19 +436,12 @@ class IBDGroupRankService:
     def _annotate_top_symbol_names(db: Session, rows: List[Dict]) -> None:
         top_symbols = {row["top_symbol"] for row in rows if row.get("top_symbol")}
         if not top_symbols:
-            for row in rows:
-                row.setdefault("top_symbol_name", None)
             return
-        name_map: Dict[str, str | None] = {}
-        try:
-            for symbol, name in (
-                db.query(StockUniverse.symbol, StockUniverse.name)
-                .filter(StockUniverse.symbol.in_(top_symbols))
-                .all()
-            ):
-                name_map[symbol] = name
-        except Exception:
-            logger.warning("Failed to annotate top_symbol_name for group rankings", exc_info=True)
+        name_map: Dict[str, str | None] = dict(
+            db.query(StockUniverse.symbol, StockUniverse.name)
+            .filter(StockUniverse.symbol.in_(top_symbols))
+            .all()
+        )
         for row in rows:
             row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
 
@@ -598,18 +591,10 @@ class IBDGroupRankService:
             current.num_stocks_rs_above_80, current.num_stocks
         )
 
-        top_symbol_name = None
-        if current.top_symbol:
-            try:
-                top_symbol_name = (
-                    db.query(StockUniverse.name)
-                    .filter(StockUniverse.symbol == current.top_symbol)
-                    .scalar()
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to look up top_symbol_name for %s", current.top_symbol, exc_info=True
-                )
+        top_symbol_name = next(
+            (stock["company_name"] for stock in stocks if stock["symbol"] == current.top_symbol),
+            None,
+        ) if current.top_symbol else None
 
         return {
             'industry_group': industry_group,
@@ -655,8 +640,6 @@ class IBDGroupRankService:
                 logger.warning("No completed scans found for constituent stocks")
                 return []
 
-            # Get scan results for this industry group, left-joined with
-            # stock_universe to pick up company names for display
             results = (
                 db.query(ScanResult, StockUniverse.name.label("company_name"))
                 .outerjoin(StockUniverse, StockUniverse.symbol == ScanResult.symbol)

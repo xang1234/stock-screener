@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.industry import IBDGroupRank
+from app.models.stock_universe import StockUniverse
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -34,7 +35,10 @@ def _add_rank(session, group, rank_date, rank):
 
 def _make_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[IBDGroupRank.__table__, StockUniverse.__table__],
+    )
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
 
