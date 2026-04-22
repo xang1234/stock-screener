@@ -333,9 +333,14 @@ class ScanOrchestrator:
                     else:
                         screener_results[name] = result
 
+            if hard_error_screeners:
+                failed_screeners = ", ".join(sorted(hard_error_screeners))
+                return self._error_result(
+                    symbol,
+                    f"Screener execution failed: {failed_screeners}",
+                )
+
             if not screener_results:
-                if hard_error_screeners:
-                    return self._error_result(symbol, "All screeners failed")
                 return self._insufficient_data_result(
                     symbol,
                     stock_data,

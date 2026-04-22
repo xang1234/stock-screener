@@ -185,7 +185,7 @@ export const filterStaticScanRows = (rows, filters) => {
 export const sortStaticScanRows = (rows, sortBy, sortOrder = 'desc') => {
   const direction = sortOrder === 'asc' ? 1 : -1;
   return [...rows].sort((left, right) => {
-    if (sortBy === 'composite_score') {
+    if (sortBy === 'composite_score' && sortOrder === 'desc') {
       const modeComparison = compareValues(
         getScanModeSortPriority(left),
         getScanModeSortPriority(right),
@@ -199,6 +199,15 @@ export const sortStaticScanRows = (rows, sortBy, sortOrder = 'desc') => {
     const comparison = compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
+    }
+    if (sortBy === 'composite_score') {
+      const modeComparison = compareValues(
+        getScanModeSortPriority(left),
+        getScanModeSortPriority(right),
+      );
+      if (modeComparison !== 0) {
+        return modeComparison;
+      }
     }
     return compareValues(left.symbol, right.symbol);
   });

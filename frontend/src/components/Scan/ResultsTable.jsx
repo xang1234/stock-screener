@@ -106,14 +106,17 @@ const columns = [
 ];
 
 const getStatusChipProps = (row) => {
-  if (row.scan_mode === 'listing_only' || row.is_scannable === false) {
+  const isInsufficientHistoryRow =
+    row.data_status === 'insufficient_history' || row.rating === 'Insufficient Data';
+
+  if (row.scan_mode === 'listing_only' && isInsufficientHistoryRow) {
     return {
       label: 'New IPO',
       color: 'warning',
       title: 'Visible in the scan table, but not yet scannable because price history is still limited.',
     };
   }
-  if (row.scan_mode === 'ipo_weighted') {
+  if (row.scan_mode === 'ipo_weighted' && isInsufficientHistoryRow) {
     return {
       label: 'IPO Weighted',
       color: 'info',

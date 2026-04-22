@@ -231,6 +231,29 @@ describe('ResultsTable', () => {
       expect(screen.getByText('New IPO')).toBeInTheDocument();
       expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
     });
+
+    it('does not relabel generic error rows as young IPOs', () => {
+      renderWithProviders(
+        <ResultsTable
+          {...defaultProps}
+          results={[{
+            ...fullSeRow,
+            symbol: 'BROKEN',
+            rating: 'Error',
+            scan_mode: 'listing_only',
+            data_status: 'error',
+            is_scannable: false,
+          }]}
+          showActions={true}
+          showWatchlistMenu={false}
+          isChartEnabled={() => true}
+        />
+      );
+
+      expect(screen.queryByText('New IPO')).not.toBeInTheDocument();
+      expect(screen.getByText('Error')).toBeInTheDocument();
+      expect(screen.queryByTestId('ShowChartIcon')).not.toBeInTheDocument();
+    });
   });
 
   // ── interactions ─────────────────────────────────────────────────────

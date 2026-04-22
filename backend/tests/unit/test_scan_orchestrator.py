@@ -297,7 +297,40 @@ class TestScanOrchestratorErrorPaths:
         result = orch.scan_stock_multi("TEST", ["failing"], composite_method="weighted_average")
 
         assert result["rating"] == "Error"
-        assert "All screeners failed" in result.get("error", "")
+        assert "Screener execution failed" in result.get("error", "")
+
+    def test_any_screener_exception_promotes_the_symbol_to_error(self):
+        stock_data = _make_stock_data("TEST", n_days=260)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        class PassingScreener(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(name="ipo", score=85.0, passes=True, rating="Strong Buy")
+
+        class FailingScreener(BaseStockScreener):
+            @property
+            def screener_name(self) -> str:
+                return "minervini"
+
+            def get_data_requirements(self, criteria=None) -> DataRequirements:
+                return DataRequirements()
+
+            def scan_stock(self, symbol, data, criteria=None) -> ScreenerResult:
+                raise RuntimeError("Boom!")
+
+            def calculate_rating(self, score, details) -> str:
+                return "Pass"
+
+        registry.register(PassingScreener)
+        registry.register(FailingScreener)
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orch.scan_stock_multi("TEST", ["ipo", "minervini"], composite_method="weighted_average")
+
+        assert result["rating"] == "Error"
+        assert result["result_status"] == "error"
+        assert "minervini" in result.get("error", "")
 
     def test_listing_only_rows_remain_visible_below_thirty_bars(self):
         stock_data = _make_stock_data("TEST", n_days=20)
