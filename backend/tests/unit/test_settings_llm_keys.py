@@ -1,6 +1,12 @@
+import importlib
+from pathlib import Path
+
+import app.services.ibd_industry_service as ibd_industry_service
 from app.config.settings import Settings
 from app.scripts import export_static_site
 from app.tasks import industry_tasks
+
+settings_module = importlib.import_module("app.config.settings")
 
 
 def test_zai_api_keys_list_prefers_multi_key_field() -> None:
@@ -24,11 +30,39 @@ def test_universe_source_timeout_seconds_must_be_positive() -> None:
         raise AssertionError("Expected invalid universe_source_timeout_seconds to fail")
 
 
-def test_ibd_industry_csv_path_is_configurable(monkeypatch) -> None:
-    override = "/tmp/custom/ibd.csv"
+def test_ibd_industry_csv_path_is_configurable(tmp_path, monkeypatch) -> None:
+    override = tmp_path / "custom" / "ibd.csv"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text("AAPL,Software\n", encoding="utf-8")
 
-    monkeypatch.setattr(industry_tasks.settings, "ibd_industry_csv_path", override)
-    monkeypatch.setattr(export_static_site.settings, "ibd_industry_csv_path", override)
+    monkeypatch.setattr(industry_tasks.settings, "ibd_industry_csv_path", str(override))
+    monkeypatch.setattr(export_static_site.settings, "ibd_industry_csv_path", str(override))
 
-    assert str(industry_tasks._tracked_ibd_csv_path()) == override
-    assert str(export_static_site._tracked_ibd_csv_path()) == override
+    assert industry_tasks._tracked_ibd_csv_path() == override
+    assert export_static_site._tracked_ibd_csv_path() == override
+
+
+def test_ibd_industry_csv_path_falls_back_to_project_data_when_override_is_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fallback = tmp_path / "data" / "IBD_industry_group.csv"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("AAPL,Software\n", encoding="utf-8")
+    missing_override = tmp_path / "missing" / "ibd.csv"
+
+    monkeypatch.setattr(ibd_industry_service, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(industry_tasks.settings, "ibd_industry_csv_path", str(missing_override))
+    monkeypatch.setattr(export_static_site.settings, "ibd_industry_csv_path", str(missing_override))
+
+    assert industry_tasks._tracked_ibd_csv_path() == fallback
+    assert export_static_site._tracked_ibd_csv_path() == fallback
+
+
+def test_get_project_root_detects_container_style_runtime_layout(tmp_path) -> None:
+    settings_path = tmp_path / "app" / "app" / "config" / "settings.py"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("# test", encoding="utf-8")
+    (tmp_path / "app" / "data").mkdir(parents=True, exist_ok=True)
+
+    assert settings_module._get_project_root(settings_path) == tmp_path / "app"

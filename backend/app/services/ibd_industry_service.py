@@ -5,6 +5,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy import delete
 from ..config import settings
+from ..config.settings import get_project_root
 from ..models.industry import IBDIndustryGroup
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,24 @@ logger = logging.getLogger(__name__)
 
 class IBDIndustryService:
     """Manage IBD Industry Group data"""
+
+    @staticmethod
+    def resolve_tracked_csv_path(csv_path: str | Path | None = None) -> Path:
+        """Resolve the tracked IBD CSV, falling back to the repo copy when needed."""
+        configured_path = Path(csv_path or settings.ibd_industry_csv_path)
+        if configured_path.exists():
+            return configured_path
+
+        fallback_path = get_project_root() / "data" / "IBD_industry_group.csv"
+        if fallback_path.exists() and fallback_path != configured_path:
+            logger.warning(
+                "Configured IBD industry CSV path %s is missing; falling back to tracked CSV at %s",
+                configured_path,
+                fallback_path,
+            )
+            return fallback_path
+
+        return configured_path
 
     @staticmethod
     def load_from_csv(db: Session, csv_path: str = None) -> int:
@@ -25,10 +44,7 @@ class IBDIndustryService:
         Returns:
             Number of records loaded
         """
-        if not csv_path:
-            csv_path = settings.ibd_industry_csv_path
-
-        csv_path = Path(csv_path)
+        csv_path = IBDIndustryService.resolve_tracked_csv_path(csv_path)
         if not csv_path.exists():
             raise FileNotFoundError(f"IBD industry CSV file not found at {csv_path}")
 

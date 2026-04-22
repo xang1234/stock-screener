@@ -10,9 +10,47 @@ from pydantic_settings import BaseSettings
 from typing import List
 
 
-def _get_project_root() -> Path:
-    # settings.py is at backend/app/config/settings.py -> 4 levels up
-    return Path(__file__).resolve().parent.parent.parent.parent
+def _get_project_root(source_path: str | Path | None = None) -> Path:
+    """Resolve the runtime project root for both local and container layouts."""
+    resolved_path = Path(source_path or __file__).resolve()
+    candidates = list(resolved_path.parents)
+
+    def _score(candidate: Path) -> int:
+        score = 0
+        if (candidate / "data").exists():
+            score += 2
+        if (candidate / "frontend").exists():
+            score += 2
+        if (candidate / "backend").exists():
+            score += 1
+        if (candidate / "app").is_dir():
+            score += 1
+        if (candidate / "requirements-runtime.txt").exists():
+            score += 1
+        if (candidate / "docker-compose.yml").exists():
+            score += 2
+        return score
+
+    ranked_candidates = [
+        (candidate, _score(candidate))
+        for candidate in candidates
+    ]
+    ranked_candidates = [
+        (candidate, score)
+        for candidate, score in ranked_candidates
+        if score > 0
+    ]
+    if ranked_candidates:
+        return max(
+            ranked_candidates,
+            key=lambda item: (item[1], len(item[0].parts)),
+        )[0]
+
+    # Legacy fallback: settings.py is typically under backend/app/config.
+    try:
+        return resolved_path.parents[3]
+    except IndexError:
+        return resolved_path.parent
 
 
 _PROJECT_ROOT = _get_project_root()
