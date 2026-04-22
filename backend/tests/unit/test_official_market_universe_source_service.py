@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from unittest.mock import MagicMock
 
 from celery.exceptions import Retry
@@ -321,6 +322,7 @@ def test_http_get_retries_timeouts_before_succeeding(monkeypatch):
     assert fetched.url == "https://example.com/final"
     assert fetched.content == b"ok"
     assert len(calls) == 2
+    assert calls[0]["headers"]["User-Agent"] == service._user_agent
     assert calls[0]["timeout"] == 7
     assert calls[0]["verify"] is True
     assert calls[1]["verify"] is True
@@ -357,6 +359,87 @@ def test_http_get_raises_after_exhausting_timeout_retries(monkeypatch):
 
     assert len(calls) == 3
     assert sleeps == [1.0, 2.0]
+
+
+def test_fetch_nse_snapshot_uses_browser_like_headers(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    calls: list[dict[str, object]] = []
+
+    def fake_get(url, *, allow_insecure_fallback=False, extra_headers=None):
+        calls.append(
+            {
+                "url": url,
+                "allow_insecure_fallback": allow_insecure_fallback,
+                "extra_headers": dict(extra_headers or {}),
+            }
+        )
+        return _FetchedSource(
+            url=url,
+            content="\n".join(
+                [
+                    "SYMBOL,NAME OF COMPANY,SERIES,DATE OF LISTING,PAID UP VALUE,MARKET LOT,ISIN NUMBER,FACE VALUE",
+                    "RELIANCE,Reliance Industries Limited,EQ,29-NOV-1995,10,1,INE002A01018,10",
+                ]
+            ).encode("utf-8"),
+            fetched_at="2026-04-22T00:00:00+00:00",
+            last_modified="Tue, 21 Apr 2026 21:35:02 GMT",
+            tls_verification_disabled=False,
+        )
+
+    monkeypatch.setattr(service, "_http_get", fake_get)
+
+    snapshot = service.fetch_nse_snapshot()
+
+    assert snapshot.snapshot_id == "nse-equity-2026-04-21"
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    assert calls[0]["allow_insecure_fallback"] is False
+    assert calls[0]["extra_headers"]["Accept"] == "text/csv,*/*"
+    assert calls[0]["extra_headers"]["Accept-Language"] == "en-US,en;q=0.9"
+    assert calls[0]["extra_headers"]["Referer"] == "https://www.nseindia.com/"
+    assert re.match(r"^Mozilla/5\.0", calls[0]["extra_headers"]["User-Agent"])
+
+
+def test_fetch_nse_snapshot_falls_back_to_archives_after_timeout(monkeypatch):
+    service = OfficialMarketUniverseSourceService()
+    calls: list[dict[str, object]] = []
+
+    def fake_get(url, *, allow_insecure_fallback=False, extra_headers=None):
+        calls.append(
+            {
+                "url": url,
+                "allow_insecure_fallback": allow_insecure_fallback,
+                "extra_headers": dict(extra_headers or {}),
+            }
+        )
+        if "nsearchives" in url:
+            raise requests.exceptions.ReadTimeout("nsearchives timed out")
+        return _FetchedSource(
+            url=url,
+            content="\n".join(
+                [
+                    "SYMBOL,NAME OF COMPANY,SERIES,DATE OF LISTING,PAID UP VALUE,MARKET LOT,ISIN NUMBER,FACE VALUE",
+                    "TCS,Tata Consultancy Services Limited,EQ,25-AUG-2004,1,1,INE467B01029,1",
+                ]
+            ).encode("utf-8"),
+            fetched_at="2026-04-22T00:00:00+00:00",
+            last_modified="Tue, 21 Apr 2026 21:35:02 GMT",
+            tls_verification_disabled=False,
+        )
+
+    monkeypatch.setattr(service, "_http_get", fake_get)
+
+    snapshot = service.fetch_nse_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["TCS.NS"]
+    assert [call["url"] for call in calls] == [
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+        "https://archives.nseindia.com/content/equities/EQUITY_L.csv",
+    ]
+    assert snapshot.source_metadata["source_urls"] == [
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
+        "https://archives.nseindia.com/content/equities/EQUITY_L.csv",
+    ]
 
 
 def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):

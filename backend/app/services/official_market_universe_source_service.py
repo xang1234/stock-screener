@@ -41,9 +41,16 @@ _JP_ALLOWED_MARKET_SECTIONS = frozenset(
 _TW_UPDATED_AT_RE = re.compile(r"Date\s+Stock\s+Updated:\s*(\d{4}/\d{2}/\d{2})", re.IGNORECASE)
 _TW_CODE_NAME_RE = re.compile(r"^([0-9A-Z]{3,6}[A-Z]?)\s+(.+?)$")
 _HTTP_GET_MAX_ATTEMPTS = 3
+_NSE_ARCHIVE_SOURCE_URL = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 _NSE_SOURCE_HEADERS = {
     "Accept": "text/csv,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.nseindia.com/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
 }
 _BSE_SOURCE_HEADERS = {
     "Accept": "application/json,*/*",
@@ -147,10 +154,20 @@ class OfficialMarketUniverseSourceService:
         )
 
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
-        fetched = self._http_get(
-            settings.nse_universe_source_url,
-            extra_headers=_NSE_SOURCE_HEADERS,
-        )
+        source_urls = [settings.nse_universe_source_url]
+        try:
+            fetched = self._http_get(
+                settings.nse_universe_source_url,
+                extra_headers=_NSE_SOURCE_HEADERS,
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if settings.nse_universe_source_url == _NSE_ARCHIVE_SOURCE_URL:
+                raise
+            source_urls.append(_NSE_ARCHIVE_SOURCE_URL)
+            fetched = self._http_get(
+                _NSE_ARCHIVE_SOURCE_URL,
+                extra_headers=_NSE_SOURCE_HEADERS,
+            )
         fallback_as_of = self._date_from_http_header(fetched.last_modified) or self._utc_today()
         rows = self.parse_nse_rows(fetched.content)
         snapshot_as_of = fallback_as_of.isoformat()
@@ -160,7 +177,7 @@ class OfficialMarketUniverseSourceService:
             snapshot_id=f"nse-equity-{snapshot_as_of}",
             snapshot_as_of=snapshot_as_of,
             source_metadata={
-                "source_urls": [settings.nse_universe_source_url],
+                "source_urls": source_urls,
                 "fetched_at": fetched.fetched_at,
                 "http_last_modified": fetched.last_modified,
                 "tls_verification_disabled": fetched.tls_verification_disabled,
