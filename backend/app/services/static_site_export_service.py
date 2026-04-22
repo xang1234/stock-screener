@@ -1183,6 +1183,7 @@ class StaticSiteExportService:
                     "num_stocks_rs_above_80": above_80,
                     "pct_rs_above_80": round((above_80 / len(rs_values)) * 100, 2) if rs_values else None,
                     "top_symbol": top_row.get("symbol"),
+                    "top_symbol_name": top_row.get("company_name"),
                     "top_rs_rating": top_row.get("rs_rating"),
                     "rank_change_1w": None,
                     "rank_change_1m": None,
@@ -1208,6 +1209,7 @@ class StaticSiteExportService:
         extended = getattr(row, "extended_fields", {}) or {}
         return {
             "symbol": getattr(row, "symbol", None),
+            "company_name": extended.get("company_name"),
             "composite_score": getattr(row, "composite_score", None),
             "current_price": getattr(row, "current_price", None),
             "rs_rating": extended.get("rs_rating"),
@@ -1302,6 +1304,7 @@ class StaticSiteExportService:
             stock_payload = [
                 ConstituentStock(
                     symbol=row["symbol"],
+                    company_name=row.get("company_name"),
                     price=row.get("current_price"),
                     rs_rating=row.get("rs_rating"),
                     rs_rating_1m=row.get("rs_rating_1m"),
@@ -1332,6 +1335,7 @@ class StaticSiteExportService:
                 num_stocks=ranking["num_stocks"],
                 pct_rs_above_80=ranking.get("pct_rs_above_80"),
                 top_symbol=ranking.get("top_symbol"),
+                top_symbol_name=ranking.get("top_symbol_name"),
                 top_rs_rating=ranking.get("top_rs_rating"),
                 rank_change_1w=ranking.get("rank_change_1w"),
                 rank_change_1m=ranking.get("rank_change_1m"),

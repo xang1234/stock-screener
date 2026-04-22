@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.industry import IBDGroupRank
+from app.models.stock_universe import StockUniverse
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -34,7 +35,10 @@ def _add_rank(session, group, rank_date, rank):
 
 def _make_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[IBDGroupRank.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[IBDGroupRank.__table__, StockUniverse.__table__],
+    )
     return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
 
@@ -84,6 +88,61 @@ def test_get_historical_rank_prefers_earlier_on_tie():
             db_session, [group], current_date, {'1w': 7}
         )
         assert result[(group, '1w')] == 11
+    finally:
+        db_session.rollback()
+        db_session.close()
+
+
+def test_get_group_history_uses_universe_lookup_for_top_symbol_name(monkeypatch):
+    service = _make_group_rank_service()
+    db_session = _make_session()
+    group = f"TEST_GROUP_UNIT_{uuid4().hex}"
+    current_date = date.today()
+
+    try:
+        db_session.add(
+            IBDGroupRank(
+                industry_group=group,
+                date=current_date,
+                rank=1,
+                avg_rs_rating=92.0,
+                median_rs_rating=91.0,
+                weighted_avg_rs_rating=93.0,
+                rs_std_dev=1.5,
+                num_stocks=8,
+                num_stocks_rs_above_80=6,
+                top_symbol="AAPL",
+                top_rs_rating=98.0,
+            )
+        )
+        db_session.add(
+            StockUniverse(
+                symbol="AAPL",
+                name="Apple Inc.",
+                market="US",
+                exchange="NASDAQ",
+                is_active=True,
+                status="active",
+                status_reason="active",
+            )
+        )
+        db_session.commit()
+
+        monkeypatch.setattr(
+            service,
+            "_get_historical_ranks_batch",
+            lambda *_args, **_kwargs: {},
+        )
+        monkeypatch.setattr(
+            service,
+            "_get_constituent_stocks",
+            lambda *_args, **_kwargs: [{"symbol": "MSFT", "company_name": "Microsoft"}],
+        )
+
+        result = service.get_group_history(db_session, group, days=30)
+
+        assert result["top_symbol"] == "AAPL"
+        assert result["top_symbol_name"] == "Apple Inc."
     finally:
         db_session.rollback()
         db_session.close()

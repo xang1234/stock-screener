@@ -429,7 +429,32 @@ class IBDGroupRankService:
 
             result.append(item)
 
+        self._annotate_top_symbol_names(db, result)
         return result
+
+    @staticmethod
+    def _annotate_top_symbol_names(db: Session, rows: List[Dict]) -> None:
+        name_map = IBDGroupRankService._get_symbol_name_map(
+            db,
+            [row.get("top_symbol") for row in rows],
+        )
+        for row in rows:
+            row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
+
+    @staticmethod
+    def _get_symbol_name_map(db: Session, symbols: List[str | None]) -> Dict[str, str | None]:
+        normalized_symbols = {
+            str(symbol).strip()
+            for symbol in symbols
+            if str(symbol or "").strip()
+        }
+        if not normalized_symbols:
+            return {}
+        return dict(
+            db.query(StockUniverse.symbol, StockUniverse.name)
+            .filter(StockUniverse.symbol.in_(normalized_symbols))
+            .all()
+        )
 
     def _get_historical_ranks_batch(
         self,
@@ -577,6 +602,10 @@ class IBDGroupRankService:
             current.num_stocks_rs_above_80, current.num_stocks
         )
 
+        top_symbol_name = self._get_symbol_name_map(db, [current.top_symbol]).get(
+            current.top_symbol
+        )
+
         return {
             'industry_group': industry_group,
             'current_rank': current.rank,
@@ -587,6 +616,7 @@ class IBDGroupRankService:
             'num_stocks': current.num_stocks,
             'pct_rs_above_80': pct_above_80,
             'top_symbol': current.top_symbol,
+            'top_symbol_name': top_symbol_name,
             'top_rs_rating': current.top_rs_rating,
             **rank_changes,
             'history': history,
@@ -620,18 +650,24 @@ class IBDGroupRankService:
                 logger.warning("No completed scans found for constituent stocks")
                 return []
 
-            # Get scan results for this industry group
-            results = db.query(ScanResult).filter(
-                and_(
-                    ScanResult.scan_id == latest_scan.scan_id,
-                    ScanResult.ibd_industry_group == industry_group
+            results = (
+                db.query(ScanResult, StockUniverse.name.label("company_name"))
+                .outerjoin(StockUniverse, StockUniverse.symbol == ScanResult.symbol)
+                .filter(
+                    and_(
+                        ScanResult.scan_id == latest_scan.scan_id,
+                        ScanResult.ibd_industry_group == industry_group,
+                    )
                 )
-            ).order_by(desc(ScanResult.rs_rating)).all()
+                .order_by(desc(ScanResult.rs_rating))
+                .all()
+            )
 
             stocks = []
-            for r in results:
+            for r, company_name in results:
                 stocks.append({
                     'symbol': r.symbol,
+                    'company_name': company_name,
                     'price': r.price,
                     'rs_rating': r.rs_rating,
                     'rs_rating_1m': r.rs_rating_1m,

@@ -28,6 +28,7 @@ import {
 import RankChangeCell from '../components/shared/RankChangeCell';
 import PriceSparkline from '../components/Scan/PriceSparkline';
 import RSSparkline from '../components/Scan/RSSparkline';
+import TickerCell from '../components/common/TickerCell';
 
 function StaticGroupDetailModal({ group, detail, open, onClose }) {
   const chartData = useMemo(() => {
@@ -178,7 +179,9 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                     <TableBody>
                       {detail.stocks.map((stock) => (
                         <TableRow key={stock.symbol} hover>
-                          <TableCell sx={{ fontWeight: 600 }}>{stock.symbol}</TableCell>
+                          <TableCell>
+                            <TickerCell symbol={stock.symbol} companyName={stock.company_name} />
+                          </TableCell>
                           <TableCell align="center" sx={{ p: '2px' }}>
                             <PriceSparkline
                               data={stock.price_sparkline_data}
