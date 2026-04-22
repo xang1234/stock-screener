@@ -434,16 +434,27 @@ class IBDGroupRankService:
 
     @staticmethod
     def _annotate_top_symbol_names(db: Session, rows: List[Dict]) -> None:
-        top_symbols = {row["top_symbol"] for row in rows if row.get("top_symbol")}
-        if not top_symbols:
-            return
-        name_map: Dict[str, str | None] = dict(
-            db.query(StockUniverse.symbol, StockUniverse.name)
-            .filter(StockUniverse.symbol.in_(top_symbols))
-            .all()
+        name_map = IBDGroupRankService._get_symbol_name_map(
+            db,
+            [row.get("top_symbol") for row in rows],
         )
         for row in rows:
             row["top_symbol_name"] = name_map.get(row.get("top_symbol"))
+
+    @staticmethod
+    def _get_symbol_name_map(db: Session, symbols: List[str | None]) -> Dict[str, str | None]:
+        normalized_symbols = {
+            str(symbol).strip()
+            for symbol in symbols
+            if str(symbol or "").strip()
+        }
+        if not normalized_symbols:
+            return {}
+        return dict(
+            db.query(StockUniverse.symbol, StockUniverse.name)
+            .filter(StockUniverse.symbol.in_(normalized_symbols))
+            .all()
+        )
 
     def _get_historical_ranks_batch(
         self,
@@ -591,10 +602,9 @@ class IBDGroupRankService:
             current.num_stocks_rs_above_80, current.num_stocks
         )
 
-        top_symbol_name = next(
-            (stock["company_name"] for stock in stocks if stock["symbol"] == current.top_symbol),
-            None,
-        ) if current.top_symbol else None
+        top_symbol_name = self._get_symbol_name_map(db, [current.top_symbol]).get(
+            current.top_symbol
+        )
 
         return {
             'industry_group': industry_group,

@@ -280,7 +280,7 @@ function StaticHomePage() {
                   <TableCell>{group.industry_group}</TableCell>
                   <TableCell align="right"><RankChangeCell value={group.rank_change_1w} /></TableCell>
                   <TableCell align="right"><RankChangeCell value={group.rank_change_1m} /></TableCell>
-                  <TableCell sx={{ fontSize: '11px' }}>
+                  <TableCell>
                     <TickerCell symbol={group.top_symbol} companyName={group.top_symbol_name} />
                   </TableCell>
                 </TableRow>

@@ -1,13 +1,38 @@
 import { Box, Typography } from '@mui/material';
 
 function TickerCell({ symbol, companyName, align = 'left' }) {
-  if (!symbol) return '-';
+  const alignItems = align === 'center' ? 'center' : 'flex-start';
+  const textAlign = align === 'center' ? 'center' : 'left';
+
+  if (!symbol) {
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems,
+          gap: 0.25,
+          minWidth: 0,
+        }}
+      >
+        <Typography
+          component="span"
+          variant="body2"
+          color="text.secondary"
+          sx={{ lineHeight: 1.2 }}
+        >
+          -
+        </Typography>
+      </Box>
+    );
+  }
+
   return (
     <Box
       sx={{
         display: 'flex',
         flexDirection: 'column',
-        alignItems: align === 'center' ? 'center' : 'flex-start',
+        alignItems,
         gap: 0.25,
         minWidth: 0,
       }}
@@ -30,7 +55,7 @@ function TickerCell({ symbol, companyName, align = 'left' }) {
             lineHeight: 1.2,
             minWidth: 0,
             maxWidth: '100%',
-            textAlign: align === 'center' ? 'center' : 'left',
+            textAlign,
           }}
         >
           {companyName}
