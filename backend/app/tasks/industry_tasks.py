@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _tracked_ibd_csv_path() -> Path:
-    return Path(settings.ibd_industry_csv_path)
+    return IBDIndustryService.resolve_tracked_csv_path(settings.ibd_industry_csv_path)
 
 
 @celery_app.task(

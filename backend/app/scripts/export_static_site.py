@@ -48,7 +48,7 @@ def _default_output_dir() -> Path:
 
 
 def _tracked_ibd_csv_path() -> Path:
-    return Path(settings.ibd_industry_csv_path)
+    return IBDIndustryService.resolve_tracked_csv_path(settings.ibd_industry_csv_path)
 
 
 def _resolve_latest_completed_us_trading_date() -> date:
