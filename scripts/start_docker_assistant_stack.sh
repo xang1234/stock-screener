@@ -266,6 +266,11 @@ EOF
 export HERMES_PLATFORM="${HERMES_PLATFORM:-linux/amd64}"
 export HERMES_UID="${HERMES_UID:-$(id -u)}"
 export HERMES_GID="${HERMES_GID:-$(id -g)}"
+HERMES_DATA_DIR="${HERMES_DATA_DIR:-$ROOT_DIR/data/hermes}"
+if [[ "$HERMES_DATA_DIR" != /* ]]; then
+  HERMES_DATA_DIR="$ROOT_DIR/$HERMES_DATA_DIR"
+fi
+export HERMES_DATA_DIR
 COMPOSE_CMD=(
   docker compose
   --env-file "$ENV_FILE"
@@ -285,12 +290,12 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
-mkdir -p "$ROOT_DIR/data/hermes"
-render_hermes_config > "$ROOT_DIR/data/hermes/config.yaml"
-render_hermes_env > "$ROOT_DIR/data/hermes/.env"
-chmod 600 "$ROOT_DIR/data/hermes/config.yaml" "$ROOT_DIR/data/hermes/.env"
+mkdir -p "$HERMES_DATA_DIR"
+render_hermes_config > "$HERMES_DATA_DIR/config.yaml"
+render_hermes_env > "$HERMES_DATA_DIR/.env"
+chmod 600 "$HERMES_DATA_DIR/config.yaml" "$HERMES_DATA_DIR/.env"
 
-echo "Prepared data/hermes/config.yaml and data/hermes/.env"
+echo "Prepared ${HERMES_DATA_DIR}/config.yaml and ${HERMES_DATA_DIR}/.env"
 echo "Using env file: $ENV_FILE"
 echo "Using Hermes platform: $HERMES_PLATFORM"
 echo "Using Hermes provider/model: ${HERMES_PROVIDER_VALUE}/${HERMES_DEFAULT_MODEL_VALUE}"

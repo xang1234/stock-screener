@@ -11,6 +11,7 @@ const getRankMovers = vi.fn();
 const getGroupDetail = vi.fn();
 const triggerCalculation = vi.fn();
 const getCalculationStatus = vi.fn();
+const fetchPriceHistoryBatch = vi.fn();
 const runtimeState = {
   features: { tasks: false },
   runtimeReady: true,
@@ -29,8 +30,22 @@ vi.mock('../api/groups', () => ({
   getCalculationStatus: (...args) => getCalculationStatus(...args),
 }));
 
+vi.mock('../api/priceHistory', () => ({
+  fetchPriceHistoryBatch: (...args) => fetchPriceHistoryBatch(...args),
+  priceHistoryKeys: {
+    batch: (symbols, period = '6mo') => ['priceHistory', 'batch', period, symbols.join(',')],
+  },
+  PRICE_HISTORY_STALE_TIME: 300000,
+}));
+
 vi.mock('../contexts/RuntimeContext', () => ({
   useRuntime: () => runtimeState,
+}));
+
+vi.mock('../components/Charts/CandlestickChart', () => ({
+  default: ({ symbol, priceData, compact }) => (
+    <div data-testid="candlestick-chart">{`${symbol}:${priceData?.length ?? 0}:${compact ? 'compact' : 'full'}`}</div>
+  ),
 }));
 
 const rankingRowFor = (market) => ({
@@ -66,6 +81,7 @@ describe('GroupRankingsPage', () => {
     getGroupDetail.mockReset();
     triggerCalculation.mockReset();
     getCalculationStatus.mockReset();
+    fetchPriceHistoryBatch.mockReset();
 
     getCurrentRankings.mockImplementation(async (_limit, market = 'US') => ({
       date: '2026-04-18',
@@ -141,5 +157,63 @@ describe('GroupRankingsPage', () => {
       expect(getCurrentRankings).toHaveBeenCalledWith(197, 'US');
     });
     expect(await screen.findByText('US Internet Services')).toBeInTheDocument();
+  });
+
+  it('loads batch price history when the Charts tab is opened in the group modal', async () => {
+    getGroupDetail.mockResolvedValueOnce({
+      industry_group: 'HK Internet Services',
+      current_rank: 3,
+      current_avg_rs: 82.1,
+      num_stocks: 2,
+      top_symbol: '0700.HK',
+      top_rs_rating: 97,
+      history: [],
+      stocks: [{ symbol: '0700.HK' }, { symbol: '9988.HK' }],
+    });
+    fetchPriceHistoryBatch.mockResolvedValueOnce({
+      data: {
+        '0700.HK': [{ date: '2026-04-18', open: 500, high: 510, low: 495, close: 505, volume: 1000 }],
+        '9988.HK': [{ date: '2026-04-18', open: 100, high: 101, low: 99, close: 100.5, volume: 2000 }],
+      },
+      missing: [],
+    });
+
+    renderWithProviders(<GroupRankingsPage />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('HK Internet Services'));
+
+    expect(await screen.findByRole('tab', { name: 'Charts (2)' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Charts (2)' }));
+
+    await waitFor(() => {
+      expect(fetchPriceHistoryBatch).toHaveBeenCalledWith(['0700.HK', '9988.HK'], '6mo');
+    });
+    expect(await screen.findByText('0700.HK:1:compact')).toBeInTheDocument();
+    expect(await screen.findByText('9988.HK:1:compact')).toBeInTheDocument();
+  });
+
+  it('shows an inline error state when the Charts tab batch fetch fails', async () => {
+    getGroupDetail.mockResolvedValueOnce({
+      industry_group: 'HK Internet Services',
+      current_rank: 3,
+      current_avg_rs: 82.1,
+      num_stocks: 1,
+      top_symbol: '0700.HK',
+      top_rs_rating: 97,
+      history: [],
+      stocks: [{ symbol: '0700.HK' }],
+    });
+    fetchPriceHistoryBatch.mockRejectedValueOnce(new Error('batch failed'));
+
+    renderWithProviders(<GroupRankingsPage />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('HK Internet Services'));
+    await user.click(await screen.findByRole('tab', { name: 'Charts (1)' }));
+
+    expect(await screen.findByText('Failed to load group charts')).toBeInTheDocument();
+    expect(screen.getByText('batch failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

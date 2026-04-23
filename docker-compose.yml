@@ -129,7 +129,7 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       SERPER_API_KEY: ${SERPER_API_KEY:-}
     volumes:
-      - ./data/hermes:/opt/data
+      - "${HERMES_DATA_DIR:-./data/hermes}:/opt/data"
       - ./integrations/hermes/skills:/opt/external-skills:ro
     expose:
       - "8642"

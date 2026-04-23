@@ -309,6 +309,7 @@ const transformToCandlestickData = (apiData, timeframe = 'daily') => {
  * @param {Function} props.onVisibleRangeChange - Callback when visible range changes
  * @param {Array|null} props.priceData - Optional static OHLCV payload to render without API calls
  * @param {number|null} props.dataUpdatedAtOverride - Optional timestamp (ms) for static bundles
+ * @param {boolean} props.compact - When true, hides overlays (Daily/Weekly toggle, OHLC legend, updated-at indicator) for dense grid layouts
  */
 function CandlestickChart({
   symbol,
@@ -318,6 +319,7 @@ function CandlestickChart({
   onVisibleRangeChange = null,
   priceData = null,
   dataUpdatedAtOverride = null,
+  compact = false,
 }) {
   const chartContainerRef = useRef(null);
   const chartRef = useRef(null);
@@ -501,8 +503,8 @@ function CandlestickChart({
 
     console.log('CandlestickChart: All series added');
 
-    // Subscribe to crosshair move for OHLC legend
-    chart.subscribeCrosshairMove((param) => {
+    // Subscribe to crosshair move for OHLC legend (skip in compact mode — legend is hidden)
+    if (!compact) chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData || !candlestickSeriesRef.current) {
         // Mouse left the chart or no data - fall back to latest candle
         if (latestCandleRef.current) {
@@ -555,7 +557,7 @@ function CandlestickChart({
       ema20SeriesRef.current = null;
       ema50SeriesRef.current = null;
     };
-  }, [height, isDarkMode, symbol]); // Re-initialize only when required visual inputs change
+  }, [height, isDarkMode, symbol, compact]); // Re-initialize only when required visual inputs change
 
   // Track symbol changes - set flag to restore range when symbol changes
   useEffect(() => {
@@ -705,7 +707,7 @@ function CandlestickChart({
       }}
     >
       {/* Timeframe Toggle - only show when chart has data */}
-      {!showLoading && !showError && !showNoData && (
+      {!compact && !showLoading && !showError && !showNoData && (
         <Box
           sx={{
             position: 'absolute',
@@ -734,7 +736,7 @@ function CandlestickChart({
       )}
 
       {/* OHLC Legend - show when hovering over chart */}
-      {!showLoading && !showError && !showNoData && legendData && (
+      {!compact && !showLoading && !showError && !showNoData && legendData && (
         <Box
           sx={{
             position: 'absolute',
@@ -825,7 +827,7 @@ function CandlestickChart({
       )}
 
       {/* Last updated indicator */}
-      {!showLoading && !showError && !showNoData && lastUpdatedText && !showRefreshIndicator && (
+      {!compact && !showLoading && !showError && !showNoData && lastUpdatedText && !showRefreshIndicator && (
         <Box
           sx={{
             position: 'absolute',

@@ -9,8 +9,9 @@ FRONTEND_PORT="${FRONTEND_PORT:-18080}"
 SERVER_AUTH_PASSWORD="${SERVER_AUTH_PASSWORD:-smoke-password}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ssc_assistant_smoke}"
 ASSISTANT_HEALTH_MAX_ATTEMPTS="${ASSISTANT_HEALTH_MAX_ATTEMPTS:-150}"
-HERMES_UID="${HERMES_UID:-$(id -u)}"
-HERMES_GID="${HERMES_GID:-$(id -g)}"
+HERMES_UID="${HERMES_UID:-0}"
+HERMES_GID="${HERMES_GID:-0}"
+HERMES_DATA_DIR="$TMP_DIR/hermes"
 export COMPOSE_PROJECT_NAME
 
 cleanup() {
@@ -24,9 +25,16 @@ cleanup() {
     --env-file "$ENV_FILE" \
     --profile assistant \
     down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$TMP_DIR"
+  rm -rf "$TMP_DIR" >/dev/null 2>&1 || {
+    echo "Warning: unable to remove temporary smoke directory $TMP_DIR" >&2
+  }
 }
 trap cleanup EXIT
+
+# Hermes re-owns /opt/data before dropping privileges. Make the directory itself
+# world-writable so the CI runner can still remove the temp tree afterward.
+mkdir -p "$HERMES_DATA_DIR"
+chmod 0777 "$HERMES_DATA_DIR"
 
 cat > "$ENV_FILE" <<EOF
 SERVER_AUTH_PASSWORD=${SERVER_AUTH_PASSWORD}
@@ -42,6 +50,7 @@ HERMES_MODEL=hermes-agent
 HERMES_PLATFORM=linux/amd64
 HERMES_UID=${HERMES_UID}
 HERMES_GID=${HERMES_GID}
+HERMES_DATA_DIR=${HERMES_DATA_DIR}
 FRONTEND_PORT=${FRONTEND_PORT}
 MINIMAX_API_KEY=smoke-minimax-key
 SERPER_API_KEY=smoke-serper-key

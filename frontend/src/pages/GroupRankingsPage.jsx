@@ -54,6 +54,7 @@ import {
 import { useRuntime } from '../contexts/RuntimeContext';
 import PriceSparkline from '../components/Scan/PriceSparkline';
 import RSSparkline from '../components/Scan/RSSparkline';
+import GroupChartsGrid from '../components/Charts/GroupChartsGrid';
 
 const MARKET_LABELS = {
   US: 'US',
@@ -154,11 +155,22 @@ const MoversCard = ({ title, groups, isGainers, period }) => {
 
 // Group Detail Modal
 const GroupDetailModal = ({ group, market, open, onClose }) => {
+  const [activeTab, setActiveTab] = useState('overview');
+
+  useEffect(() => {
+    if (!open) setActiveTab('overview');
+  }, [open]);
+
   const { data: detail, isLoading } = useQuery({
     queryKey: ['groupDetail', market, group],
     queryFn: () => getGroupDetail(group, 365, market),
     enabled: !!group && open,
   });
+
+  const chartSymbols = useMemo(
+    () => (detail?.stocks || []).map((s) => s.symbol).filter(Boolean),
+    [detail?.stocks],
+  );
 
   // Prepare chart data (reverse to show oldest first)
   const chartData = detail?.history
@@ -190,6 +202,19 @@ const GroupDetailModal = ({ group, market, open, onClose }) => {
           </Box>
         ) : detail ? (
           <Box>
+            <Tabs
+              value={activeTab}
+              onChange={(_, v) => setActiveTab(v)}
+              sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+            >
+              <Tab value="overview" label="Overview" />
+              <Tab value="charts" label={`Charts${chartSymbols.length ? ` (${chartSymbols.length})` : ''}`} />
+            </Tabs>
+            {activeTab === 'charts' && (
+              <GroupChartsGrid symbols={chartSymbols} period="6mo" height={200} />
+            )}
+            {activeTab === 'overview' && (
+            <Box>
             {/* Current Stats */}
             <Grid container spacing={2} mb={3}>
               <Grid item xs={3}>
@@ -442,6 +467,8 @@ const GroupDetailModal = ({ group, market, open, onClose }) => {
                   </Table>
                 </TableContainer>
               </>
+            )}
+            </Box>
             )}
           </Box>
         ) : (
