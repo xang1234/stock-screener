@@ -173,6 +173,16 @@ def _scan_mode_for_history(history_bars: int) -> str:
     return "listing_only"
 
 
+def _insufficient_screener_reason(
+    insufficient_screeners: dict[str, str | None],
+) -> str:
+    parts: list[str] = []
+    for name in sorted(insufficient_screeners):
+        reason = insufficient_screeners[name]
+        parts.append(f"{name} ({reason})" if reason else name)
+    return "Insufficient data from runnable screeners: " + ", ".join(parts)
+
+
 class ScanOrchestrator:
     """
     Orchestrates multi-screener stock analysis.
@@ -302,6 +312,7 @@ class ScanOrchestrator:
                     stock_data,
                     composite_method=composite_method,
                     history_bars=history_bars,
+                    applicable_screeners=[],
                     unavailable_screeners=screener_names,
                     reason=stock_data.get_error_summary() or "Insufficient price history",
                 )
@@ -309,6 +320,7 @@ class ScanOrchestrator:
             # 5. Run applicable screeners in parallel on the same data
             screener_results: Dict[str, ScreenerResult] = {}
             hard_error_screeners: list[str] = []
+            insufficient_screeners: dict[str, str | None] = {}
 
             def run_screener(name: str, screener: BaseStockScreener) -> tuple[str, Optional[ScreenerResult]]:
                 """Run a single screener and return (name, result) tuple."""
@@ -338,6 +350,11 @@ class ScanOrchestrator:
                         hard_error_screeners.append(name)
                     elif result.rating == "Insufficient Data":
                         unavailable_screeners.append(name)
+                        details = result.details if isinstance(result.details, dict) else {}
+                        insufficient_screeners[name] = (
+                            details.get("reason")
+                            or details.get("error")
+                        )
                     else:
                         screener_results[name] = result
 
@@ -348,12 +365,28 @@ class ScanOrchestrator:
                     f"Screener execution failed: {failed_screeners}",
                 )
 
+            if history_bars >= FULL_SCAN_MIN_BARS and insufficient_screeners:
+                return self._insufficient_data_result(
+                    symbol,
+                    stock_data,
+                    composite_method=composite_method,
+                    history_bars=history_bars,
+                    applicable_screeners=[
+                        name for name in screener_names if name in screener_results
+                    ],
+                    unavailable_screeners=[
+                        name for name in screener_names if name in unavailable_screeners
+                    ],
+                    reason=_insufficient_screener_reason(insufficient_screeners),
+                )
+
             if not screener_results:
                 return self._insufficient_data_result(
                     symbol,
                     stock_data,
                     composite_method=composite_method,
                     history_bars=history_bars,
+                    applicable_screeners=[],
                     unavailable_screeners=screener_names,
                     reason=stock_data.get_error_summary() or "Insufficient data for applicable screeners",
                 )
@@ -747,6 +780,7 @@ class ScanOrchestrator:
         *,
         composite_method: str,
         history_bars: int,
+        applicable_screeners: list[str],
         unavailable_screeners: list[str],
         reason: str,
     ) -> Dict:
@@ -766,7 +800,7 @@ class ScanOrchestrator:
             "is_scannable": False,
             "scan_mode": _scan_mode_for_history(history_bars),
             "history_bars": history_bars,
-            "applicable_screeners": [],
+            "applicable_screeners": list(applicable_screeners),
             "unavailable_screeners": list(unavailable_screeners),
             "composite_reason": None,
             "ipo_bonus": 0.0,

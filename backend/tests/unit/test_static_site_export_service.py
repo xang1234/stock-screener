@@ -1157,6 +1157,77 @@ def test_export_chart_bundle_backfills_past_skipped_symbols_to_fill_limit(
     assert index_payload["skipped_symbols"] == ["NVDA"]
 
 
+def test_export_chart_bundle_uses_sorted_scan_order_for_primary_chart_selection(
+    service_and_session_factory,
+    monkeypatch,
+    tmp_path,
+):
+    service, session_factory = service_and_session_factory
+    _insert_runs(
+        session_factory,
+        FeatureRun(
+            id=21,
+            as_of_date=date(2026, 4, 2),
+            run_type="daily_snapshot",
+            status="published",
+            published_at=datetime(2026, 4, 2, 21, 30, 0),
+        ),
+        pointer_run_id=21,
+    )
+
+    monkeypatch.setattr(export_module, "STATIC_CHART_LIMIT", 1)
+    monkeypatch.setattr(export_module, "STATIC_CHART_LOOKUP_BATCH_SIZE", 2)
+
+    service._price_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols, period="2y": {
+            symbol: _make_chart_price_frame(100.0 + index)
+            for index, symbol in enumerate(symbols)
+        }
+    )
+    service._fundamentals_cache = SimpleNamespace(
+        get_many_cached_only=lambda symbols: {s: {"symbol": s} for s in symbols}
+    )
+
+    rows = [
+        SimpleNamespace(
+            symbol="LOW",
+            composite_score=10.0,
+            rating="Watch",
+            current_price=90.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+        SimpleNamespace(
+            symbol="HIGH",
+            composite_score=99.0,
+            rating="Strong Buy",
+            current_price=120.0,
+            screeners_run=[],
+            extended_fields={},
+        ),
+    ]
+    serialized_rows = [
+        {"symbol": "HIGH", "composite_score": 99.0, "scan_mode": "full"},
+        {"symbol": "LOW", "composite_score": 10.0, "scan_mode": "full"},
+    ]
+
+    with session_factory() as db:
+        run = db.get(FeatureRun, 21)
+        manifest = service._export_chart_bundle(  # noqa: SLF001 - intentional unit coverage
+            output_dir=tmp_path,
+            generated_at="2026-04-02T22:00:00Z",
+            run=run,
+            rows=rows,
+            serialized_rows=serialized_rows,
+        )
+
+    index_payload = json.loads((tmp_path / "charts" / "index.json").read_text(encoding="utf-8"))
+
+    assert manifest["symbols_total"] == 1
+    assert [entry["symbol"] for entry in index_payload["symbols"]] == ["HIGH"]
+    assert [entry["rank"] for entry in index_payload["symbols"]] == [1]
+
+
 def _make_chart_price_frame(close: float = 100.0) -> pd.DataFrame:
     dates = pd.date_range("2026-03-28", periods=2, freq="D")
     return pd.DataFrame(

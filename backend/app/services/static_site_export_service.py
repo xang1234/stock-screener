@@ -630,13 +630,33 @@ class StaticSiteExportService:
         entries: list[dict[str, Any]] = []
         skipped_symbols: list[str] = []
         row_by_symbol: dict[str, Any] = {}
+        ordered_rows = list(rows)
+
+        if serialized_rows is not None:
+            raw_rows_by_symbol = {
+                getattr(row, "symbol", None): row
+                for row in rows
+                if getattr(row, "symbol", None)
+            }
+            ordered_symbols = [row["symbol"] for row in serialized_rows if row.get("symbol")]
+            ordered_rows = [
+                raw_rows_by_symbol[symbol]
+                for symbol in ordered_symbols
+                if symbol in raw_rows_by_symbol
+            ]
+            seen_symbols = {getattr(row, "symbol", None) for row in ordered_rows}
+            ordered_rows.extend(
+                row
+                for row in rows
+                if getattr(row, "symbol", None) not in seen_symbols
+            )
 
         # --- Pass 1: export charts for top-N by composite score (default) ---
-        for start in range(0, len(rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
+        for start in range(0, len(ordered_rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
             if len(entries) >= STATIC_CHART_LIMIT:
                 break
 
-            batch_rows = list(rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
+            batch_rows = list(ordered_rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
             symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
             price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
             fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
@@ -689,7 +709,7 @@ class StaticSiteExportService:
                 # Build a lookup from serialized rows for extra symbols
                 ser_by_symbol = {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
                 # Also need domain rows for _serialize_scan_row
-                for row in rows:
+                for row in ordered_rows:
                     sym = getattr(row, "symbol", None)
                     if sym and sym not in row_by_symbol:
                         row_by_symbol[sym] = row

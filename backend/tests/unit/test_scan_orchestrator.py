@@ -488,6 +488,40 @@ class TestScanOrchestratorErrorPaths:
         assert result["is_scannable"] is False
         assert result["history_bars"] == 260
 
+    def test_full_history_screener_insufficient_data_degrades_symbol_instead_of_excluding_it(self):
+        stock_data = _make_stock_data("TEST", n_days=260)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        class FakeIPO(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(name="ipo", score=85.0, passes=True, rating="Strong Buy")
+
+        class FakeSetupEngine(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="setup_engine",
+                    score=0.0,
+                    passes=False,
+                    rating="Insufficient Data",
+                    details={"reason": "missing_benchmark_history"},
+                )
+
+        registry.register(FakeIPO)
+        registry.register(FakeSetupEngine)
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orch.scan_stock_multi("TEST", ["ipo", "setup_engine"], composite_method="weighted_average")
+
+        assert result["result_status"] == "insufficient_history"
+        assert result["rating"] == "Insufficient Data"
+        assert result["composite_score"] is None
+        assert result["scan_mode"] == "full"
+        assert result["is_scannable"] is False
+        assert result["applicable_screeners"] == ["ipo"]
+        assert result["unavailable_screeners"] == ["setup_engine"]
+        assert "setup_engine" in result["reason"]
+
 
 class TestScanOrchestratorDataFlow:
     def test_pre_fetched_data_skips_provider(self):
