@@ -413,7 +413,7 @@ class TestScanOrchestratorErrorPaths:
         assert result["ipo_bonus"] == 0
         assert result["composite_score"] == 55.0
 
-    def test_setup_engine_insufficient_history_is_excluded_from_composite(self):
+    def test_ipo_weighted_screener_insufficient_data_degrades_symbol(self):
         stock_data = _make_stock_data("TEST", n_days=120)
         provider = FakeDataProvider({"TEST": stock_data})
         registry = ScreenerRegistry()
@@ -429,7 +429,7 @@ class TestScanOrchestratorErrorPaths:
                     score=0.0,
                     passes=False,
                     rating="Insufficient Data",
-                    details={"reason": "insufficient_daily_bars"},
+                    details={"reason": "missing_benchmark_history"},
                 )
 
         registry.register(FakeIPO)
@@ -438,10 +438,14 @@ class TestScanOrchestratorErrorPaths:
 
         result = orch.scan_stock_multi("TEST", ["ipo", "setup_engine"], composite_method="weighted_average")
 
-        assert result["screeners_run"] == ["ipo"]
+        assert result["result_status"] == "insufficient_history"
+        assert result["rating"] == "Insufficient Data"
+        assert result["composite_score"] is None
+        assert result["scan_mode"] == "ipo_weighted"
+        assert result["is_scannable"] is False
         assert result["applicable_screeners"] == ["ipo"]
         assert result["unavailable_screeners"] == ["setup_engine"]
-        assert result["composite_score"] > 80.0
+        assert "setup_engine" in result["reason"]
 
     def test_mid_history_non_scannable_rows_keep_ipo_weighted_band(self):
         stock_data = _make_stock_data("TEST", n_days=120)

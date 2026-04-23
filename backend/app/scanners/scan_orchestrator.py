@@ -365,7 +365,7 @@ class ScanOrchestrator:
                     f"Screener execution failed: {failed_screeners}",
                 )
 
-            if history_bars >= FULL_SCAN_MIN_BARS and insufficient_screeners:
+            if insufficient_screeners:
                 return self._insufficient_data_result(
                     symbol,
                     stock_data,
