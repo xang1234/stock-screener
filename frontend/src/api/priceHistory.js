@@ -18,12 +18,29 @@ export const fetchPriceHistory = async (symbol, period = '6mo') => {
 };
 
 /**
+ * Fetch OHLCV history for many symbols in a single request.
+ * @param {string[]} symbols - Ticker symbols (case-insensitive, deduped server-side)
+ * @param {string} period - Time period (default: '6mo')
+ * @returns {Promise<{data: Record<string, Array>, missing: string[]}>}
+ */
+export const fetchPriceHistoryBatch = async (symbols, period = '6mo') => {
+  const response = await apiClient.post('/v1/stocks/history/batch', { symbols, period });
+  return response.data;
+};
+
+/**
  * Query key factory for price history queries
  * Ensures consistent cache key usage across the app
  */
 export const priceHistoryKeys = {
   all: ['priceHistory'],
   symbol: (symbol, period = '6mo') => ['priceHistory', symbol, period],
+  batch: (symbols, period = '6mo') => [
+    'priceHistory',
+    'batch',
+    period,
+    [...symbols].map((s) => String(s).toUpperCase()).sort().join(','),
+  ],
 };
 
 /**

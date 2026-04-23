@@ -89,6 +89,20 @@ class StockPriceHistoryPoint(BaseModel):
     volume: int
 
 
+class PriceHistoryBatchRequest(BaseModel):
+    """Request body for the multi-symbol price history endpoint."""
+
+    symbols: List[str]
+    period: str = "6mo"
+
+
+class PriceHistoryBatchResponse(BaseModel):
+    """Per-symbol OHLCV payloads plus the list of symbols that had no cached data."""
+
+    data: Dict[str, List[StockPriceHistoryPoint]]
+    missing: List[str]
+
+
 class StockChartSnapshot(BaseModel):
     """Chart payload for the decision workspace."""
 

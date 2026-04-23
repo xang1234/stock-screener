@@ -15,6 +15,8 @@ from ...models.stock_universe import StockUniverse
 from ...models.theme import ThemeCluster, ThemeConstituent, ThemeMetrics
 from ...schemas.scanning import ExplainResponse, ScanResultItem
 from ...schemas.stock import (
+    PriceHistoryBatchRequest,
+    PriceHistoryBatchResponse,
     StockData,
     StockDecisionDashboardResponse,
     StockInfo,
@@ -146,20 +148,54 @@ def _get_stock_technicals_payload(
     return fetcher.get_stock_technicals(symbol.upper(), force_refresh=force_refresh)
 
 
-def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
-    """Get historical price data (OHLCV only) from cache."""
+_PERIOD_DAYS = {
+    "1mo": 30,
+    "3mo": 90,
+    "6mo": 180,
+    "1y": 365,
+    "2y": 730,
+    "5y": 1825,
+}
+
+
+def _dataframe_to_points(data, days: int) -> list[dict]:
+    """Filter an OHLCV DataFrame to the last N days and convert to JSON-ready dicts."""
 
     import pandas as pd
 
-    period_days = {
-        "1mo": 30,
-        "3mo": 90,
-        "6mo": 180,
-        "1y": 365,
-        "2y": 730,
-        "5y": 1825,
-    }
-    days = period_days.get(period)
+    if data is None or len(data) == 0:
+        return []
+
+    cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=days))
+    if data.index.tz is not None:
+        cutoff_date = cutoff_date.tz_localize(data.index.tz)
+
+    filtered = data[data.index >= cutoff_date]
+    if len(filtered) == 0:
+        return []
+
+    df = filtered.reset_index()
+    date_col = df.columns[0]
+    df = df.rename(columns={date_col: "Date"})
+    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+
+    return [
+        {
+            "date": row["Date"],
+            "open": round(float(row["Open"]), 2),
+            "high": round(float(row["High"]), 2),
+            "low": round(float(row["Low"]), 2),
+            "close": round(float(row["Close"]), 2),
+            "volume": int(row["Volume"]),
+        }
+        for _, row in df.iterrows()
+    ]
+
+
+def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
+    """Get historical price data (OHLCV only) from cache."""
+
+    days = _PERIOD_DAYS.get(period)
     if days is None:
         raise HTTPException(status_code=422, detail=f"Unsupported period: {period}")
 
@@ -174,33 +210,11 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
             detail=f"Historical data not available for {symbol}. Run a scan to populate cache.",
         )
 
-    cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=days))
-    if data.index.tz is not None:
-        cutoff_date = cutoff_date.tz_localize(data.index.tz)
-
-    data = data[data.index >= cutoff_date]
-    if len(data) == 0:
+    result = _dataframe_to_points(data, days)
+    if not result:
         raise HTTPException(
             status_code=404,
             detail=f"No data available for {symbol} in the last {period}",
-        )
-
-    df = data.reset_index()
-    date_col = df.columns[0]
-    df = df.rename(columns={date_col: "Date"})
-    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-
-    result = []
-    for _, row in df.iterrows():
-        result.append(
-            {
-                "date": row["Date"],
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]),
-            }
         )
 
     logger.info("Returning %s price records for %s", len(result), symbol)
@@ -872,6 +886,66 @@ async def get_price_history(
     period: str = "6mo",
 ):
     return _load_price_history(symbol, period)
+
+
+_BATCH_MAX_SYMBOLS = 100
+
+
+@router.post("/history/batch", response_model=PriceHistoryBatchResponse)
+async def get_price_history_batch(payload: PriceHistoryBatchRequest):
+    """Return OHLCV history for many symbols in a single round-trip.
+
+    Partial-success semantics: symbols with no cached data are reported in
+    `missing` rather than triggering a 404. Caller receives only the symbols
+    whose data is available under the `data` map.
+    """
+
+    days = _PERIOD_DAYS.get(payload.period)
+    if days is None:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported period: {payload.period}"
+        )
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in payload.symbols:
+        if not raw or not isinstance(raw, str):
+            continue
+        sym = raw.strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        normalized.append(sym)
+
+    if not normalized:
+        raise HTTPException(status_code=422, detail="symbols must be a non-empty list")
+
+    if len(normalized) > _BATCH_MAX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many symbols ({len(normalized)}); maximum is {_BATCH_MAX_SYMBOLS}",
+        )
+
+    cache_period = "5y" if payload.period == "5y" else "2y"
+    frames = get_price_cache().get_many(normalized, period=cache_period)
+
+    data: dict[str, list[dict]] = {}
+    missing: list[str] = []
+    for sym in normalized:
+        df = frames.get(sym) if isinstance(frames, dict) else None
+        points = _dataframe_to_points(df, days)
+        if points:
+            data[sym] = points
+        else:
+            missing.append(sym)
+
+    logger.info(
+        "Batch price history: %s hit, %s missing, period=%s",
+        len(data),
+        len(missing),
+        payload.period,
+    )
+    return {"data": data, "missing": missing}
 
 
 @router.get("/{symbol}/validation", response_model=StockValidationResponse)
