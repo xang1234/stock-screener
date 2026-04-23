@@ -109,7 +109,7 @@ function DailyMarketSnapshotTab() {
     sort_by: 'composite_score',
     sort_order: 'desc',
     min_volume: DEFAULT_MIN_VOLUME,
-    ...(marketCapMin !== '' ? { min_market_cap: Number(marketCapMin) } : {}),
+    ...(marketCapMin !== '' ? { min_market_cap_usd: Number(marketCapMin) } : {}),
   }), [marketCapMin]);
   const topResultsQuery = useQuery({
     queryKey: ['marketScan', 'dailySnapshot', scanId, topResultsParams],
@@ -276,7 +276,7 @@ function DailyMarketSnapshotTab() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
-                <TableCell align="center">MCap ($)</TableCell>
+                <TableCell align="center">MCap</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend</TableCell>
                 <TableCell align="center">RS Trend</TableCell>
@@ -289,6 +289,13 @@ function DailyMarketSnapshotTab() {
                 <TableRow>
                   <TableCell align="center" colSpan={9}>
                     <CircularProgress size={18} />
+                  </TableCell>
+                </TableRow>
+              ) : null}
+              {topResultsQuery.isError && topResults.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} align="center" sx={{ color: 'error.main', py: 2 }}>
+                    Failed to load scan candidates.
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -354,7 +361,7 @@ function DailyMarketSnapshotTab() {
                   </TableCell>
                 </TableRow>
               ))}
-              {!topResultsQuery.isLoading && topResults.length === 0 && (
+              {!topResultsQuery.isLoading && !topResultsQuery.isError && topResults.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={9} align="center" sx={{ color: 'text.disabled', py: 2 }}>
                     No scan candidates match the current filters.

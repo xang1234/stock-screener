@@ -130,7 +130,7 @@ describe('StaticHomePage', () => {
               current_price: 25,
               rating: 'Buy',
               volume: 170_000_000,
-              market_cap: 900_000_000,
+              market_cap: 3_900_000_000_000,
               market_cap_usd: 500_000_000,
               currency: 'HKD',
               price_sparkline_data: null,
@@ -160,9 +160,9 @@ describe('StaticHomePage', () => {
     renderWithProviders(<StaticHomePage />);
 
     expect(await screen.findByText('0700.HK')).toBeInTheDocument();
-    expect(screen.getByText('MCap ($)')).toBeInTheDocument();
+    expect(screen.getByText('MCap')).toBeInTheDocument();
     expect(screen.getByText('$500.0M')).toBeInTheDocument();
-    expect(screen.queryByText('HK$900.0M')).not.toBeInTheDocument();
+    expect(screen.queryByText('HK$3.9T')).not.toBeInTheDocument();
     expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/manifest.json');
     expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/chunks/chunk-0001.json');
     expect(screen.queryByText('SUMMARYONLY')).not.toBeInTheDocument();

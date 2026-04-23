@@ -113,7 +113,7 @@ describe('DailyMarketSnapshotTab', () => {
       );
     });
     expect(await screen.findByText('LIVE', {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.getByText('MCap ($)')).toBeInTheDocument();
+    expect(screen.getByText('MCap')).toBeInTheDocument();
     expect(screen.getByText('$2.5B')).toBeInTheDocument();
     expect(screen.queryByText('BOOT')).not.toBeInTheDocument();
   });
@@ -123,14 +123,14 @@ describe('DailyMarketSnapshotTab', () => {
       .mockResolvedValueOnce({
         total: 2,
         results: [
-          { ...liveRow, symbol: 'BIG', market_cap: 5_000_000_000 },
-          { ...liveRow, symbol: 'SMALL', market_cap: 500_000_000 },
+          { ...liveRow, symbol: 'BIG', market_cap: 5_000_000_000, market_cap_usd: 5_000_000_000 },
+          { ...liveRow, symbol: 'SMALL', market_cap: 5_000_000_000, market_cap_usd: 500_000_000 },
         ],
       })
       .mockResolvedValueOnce({
         total: 1,
         results: [
-          { ...liveRow, symbol: 'BIG', market_cap: 5_000_000_000 },
+          { ...liveRow, symbol: 'BIG', market_cap: 5_000_000_000, market_cap_usd: 5_000_000_000 },
         ],
       });
 
@@ -151,10 +151,19 @@ describe('DailyMarketSnapshotTab', () => {
           sort_by: 'composite_score',
           sort_order: 'desc',
           min_volume: 100_000_000,
-          min_market_cap: 1_000_000_000,
+          min_market_cap_usd: 1_000_000_000,
         })
       );
     });
+  });
+
+  it('shows an inline error state when top candidates fail to load', async () => {
+    getScanResults.mockRejectedValueOnce(new Error('scan fetch failed'));
+
+    renderWithProviders(<DailyMarketSnapshotTab />);
+
+    expect(await screen.findByText('Failed to load scan candidates.')).toBeInTheDocument();
+    expect(screen.queryByText('No scan candidates match the current filters.')).not.toBeInTheDocument();
   });
 
   it('uses USD-normalized market cap in the table and keeps modal navigation scoped to visible rows', async () => {

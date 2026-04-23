@@ -162,6 +162,13 @@ export const filterStaticScanRows = (rows, filters) => {
       return false;
     }
 
+    const currency = String(row.currency || '').toUpperCase();
+    const effectiveMarketCapUsd = row.market_cap_usd
+      ?? ((currency === 'USD' || row.market === 'US') ? row.market_cap : null);
+    if (!valueMatchesRange(effectiveMarketCapUsd, filters.marketCapUsd)) {
+      return false;
+    }
+
     if (ipoCutoff && (!row.ipo_date || row.ipo_date < ipoCutoff)) {
       return false;
     }

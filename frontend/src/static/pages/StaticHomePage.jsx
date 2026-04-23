@@ -89,7 +89,7 @@ function StaticHomePage() {
   const topCandidateFilters = useMemo(
     () => applyScanFilterDefaults({
       minVolume: DEFAULT_MIN_VOLUME,
-      ...(marketCapMin !== '' ? { minMarketCap: Number(marketCapMin) } : {}),
+      ...(marketCapMin !== '' ? { marketCapUsd: { min: Number(marketCapMin), max: null } } : {}),
     }),
     [marketCapMin]
   );
@@ -260,7 +260,7 @@ function StaticHomePage() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
-                <TableCell align="center">MCap ($)</TableCell>
+                <TableCell align="center">MCap</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend (30d)</TableCell>
                 <TableCell align="center">RS Trend (30d)</TableCell>
