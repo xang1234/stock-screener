@@ -918,8 +918,8 @@ def _make_scan_result_from_feature_row(row: FeatureRow) -> ScanResultItemDomain:
     from app.domain.feature_store.models import INT_TO_RATING
 
     d = row.details or {}
-    raw_score = row.composite_score or 0
-    clamped = max(0.0, min(100.0, float(raw_score)))
+    raw_score = row.composite_score
+    clamped = None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
     rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
     extended: dict[str, Any] = {"company_name": f"{row.symbol} Inc"}
     # Propagate all metric/classification fields (skip keys consumed elsewhere)
@@ -947,7 +947,7 @@ def _make_scan_result_from_feature_row(row: FeatureRow) -> ScanResultItemDomain:
 
 def make_domain_item(
     symbol: str = "AAPL",
-    score: float = 85.0,
+    score: float | None = 85.0,
     **extra_extended_fields: Any,
 ) -> ScanResultItemDomain:
     """Construct a ``ScanResultItemDomain`` with sensible defaults."""

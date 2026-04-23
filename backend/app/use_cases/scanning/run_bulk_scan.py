@@ -46,6 +46,23 @@ def _chunked(seq: Sequence[str], size: int) -> Iterator[list[str]]:
         yield list(seq[i : i + size])
 
 
+def _should_persist_result(result: object) -> bool:
+    """Keep legacy scan_results persistence limited to successful rows."""
+    if not isinstance(result, dict):
+        return False
+
+    explicit_status = result.get("result_status")
+    if explicit_status == "ok":
+        return True
+    if explicit_status in {"insufficient_history", "error"}:
+        return False
+
+    if "error" in result:
+        return False
+
+    return result.get("rating") != "Insufficient Data"
+
+
 # ── Command (input) ──────────────────────────────────────────────────────
 
 
@@ -243,7 +260,7 @@ class RunBulkScanUseCase:
                         composite_method=composite_method,
                         **scan_kwargs,
                     )
-                    if result and "error" not in result:
+                    if _should_persist_result(result):
                         chunk_results.append((sym, result))
                         if result.get("passes_template"):
                             passed += 1

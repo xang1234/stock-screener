@@ -54,6 +54,7 @@ const RATING_SORT_ORDER = {
   Watch: 3,
   Pass: 2,
   Error: 1,
+  'Insufficient Data': 0,
 };
 
 const IPO_PRESET_MONTHS = { '6m': 6, '1y': 12, '2y': 24, '3y': 36, '5y': 60 };
@@ -99,6 +100,20 @@ const compareValues = (left, right) => {
   return Number(left) - Number(right);
 };
 
+const getScanModeSortPriority = (row) => {
+  const scanMode = row?.scan_mode;
+  if (!scanMode || scanMode === 'full') {
+    return 0;
+  }
+  if (scanMode === 'ipo_weighted') {
+    return 1;
+  }
+  if (scanMode === 'listing_only') {
+    return 2;
+  }
+  return 3;
+};
+
 const getSortValue = (row, sortBy) => {
   if (sortBy === 'rating') {
     return RATING_SORT_ORDER[row.rating] ?? 0;
@@ -109,7 +124,8 @@ const getSortValue = (row, sortBy) => {
 export const filterStaticScanRows = (rows, filters) => {
   const ipoCutoff = resolveIpoCutoff(filters.ipoAfter);
   return rows.filter((row) => {
-    if (filters.symbolSearch) {
+    const hasSymbolSearch = Boolean(filters.symbolSearch);
+    if (hasSymbolSearch) {
       const needle = filters.symbolSearch.toLowerCase();
       const haystack = `${row.symbol || ''} ${row.company_name || ''}`.toLowerCase();
       if (!haystack.includes(needle)) {
@@ -133,7 +149,12 @@ export const filterStaticScanRows = (rows, filters) => {
       return false;
     }
 
-    if (filters.minVolume != null && (row.volume == null || row.volume < filters.minVolume)) {
+    const bypassMinVolumeForListingSearch = hasSymbolSearch && row.scan_mode === 'listing_only';
+    if (
+      !bypassMinVolumeForListingSearch &&
+      filters.minVolume != null &&
+      (row.volume == null || row.volume < filters.minVolume)
+    ) {
       return false;
     }
 
@@ -164,11 +185,37 @@ export const filterStaticScanRows = (rows, filters) => {
 export const sortStaticScanRows = (rows, sortBy, sortOrder = 'desc') => {
   const direction = sortOrder === 'asc' ? 1 : -1;
   return [...rows].sort((left, right) => {
+    if (sortBy === 'composite_score' && sortOrder === 'desc') {
+      const modeComparison = compareValues(
+        getScanModeSortPriority(left),
+        getScanModeSortPriority(right),
+      );
+      if (modeComparison !== 0) {
+        return modeComparison;
+      }
+    }
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
+    if (sortBy === 'composite_score' && sortOrder === 'desc') {
+      if (leftValue == null && rightValue != null) {
+        return 1;
+      }
+      if (leftValue != null && rightValue == null) {
+        return -1;
+      }
+    }
     const comparison = compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
+    }
+    if (sortBy === 'composite_score') {
+      const modeComparison = compareValues(
+        getScanModeSortPriority(left),
+        getScanModeSortPriority(right),
+      );
+      if (modeComparison !== 0) {
+        return modeComparison;
+      }
     }
     return compareValues(left.symbol, right.symbol);
   });

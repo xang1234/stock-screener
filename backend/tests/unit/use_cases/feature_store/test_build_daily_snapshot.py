@@ -881,6 +881,58 @@ class TestPartialFailures:
         assert result.processed_symbols == 3
         assert result.failed_symbols == 1
 
+    @_PATCH_TRADING_DAY
+    def test_insufficient_history_rows_are_persisted_without_counting_as_failures(self, _mock_td):
+        results = {
+            "AAPL": {
+                "composite_score": None,
+                "rating": "Insufficient Data",
+                "current_price": 12.5,
+                "screeners_passed": 0,
+                "result_status": "insufficient_history",
+                "data_status": "insufficient_history",
+                "scan_mode": "listing_only",
+                "is_scannable": False,
+                "history_bars": 20,
+                "applicable_screeners": [],
+                "unavailable_screeners": ["ipo", "minervini"],
+            },
+        }
+        uow, scanner = _make_uow(symbols=["AAPL"], scanner_results=results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed_symbols == 0
+        assert uow.feature_store.count_by_run_id(result.run_id) == 1
+        row = uow.feature_store.get_row_by_symbol(result.run_id, "AAPL")
+        assert row is not None
+        assert row.composite_score is None
+        assert row.overall_rating is None
+        assert row.details["scan_mode"] == "listing_only"
+        assert row.details["data_status"] == "insufficient_history"
+
+    @_PATCH_TRADING_DAY
+    def test_hard_error_results_do_not_persist_rows(self, _mock_td):
+        results = {
+            "AAPL": {
+                "rating": "Error",
+                "error": "boom",
+                "result_status": "error",
+            },
+        }
+        uow, scanner = _make_uow(symbols=["AAPL"], scanner_results=results)
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow, _make_cmd(), FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed_symbols == 1
+        assert uow.feature_store.count_by_run_id(result.run_id) == 0
+
 
 # ---------------------------------------------------------------------------
 # Chunking behaviour

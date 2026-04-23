@@ -851,13 +851,23 @@ def _map_row_to_domain(
     extended["se_pivot_date"] = se_data.get("pivot_date")
     extended["se_timeframe"] = se_data.get("timeframe")
     extended["se_atr14_pct"] = se_data.get("atr14_pct")
+    extended["data_status"] = details.get("data_status")
+    extended["is_scannable"] = details.get("is_scannable")
+    extended["scan_mode"] = details.get("scan_mode")
+    extended["history_bars"] = details.get("history_bars")
+    extended["applicable_screeners"] = details.get("applicable_screeners")
+    extended["unavailable_screeners"] = details.get("unavailable_screeners")
+    extended["composite_reason"] = details.get("composite_reason")
+    extended["ipo_bonus"] = details.get("ipo_bonus")
     if include_setup_payload:
         extended["se_explain"] = se_data.get("explain")
         extended["se_candidates"] = se_data.get("candidates")
 
     # Clamp score to 0-100 to satisfy domain invariant; legacy data may exceed.
-    raw_score = result.composite_score or 0
-    clamped_score = max(0.0, min(100.0, float(raw_score)))
+    raw_score = result.composite_score
+    clamped_score = (
+        None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
+    )
 
     return ScanResultItemDomain(
         symbol=result.symbol,

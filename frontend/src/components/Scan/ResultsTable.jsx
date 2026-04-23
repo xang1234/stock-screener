@@ -105,6 +105,29 @@ const columns = [
   { id: 'rating', label: 'Rate', sortable: false, width: 80 },
 ];
 
+const getStatusChipProps = (row) => {
+  const isInsufficientHistoryRow =
+    row.data_status === 'insufficient_history' || row.rating === 'Insufficient Data';
+
+  if (row.scan_mode === 'listing_only' && isInsufficientHistoryRow) {
+    return {
+      label: 'New IPO',
+      color: 'warning',
+      title: 'Visible in the scan table, but not yet scannable because price history is still limited.',
+    };
+  }
+  if (row.scan_mode === 'ipo_weighted' && isInsufficientHistoryRow) {
+    return {
+      label: 'IPO Weighted',
+      color: 'info',
+      title: row.composite_reason === 'ipo_uplift'
+        ? 'Composite uses applicable screeners plus an IPO uplift while the stock is still young.'
+        : 'Composite uses only the screeners that have enough history to run.',
+    };
+  }
+  return null;
+};
+
 /**
  * Memoized table row component to prevent unnecessary re-renders
  */
@@ -118,6 +141,7 @@ const VirtualTableRow = memo(function VirtualTableRow({
   chartEnabled,
   mcapDisplay,
 }) {
+  const statusChip = getStatusChipProps(row);
   const handleRowClick = useCallback(() => {
     if (!chartEnabled) {
       return;
@@ -179,16 +203,29 @@ const VirtualTableRow = memo(function VirtualTableRow({
               growthMetricBasis={row.growth_metric_basis}
             />
           </Box>
-          {row.company_name ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              noWrap
-              title={row.company_name}
-              sx={{ display: 'block', lineHeight: 1.2, minWidth: 0 }}
-            >
-              {row.company_name}
-            </Typography>
+          {row.company_name || statusChip ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+              {row.company_name ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  title={row.company_name}
+                  sx={{ display: 'block', lineHeight: 1.2, minWidth: 0, flex: 1 }}
+                >
+                  {row.company_name}
+                </Typography>
+              ) : null}
+              {statusChip ? (
+                <Chip
+                  label={statusChip.label}
+                  color={statusChip.color}
+                  size="small"
+                  title={statusChip.title}
+                  sx={{ height: 18, fontSize: 10, flexShrink: 0 }}
+                />
+              ) : null}
+            </Box>
           ) : null}
         </Box>
       </TableCell>
@@ -436,6 +473,10 @@ const VirtualTableRow = memo(function VirtualTableRow({
          prevProps.row.gics_sector === nextProps.row.gics_sector &&
          prevProps.row.ibd_industry_group === nextProps.row.ibd_industry_group &&
          prevProps.row.ibd_group_rank === nextProps.row.ibd_group_rank &&
+         prevProps.row.scan_mode === nextProps.row.scan_mode &&
+         prevProps.row.data_status === nextProps.row.data_status &&
+         prevProps.row.is_scannable === nextProps.row.is_scannable &&
+         prevProps.row.composite_reason === nextProps.row.composite_reason &&
          (prevProps.row.market_themes || []).join('|') === (nextProps.row.market_themes || []).join('|') &&
          prevProps.row.rating === nextProps.row.rating &&
          prevProps.mcapDisplay === nextProps.mcapDisplay &&
@@ -594,7 +635,10 @@ function ResultsTable({
                   onOpenChart={onOpenChart}
                   showActions={showActions}
                   showWatchlistMenu={showWatchlistMenu}
-                  chartEnabled={isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)}
+                  chartEnabled={
+                    row.is_scannable !== false &&
+                    (isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart))
+                  }
                   mcapDisplay={mcapDisplay}
                 />
               );

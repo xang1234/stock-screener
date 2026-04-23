@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import Text, cast, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -373,11 +373,38 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             if r.overall_rating in INT_TO_RATING
         ))
 
+        legacy_rating_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("rating",),
+                bind_or_session=self._session,
+            ),
+            Text,
+        )
+        legacy_rating_rows = (
+            self._session.query(legacy_rating_col)
+            .filter(
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.overall_rating.is_(None),
+                legacy_rating_col.isnot(None),
+                legacy_rating_col != "",
+            )
+            .distinct()
+            .all()
+        )
+        ratings = tuple(sorted({
+            *ratings,
+            *(row[0] for row in legacy_rating_rows),
+        }))
+
         # Industries and sectors from JSON
-        industry_col = json_text(
-            StockFeatureDaily.details_json,
-            ("ibd_industry_group",),
-            bind_or_session=self._session,
+        industry_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("ibd_industry_group",),
+                bind_or_session=self._session,
+            ),
+            Text,
         )
         industry_rows = (
             self._session.query(industry_col)
@@ -391,10 +418,13 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         )
         industries = tuple(sorted(r[0] for r in industry_rows))
 
-        sector_col = json_text(
-            StockFeatureDaily.details_json,
-            ("gics_sector",),
-            bind_or_session=self._session,
+        sector_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("gics_sector",),
+                bind_or_session=self._session,
+            ),
+            Text,
         )
         sector_rows = (
             self._session.query(sector_col)
@@ -469,7 +499,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(industry_col == ibd_industry_group)
-            .order_by(StockFeatureDaily.composite_score.desc())
+            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
             .all()
         )
         return tuple(
@@ -502,7 +532,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(sector_col == gics_sector)
-            .order_by(StockFeatureDaily.composite_score.desc())
+            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
             .all()
         )
         return tuple(
@@ -655,8 +685,10 @@ def _map_feature_to_scan_result(
     """
     d: dict[str, Any] = row.details_json or {}
 
-    raw_score = row.composite_score or 0
-    clamped_score = max(0.0, min(100.0, float(raw_score)))
+    raw_score = row.composite_score
+    clamped_score = (
+        None if raw_score is None else max(0.0, min(100.0, float(raw_score)))
+    )
 
     rating = INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass"))
 
@@ -670,6 +702,14 @@ def _map_feature_to_scan_result(
         "field_availability": joined.get("field_availability"),
         "growth_reporting_cadence": joined.get("growth_reporting_cadence"),
         "growth_metric_basis": joined.get("growth_metric_basis"),
+        "data_status": d.get("data_status"),
+        "is_scannable": d.get("is_scannable"),
+        "scan_mode": d.get("scan_mode"),
+        "history_bars": d.get("history_bars"),
+        "applicable_screeners": d.get("applicable_screeners"),
+        "unavailable_screeners": d.get("unavailable_screeners"),
+        "composite_reason": d.get("composite_reason"),
+        "ipo_bonus": d.get("ipo_bonus"),
         "minervini_score": d.get("minervini_score"),
         "canslim_score": d.get("canslim_score"),
         "ipo_score": d.get("ipo_score"),

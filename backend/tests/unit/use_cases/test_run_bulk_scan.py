@@ -395,6 +395,34 @@ class TestErrorHandling:
         assert result.passed == 2
         assert result.status == ScanStatus.COMPLETED.value
 
+    def test_insufficient_history_result_is_not_persisted_in_legacy_scan_results(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+
+        scanner = FakeScanner(
+            results={
+                "AAPL": {
+                    "composite_score": None,
+                    "rating": "Insufficient Data",
+                    "reason": "Insufficient price history",
+                    "result_status": "insufficient_history",
+                    "scan_mode": "ipo_weighted",
+                    "is_scannable": False,
+                },
+            }
+        )
+
+        cmd = RunBulkScanCommand(scan_id="s1", symbols=["AAPL"])
+        result = _make_use_case(scanner).execute(
+            uow, cmd, FakeProgressSink(), FakeCancellationToken()
+        )
+
+        assert result.failed == 1
+        assert result.passed == 0
+        assert result_repo.count_by_scan_id("s1") == 0
+
     def test_fatal_error_marks_scan_failed(self):
         """A fatal error (e.g. commit failure) marks the scan as FAILED."""
         scan_repo = FakeScanRepository()

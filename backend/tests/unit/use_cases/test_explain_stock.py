@@ -101,6 +101,38 @@ class TestExplainStockHappyPath:
         result = uc.execute(uow, ExplainStockQuery(scan_id="scan-ci", symbol="aapl"))
         assert result.explanation.symbol == "AAPL"
 
+    def test_feature_store_path_preserves_unscored_rows(self):
+        store = FakeFeatureStoreRepository()
+        uow = FakeUnitOfWork(feature_store=store)
+        uow.scans.create(scan_id="scan-fs", status="completed", feature_run_id=42)
+
+        store._rows[42] = [
+            FeatureRow(
+                run_id=42,
+                symbol="MINI",
+                as_of_date=date(2026, 4, 23),
+                composite_score=None,
+                overall_rating=None,
+                passes_count=0,
+                details={
+                    "rating": "Insufficient Data",
+                    "screeners_run": [],
+                    "composite_method": "weighted_average",
+                    "screeners_passed": 0,
+                    "screeners_total": 0,
+                    "current_price": 18.5,
+                    "details": {"screeners": {}},
+                },
+            ),
+        ]
+
+        uc = ExplainStockUseCase()
+        result = uc.execute(uow, ExplainStockQuery(scan_id="scan-fs", symbol="MINI"))
+
+        assert result.explanation.symbol == "MINI"
+        assert result.explanation.composite_score is None
+        assert result.explanation.rating == "Insufficient Data"
+
 
 class TestExplainStockErrors:
     """Error conditions for ExplainStockUseCase."""
@@ -166,6 +198,30 @@ class TestExplainStockErrors:
 
         with pytest.raises(EntityNotFoundError, match="ScanResult"):
             uc.execute(uow, ExplainStockQuery(scan_id="scan-legacy", symbol="GHOST"))
+
+    def test_unbound_scan_preserves_unscored_details_blob(self):
+        item = make_domain_item("MINI", score=None)
+        scan_results = FakeScanResultRepository(items=[item])
+        scan_results._details_map = {
+            "MINI": {
+                "composite_score": None,
+                "rating": "Insufficient Data",
+                "current_price": 12.0,
+                "screeners_run": [],
+                "composite_method": "weighted_average",
+                "screeners_passed": 0,
+                "screeners_total": 0,
+                "details": {"screeners": {}},
+            },
+        }
+        uow = FakeUnitOfWork(scan_results=scan_results)
+        uow.scans.create(scan_id="scan-legacy", status="completed")
+
+        uc = ExplainStockUseCase()
+        result = uc.execute(uow, ExplainStockQuery(scan_id="scan-legacy", symbol="MINI"))
+
+        assert result.explanation.composite_score is None
+        assert result.explanation.rating == "Insufficient Data"
 
     def test_symbol_not_found_raises(self):
         store = FakeFeatureStoreRepository()

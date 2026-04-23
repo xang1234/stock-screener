@@ -564,10 +564,11 @@ class StaticSiteExportService:
         chunk_dir = scan_dir / "chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        chunk_refs: list[dict[str, Any]] = []
         serialized_rows = [self._serialize_scan_row(row) for row in rows]
         self._annotate_percentile_ranks(serialized_rows)
+        serialized_rows = self._sort_static_scan_rows(serialized_rows)
         default_filtered_rows = self._apply_static_default_filters(serialized_rows)
+        chunk_refs: list[dict[str, Any]] = []
         for index in range(0, len(serialized_rows), SCAN_CHUNK_SIZE):
             chunk_rows = serialized_rows[index:index + SCAN_CHUNK_SIZE]
             chunk_num = (index // SCAN_CHUNK_SIZE) + 1
@@ -629,13 +630,33 @@ class StaticSiteExportService:
         entries: list[dict[str, Any]] = []
         skipped_symbols: list[str] = []
         row_by_symbol: dict[str, Any] = {}
+        ordered_rows = list(rows)
+
+        if serialized_rows is not None:
+            raw_rows_by_symbol = {
+                getattr(row, "symbol", None): row
+                for row in rows
+                if getattr(row, "symbol", None)
+            }
+            ordered_symbols = [row["symbol"] for row in serialized_rows if row.get("symbol")]
+            ordered_rows = [
+                raw_rows_by_symbol[symbol]
+                for symbol in ordered_symbols
+                if symbol in raw_rows_by_symbol
+            ]
+            seen_symbols = {getattr(row, "symbol", None) for row in ordered_rows}
+            ordered_rows.extend(
+                row
+                for row in rows
+                if getattr(row, "symbol", None) not in seen_symbols
+            )
 
         # --- Pass 1: export charts for top-N by composite score (default) ---
-        for start in range(0, len(rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
+        for start in range(0, len(ordered_rows), STATIC_CHART_LOOKUP_BATCH_SIZE):
             if len(entries) >= STATIC_CHART_LIMIT:
                 break
 
-            batch_rows = list(rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
+            batch_rows = list(ordered_rows[start:start + STATIC_CHART_LOOKUP_BATCH_SIZE])
             symbols = [row.symbol for row in batch_rows if getattr(row, "symbol", None)]
             price_data = self._price_cache.get_many_cached_only(symbols, period="2y")
             fundamentals = self._fundamentals_cache.get_many_cached_only(symbols)
@@ -688,7 +709,7 @@ class StaticSiteExportService:
                 # Build a lookup from serialized rows for extra symbols
                 ser_by_symbol = {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
                 # Also need domain rows for _serialize_scan_row
-                for row in rows:
+                for row in ordered_rows:
                     sym = getattr(row, "symbol", None)
                     if sym and sym not in row_by_symbol:
                         row_by_symbol[sym] = row
@@ -1596,6 +1617,34 @@ class StaticSiteExportService:
             for row in rows
             if row.get("volume") is not None and row["volume"] >= min_volume
         ]
+
+    @staticmethod
+    def _static_scan_mode_sort_priority(row: dict[str, Any]) -> int:
+        mode = row.get("scan_mode")
+        if not mode or mode == "full":
+            return 0
+        if mode == "ipo_weighted":
+            return 1
+        if mode == "listing_only":
+            return 2
+        return 3
+
+    @classmethod
+    def _sort_static_scan_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        def _score_key(row: dict[str, Any]) -> float:
+            score = row.get("composite_score")
+            if score is None:
+                return float("-inf")
+            return float(score)
+
+        return sorted(
+            rows,
+            key=lambda row: (
+                cls._static_scan_mode_sort_priority(row),
+                -_score_key(row) if row.get("scan_mode") != "listing_only" else 0,
+                row.get("symbol") or "",
+            ),
+        )
 
     def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
         if data is None or getattr(data, "empty", True):

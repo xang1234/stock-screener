@@ -14,6 +14,7 @@ Business rules:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from app.domain.common.errors import EntityNotFoundError
@@ -38,6 +39,20 @@ from app.domain.scanning.scoring import (
 from ._resolve import resolve_scan
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_composite_score(value: object) -> float | None:
+    """Clamp stored composite scores into range while preserving unscored rows."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return max(0.0, min(100.0, numeric))
 
 
 # ── Query (input) ───────────────────────────────────────────────────────
@@ -174,7 +189,7 @@ class ExplainStockUseCase:
         screener_outputs = extract_screener_outputs(d)
         return ScanResultItemDomain(
             symbol=row.symbol,
-            composite_score=max(0.0, min(100.0, float(row.composite_score or 0))),
+            composite_score=_normalize_composite_score(row.composite_score),
             rating=INT_TO_RATING.get(row.overall_rating, d.get("rating", "Pass")),
             current_price=d.get("current_price"),
             screener_outputs=screener_outputs,
@@ -190,10 +205,9 @@ class ExplainStockUseCase:
     ) -> ScanResultItemDomain:
         """Reconstruct ScanResultItemDomain from a raw details blob (legacy path)."""
         screener_outputs = extract_screener_outputs(details)
-        raw_score = details.get("composite_score", 0) or 0
         return ScanResultItemDomain(
             symbol=symbol,
-            composite_score=max(0.0, min(100.0, float(raw_score))),
+            composite_score=_normalize_composite_score(details.get("composite_score")),
             rating=details.get("rating", "Pass"),
             current_price=details.get("current_price"),
             screener_outputs=screener_outputs,

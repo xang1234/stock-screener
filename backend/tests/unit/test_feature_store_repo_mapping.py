@@ -34,3 +34,33 @@ def test_map_feature_to_scan_result_coerces_scalar_market_themes():
     )
 
     assert item.extended_fields["market_themes"] == ["AI Infrastructure"]
+
+
+def test_map_feature_to_scan_result_preserves_insufficient_data_rating_from_details():
+    row = StockFeatureDaily(
+        run_id=1,
+        symbol="0100.HK",
+        as_of_date=date(2026, 4, 2),
+        composite_score=None,
+        overall_rating=None,
+        passes_count=0,
+        details_json={
+            "rating": "Insufficient Data",
+            "data_status": "insufficient_history",
+            "scan_mode": "listing_only",
+            "history_bars": 20,
+        },
+    )
+
+    item = _map_feature_to_scan_result(
+        row,
+        joined={
+            "company_name": "MINIMAX-W",
+            "market": "HK",
+            "exchange": "XHKG",
+            "currency": "HKD",
+        },
+        include_sparklines=False,
+    )
+
+    assert item.rating == "Insufficient Data"
