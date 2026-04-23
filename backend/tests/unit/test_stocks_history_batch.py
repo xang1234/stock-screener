@@ -48,11 +48,16 @@ class _FakeCache:
         self._frames = frames
         self.last_period = None
         self.last_symbols = None
+        self.last_method = None
 
-    def get_many(self, symbols, period="2y"):
+    def get_many_cached_only(self, symbols, period="2y"):
+        self.last_method = "get_many_cached_only"
         self.last_symbols = list(symbols)
         self.last_period = period
         return {sym: self._frames.get(sym) for sym in symbols}
+
+    def get_many(self, symbols, period="2y"):
+        raise AssertionError("history/batch must use the cache-only bulk path")
 
 
 @pytest.mark.asyncio
@@ -78,6 +83,7 @@ async def test_history_batch_returns_points_and_missing(client, monkeypatch):
     assert isinstance(first["volume"], int)
     assert isinstance(first["close"], float)
 
+    assert fake.last_method == "get_many_cached_only"
     # Cache invoked with normalized (uppercase, deduped) symbols
     assert fake.last_symbols == ["AAPL", "MSFT", "ZZZZ"]
     # Cache period is "2y" for any non-5y request (mirrors single-symbol behavior)

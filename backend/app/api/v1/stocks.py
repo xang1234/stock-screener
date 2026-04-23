@@ -927,7 +927,7 @@ async def get_price_history_batch(payload: PriceHistoryBatchRequest):
         )
 
     cache_period = "5y" if payload.period == "5y" else "2y"
-    frames = get_price_cache().get_many(normalized, period=cache_period)
+    frames = get_price_cache().get_many_cached_only(normalized, period=cache_period)
 
     data: dict[str, list[dict]] = {}
     missing: list[str] = []
