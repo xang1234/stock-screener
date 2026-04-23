@@ -165,6 +165,14 @@ def _compute_ipo_bonus(ipo_score: float | None, history_bars: int) -> float:
     return round(max(0.0, raw_bonus), 2)
 
 
+def _scan_mode_for_history(history_bars: int) -> str:
+    if history_bars >= FULL_SCAN_MIN_BARS:
+        return "full"
+    if history_bars >= LISTING_ONLY_MIN_BARS:
+        return "ipo_weighted"
+    return "listing_only"
+
+
 class ScanOrchestrator:
     """
     Orchestrates multi-screener stock analysis.
@@ -359,7 +367,7 @@ class ScanOrchestrator:
             scan_mode = "full"
             data_status = "complete"
             if history_bars < FULL_SCAN_MIN_BARS:
-                scan_mode = "ipo_weighted"
+                scan_mode = _scan_mode_for_history(history_bars)
                 data_status = "insufficient_history"
                 if ipo_bonus > 0:
                     composite_score = min(100.0, composite_score + ipo_bonus)
@@ -756,7 +764,7 @@ class ScanOrchestrator:
             "result_status": "insufficient_history",
             "data_status": "insufficient_history",
             "is_scannable": False,
-            "scan_mode": "listing_only",
+            "scan_mode": _scan_mode_for_history(history_bars),
             "history_bars": history_bars,
             "applicable_screeners": [],
             "unavailable_screeners": list(unavailable_screeners),

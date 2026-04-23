@@ -260,14 +260,14 @@ class TestScanOrchestratorRating:
 
 class TestScanOrchestratorErrorPaths:
     def test_insufficient_data_returns_error(self):
-        """StockData with < 100 days produces a listing-only insufficient-history row."""
+        """StockData with 30-251 bars produces an ipo-weighted insufficient-history row."""
         orch, _, _ = _build_orchestrator([("alpha", 85.0, True)], n_days=50)
         result = orch.scan_stock_multi("TEST", ["alpha"], composite_method="weighted_average")
 
         assert result["rating"] == "Insufficient Data"
         assert result["composite_score"] is None
         assert result["result_status"] == "insufficient_history"
-        assert result["scan_mode"] == "listing_only"
+        assert result["scan_mode"] == "ipo_weighted"
         assert result["is_scannable"] is False
 
     def test_all_screeners_fail_returns_error(self):
@@ -442,6 +442,51 @@ class TestScanOrchestratorErrorPaths:
         assert result["applicable_screeners"] == ["ipo"]
         assert result["unavailable_screeners"] == ["setup_engine"]
         assert result["composite_score"] > 80.0
+
+    def test_mid_history_non_scannable_rows_keep_ipo_weighted_band(self):
+        stock_data = _make_stock_data("TEST", n_days=120)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        class FakeMinervini(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(name="minervini", score=95.0, passes=True, rating="Strong Buy")
+
+        registry.register(FakeMinervini)
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orch.scan_stock_multi("TEST", ["minervini"], composite_method="weighted_average")
+
+        assert result["result_status"] == "insufficient_history"
+        assert result["scan_mode"] == "ipo_weighted"
+        assert result["is_scannable"] is False
+        assert result["history_bars"] == 120
+        assert result["unavailable_screeners"] == ["minervini"]
+
+    def test_full_history_non_scannable_rows_keep_full_band(self):
+        stock_data = _make_stock_data("TEST", n_days=260)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        class FakeSetupEngine(RecordingScreener):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="setup_engine",
+                    score=0.0,
+                    passes=False,
+                    rating="Insufficient Data",
+                    details={"reason": "insufficient_weekly_bars"},
+                )
+
+        registry.register(FakeSetupEngine)
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+
+        result = orch.scan_stock_multi("TEST", ["setup_engine"], composite_method="weighted_average")
+
+        assert result["result_status"] == "insufficient_history"
+        assert result["scan_mode"] == "full"
+        assert result["is_scannable"] is False
+        assert result["history_bars"] == 260
 
 
 class TestScanOrchestratorDataFlow:
