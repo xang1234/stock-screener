@@ -5,6 +5,7 @@ import {
   Box,
   CircularProgress,
   Grid,
+  MenuItem,
   Paper,
   Table,
   TableBody,
@@ -12,23 +13,28 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from '@mui/material';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 
 import { getWatchlist } from '../../api/marketScan';
-import { getScanBootstrap } from '../../api/scans';
+import { getScanBootstrap, getScanResults } from '../../api/scans';
 import { getCurrentRankings } from '../../api/groups';
 import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
 import PriceSparkline from '../Scan/PriceSparkline';
 import RSSparkline from '../Scan/RSSparkline';
 import ChartViewerModal from '../Scan/ChartViewerModal';
 import RankChangeCell from '../shared/RankChangeCell';
+import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/constants';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
+import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
 
 const EMPTY_ROWS = [];
+const DEFAULT_MIN_VOLUME = 100_000_000;
+const DEFAULT_TOP_RESULTS = 20;
 
 function formatNumber(value, digits = 0) {
   if (value == null) return '-';
@@ -96,12 +102,29 @@ function DailyMarketSnapshotTab() {
   const scanAsOfDate = scanPayload?.selected_scan?.as_of_date
     ?? scanPayload?.results_page?.as_of_date
     ?? null;
-  const topResults = useMemo(() => {
-    const all = scanPayload?.results_page?.results ?? EMPTY_ROWS;
-    return all
-      .filter((row) => (row.dollar_volume ?? row.avg_dollar_volume ?? 0) >= 100_000_000)
-      .slice(0, 20);
-  }, [scanPayload]);
+  const [marketCapMin, setMarketCapMin] = useState('');
+  const topResultsParams = useMemo(() => ({
+    page: 1,
+    per_page: DEFAULT_TOP_RESULTS,
+    sort_by: 'composite_score',
+    sort_order: 'desc',
+    min_volume: DEFAULT_MIN_VOLUME,
+    ...(marketCapMin !== '' ? { min_market_cap_usd: Number(marketCapMin) } : {}),
+  }), [marketCapMin]);
+  const topResultsQuery = useQuery({
+    queryKey: ['marketScan', 'dailySnapshot', scanId, topResultsParams],
+    queryFn: () => getScanResults(scanId, topResultsParams),
+    enabled: Boolean(scanId),
+    staleTime: 60_000,
+    placeholderData: (previous) => previous,
+  });
+  const topResults = topResultsQuery.data?.results ?? EMPTY_ROWS;
+  const topResultSymbols = useMemo(() => {
+    const seen = new Set();
+    return topResults
+      .map((row) => row?.symbol)
+      .filter((symbol) => symbol && !seen.has(symbol) && seen.add(symbol));
+  }, [topResults]);
 
   const topGroups = (groupsQuery.data?.rankings ?? EMPTY_ROWS).slice(0, 10);
   const groupsDate = groupsQuery.data?.date ?? null;
@@ -209,12 +232,43 @@ function DailyMarketSnapshotTab() {
       </Grid>
 
       <Paper elevation={0} sx={{ p: 1.5, mb: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
-          Top Scan Candidates
-        </Typography>
-        <Typography variant="caption" color="text.disabled" sx={{ mb: 1, display: 'block', fontSize: '10px' }}>
-          Dollar volume &gt; $100M. Click a row for chart details.
-        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 1,
+            flexWrap: 'wrap',
+            mb: 1,
+          }}
+        >
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
+              Top Scan Candidates
+            </Typography>
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', fontSize: '10px' }}>
+              Dollar volume &gt; $100M. Click a row for chart details.
+            </Typography>
+          </Box>
+          <TextField
+            select
+            size="small"
+            label="Mkt Cap"
+            value={marketCapMin}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setMarketCapMin(nextValue === '' ? '' : Number(nextValue));
+            }}
+            sx={{ minWidth: 140 }}
+          >
+            <MenuItem value="">All</MenuItem>
+            {MARKET_CAP_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Box>
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -222,6 +276,7 @@ function DailyMarketSnapshotTab() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
+                <TableCell align="center">MCap</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend</TableCell>
                 <TableCell align="center">RS Trend</TableCell>
@@ -230,6 +285,20 @@ function DailyMarketSnapshotTab() {
               </TableRow>
             </TableHead>
             <TableBody>
+              {topResultsQuery.isLoading && topResults.length === 0 ? (
+                <TableRow>
+                  <TableCell align="center" colSpan={9}>
+                    <CircularProgress size={18} />
+                  </TableCell>
+                </TableRow>
+              ) : null}
+              {topResultsQuery.isError && topResults.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} align="center" sx={{ color: 'error.main', py: 2 }}>
+                    Failed to load scan candidates.
+                  </TableCell>
+                </TableRow>
+              ) : null}
               {topResults.map((row) => (
                 <TableRow
                   key={row.symbol}
@@ -246,7 +315,10 @@ function DailyMarketSnapshotTab() {
                 >
                   <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
                   <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
-                  <TableCell align="center">{row.current_price != null ? `$${formatNumber(row.current_price, 2)}` : '-'}</TableCell>
+                  <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
+                  <TableCell align="center">
+                    {resolveMarketCapDisplay(row, null, { preferUsd: true }).formattedValue}
+                  </TableCell>
                   <TableCell align="center">{row.rating}</TableCell>
                   <TableCell align="center">
                     {row.price_sparkline_data ? (
@@ -289,10 +361,10 @@ function DailyMarketSnapshotTab() {
                   </TableCell>
                 </TableRow>
               ))}
-              {topResults.length === 0 && (
+              {!topResultsQuery.isLoading && !topResultsQuery.isError && topResults.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} align="center" sx={{ color: 'text.disabled', py: 2 }}>
-                    No high-volume candidates in the latest scan.
+                  <TableCell colSpan={9} align="center" sx={{ color: 'text.disabled', py: 2 }}>
+                    No scan candidates match the current filters.
                   </TableCell>
                 </TableRow>
               )}
@@ -347,6 +419,7 @@ function DailyMarketSnapshotTab() {
           filters={{}}
           sortBy="composite_score"
           sortOrder="desc"
+          navigationSymbolsOverride={topResultSymbols}
           currentPageResults={topResults}
         />
       )}

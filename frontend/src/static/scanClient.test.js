@@ -151,8 +151,8 @@ describe('static scan client', () => {
 
   it('filters by EPS Rating, Market Cap, and RS 12M ranges', () => {
     const testRows = [
-      { symbol: 'A', eps_rating: 85, market_cap: 5_000_000_000, rs_rating_12m: 90 },
-      { symbol: 'B', eps_rating: 45, market_cap: 500_000_000, rs_rating_12m: 55 },
+      { symbol: 'A', eps_rating: 85, market_cap: 5_000_000_000, market_cap_usd: 500_000_000, rs_rating_12m: 90 },
+      { symbol: 'B', eps_rating: 45, market_cap: 500_000_000, market_cap_usd: 2_000_000_000, rs_rating_12m: 55 },
       { symbol: 'C', eps_rating: null, market_cap: null, rs_rating_12m: null },
     ];
 
@@ -163,6 +163,10 @@ describe('static scan client', () => {
     const f2 = buildDefaultScanFilters();
     f2.minMarketCap = 1_000_000_000;
     expect(filterStaticScanRows(testRows, f2).map((r) => r.symbol)).toEqual(['A']);
+
+    const fUsd = buildDefaultScanFilters();
+    fUsd.marketCapUsd = { min: 1_000_000_000, max: null };
+    expect(filterStaticScanRows(testRows, fUsd).map((r) => r.symbol)).toEqual(['B']);
 
     const f3 = buildDefaultScanFilters();
     f3.rs12m = { min: 80, max: null };

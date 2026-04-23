@@ -46,6 +46,7 @@ const inferMarketFromSymbol = (symbol) => {
  * @param {Object} props.filters - Current filter state object (from ScanPage)
  * @param {string} props.sortBy - Current sort field
  * @param {string} props.sortOrder - Current sort order
+ * @param {Array<string>} props.navigationSymbolsOverride - Explicit navigation set
  * @param {Array} props.currentPageResults - Results from current page (for quick lookup)
  */
 function ChartViewerModal({
@@ -56,6 +57,7 @@ function ChartViewerModal({
   filters = {},
   sortBy = 'composite_score',
   sortOrder = 'desc',
+  navigationSymbolsOverride = null,
   currentPageResults = [],
 }) {
   const queryClient = useQueryClient();
@@ -87,7 +89,7 @@ function ChartViewerModal({
   const { data: allSymbols, isLoading: symbolsLoading } = useQuery({
     queryKey: ['allFilteredSymbols', scanId, filterCacheKey, sortBy, sortOrder],
     queryFn: () => getAllFilteredSymbols(scanId, filterParams),
-    enabled: open && !!scanId,
+    enabled: open && !!scanId && !Array.isArray(navigationSymbolsOverride),
     staleTime: 5000, // 5 seconds — short enough to catch mid-session sort changes
     refetchOnMount: 'always', // Always refetch when modal opens to pick up sort changes
   });
@@ -108,11 +110,14 @@ function ChartViewerModal({
   // Make navigation immediately usable from the current page, then
   // upgrade to the full filtered symbol list when hydration finishes.
   const navigationSymbols = useMemo(() => {
+    if (Array.isArray(navigationSymbolsOverride)) {
+      return navigationSymbolsOverride;
+    }
     if (Array.isArray(allSymbols) && allSymbols.length > 0) {
       return allSymbols;
     }
     return currentPageSymbols;
-  }, [allSymbols, currentPageSymbols]);
+  }, [allSymbols, currentPageSymbols, navigationSymbolsOverride]);
 
   // Use navigation hook
   const { currentIndex, currentSymbol, totalCount, goNext, goPrevious, goToIndex } = useChartNavigation(

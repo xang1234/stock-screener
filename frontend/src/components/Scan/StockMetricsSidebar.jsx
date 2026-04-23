@@ -12,7 +12,8 @@ import {
   getGrowthColorHex,
   getEpsRatingColor,
 } from '../../utils/colorUtils';
-import { formatMarketCap, formatPercent, formatRatio, formatPatternName, getScoreColor } from '../../utils/formatUtils';
+import { formatPercent, formatRatio, formatPatternName, getScoreColor } from '../../utils/formatUtils';
+import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
 
 // Alias for this component's usage (uses hex colors)
 const getGrowthColor = getGrowthColorHex;
@@ -80,6 +81,8 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
       </Box>
     );
   }
+
+  const marketCapMetric = resolveMarketCapDisplay(stockData, fundamentals, { preferUsd: true });
 
   // Minimal view when only fundamentals are available (e.g., watchlists)
   if (!stockData && fundamentals) {
@@ -161,7 +164,7 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
         <Box>
           <SectionHeader>VALUATION</SectionHeader>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.5 }}>
-            <MetricRow label="Mkt Cap" value={formatMarketCap(fundamentals.market_cap)} />
+            <MetricRow label={marketCapMetric.label} value={marketCapMetric.formattedValue} />
             <MetricRow label="P/E" value={formatRatio(fundamentals.pe_ratio)} />
             <MetricRow label="Fwd P/E" value={formatRatio(fundamentals.forward_pe)} />
             <MetricRow label="PEG" value={formatRatio(fundamentals.peg_ratio)} />
@@ -338,7 +341,7 @@ function StockMetricsSidebar({ stockData, fundamentals, onViewPeers, onViewSetup
       <Box>
         <SectionHeader>VALUATION</SectionHeader>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.5 }}>
-          <MetricRow label="Mkt Cap" value={formatMarketCap(fundamentals?.market_cap)} />
+          <MetricRow label={marketCapMetric.label} value={marketCapMetric.formattedValue} />
           <MetricRow label="P/E" value={formatRatio(fundamentals?.pe_ratio)} />
           <MetricRow label="Fwd P/E" value={formatRatio(fundamentals?.forward_pe)} />
           <MetricRow label="PEG" value={formatRatio(fundamentals?.peg_ratio)} />

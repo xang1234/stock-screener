@@ -5,6 +5,7 @@ import {
   Box,
   CircularProgress,
   Grid,
+  MenuItem,
   Paper,
   Table,
   TableBody,
@@ -12,6 +13,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from '@mui/material';
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
@@ -27,8 +29,14 @@ import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { useStaticMarket } from '../StaticMarketContext';
 import { marketFlag } from '../marketFlags';
+import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/constants';
+import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
+import { filterStaticScanRows, sortStaticScanRows } from '../scanClient';
+import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
 
 const EMPTY_RESULTS = [];
+const DEFAULT_MIN_VOLUME = 100_000_000;
+const DEFAULT_TOP_RESULTS = 20;
 
 const formatNumber = (value, digits = 0) => {
   if (value == null) return '-';
@@ -51,13 +59,48 @@ function StaticHomePage() {
     enabled: Boolean(marketEntry.pages?.home?.path),
     staleTime: Infinity,
   });
+  const scanRowsQuery = useQuery({
+    queryKey: ['staticHomeScanRows', marketEntry.pages?.scan?.path],
+    queryFn: async () => {
+      const scanManifest = await fetchStaticJson(marketEntry.pages.scan.path);
+      const rowsBySymbol = new Map(
+        (scanManifest.initial_rows || []).map((row) => [row.symbol, row])
+      );
+      const chunkPayloads = await Promise.all(
+        (scanManifest.chunks || []).map((chunk) => fetchStaticJson(chunk.path))
+      );
+      chunkPayloads.forEach((payload) => {
+        (payload.rows || []).forEach((row) => {
+          rowsBySymbol.set(row.symbol, row);
+        });
+      });
+      return Array.from(rowsBySymbol.values());
+    },
+    enabled: Boolean(marketEntry.pages?.scan?.path),
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
   const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
 
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedChartSymbol, setSelectedChartSymbol] = useState(null);
-
-  const topResults = homeQuery.data?.scan_summary?.top_results ?? EMPTY_RESULTS;
+  const [marketCapMin, setMarketCapMin] = useState('');
   const topGroups = homeQuery.data?.top_groups ?? EMPTY_RESULTS;
+  const topCandidateFilters = useMemo(
+    () => applyScanFilterDefaults({
+      minVolume: DEFAULT_MIN_VOLUME,
+      ...(marketCapMin !== '' ? { marketCapUsd: { min: Number(marketCapMin), max: null } } : {}),
+    }),
+    [marketCapMin]
+  );
+  const topResults = useMemo(() => {
+    const allRows = scanRowsQuery.data ?? EMPTY_RESULTS;
+    return sortStaticScanRows(
+      filterStaticScanRows(allRows, topCandidateFilters),
+      'composite_score',
+      'desc'
+    ).slice(0, DEFAULT_TOP_RESULTS);
+  }, [scanRowsQuery.data, topCandidateFilters]);
 
   const chartEntries = useMemo(() => chartIndexQuery.data?.symbols || [], [chartIndexQuery.data]);
   const chartEnabledSymbols = useMemo(() => new Set(chartEntries.map((e) => e.symbol)), [chartEntries]);
@@ -66,7 +109,7 @@ function StaticHomePage() {
     [topResults, chartEnabledSymbols],
   );
 
-  if (manifestQuery.isLoading || homeQuery.isLoading) {
+  if (manifestQuery.isLoading || homeQuery.isLoading || scanRowsQuery.isLoading) {
     return (
       <Box display="flex" justifyContent="center" py={8}>
         <CircularProgress />
@@ -74,7 +117,7 @@ function StaticHomePage() {
     );
   }
 
-  if (manifestQuery.isError || homeQuery.isError) {
+  if (manifestQuery.isError || homeQuery.isError || scanRowsQuery.isError) {
     return (
       <Alert severity="error">
         Failed to load the daily snapshot.
@@ -173,12 +216,43 @@ function StaticHomePage() {
       </Grid>
 
       <Paper elevation={0} sx={{ p: 1.5, mb: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
-          Top Scan Candidates
-        </Typography>
-        <Typography variant="caption" color="text.disabled" sx={{ mb: 1, display: 'block', fontSize: '10px' }}>
-          Dollar volume &gt; $100M. Click a row for chart details.
-        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 1,
+            flexWrap: 'wrap',
+            mb: 1,
+          }}
+        >
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
+              Top Scan Candidates
+            </Typography>
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', fontSize: '10px' }}>
+              Dollar volume &gt; $100M. Click a row for chart details.
+            </Typography>
+          </Box>
+          <TextField
+            select
+            size="small"
+            label="Mkt Cap"
+            value={marketCapMin}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setMarketCapMin(nextValue === '' ? '' : Number(nextValue));
+            }}
+            sx={{ minWidth: 140 }}
+          >
+            <MenuItem value="">All</MenuItem>
+            {MARKET_CAP_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </Box>
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -186,6 +260,7 @@ function StaticHomePage() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
+                <TableCell align="center">MCap</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend (30d)</TableCell>
                 <TableCell align="center">RS Trend (30d)</TableCell>
@@ -213,7 +288,10 @@ function StaticHomePage() {
                     <TickerCell symbol={row.symbol} companyName={row.company_name} align="center" />
                   </TableCell>
                   <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
-                  <TableCell align="center">{row.current_price != null ? `$${formatNumber(row.current_price, 2)}` : '-'}</TableCell>
+                  <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
+                  <TableCell align="center">
+                    {resolveMarketCapDisplay(row, null, { preferUsd: true }).formattedValue}
+                  </TableCell>
                   <TableCell align="center">{row.rating}</TableCell>
                   <TableCell align="center">
                     {row.price_sparkline_data ? (
@@ -255,6 +333,13 @@ function StaticHomePage() {
                   </TableCell>
                 </TableRow>
               ))}
+              {topResults.length === 0 ? (
+                <TableRow>
+                  <TableCell align="center" colSpan={9}>
+                    No scan candidates match the current filters.
+                  </TableCell>
+                </TableRow>
+              ) : null}
             </TableBody>
           </Table>
         </TableContainer>
