@@ -119,6 +119,12 @@ function DailyMarketSnapshotTab() {
     placeholderData: (previous) => previous,
   });
   const topResults = topResultsQuery.data?.results ?? EMPTY_ROWS;
+  const topResultSymbols = useMemo(() => {
+    const seen = new Set();
+    return topResults
+      .map((row) => row?.symbol)
+      .filter((symbol) => symbol && !seen.has(symbol) && seen.add(symbol));
+  }, [topResults]);
 
   const topGroups = (groupsQuery.data?.rankings ?? EMPTY_ROWS).slice(0, 10);
   const groupsDate = groupsQuery.data?.date ?? null;
@@ -270,7 +276,7 @@ function DailyMarketSnapshotTab() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
-                <TableCell align="center">MCap</TableCell>
+                <TableCell align="center">MCap ($)</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend</TableCell>
                 <TableCell align="center">RS Trend</TableCell>
@@ -303,7 +309,9 @@ function DailyMarketSnapshotTab() {
                   <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
                   <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
                   <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
-                  <TableCell align="center">{resolveMarketCapDisplay(row).formattedValue}</TableCell>
+                  <TableCell align="center">
+                    {resolveMarketCapDisplay(row, null, { preferUsd: true }).formattedValue}
+                  </TableCell>
                   <TableCell align="center">{row.rating}</TableCell>
                   <TableCell align="center">
                     {row.price_sparkline_data ? (
@@ -404,6 +412,7 @@ function DailyMarketSnapshotTab() {
           filters={{}}
           sortBy="composite_score"
           sortOrder="desc"
+          navigationSymbolsOverride={topResultSymbols}
           currentPageResults={topResults}
         />
       )}

@@ -260,7 +260,7 @@ function StaticHomePage() {
                 <TableCell align="center">Symbol</TableCell>
                 <TableCell align="center">Score</TableCell>
                 <TableCell align="center">Price</TableCell>
-                <TableCell align="center">MCap</TableCell>
+                <TableCell align="center">MCap ($)</TableCell>
                 <TableCell align="center">Rating</TableCell>
                 <TableCell align="center">Price Trend (30d)</TableCell>
                 <TableCell align="center">RS Trend (30d)</TableCell>
@@ -289,7 +289,9 @@ function StaticHomePage() {
                   </TableCell>
                   <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
                   <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
-                  <TableCell align="center">{resolveMarketCapDisplay(row).formattedValue}</TableCell>
+                  <TableCell align="center">
+                    {resolveMarketCapDisplay(row, null, { preferUsd: true }).formattedValue}
+                  </TableCell>
                   <TableCell align="center">{row.rating}</TableCell>
                   <TableCell align="center">
                     {row.price_sparkline_data ? (

@@ -10,6 +10,7 @@ const getScanBootstrap = vi.fn();
 const getScanResults = vi.fn();
 const getCurrentRankings = vi.fn();
 const fetchPriceHistory = vi.fn();
+const chartModalSpy = vi.fn();
 
 vi.mock('../../api/marketScan', () => ({
   getWatchlist: (...args) => getWatchlist(...args),
@@ -41,7 +42,10 @@ vi.mock('../Scan/RSSparkline', () => ({
 }));
 
 vi.mock('../Scan/ChartViewerModal', () => ({
-  default: () => null,
+  default: (props) => {
+    chartModalSpy(props);
+    return null;
+  },
 }));
 
 const liveRow = {
@@ -66,6 +70,7 @@ describe('DailyMarketSnapshotTab', () => {
     getScanResults.mockReset();
     getCurrentRankings.mockReset();
     fetchPriceHistory.mockReset();
+    chartModalSpy.mockReset();
     getWatchlist.mockResolvedValue({ symbols: [] });
     getCurrentRankings.mockResolvedValue({ date: '2026-04-24', rankings: [] });
     getScanBootstrap.mockResolvedValue({
@@ -108,7 +113,7 @@ describe('DailyMarketSnapshotTab', () => {
       );
     });
     expect(await screen.findByText('LIVE', {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.getByText('MCap')).toBeInTheDocument();
+    expect(screen.getByText('MCap ($)')).toBeInTheDocument();
     expect(screen.getByText('$2.5B')).toBeInTheDocument();
     expect(screen.queryByText('BOOT')).not.toBeInTheDocument();
   });
@@ -147,6 +152,47 @@ describe('DailyMarketSnapshotTab', () => {
           sort_order: 'desc',
           min_volume: 100_000_000,
           min_market_cap: 1_000_000_000,
+        })
+      );
+    });
+  });
+
+  it('uses USD-normalized market cap in the table and keeps modal navigation scoped to visible rows', async () => {
+    getScanResults.mockResolvedValue({
+      total: 2,
+      results: [
+        {
+          ...liveRow,
+          symbol: '0700.HK',
+          currency: 'HKD',
+          market_cap: 3_900_000_000_000,
+          market_cap_usd: 500_000_000_000,
+        },
+        {
+          ...liveRow,
+          symbol: 'AAPL',
+          currency: 'USD',
+          market_cap: 2_000_000_000_000,
+          market_cap_usd: 2_000_000_000_000,
+        },
+      ],
+    });
+
+    renderWithProviders(<DailyMarketSnapshotTab />);
+
+    expect(await screen.findByText('0700.HK')).toBeInTheDocument();
+    expect(screen.getByText('$500.0B')).toBeInTheDocument();
+    expect(screen.queryByText('HK$3.9T')).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText('0700.HK'));
+
+    await waitFor(() => {
+      expect(chartModalSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          open: true,
+          initialSymbol: '0700.HK',
+          navigationSymbolsOverride: ['0700.HK', 'AAPL'],
         })
       );
     });

@@ -124,14 +124,15 @@ describe('StaticHomePage', () => {
         return {
           rows: [
             {
-              symbol: 'LOW',
-              company_name: 'Low Cap Systems',
+              symbol: '0700.HK',
+              company_name: 'Tencent Holdings',
               composite_score: 99.0,
               current_price: 25,
               rating: 'Buy',
               volume: 170_000_000,
               market_cap: 900_000_000,
-              currency: 'USD',
+              market_cap_usd: 500_000_000,
+              currency: 'HKD',
               price_sparkline_data: null,
               rs_sparkline_data: null,
             },
@@ -158,8 +159,10 @@ describe('StaticHomePage', () => {
   it('loads top candidates from the static scan bundle, filters by market cap, and keeps chart navigation aligned', async () => {
     renderWithProviders(<StaticHomePage />);
 
-    expect(await screen.findByText('LOW')).toBeInTheDocument();
-    expect(screen.getByText('MCap')).toBeInTheDocument();
+    expect(await screen.findByText('0700.HK')).toBeInTheDocument();
+    expect(screen.getByText('MCap ($)')).toBeInTheDocument();
+    expect(screen.getByText('$500.0M')).toBeInTheDocument();
+    expect(screen.queryByText('HK$900.0M')).not.toBeInTheDocument();
     expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/manifest.json');
     expect(fetchStaticJson).toHaveBeenCalledWith('markets/us/scan/chunks/chunk-0001.json');
     expect(screen.queryByText('SUMMARYONLY')).not.toBeInTheDocument();
@@ -169,7 +172,7 @@ describe('StaticHomePage', () => {
     await user.click(await screen.findByRole('option', { name: '>$1B' }));
 
     await waitFor(() => {
-      expect(screen.queryByText('LOW')).not.toBeInTheDocument();
+      expect(screen.queryByText('0700.HK')).not.toBeInTheDocument();
     });
     expect(screen.getByText('NVDA')).toBeInTheDocument();
     expect(screen.getByText('AAPL')).toBeInTheDocument();
