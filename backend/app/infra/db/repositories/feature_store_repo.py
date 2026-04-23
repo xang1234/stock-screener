@@ -499,7 +499,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(industry_col == ibd_industry_group)
-            .order_by(StockFeatureDaily.composite_score.desc())
+            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
             .all()
         )
         return tuple(
@@ -532,7 +532,7 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         rows = (
             _feature_results_query(self._session, run_id)
             .filter(sector_col == gics_sector)
-            .order_by(StockFeatureDaily.composite_score.desc())
+            .order_by(StockFeatureDaily.composite_score.desc().nullslast())
             .all()
         )
         return tuple(

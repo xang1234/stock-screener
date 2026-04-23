@@ -540,6 +540,92 @@ class TestGetFilterOptionsForRun:
         assert "Insufficient Data" in options.ratings
 
 
+class TestPeerOrdering:
+    def test_industry_peers_place_null_scores_last(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                FeatureRowWrite(
+                    symbol="HIGH",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=90.0,
+                    overall_rating=4,
+                    passes_count=2,
+                    details={"ibd_industry_group": "Software", "gics_sector": "Technology"},
+                ),
+                FeatureRowWrite(
+                    symbol="NULLIPO",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=None,
+                    overall_rating=None,
+                    passes_count=0,
+                    details={
+                        "ibd_industry_group": "Software",
+                        "gics_sector": "Technology",
+                        "rating": "Insufficient Data",
+                    },
+                ),
+                FeatureRowWrite(
+                    symbol="MID",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=40.0,
+                    overall_rating=3,
+                    passes_count=1,
+                    details={"ibd_industry_group": "Software", "gics_sector": "Technology"},
+                ),
+            ],
+        )
+
+        peers = repo.get_peers_by_industry_for_run(run_id, "Software")
+
+        assert [peer.symbol for peer in peers] == ["HIGH", "MID", "NULLIPO"]
+
+    def test_sector_peers_place_null_scores_last(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                FeatureRowWrite(
+                    symbol="HIGH",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=90.0,
+                    overall_rating=4,
+                    passes_count=2,
+                    details={"ibd_industry_group": "Software", "gics_sector": "Technology"},
+                ),
+                FeatureRowWrite(
+                    symbol="NULLIPO",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=None,
+                    overall_rating=None,
+                    passes_count=0,
+                    details={
+                        "ibd_industry_group": "Software",
+                        "gics_sector": "Technology",
+                        "rating": "Insufficient Data",
+                    },
+                ),
+                FeatureRowWrite(
+                    symbol="MID",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=40.0,
+                    overall_rating=3,
+                    passes_count=1,
+                    details={"ibd_industry_group": "Semiconductors", "gics_sector": "Technology"},
+                ),
+            ],
+        )
+
+        peers = repo.get_peers_by_sector_for_run(run_id, "Technology")
+
+        assert [peer.symbol for peer in peers] == ["HIGH", "MID", "NULLIPO"]
+
+
 # ---------------------------------------------------------------------------
 # TestPagination
 # ---------------------------------------------------------------------------

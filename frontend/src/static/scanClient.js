@@ -196,6 +196,14 @@ export const sortStaticScanRows = (rows, sortBy, sortOrder = 'desc') => {
     }
     const leftValue = getSortValue(left, sortBy);
     const rightValue = getSortValue(right, sortBy);
+    if (sortBy === 'composite_score' && sortOrder === 'desc') {
+      if (leftValue == null && rightValue != null) {
+        return 1;
+      }
+      if (leftValue != null && rightValue == null) {
+        return -1;
+      }
+    }
     const comparison = compareValues(leftValue, rightValue);
     if (comparison !== 0) {
       return comparison * direction;
