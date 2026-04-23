@@ -14,6 +14,7 @@ Business rules:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from app.domain.common.errors import EntityNotFoundError
@@ -48,6 +49,8 @@ def _normalize_composite_score(value: object) -> float | None:
     try:
         numeric = float(value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
         return None
     return max(0.0, min(100.0, numeric))
 

@@ -19,6 +19,7 @@ from app.use_cases.scanning.explain_stock import (
     ExplainStockQuery,
     ExplainStockResult,
     ExplainStockUseCase,
+    _normalize_composite_score,
 )
 
 from tests.unit.use_cases.conftest import (
@@ -225,6 +226,14 @@ class TestHappyPath:
         assert thresholds["Buy"] == BUY_THRESHOLD
         assert thresholds["Watch"] == WATCH_THRESHOLD
         assert thresholds["Pass"] == 0.0
+
+
+class TestCompositeScoreNormalization:
+    def test_nan_is_treated_as_unscored(self):
+        assert _normalize_composite_score(float("nan")) is None
+
+    def test_infinity_is_treated_as_unscored(self):
+        assert _normalize_composite_score(float("inf")) is None
 
 
 # ── Tests: Scan Not Found ──────────────────────────────────────────────
