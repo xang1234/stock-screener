@@ -1601,13 +1601,13 @@ class StaticSiteExportService:
     @staticmethod
     def _static_scan_mode_sort_priority(row: dict[str, Any]) -> int:
         mode = row.get("scan_mode")
-        if mode == "full":
+        if not mode or mode == "full":
             return 0
         if mode == "ipo_weighted":
             return 1
         if mode == "listing_only":
             return 2
-        return 0
+        return 3
 
     @classmethod
     def _sort_static_scan_rows(cls, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

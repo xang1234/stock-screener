@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import Text, cast, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -373,11 +373,38 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
             if r.overall_rating in INT_TO_RATING
         ))
 
+        legacy_rating_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("rating",),
+                bind_or_session=self._session,
+            ),
+            Text,
+        )
+        legacy_rating_rows = (
+            self._session.query(legacy_rating_col)
+            .filter(
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.overall_rating.is_(None),
+                legacy_rating_col.isnot(None),
+                legacy_rating_col != "",
+            )
+            .distinct()
+            .all()
+        )
+        ratings = tuple(sorted({
+            *ratings,
+            *(row[0] for row in legacy_rating_rows),
+        }))
+
         # Industries and sectors from JSON
-        industry_col = json_text(
-            StockFeatureDaily.details_json,
-            ("ibd_industry_group",),
-            bind_or_session=self._session,
+        industry_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("ibd_industry_group",),
+                bind_or_session=self._session,
+            ),
+            Text,
         )
         industry_rows = (
             self._session.query(industry_col)
@@ -391,10 +418,13 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         )
         industries = tuple(sorted(r[0] for r in industry_rows))
 
-        sector_col = json_text(
-            StockFeatureDaily.details_json,
-            ("gics_sector",),
-            bind_or_session=self._session,
+        sector_col = cast(
+            json_text(
+                StockFeatureDaily.details_json,
+                ("gics_sector",),
+                bind_or_session=self._session,
+            ),
+            Text,
         )
         sector_rows = (
             self._session.query(sector_col)

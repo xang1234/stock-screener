@@ -207,13 +207,16 @@ def apply_sort_and_paginate(
         col = _COLUMN_MAP.get(sort.field)
         if col is not None:
             order_fn = asc if sort.order == SortOrder.ASC else desc
-            query = query.order_by(order_fn(col))
+            ordered_col = order_fn(col)
+            if sort.field == "composite_score":
+                ordered_col = ordered_col.nullslast()
+            query = query.order_by(ordered_col)
         elif sort.field in _JSON_FIELD_MAP:
             json_path = _JSON_FIELD_MAP[sort.field]
             query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
         else:
             # Unknown sort field — fall back to composite_score desc
-            query = query.order_by(desc(ScanResult.composite_score))
+            query = query.order_by(desc(ScanResult.composite_score).nullslast())
         query = query.offset(page.offset).limit(page.limit)
         rows = query.all()
 
@@ -232,12 +235,15 @@ def apply_sort_all(query: Query, sort: SortSpec) -> list:
     col = _COLUMN_MAP.get(sort.field)
     if col is not None:
         order_fn = asc if sort.order == SortOrder.ASC else desc
-        query = query.order_by(order_fn(col))
+        ordered_col = order_fn(col)
+        if sort.field == "composite_score":
+            ordered_col = ordered_col.nullslast()
+        query = query.order_by(ordered_col)
     elif sort.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[sort.field]
         query = query.order_by(_json_sort_expr(query, sort.field, ScanResult.details, json_path, sort.order))
     else:
-        query = query.order_by(desc(ScanResult.composite_score))
+        query = query.order_by(desc(ScanResult.composite_score).nullslast())
     return query.all()
 
 

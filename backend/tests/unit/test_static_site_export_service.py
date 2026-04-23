@@ -566,6 +566,18 @@ def test_export_scan_bundle_prioritizes_full_rows_before_ipo_weighted_and_listin
     assert [row["symbol"] for row in chunk["rows"]] == ["FULL80", "FULL70", "IPO95", "NEW1"]
 
 
+def test_static_scan_mode_sort_priority_matches_frontend_unknown_mode_fallback(
+    service_and_session_factory,
+):
+    service, _session_factory = service_and_session_factory
+
+    assert service._static_scan_mode_sort_priority({"scan_mode": None}) == 0  # noqa: SLF001
+    assert service._static_scan_mode_sort_priority({"scan_mode": "full"}) == 0  # noqa: SLF001
+    assert service._static_scan_mode_sort_priority({"scan_mode": "ipo_weighted"}) == 1  # noqa: SLF001
+    assert service._static_scan_mode_sort_priority({"scan_mode": "listing_only"}) == 2  # noqa: SLF001
+    assert service._static_scan_mode_sort_priority({"scan_mode": "mystery_mode"}) == 3  # noqa: SLF001
+
+
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     artifacts_dir = tmp_path / "artifacts"
     us_dir = artifacts_dir / "job-us" / "markets" / "us"

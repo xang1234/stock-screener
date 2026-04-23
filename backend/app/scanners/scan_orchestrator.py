@@ -143,7 +143,7 @@ def _history_bar_count(stock_data: StockData) -> int:
     price_data = stock_data.price_data
     if price_data is None or getattr(price_data, "empty", True):
         return 0
-    return int(len(price_data))
+    return len(price_data)
 
 
 def _required_bars_for_screener(name: str) -> int:
@@ -419,14 +419,14 @@ class ScanOrchestrator:
         composite_score: float,
         overall_rating: str,
         composite_method: str,
-        applicable_screeners: list[str],
-        unavailable_screeners: list[str],
-        history_bars: int,
-        scan_mode: str,
-        data_status: str,
-        is_scannable: bool,
-        ipo_bonus: float,
-        composite_reason: str | None,
+        applicable_screeners: list[str] | None = None,
+        unavailable_screeners: list[str] | None = None,
+        history_bars: int | None = None,
+        scan_mode: str = "full",
+        data_status: str = "complete",
+        is_scannable: bool = True,
+        ipo_bonus: float = 0.0,
+        composite_reason: str | None = None,
         quality_downgrade_reason: Optional[str] = None,
         field_completeness_score: Optional[int] = None,
     ) -> Dict:
@@ -448,6 +448,13 @@ class ScanOrchestrator:
         Returns:
             Combined result dict
         """
+        if applicable_screeners is None:
+            applicable_screeners = list(screener_results.keys())
+        if unavailable_screeners is None:
+            unavailable_screeners = []
+        if history_bars is None:
+            history_bars = _history_bar_count(stock_data)
+
         # Extract individual scores
         individual_scores = {
             f"{name}_score": result.score

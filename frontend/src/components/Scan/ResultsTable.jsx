@@ -203,25 +203,29 @@ const VirtualTableRow = memo(function VirtualTableRow({
               growthMetricBasis={row.growth_metric_basis}
             />
           </Box>
-          {row.company_name ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              noWrap
-              title={row.company_name}
-              sx={{ display: 'block', lineHeight: 1.2, minWidth: 0 }}
-            >
-              {row.company_name}
-            </Typography>
-          ) : null}
-          {statusChip ? (
-            <Chip
-              label={statusChip.label}
-              color={statusChip.color}
-              size="small"
-              title={statusChip.title}
-              sx={{ alignSelf: 'flex-start', height: 18, fontSize: 10, mt: 0.25 }}
-            />
+          {row.company_name || statusChip ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+              {row.company_name ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  noWrap
+                  title={row.company_name}
+                  sx={{ display: 'block', lineHeight: 1.2, minWidth: 0, flex: 1 }}
+                >
+                  {row.company_name}
+                </Typography>
+              ) : null}
+              {statusChip ? (
+                <Chip
+                  label={statusChip.label}
+                  color={statusChip.color}
+                  size="small"
+                  title={statusChip.title}
+                  sx={{ height: 18, fontSize: 10, flexShrink: 0 }}
+                />
+              ) : null}
+            </Box>
           ) : null}
         </Box>
       </TableCell>
@@ -632,8 +636,8 @@ function ResultsTable({
                   showActions={showActions}
                   showWatchlistMenu={showWatchlistMenu}
                   chartEnabled={
-                    (isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart)) &&
-                    row.is_scannable !== false
+                    row.is_scannable !== false &&
+                    (isChartEnabled ? isChartEnabled(row.symbol) : Boolean(onOpenChart))
                   }
                   mcapDisplay={mcapDisplay}
                 />

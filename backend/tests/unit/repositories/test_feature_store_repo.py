@@ -483,6 +483,62 @@ class TestSortOrdering:
         scores = [item.composite_score for item in result.items]
         assert scores == [30.0, 20.0, 10.0]
 
+    def test_sort_composite_score_descending_places_null_scores_last(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                _make_row("HIGH", score=90.0),
+                FeatureRowWrite(
+                    symbol="NEWIPO",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=None,
+                    overall_rating=None,
+                    passes_count=0,
+                    details={"rating": "Insufficient Data"},
+                ),
+                _make_row("MID", score=40.0),
+            ],
+        )
+
+        result = repo.query_run(
+            run_id, sort=SortSpec(field="composite_score", order=SortOrder.DESC)
+        )
+
+        assert [item.symbol for item in result.items] == ["HIGH", "MID", "NEWIPO"]
+
+
+class TestGetFilterOptionsForRun:
+    def test_includes_insufficient_data_rating_from_details_when_overall_rating_is_null(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                _make_row("AAPL", score=85.0),
+                FeatureRowWrite(
+                    symbol="0100.HK",
+                    as_of_date=date(2026, 2, 17),
+                    composite_score=None,
+                    overall_rating=None,
+                    passes_count=0,
+                    details={
+                        "rating": "Insufficient Data",
+                        "ibd_industry_group": "Software",
+                        "gics_sector": "Technology",
+                    },
+                ),
+            ],
+        )
+
+        options = repo.get_filter_options_for_run(run_id)
+
+        assert "Watch" in options.ratings
+        assert "Insufficient Data" in options.ratings
+
 
 # ---------------------------------------------------------------------------
 # TestPagination
