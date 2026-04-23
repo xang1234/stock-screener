@@ -425,7 +425,7 @@ class ExplainResponse(BaseModel):
     """Complete explanation of a stock's composite score."""
 
     symbol: str
-    composite_score: float
+    composite_score: float | None
     rating: str
     composite_method: str
     screeners_passed: int

@@ -514,10 +514,17 @@ class MarketCopilotService:
                     ][:5]
                 setup_payload = uow.feature_store.get_setup_payload_for_run(latest_run.id, args.symbol)
 
-        summary = (
-            f"{args.symbol} is rated {explanation.rating} in published run {latest_run.id} "
-            f"with composite score {round(explanation.composite_score, 2)}."
-        )
+        composite_score = explanation.composite_score
+        if composite_score is None:
+            summary = (
+                f"{args.symbol} is rated {explanation.rating} in published run {latest_run.id} "
+                "with no composite score yet."
+            )
+        else:
+            summary = (
+                f"{args.symbol} is rated {explanation.rating} in published run {latest_run.id} "
+                f"with composite score {round(composite_score, 2)}."
+            )
         if scan_item.extended_fields.get("stage") is not None:
             summary += f" It is currently classified as stage {scan_item.extended_fields['stage']}."
 
@@ -525,7 +532,12 @@ class MarketCopilotService:
             summary,
             facts=[
                 self._fact("symbol", args.symbol, "feature_runs", latest_run.as_of_date),
-                self._fact("composite_score", round(explanation.composite_score, 2), "feature_runs", latest_run.as_of_date),
+                self._fact(
+                    "composite_score",
+                    round(composite_score, 2) if composite_score is not None else None,
+                    "feature_runs",
+                    latest_run.as_of_date,
+                ),
                 self._fact("rating", explanation.rating, "feature_runs", latest_run.as_of_date),
             ],
             citations=[

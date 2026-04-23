@@ -145,7 +145,7 @@ class StockExplanation:
     """Complete explanation of why a stock received its composite score/rating."""
 
     symbol: str
-    composite_score: float
+    composite_score: float | None
     rating: str
     composite_method: str
     screeners_passed: int
