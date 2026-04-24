@@ -1,5 +1,8 @@
 """Unit tests for ExportScanResultsUseCase — pure in-memory, no infrastructure."""
 
+import csv
+import io
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -151,6 +154,46 @@ class TestUnboundScanFallback:
         assert len(lines) == 3
         assert "AAPL" in csv_text
         assert "MSFT" in csv_text
+
+    def test_unbound_scan_exports_young_ipo_partial_metrics(self):
+        item = make_domain_item(
+            "NEWIPO",
+            score=None,
+            data_status="insufficient_history",
+            scan_mode="listing_only",
+            is_scannable=False,
+            history_bars=30,
+            rs_rating=None,
+            rs_rating_1m=50.0,
+            rs_rating_3m=None,
+            rs_rating_12m=None,
+            adr_percent=3.5,
+            price_change_1d=2.1,
+        )
+        item = replace(
+            item,
+            rating="Insufficient Data",
+            screeners_run=[],
+            screeners_passed=0,
+            screeners_total=0,
+        )
+        scan_results = FakeScanResultRepository(items=[item])
+        uow = FakeUnitOfWork(scan_results=scan_results)
+        uow.scans.create(scan_id="scan-legacy", status="completed")
+        uc = ExportScanResultsUseCase()
+
+        result = uc.execute(uow, _make_query(scan_id="scan-legacy"))
+
+        csv_text = result.content.decode("utf-8-sig")
+        row = next(csv.DictReader(io.StringIO(csv_text)))
+        assert row["Symbol"] == "NEWIPO"
+        assert row["Composite Score"] == ""
+        assert row["Rating"] == "Insufficient Data"
+        assert row["RS Rating"] == ""
+        assert row["RS 1M"] == "50.0"
+        assert row["RS 3M"] == ""
+        assert row["RS 12M"] == ""
+        assert row["ADR %"] == "3.5"
 
 
 class TestFeatureStoreRouting:

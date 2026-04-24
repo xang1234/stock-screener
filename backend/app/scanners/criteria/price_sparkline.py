@@ -54,17 +54,7 @@ class PriceSparklineCalculator:
             # Get last 30 trading days (most recent data)
             stock_last_30 = stock_prices.iloc[-self.SPARKLINE_DAYS:].values
 
-            # Calculate 1-day percentage change
-            if len(stock_prices) >= 2:
-                yesterday_price = stock_prices.iloc[-2]
-                today_price = stock_prices.iloc[-1]
-                if yesterday_price != 0:
-                    price_change_1d = ((today_price - yesterday_price) / yesterday_price) * 100
-                    price_change_1d = round(float(price_change_1d), 2)
-                else:
-                    price_change_1d = None
-            else:
-                price_change_1d = None
+            price_change_1d = self._calculate_price_change_1d(stock_prices)
 
             # Handle any NaN values
             price_series = np.nan_to_num(stock_last_30, nan=stock_last_30[0])
@@ -111,7 +101,12 @@ class PriceSparklineCalculator:
             return None
         yesterday_price = stock_prices.iloc[-2]
         today_price = stock_prices.iloc[-1]
-        if yesterday_price == 0:
+        if pd.isna(yesterday_price) or pd.isna(today_price) or yesterday_price == 0:
+            return None
+        try:
+            if not np.isfinite(yesterday_price) or not np.isfinite(today_price):
+                return None
+        except TypeError:
             return None
         price_change_1d = ((today_price - yesterday_price) / yesterday_price) * 100
         return round(float(price_change_1d), 2)

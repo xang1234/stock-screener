@@ -236,17 +236,20 @@ def _partial_history_metrics(stock_data: StockData) -> dict[str, object]:
         "stage": None,
         "ma_alignment": None,
         "price_sparkline_data": None,
-        "price_trend": 0,
+        "price_trend": None,
         "price_change_1d": None,
         "rs_sparkline_data": None,
-        "rs_trend": 0,
+        "rs_trend": None,
         "adr_percent": None,
     }
 
     if close_chrono is not None:
         price_result = PriceSparklineCalculator().calculate_price_sparkline(close_chrono)
-        metrics["price_sparkline_data"] = price_result.get("price_data")
-        metrics["price_trend"] = price_result.get("price_trend")
+        price_data_result = price_result.get("price_data")
+        metrics["price_sparkline_data"] = price_data_result
+        metrics["price_trend"] = (
+            price_result.get("price_trend") if price_data_result is not None else None
+        )
         metrics["price_change_1d"] = (
             price_result.get("price_change_1d")
             if price_result.get("price_change_1d") is not None
@@ -258,8 +261,11 @@ def _partial_history_metrics(stock_data: StockData) -> dict[str, object]:
             close_chrono,
             benchmark_close_chrono,
         )
-        metrics["rs_sparkline_data"] = rs_result.get("rs_data")
-        metrics["rs_trend"] = rs_result.get("rs_trend")
+        rs_data_result = rs_result.get("rs_data")
+        metrics["rs_sparkline_data"] = rs_data_result
+        metrics["rs_trend"] = (
+            rs_result.get("rs_trend") if rs_data_result is not None else None
+        )
 
     if (
         close_rev is not None
@@ -267,19 +273,24 @@ def _partial_history_metrics(stock_data: StockData) -> dict[str, object]:
         and len(close_rev) >= 21
         and len(benchmark_close_rev) >= 21
     ):
-        metrics["rs_rating_1m"] = RelativeStrengthCalculator().calculate_period_rs_rating(
-            21,
-            close_rev,
-            benchmark_close_rev,
-            stock_data.rs_universe_performances.get(21)
-            if stock_data.rs_universe_performances
-            else None,
-        )
+        rs_calc = RelativeStrengthCalculator()
+        stock_return = rs_calc.calculate_return(close_rev, 21)
+        benchmark_return = rs_calc.calculate_return(benchmark_close_rev, 21)
+        if stock_return is not None and benchmark_return is not None:
+            metrics["rs_rating_1m"] = rs_calc.calculate_period_rs_rating(
+                21,
+                close_rev,
+                benchmark_close_rev,
+                stock_data.rs_universe_performances.get(21)
+                if stock_data.rs_universe_performances
+                else None,
+            )
 
     if price_data is not None and not price_data.empty:
         metrics["adr_percent"] = ADRCalculator().calculate_adr_percent(
             price_data,
             period=20,
+            min_valid_rows=20,
         )
 
     return metrics

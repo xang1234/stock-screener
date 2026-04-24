@@ -395,7 +395,7 @@ class TestErrorHandling:
         assert result.passed == 2
         assert result.status == ScanStatus.COMPLETED.value
 
-    def test_insufficient_history_result_is_not_persisted_in_legacy_scan_results(self):
+    def test_insufficient_history_result_is_persisted_in_legacy_scan_results(self):
         scan_repo = FakeScanRepository()
         scan_repo.scans["s1"] = _make_scan("s1")
         result_repo = FakeScanResultRepository()
@@ -410,6 +410,9 @@ class TestErrorHandling:
                     "result_status": "insufficient_history",
                     "scan_mode": "ipo_weighted",
                     "is_scannable": False,
+                    "rs_rating_1m": 50.0,
+                    "adr_percent": 3.5,
+                    "price_change_1d": 2.1,
                 },
             }
         )
@@ -419,9 +422,17 @@ class TestErrorHandling:
             uow, cmd, FakeProgressSink(), FakeCancellationToken()
         )
 
-        assert result.failed == 1
+        assert result.failed == 0
         assert result.passed == 0
-        assert result_repo.count_by_scan_id("s1") == 0
+        assert result_repo.count_by_scan_id("s1") == 1
+        _, symbol, persisted = result_repo._persisted_results[0]
+        assert symbol == "AAPL"
+        assert persisted["composite_score"] is None
+        assert persisted["scan_mode"] == "ipo_weighted"
+        assert persisted["is_scannable"] is False
+        assert persisted["rs_rating_1m"] == 50.0
+        assert persisted["adr_percent"] == 3.5
+        assert persisted["price_change_1d"] == 2.1
 
     def test_fatal_error_marks_scan_failed(self):
         """A fatal error (e.g. commit failure) marks the scan as FAILED."""

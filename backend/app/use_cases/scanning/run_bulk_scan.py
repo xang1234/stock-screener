@@ -47,14 +47,14 @@ def _chunked(seq: Sequence[str], size: int) -> Iterator[list[str]]:
 
 
 def _should_persist_result(result: object) -> bool:
-    """Keep legacy scan_results persistence limited to successful rows."""
+    """Persist visible result rows; skip only hard errors."""
     if not isinstance(result, dict):
         return False
 
     explicit_status = result.get("result_status")
-    if explicit_status == "ok":
+    if explicit_status in {"ok", "insufficient_history"}:
         return True
-    if explicit_status in {"insufficient_history", "error"}:
+    if explicit_status == "error":
         return False
 
     if "error" in result:
