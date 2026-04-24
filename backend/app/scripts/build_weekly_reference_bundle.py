@@ -230,6 +230,21 @@ def _build_us_bundle(
         )
     _print_snapshot_publish_summary(snapshot_stats)
 
+    # Yahoo hydration writes market_cap / growth metrics / eps_rating / ipo_date
+    # into stock_fundamentals so `export_weekly_reference_bundle` can merge them
+    # into the Finviz snapshot. Without this, the US bundle carries only what
+    # Finviz's screener returned, which regularly omits market_cap for delisted
+    # tickers and partial responses. The Asia bundle path gets this implicitly
+    # via `hybrid_service.fetch_fundamentals_batch`.
+    print("Starting Yahoo hydration for US published snapshot...", flush=True)
+    hydrate_stats = provider_snapshot_service.hydrate_published_snapshot(
+        db,
+        snapshot_key=snapshot_key,
+        progress_callback=_print_progress,
+    )
+    summary["fundamentals_hydrate"] = hydrate_stats
+    print(f"Hydration complete: {hydrate_stats}", flush=True)
+
     published_run = provider_snapshot_service.get_published_run(db, snapshot_key=snapshot_key)
     if published_run is None:
         raise RuntimeError("Published weekly fundamentals snapshot was not found after publish")
