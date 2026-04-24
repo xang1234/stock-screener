@@ -55,6 +55,11 @@ def downgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
 
+    # (industry_group, date) is about to become unique again; non-US rows
+    # written after upgrade would collide. Drop them first rather than leave
+    # the schema half-reverted.
+    bind.execute(sa.text("DELETE FROM ibd_group_ranks WHERE market <> 'US'"))
+
     if dialect == "sqlite":
         with op.batch_alter_table("ibd_group_ranks") as batch_op:
             batch_op.drop_constraint("uix_ibd_group_rank_market_date", type_="unique")

@@ -481,7 +481,14 @@ def test_non_us_market_never_invokes_us_metadata_repair(monkeypatch):
 
     fake_service = MagicMock()
     fake_service.price_cache = MagicMock()
-    fake_service.price_cache.get_warmup_metadata.return_value = None
+    # Return a completed warmup so the task reaches the post-ranking repair
+    # gate instead of short-circuiting on the same-day warmup-required path.
+    fake_service.price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
     fake_service.calculate_group_rankings.return_value = [
         {"industry_group": "Banks", "avg_rs_rating": 90.0, "rank": 1, "num_stocks": 5}
     ]
@@ -493,14 +500,19 @@ def test_non_us_market_never_invokes_us_metadata_repair(monkeypatch):
         lambda **kwargs: repair_calls.append(kwargs) or {"status": "ok"},
     )
 
-    # Same-day HK run (calc_date == today_local from the calendar stub).
+    # Same-day HK run (calc_date == today_local from the calendar stub) — this
+    # hits the post-ranking repair gate which only fires for market == US.
     result = module.calculate_daily_group_rankings.run("2026-03-20", market="HK")
 
+    assert result.get("groups_ranked") == 1, f"task did not reach ranking path: {result!r}"
     assert result.get("status") != "skipped"
     assert repair_calls == [], (
         "US-scoped metadata repair must not run for non-US markets"
     )
     assert result.get("metadata_repair") is None
+    # Confirm the service was invoked with market='HK', not 'US'.
+    call_kwargs = fake_service.calculate_group_rankings.call_args.kwargs
+    assert call_kwargs.get("market") == "HK"
 
 
 def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):

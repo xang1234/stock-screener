@@ -361,22 +361,24 @@ class IBDGroupRankService:
         db: Session,
         limit: int = 197,
         calculation_date: date | None = None,
+        *,
+        market: str = "US",
     ) -> List[Dict]:
         """
-        Get most recent group rankings with rank changes.
+        Get most recent group rankings with rank changes for one market.
 
-        Args:
-            db: Database session
-            limit: Max number of groups to return
-
-        Returns:
-            List of groups with rankings and rank changes
+        Rankings are partitioned by market — each market maintains its own
+        rank ordering (both US and HK can have a rank #1), so every query
+        must filter by market to avoid mixing them.
         """
+        normalized_market = (market or "US").upper()
         if calculation_date is not None:
             latest_date = calculation_date
         else:
-            # Get most recent date with rankings
-            latest_record = db.query(IBDGroupRank).order_by(
+            # Get most recent date with rankings for THIS market
+            latest_record = db.query(IBDGroupRank).filter(
+                IBDGroupRank.market == normalized_market,
+            ).order_by(
                 desc(IBDGroupRank.date)
             ).first()
 
@@ -385,9 +387,10 @@ class IBDGroupRankService:
 
             latest_date = latest_record.date
 
-        # Get all rankings for latest date
+        # Get all rankings for latest date + market
         rankings = db.query(IBDGroupRank).filter(
-            IBDGroupRank.date == latest_date
+            IBDGroupRank.date == latest_date,
+            IBDGroupRank.market == normalized_market,
         ).order_by(IBDGroupRank.rank).limit(limit).all()
 
         if not rankings:
@@ -404,7 +407,8 @@ class IBDGroupRankService:
         # Batch fetch all historical ranks in ONE query instead of 197*4=788 queries
         group_names = [r.industry_group for r in rankings]
         historical_ranks = self._get_historical_ranks_batch(
-            db, group_names, latest_date, period_days
+            db, group_names, latest_date, period_days,
+            market=normalized_market,
         )
 
         # Build result with rank changes
@@ -473,22 +477,14 @@ class IBDGroupRankService:
         db: Session,
         group_names: List[str],
         current_date: date,
-        period_days: Dict[str, int]
+        period_days: Dict[str, int],
+        *,
+        market: str = "US",
     ) -> Dict[tuple, int]:
-        """
-        Batch fetch historical ranks for all groups and periods in ONE query.
+        """Batch fetch historical ranks for all groups and periods in ONE query.
 
-        This replaces N*M individual queries (N groups × M periods) with a single
-        query, reducing DB churn under heavy load.
-
-        Args:
-            db: Database session
-            group_names: List of industry group names
-            current_date: Current/latest ranking date
-            period_days: Dict mapping period names to days back
-
-        Returns:
-            Dict mapping (group_name, period_name) -> historical rank
+        Scoped by ``market`` so multi-market data doesn't cross-contaminate
+        rank-change calculations.
         """
         if not group_names or not period_days:
             return {}
@@ -506,7 +502,8 @@ class IBDGroupRankService:
             and_(
                 IBDGroupRank.industry_group.in_(group_names),
                 IBDGroupRank.date >= earliest_date,
-                IBDGroupRank.date < current_date  # Exclude current date
+                IBDGroupRank.date < current_date,  # Exclude current date
+                IBDGroupRank.market == (market or "US").upper(),
             )
         ).all()
 
@@ -553,26 +550,19 @@ class IBDGroupRankService:
         self,
         db: Session,
         industry_group: str,
-        days: int = 180
+        days: int = 180,
+        *,
+        market: str = "US",
     ) -> Dict:
-        """
-        Get historical ranking data for a specific group.
-
-        Args:
-            db: Database session
-            industry_group: Group name
-            days: Number of days of history
-
-        Returns:
-            Dict with current info and historical data points
-        """
+        """Get historical ranking data for a specific group, scoped by market."""
+        normalized_market = (market or "US").upper()
         cutoff_date = datetime.now().date() - timedelta(days=days)
 
-        # Get historical records
         records = db.query(IBDGroupRank).filter(
             and_(
                 IBDGroupRank.industry_group == industry_group,
-                IBDGroupRank.date >= cutoff_date
+                IBDGroupRank.date >= cutoff_date,
+                IBDGroupRank.market == normalized_market,
             )
         ).order_by(IBDGroupRank.date.desc()).all()
 
@@ -587,7 +577,8 @@ class IBDGroupRankService:
         rank_changes = {}
 
         historical_ranks = self._get_historical_ranks_batch(
-            db, [industry_group], current.date, period_days
+            db, [industry_group], current.date, period_days,
+            market=normalized_market,
         )
         for period_name in period_days:
             historical_rank = historical_ranks.get((industry_group, period_name))
@@ -711,18 +702,10 @@ class IBDGroupRankService:
         period: str = '1w',
         limit: int = 20,
         calculation_date: date | None = None,
+        *,
+        market: str = "US",
     ) -> Dict:
-        """
-        Get groups with biggest rank changes over a period.
-
-        Args:
-            db: Database session
-            period: '1w', '1m', '3m', or '6m'
-            limit: Number of top gainers/losers to return
-
-        Returns:
-            Dict with 'gainers' and 'losers' lists
-        """
+        """Get groups with biggest rank changes over a period, scoped by market."""
         period_days_map = {
             '1w': 5,
             '1m': 21,
@@ -732,11 +715,11 @@ class IBDGroupRankService:
 
         days = period_days_map.get(period, 5)
 
-        # Get current rankings
         current_rankings = self.get_current_rankings(
             db,
             limit=197,
             calculation_date=calculation_date,
+            market=market,
         )
 
         if not current_rankings:
@@ -926,30 +909,29 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> int:
+        """Delete existing rankings for one market in a date range.
+
+        Scoped by ``market`` — a US backfill must not wipe HK/JP/TW/IN rows
+        that share the same date range.
         """
-        Delete all existing rankings in the date range.
-
-        This allows recalculation of existing data (no skipping).
-
-        Args:
-            db: Database session
-            start_date: Start of range
-            end_date: End of range
-
-        Returns:
-            Number of records deleted
-        """
+        normalized_market = (market or "US").upper()
         deleted = db.query(IBDGroupRank).filter(
             and_(
                 IBDGroupRank.date >= start_date,
-                IBDGroupRank.date <= end_date
+                IBDGroupRank.date <= end_date,
+                IBDGroupRank.market == normalized_market,
             )
         ).delete(synchronize_session=False)
 
         db.commit()
-        logger.info(f"Deleted {deleted} existing rankings for {start_date} to {end_date}")
+        logger.info(
+            "Deleted %d existing rankings for market=%s %s to %s",
+            deleted, normalized_market, start_date, end_date,
+        )
         return deleted
 
     def _calculate_group_rs_from_cache(
@@ -1260,28 +1242,22 @@ class IBDGroupRankService:
     def find_missing_dates(
         self,
         db: Session,
-        lookback_days: int = 365
+        lookback_days: int = 365,
+        *,
+        market: str = "US",
     ) -> List[date]:
-        """
-        Find missing trading dates in the ranking data.
-
-        Args:
-            db: Database session
-            lookback_days: How many days back to check for gaps
-
-        Returns:
-            List of missing trading dates (weekdays without ranking data)
-        """
+        """Find missing trading dates in the ranking data for one market."""
         from sqlalchemy import func
 
+        normalized_market = (market or "US").upper()
         today = datetime.now().date()
         start_date = today - timedelta(days=lookback_days)
 
-        # Get all dates that have ranking data
         existing_dates = db.query(
             func.distinct(IBDGroupRank.date)
         ).filter(
-            IBDGroupRank.date >= start_date
+            IBDGroupRank.date >= start_date,
+            IBDGroupRank.market == normalized_market,
         ).all()
 
         existing_date_set = {d[0] for d in existing_dates}

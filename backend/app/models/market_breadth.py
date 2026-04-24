@@ -1,5 +1,5 @@
 """Market breadth indicator models"""
-from sqlalchemy import Column, Integer, Float, Date, DateTime, Index
+from sqlalchemy import Column, Integer, Float, Date, DateTime, Index, String, UniqueConstraint
 from sqlalchemy.sql import func
 from ..database import Base
 
@@ -8,16 +8,16 @@ class MarketBreadth(Base):
     """
     Daily market breadth indicators based on StockBee methodology.
 
-    Tracks breadth metrics across all active stocks in the universe:
-    - Daily movers (4%+ threshold)
-    - Multi-day ratios (5-day, 10-day)
-    - Monthly and quarterly movers (various thresholds)
+    Rows are partitioned by ``market`` — HK/JP/TW/IN share the same calendar
+    dates as US but have independent universes, so the UNIQUE key is
+    ``(date, market)``. Rolling-ratio history is computed per market.
     """
 
     __tablename__ = "market_breadth"
 
     id = Column(Integer, primary_key=True, index=True)
-    date = Column(Date, nullable=False, unique=True, index=True)
+    market = Column(String(8), nullable=False, default="US", index=True)
+    date = Column(Date, nullable=False, index=True)
 
     # Daily movers (4%+ threshold)
     stocks_up_4pct = Column(Integer, default=0, nullable=False)
@@ -49,8 +49,13 @@ class MarketBreadth(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
+        UniqueConstraint("date", "market", name="uix_breadth_date_market"),
         Index("idx_breadth_date", "date"),
+        Index("idx_breadth_market_date", "market", "date"),
     )
 
     def __repr__(self):
-        return f"<MarketBreadth(date={self.date}, up_4pct={self.stocks_up_4pct}, down_4pct={self.stocks_down_4pct})>"
+        return (
+            f"<MarketBreadth(market={self.market}, date={self.date}, "
+            f"up_4pct={self.stocks_up_4pct}, down_4pct={self.stocks_down_4pct})>"
+        )
