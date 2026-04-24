@@ -77,6 +77,12 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
                 "source_revision": "fundamentals_v1_us:20260404121000",
             },
         )(),
+        hydrate_published_snapshot=lambda db, snapshot_key, progress_callback=None: {
+            "hydrated": 20,
+            "yahoo_hydrated": 18,
+            "missing_prices": 0,
+            "missing_yahoo": 0,
+        },
     )
     monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
     monkeypatch.setattr(build_script, "get_provider_snapshot_service", lambda: provider_snapshot_service)
@@ -119,6 +125,13 @@ def test_build_weekly_reference_bundle_runs_us_publish_and_export(monkeypatch, t
     assert "Starting stock universe refresh from Finviz..." in stdout
     assert "[snapshot] 1/12 (8.3%) NYSE overview rows=20" in stdout
     assert "[publish] market=US coverage=100.00% (min=98.00%) missing_ratio=0.00% (max=0.50%)" in stdout
+    assert "Starting Yahoo hydration for US published snapshot..." in stdout
+    assert "Hydration complete:" in stdout
+    # Hydration must run before export so market_cap from stock_fundamentals
+    # is available at merge-time in export_weekly_reference_bundle.
+    hydrate_idx = stdout.index("Starting Yahoo hydration for US published snapshot...")
+    export_idx = stdout.index("Weekly reference bundle complete for US:")
+    assert hydrate_idx < export_idx
     assert "Weekly reference bundle complete for US:" in stdout
 
 
