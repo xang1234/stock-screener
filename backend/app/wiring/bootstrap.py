@@ -693,10 +693,39 @@ def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
 
 
 def get_create_scan_use_case() -> CreateScanUseCase:
-    """Build a CreateScanUseCase wired with infrastructure adapters."""
+    """HTTP-bound factory: always enforces the staleness gate.
+
+    This function is used with ``Depends(get_create_scan_use_case)`` in the
+    FastAPI route. It intentionally has no parameters — FastAPI would expose
+    any kwarg as a client-controllable query parameter, which could let a
+    caller disable the gate with ``?with_freshness_gate=false``.
+
+    Internal non-HTTP callers (e.g. bootstrap scans that *populate* the cache
+    and therefore can't be gated on that data already existing) must use
+    :func:`get_create_scan_use_case_without_freshness_gate` instead.
+    """
+    from app.use_cases.scanning.create_scan import CreateScanUseCase
+    from app.services.market_data_freshness import check_symbol_freshness
+
+    return CreateScanUseCase(
+        dispatcher=get_task_dispatcher(),
+        freshness_checker=check_symbol_freshness,
+    )
+
+
+def get_create_scan_use_case_without_freshness_gate() -> CreateScanUseCase:
+    """Internal factory for callers that must bypass the staleness gate.
+
+    Only appropriate for scans that *create* the data the gate would check
+    (bootstrap scans, initial market provisioning). Must never be wired
+    through ``Depends(...)`` — use :func:`get_create_scan_use_case` there.
+    """
     from app.use_cases.scanning.create_scan import CreateScanUseCase
 
-    return CreateScanUseCase(dispatcher=get_task_dispatcher())
+    return CreateScanUseCase(
+        dispatcher=get_task_dispatcher(),
+        freshness_checker=None,
+    )
 
 
 def get_get_scan_results_use_case() -> GetScanResultsUseCase:

@@ -14,6 +14,7 @@ from app.use_cases.scanning.create_scan import (
     ActiveScanConflict,
     ActiveScanConflictError,
     CreateScanResult,
+    StaleMarketDataError,
 )
 
 
@@ -64,6 +65,22 @@ async def client(monkeypatch):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+def test_http_create_scan_factory_has_no_request_bound_parameters():
+    """Round 5 Codex P1: FastAPI exposes dependency-factory kwargs as
+    query parameters. The HTTP-bound factory MUST NOT accept kwargs —
+    otherwise a client could pass ?with_freshness_gate=false and bypass
+    the staleness gate.
+    """
+    import inspect
+    from app.wiring.bootstrap import get_create_scan_use_case
+
+    sig = inspect.signature(get_create_scan_use_case)
+    assert list(sig.parameters.keys()) == [], (
+        f"get_create_scan_use_case must have no parameters (FastAPI would expose "
+        f"them as query params and bypass security); found {list(sig.parameters)}"
+    )
 
 
 @pytest.mark.asyncio
@@ -559,6 +576,66 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
     assert payload["detail"]["code"] == "market_refresh_active"
     assert payload["detail"]["market"] == "US"
     assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_when_market_price_data_is_stale(client):
+    """The staleness gate lives inside CreateScanUseCase (after idempotency
+    and symbol resolution) and surfaces as StaleMarketDataError; the route
+    maps that to 409 with the detail payload.
+    """
+    stale_detail = {
+        "code": "market_data_stale",
+        "message": (
+            "Price data is stale for: US (oldest: 2026-04-22, expected: 2026-04-23). "
+            "Wait for the next scheduled refresh before starting a scan."
+        ),
+        "stale_markets": [
+            {
+                "market": "US",
+                "total_symbols": 3,
+                "covered_symbols": 2,
+                "uncovered_symbols": 1,
+                "oldest_last_cached_date": "2026-04-22",
+                "expected_date": "2026-04-23",
+            }
+        ],
+    }
+
+    class _StaleCreateScanUseCase(_FakeCreateScanUseCase):
+        def execute(self, uow, cmd):
+            self.received_uow = uow
+            self.received_cmd = cmd
+            raise StaleMarketDataError(stale_detail)
+
+    fake_uow = _FakeUoW()
+    fake_use_case = _StaleCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-stale",
+            status="queued",
+            total_stocks=100,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe_def": {"type": "market", "market": "US"}},
+        )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_data_stale"
+    assert payload["detail"]["stale_markets"][0]["market"] == "US"
+    assert payload["detail"]["stale_markets"][0]["uncovered_symbols"] == 1
+    assert payload["detail"]["stale_markets"][0]["oldest_last_cached_date"] == "2026-04-22"
 
 
 @pytest.mark.parametrize(

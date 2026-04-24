@@ -75,6 +75,7 @@ class RunBulkScanCommand:
     criteria: dict = field(default_factory=dict)
     chunk_size: int = 50
     correlation_id: str | None = None
+    cache_only: bool = False
 
     def __post_init__(self) -> None:
         if self.chunk_size < 1:
@@ -234,6 +235,8 @@ class RunBulkScanUseCase:
                         [symbol.upper() for symbol in chunk],
                         merged_requirements,
                         allow_partial=True,
+                        batch_only_prices=cmd.cache_only,
+                        batch_only_fundamentals=cmd.cache_only,
                     )
                 except Exception:
                     logger.warning(
@@ -247,6 +250,15 @@ class RunBulkScanUseCase:
             chunk_results: list[tuple[str, dict]] = []
             for symbol in chunk:
                 sym = symbol.upper()
+                # cache_only invariant: the bulk prefetch is the only sanctioned
+                # data source. Any path that leaves a symbol out of pre_fetched_data
+                # (bulk raised, merged_requirements is None, data provider is None)
+                # must not fall through to per-symbol prepare_data() which can still
+                # hit live APIs.
+                if cmd.cache_only and sym not in pre_fetched_data:
+                    failed += 1
+                    processed += 1
+                    continue
                 scan_kwargs: dict[str, object] = {}
                 if merged_requirements is not None:
                     scan_kwargs["pre_merged_requirements"] = merged_requirements

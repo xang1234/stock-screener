@@ -177,6 +177,28 @@ def _run_post_scan_pipeline(scan_id: str, *, warm_chart_cache: bool = True) -> N
         db.close()
 
 
+def _mark_scan_failed(scan_id: str) -> None:
+    """Best-effort update of the scan row to failed status for wrapper-level errors.
+
+    The use case has its own rollback+failed-status handler for exceptions that
+    occur during execute(); this helper covers the narrow window where the
+    wrapper raises BEFORE execute() is entered (e.g., DB lookup error while
+    resolving trigger_source). Failures here are swallowed — the outer task
+    still re-raises so Celery sees the error.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            scan_row = db.query(Scan).filter(Scan.scan_id == scan_id).first()
+            if scan_row is not None and scan_row.status in {"queued", "running"}:
+                scan_row.status = "failed"
+                db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("Could not mark scan %s failed from wrapper", scan_id, exc_info=True)
+
+
 def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
     """Thin wrapper that delegates to RunBulkScanUseCase (new path).
 
@@ -195,6 +217,19 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
     cancel = DbCancellationToken(SessionLocal, scan_id)
 
     try:
+        # Manual scans run cache-only (no yfinance/Finviz fallback). Bootstrap
+        # and other internal scans *populate* the cache — they must allow live
+        # fetches. This lookup has to live inside the try block so a transient
+        # DB error still runs the cancel-token cleanup and lets the use case
+        # (via its own exception handler) mark the scan failed.
+        db = SessionLocal()
+        try:
+            scan_row = db.query(Scan).filter(Scan.scan_id == scan_id).first()
+            trigger_source = (getattr(scan_row, "trigger_source", None) or "manual").lower()
+        finally:
+            db.close()
+        cache_only = trigger_source == "manual"
+
         uow = SqlUnitOfWork(SessionLocal)
         use_case = get_run_bulk_scan_use_case()
         cmd = RunBulkScanCommand(
@@ -203,10 +238,12 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
             criteria=criteria or {},
             chunk_size=settings.scan_usecase_chunk_size,
             correlation_id=task_instance.request.id,
+            cache_only=cache_only,
         )
         result = use_case.execute(uow, cmd, progress, cancel)
     except Exception:
         logger.error("Fatal error in use case scan %s", scan_id, exc_info=True)
+        _mark_scan_failed(scan_id)
         raise
     finally:
         cancel.close()
