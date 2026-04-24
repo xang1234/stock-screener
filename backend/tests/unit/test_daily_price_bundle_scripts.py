@@ -131,3 +131,28 @@ def test_sync_daily_price_bundle_treats_live_only_as_non_fatal(monkeypatch, caps
     stdout = capsys.readouterr().out
     assert "Daily GitHub price sync result:" in stdout
     assert "live_only" in stdout
+
+
+def test_sync_daily_price_bundle_treats_missing_manifest_as_non_fatal(monkeypatch, capsys):
+    monkeypatch.setattr(sync_daily_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(sync_daily_script, "SessionLocal", _fake_session)
+    monkeypatch.setattr(
+        sync_daily_script,
+        "get_daily_price_bundle_service",
+        lambda: SimpleNamespace(
+            sync_from_github=lambda db, **kwargs: {
+                "status": "missing_manifest",
+                "market": kwargs["market"],
+                "reason": "daily-price-latest-us.json not found",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["sync_daily_price_bundle_from_github", "--market", "US"],
+    )
+
+    assert sync_daily_script.main() == 0
+    stdout = capsys.readouterr().out
+    assert "Daily GitHub price sync result:" in stdout
+    assert "missing_manifest" in stdout

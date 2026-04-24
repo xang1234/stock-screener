@@ -10,6 +10,9 @@ from app.services.daily_price_bundle_service import DailyPriceBundleService
 from app.wiring.bootstrap import get_daily_price_bundle_service
 
 
+NON_FATAL_SYNC_STATUSES = {"success", "up_to_date", "live_only", "missing_manifest"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -40,7 +43,7 @@ def main() -> int:
     for key, value in result.items():
         print(f"  - {key}: {value}")
 
-    return 0 if result.get("status") in {"success", "up_to_date", "live_only"} else 1
+    return 0 if result.get("status") in NON_FATAL_SYNC_STATUSES else 1
 
 
 if __name__ == "__main__":
