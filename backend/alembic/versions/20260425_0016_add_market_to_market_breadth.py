@@ -27,22 +27,31 @@ def upgrade() -> None:
     )
 
     # Drop the date-only UNIQUE and replace with (date, market).
+    # The baseline migration (20260408_0001) created market_breadth without a
+    # named date unique — only ORM-side models declared `unique=True`. So the
+    # constraint may or may not exist depending on how the DB was built. We
+    # inspect first to avoid failing mid-migration on production DBs.
+    inspector = sa.inspect(bind)
+    existing_uniques = {uc["name"] for uc in inspector.get_unique_constraints("market_breadth")}
+
     if dialect == "sqlite":
         with op.batch_alter_table("market_breadth") as batch_op:
-            # The previous Column(..., unique=True) emits an anonymous unique
-            # constraint; SQLite batch-copy tables can sometimes expose it as
-            # the implicit "uq_*". Try both names; ignore if neither exists.
-            try:
-                batch_op.drop_constraint("market_breadth_date_key", type_="unique")
-            except Exception:
-                pass
+            # Try all plausible names for the date-only unique; ignore if none exist.
+            for name in ("market_breadth_date_key", "uq_market_breadth_date"):
+                try:
+                    batch_op.drop_constraint(name, type_="unique")
+                    break
+                except Exception:
+                    continue
             batch_op.create_unique_constraint(
                 "uix_breadth_date_market",
                 ["date", "market"],
             )
     else:
-        # On Postgres the implicit unique is named <table>_<col>_key.
-        op.drop_constraint("market_breadth_date_key", "market_breadth", type_="unique")
+        # Postgres: drop each known implicit/explicit name ONLY if it exists.
+        for name in ("market_breadth_date_key", "uq_market_breadth_date"):
+            if name in existing_uniques:
+                op.drop_constraint(name, "market_breadth", type_="unique")
         op.create_unique_constraint(
             "uix_breadth_date_market",
             "market_breadth",
@@ -64,18 +73,22 @@ def downgrade() -> None:
 
     if dialect == "sqlite":
         with op.batch_alter_table("market_breadth") as batch_op:
-            batch_op.drop_constraint("uix_breadth_date_market", type_="unique")
-            batch_op.create_unique_constraint(
-                "market_breadth_date_key",
-                ["date"],
-            )
+            try:
+                batch_op.drop_constraint("uix_breadth_date_market", type_="unique")
+            except Exception:
+                pass
+            # Don't re-create the date-only unique: the baseline migration
+            # never materialized it as a named constraint, so recreating here
+            # could leave production in a state it never had before.
     else:
-        op.drop_constraint("uix_breadth_date_market", "market_breadth", type_="unique")
-        op.create_unique_constraint(
-            "market_breadth_date_key",
-            "market_breadth",
-            ["date"],
-        )
+        inspector = sa.inspect(bind)
+        existing = {
+            uc["name"] for uc in inspector.get_unique_constraints("market_breadth")
+        }
+        if "uix_breadth_date_market" in existing:
+            op.drop_constraint(
+                "uix_breadth_date_market", "market_breadth", type_="unique"
+            )
 
     op.drop_index("idx_breadth_market_date", table_name="market_breadth")
     op.drop_column("market_breadth", "market")
