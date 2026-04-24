@@ -586,6 +586,22 @@ class ProviderSnapshotService:
                     )
             if info.get("longBusinessSummary"):
                 yahoo_payload["description_yfinance"] = info.get("longBusinessSummary")
+
+            # Finviz is the primary source for market_cap; fall back to Yahoo
+            # only when Finviz's snapshot omitted it (partial screener response).
+            info_market_cap = info.get("marketCap")
+            info_shares = info.get("sharesOutstanding")
+            if info_market_cap is None or info_shares is None:
+                fast_market_cap, fast_shares, _ = (
+                    self.bulk_fetcher._read_fast_info_market_state(ticker)
+                )
+                info_market_cap = info_market_cap or fast_market_cap
+                info_shares = info_shares or fast_shares
+            if info_market_cap is not None:
+                yahoo_payload["market_cap"] = info_market_cap
+            if info_shares is not None:
+                yahoo_payload["shares_outstanding"] = info_shares
+
             yahoo_payload["yahoo_profile_refreshed_at"] = now_iso
         except Exception as exc:
             logger.warning("Failed Yahoo profile hydration for %s: %s", symbol, exc)

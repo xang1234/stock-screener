@@ -45,6 +45,7 @@ import {
   formatRatio,
   getScoreColor,
 } from '../../utils/formatUtils';
+import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 const CriteriaList = ({ title, items, emptyText }) => (
@@ -560,7 +561,10 @@ function StockDetails() {
                   Market regime context is unavailable for this symbol.
                 </Typography>
               )}
-              <MetricRow label="Market Cap" value={formatLargeNumber(fundamentals.market_cap ?? info.market_cap, '$')} />
+              <MetricRow
+                label="Market Cap"
+                value={resolveMarketCapDisplay(fundamentals, info).formattedValue}
+              />
               <MetricRow label="EPS Q/Q" value={formatPercent(fundamentals.eps_growth_quarterly ?? chart.eps_growth_qq)} />
               <MetricRow label="Revenue Growth" value={formatPercent(fundamentals.revenue_growth ?? chart.sales_growth_qq)} />
               <MetricRow

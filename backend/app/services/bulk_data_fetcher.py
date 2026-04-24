@@ -126,24 +126,49 @@ class BulkDataFetcher:
         )
         return self.fetch_prices_in_batches(symbols, period=period)
 
-    def _extract_fundamentals(self, info: Dict) -> Dict:
-        """
-        Extract fundamental data from ticker info.
+    @staticmethod
+    def _read_fast_info_market_state(
+        ticker: Any,
+    ) -> tuple[Optional[int], Optional[int], Optional[float]]:
+        """Return ``(market_cap, shares, last_price)`` from ``ticker.fast_info``
+        via a second Yahoo endpoint used only as a fallback when ``.info`` is
+        truncated. Returns ``(None, None, None)`` on any failure."""
+        if ticker is None:
+            return None, None, None
+        try:
+            fi = getattr(ticker, "fast_info", None)
+            if fi is None:
+                return None, None, None
+            mc = getattr(fi, "market_cap", None)
+            sh = getattr(fi, "shares", None)
+            lp = getattr(fi, "last_price", None)
+            return (
+                int(round(mc)) if mc is not None else None,
+                int(round(sh)) if sh is not None else None,
+                float(lp) if lp is not None else None,
+            )
+        except Exception as exc:
+            logger.debug("fast_info read failed: %s", exc)
+            return None, None, None
 
-        Args:
-            info: Ticker info dictionary from yfinance
+    def _extract_fundamentals(self, ticker: Any, info: Dict) -> Dict:
+        if info is None:
+            info = {}
 
-        Returns:
-            Dict with cleaned fundamental metrics
-        """
-        if not info:
-            return {}
+        info_market_cap = info.get("marketCap")
+        info_shares = info.get("sharesOutstanding")
+        info_price = info.get("currentPrice") or info.get("regularMarketPrice")
+        fast_market_cap = fast_shares = fast_last_price = None
+        if info_market_cap is None or info_shares is None or info_price is None:
+            fast_market_cap, fast_shares, fast_last_price = (
+                self._read_fast_info_market_state(ticker)
+            )
 
         fundamentals = {
             # Market data
-            'market_cap': info.get('marketCap'),
+            'market_cap': info.get('marketCap') or fast_market_cap,
             'enterprise_value': info.get('enterpriseValue'),
-            'shares_outstanding': info.get('sharesOutstanding'),
+            'shares_outstanding': info.get('sharesOutstanding') or fast_shares,
             'shares_float': info.get('floatShares'),
 
             # Valuation metrics
@@ -197,7 +222,7 @@ class BulkDataFetcher:
             'week_52_low': info.get('fiftyTwoWeekLow'),
             'avg_volume': info.get('averageVolume'),
             'avg_volume_10d': info.get('averageVolume10days'),
-            'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
+            'current_price': info.get('currentPrice') or info.get('regularMarketPrice') or fast_last_price,
 
             # Company info
             'sector': info.get('sector'),
@@ -642,7 +667,7 @@ class BulkDataFetcher:
 
                         # Get info (fundamentals)
                         info = ticker.info
-                        fundamentals = self._extract_fundamentals(info)
+                        fundamentals = self._extract_fundamentals(ticker, info)
 
                         # Optionally get quarterly growth
                         if include_quarterly:
@@ -757,7 +782,7 @@ class BulkDataFetcher:
                     try:
                         ticker = tickers.tickers[symbol]
                         info = ticker.info
-                        fundamentals = self._extract_fundamentals(info)
+                        fundamentals = self._extract_fundamentals(ticker, info)
 
                         if include_quarterly:
                             quarterly = self._extract_quarterly_growth(
