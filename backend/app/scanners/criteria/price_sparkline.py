@@ -40,14 +40,14 @@ class PriceSparklineCalculator:
             - price_trend: -1 (down overall), 0 (flat), 1 (up overall)
             - price_change_1d: 1-day percentage change (most recent)
         """
-        if len(stock_prices) < self.SPARKLINE_DAYS + 1:  # Need extra day for 1d change
+        if len(stock_prices) < self.SPARKLINE_DAYS:
             logger.debug(
                 f"Insufficient data for price sparkline: stock={len(stock_prices)}"
             )
             return {
                 "price_data": None,
                 "price_trend": 0,
-                "price_change_1d": None,
+                "price_change_1d": self._calculate_price_change_1d(stock_prices),
             }
 
         try:
@@ -102,5 +102,16 @@ class PriceSparklineCalculator:
             return {
                 "price_data": None,
                 "price_trend": 0,
-                "price_change_1d": None,
+                "price_change_1d": self._calculate_price_change_1d(stock_prices),
             }
+
+    @staticmethod
+    def _calculate_price_change_1d(stock_prices: pd.Series) -> Optional[float]:
+        if len(stock_prices) < 2:
+            return None
+        yesterday_price = stock_prices.iloc[-2]
+        today_price = stock_prices.iloc[-1]
+        if yesterday_price == 0:
+            return None
+        price_change_1d = ((today_price - yesterday_price) / yesterday_price) * 100
+        return round(float(price_change_1d), 2)
