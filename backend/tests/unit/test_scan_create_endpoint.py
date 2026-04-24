@@ -576,12 +576,13 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
         "code": "market_data_stale",
         "message": (
             "US price data is stale "
-            "(last cached: 2026-04-22; expected: 2026-04-23). "
+            "(oldest symbol last cached: 2026-04-22; expected: 2026-04-23). "
             "Wait for the next scheduled refresh before starting a scan."
         ),
         "market": "US",
-        "last_cached_date": "2026-04-22",
+        "oldest_last_cached_date": "2026-04-22",
         "expected_date": "2026-04-23",
+        "covered_symbols": 2400,
     }
     monkeypatch.setattr(
         "app.api.v1.scans._get_market_data_staleness_detail",
@@ -616,8 +617,9 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
     payload = response.json()
     assert payload["detail"]["code"] == "market_data_stale"
     assert payload["detail"]["market"] == "US"
-    assert payload["detail"]["last_cached_date"] == "2026-04-22"
+    assert payload["detail"]["oldest_last_cached_date"] == "2026-04-22"
     assert payload["detail"]["expected_date"] == "2026-04-23"
+    assert payload["detail"]["covered_symbols"] == 2400
     assert fake_use_case.received_cmd is None
 
 

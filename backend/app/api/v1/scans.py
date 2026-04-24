@@ -129,29 +129,41 @@ def _get_market_data_staleness_detail(market: str | None) -> dict[str, object] |
 
     session = SessionLocal()
     try:
-        last_date = (
-            session.query(func.max(StockPrice.date))
+        per_symbol_last = (
+            session.query(
+                StockPrice.symbol.label("symbol"),
+                func.max(StockPrice.date).label("last_date"),
+            )
             .join(StockUniverse, StockUniverse.symbol == StockPrice.symbol)
             .filter(StockUniverse.market == normalized_market)
-            .scalar()
+            .filter(StockUniverse.is_active.is_(True))
+            .group_by(StockPrice.symbol)
+            .subquery()
         )
+        row = session.query(
+            func.min(per_symbol_last.c.last_date).label("oldest_last"),
+            func.count(per_symbol_last.c.symbol).label("covered_symbols"),
+        ).one()
+        oldest_last_date = row.oldest_last
+        covered_symbols = int(row.covered_symbols or 0)
     finally:
         session.close()
 
-    if last_date is not None and last_date >= expected_date:
+    if covered_symbols > 0 and oldest_last_date is not None and oldest_last_date >= expected_date:
         return None
 
-    last_cached_str = None if last_date is None else str(last_date)
+    oldest_last_str = None if oldest_last_date is None else str(oldest_last_date)
     return {
         "code": "market_data_stale",
         "message": (
             f"{normalized_market} price data is stale "
-            f"(last cached: {last_cached_str or 'never'}; expected: {expected_date}). "
+            f"(oldest symbol last cached: {oldest_last_str or 'never'}; expected: {expected_date}). "
             "Wait for the next scheduled refresh before starting a scan."
         ),
         "market": normalized_market,
-        "last_cached_date": last_cached_str,
+        "oldest_last_cached_date": oldest_last_str,
         "expected_date": str(expected_date),
+        "covered_symbols": covered_symbols,
     }
 
 
