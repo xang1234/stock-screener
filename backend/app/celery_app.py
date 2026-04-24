@@ -380,21 +380,26 @@ if settings.cache_warmup_enabled:
             'kwargs': {'market': _market},
         }
 
-    _warm_h, _warm_m = settings.cache_warm_schedule_for("US")
-    _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
-    beat_schedule['daily-breadth-calculation-us'] = {
-        'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-        'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
-        'options': {'queue': market_jobs_queue_for_market("US")},
-        'kwargs': {'market': 'US'},
-    }
-    _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
-    beat_schedule['daily-group-ranking-calculation-us'] = {
-        'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
-        'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
-        'options': {'queue': market_jobs_queue_for_market("US")},
-        'kwargs': {'market': 'US'},
-    }
+    # Per-market daily breadth + industry-group rankings.
+    # Schedules follow each market's cache-warm offset, so they fire after the
+    # market's price refresh has landed — not all at US 16:30 ET.
+    for _market in _enabled_markets:
+        _warm_h, _warm_m = settings.cache_warm_schedule_for(_market)
+        _m_lower = _market.lower()
+        _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
+        beat_schedule[f'daily-breadth-calculation-{_m_lower}'] = {
+            'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
+            'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
+            'options': {'queue': market_jobs_queue_for_market(_market)},
+            'kwargs': {'market': _market},
+        }
+        _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
+        beat_schedule[f'daily-group-ranking-calculation-{_m_lower}'] = {
+            'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+            'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
+            'options': {'queue': market_jobs_queue_for_market(_market)},
+            'kwargs': {'market': _market},
+        }
 
     # --- Market-agnostic / shared beat entries below ---
     # These tasks are not market-scoped (theme discovery, cleanup jobs, etc.)

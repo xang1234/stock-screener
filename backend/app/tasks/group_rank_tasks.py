@@ -28,8 +28,8 @@ from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
-from ..wiring.bootstrap import get_group_rank_service
-from ..utils.market_hours import is_trading_day, get_eastern_now
+from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
+from ..utils.market_hours import get_eastern_now  # retained for non-market-scoped call sites
 from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
@@ -158,16 +158,8 @@ def calculate_daily_group_rankings(
     activity_lifecycle = activity_lifecycle or "daily_refresh"
     logger.info("=" * 60)
     logger.info(
-        "TASK: Calculate Daily IBD Group Rankings %s", market_tag(market), extra=_log_extra,
+        "TASK: Calculate Daily Industry Group Rankings %s", market_tag(market), extra=_log_extra,
     )
-    if market is not None and normalize_market(market) != "US":
-        logger.info("Skipping group rankings for unsupported market %s", market, extra=_log_extra)
-        return {
-            'status': 'skipped',
-            'reason': 'group_rankings_are_us_only',
-            'market': effective_market,
-            'timestamp': datetime.now().isoformat(),
-        }
     if market is not None and not is_market_enabled_now(normalize_market(market)):
         logger.info("Skipping group rankings for disabled market %s", market, extra=_log_extra)
         return {
@@ -176,7 +168,8 @@ def calculate_daily_group_rankings(
             'market': effective_market,
             'timestamp': datetime.now().isoformat(),
         }
-    today_et = get_eastern_now().date()
+    calendar_service = get_market_calendar_service()
+    today_local = calendar_service.market_now(effective_market).date()
 
     # Parse date
     if calculation_date:
@@ -191,14 +184,17 @@ def calculate_daily_group_rankings(
                 'timestamp': datetime.now().isoformat(),
             }
     else:
-        calc_date = today_et
+        calc_date = today_local
 
-        # Skip on non-trading days (weekends, holidays)
-        if not is_trading_day(calc_date):
-            logger.info(f"Skipping group rankings - {calc_date} is not a trading day")
+        # Skip on non-trading days in this market (weekends, local holidays)
+        if not calendar_service.is_trading_day(effective_market, calc_date):
+            logger.info(
+                "Skipping group rankings - %s is not a trading day for %s",
+                calc_date, effective_market,
+            )
             return {'skipped': True, 'reason': 'Not a trading day', 'date': calc_date.isoformat()}
 
-        logger.info(f"Calculating group rankings for today: {calc_date}")
+        logger.info(f"Calculating group rankings for today ({effective_market}): {calc_date}")
 
     logger.info("=" * 60)
 
@@ -217,7 +213,7 @@ def calculate_daily_group_rankings(
         )
         # Initialize service
         service = get_group_rank_service()
-        same_day_cache_only = force_cache_only or calc_date == today_et
+        same_day_cache_only = force_cache_only or calc_date == today_local
 
         if same_day_cache_only:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
@@ -254,7 +250,7 @@ def calculate_daily_group_rankings(
         results = service.calculate_group_rankings(
             db,
             calc_date,
-            market="US",
+            market=effective_market,
             cache_only=same_day_cache_only,
             require_complete_cache=same_day_cache_only,
         )
@@ -301,7 +297,7 @@ def calculate_daily_group_rankings(
         repair_stats = None
         if _should_repair_current_us_metadata(
             calc_date=calc_date,
-            today_et=today_et,
+            today_et=today_local,
             activity_lifecycle=activity_lifecycle,
         ):
             from ..interfaces.tasks.feature_store_tasks import _repair_current_us_group_metadata

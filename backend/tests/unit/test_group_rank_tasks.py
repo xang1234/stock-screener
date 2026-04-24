@@ -27,18 +27,36 @@ def _patch_serialized_lock(monkeypatch):
     )
 
 
+def _patch_calendar_service(
+    monkeypatch,
+    now: datetime,
+    *,
+    is_trading_day: bool = True,
+):
+    """Stub MarketCalendarService for group-rank tasks.
+
+    Mirrors the old ``is_trading_day`` / ``get_eastern_now`` patches now that
+    the task routes trading-day and "today" resolution through
+    ``MarketCalendarService`` for per-market support.
+    """
+    fake = MagicMock()
+    fake.is_trading_day.return_value = is_trading_day
+    fake.market_now.return_value = now
+    fake.last_completed_trading_day.return_value = now.date()
+    monkeypatch.setattr(
+        "app.tasks.group_rank_tasks.get_market_calendar_service",
+        lambda: fake,
+    )
+    return fake
+
+
 def test_daily_group_rankings_refuse_to_publish_when_warmup_incomplete(monkeypatch):
     import app.tasks.group_rank_tasks as module
 
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
@@ -66,12 +84,7 @@ def test_daily_group_rankings_allow_in_process_same_day_bypass(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_price_cache = MagicMock()
@@ -104,12 +117,7 @@ def test_daily_group_rankings_refuse_to_publish_when_cache_only_inputs_missing(m
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
@@ -145,11 +153,7 @@ def test_manual_group_rankings_keep_fetch_capable_behavior(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_price_cache = MagicMock()
@@ -181,11 +185,7 @@ def test_manual_group_rankings_can_force_cache_only_for_static_exports(monkeypat
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 4, 3, 0, 30, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_service = MagicMock()
@@ -224,12 +224,7 @@ def test_daily_group_rankings_retries_transient_outer_failures(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
@@ -268,12 +263,7 @@ def test_daily_group_rankings_retry_survives_activity_publish_failure(monkeypatc
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
@@ -315,12 +305,7 @@ def test_daily_group_rankings_reraises_soft_time_limit(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_price_cache = MagicMock()
     fake_price_cache.get_warmup_metadata.return_value = {
@@ -348,12 +333,7 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
 
     fake_service = MagicMock()
@@ -387,27 +367,41 @@ def test_daily_group_rankings_publishes_market_activity(monkeypatch):
     assert result["metadata_repair"] == {"status": "ok"}
 
 
-def test_daily_group_rankings_skip_non_us_market(monkeypatch):
+def test_daily_group_rankings_run_for_non_us_market(monkeypatch):
+    """Group rankings now work per market via MarketTaxonomyService; HK/JP/TW
+    no longer return group_rankings_are_us_only. The market kwarg flows into
+    IBDGroupRankService.calculate_group_rankings.
+    """
     import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
 
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
     monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
     )
 
+    fake_price_cache = MagicMock()
+    fake_price_cache.get_warmup_metadata.return_value = None
     fake_service = MagicMock()
+    fake_service.price_cache = fake_price_cache
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Banks", "avg_rs_rating": 88.0, "rank": 1, "num_stocks": 5}
+    ]
     monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
 
-    result = module.calculate_daily_group_rankings.run(market="HK")
+    # Use a prior date so the task doesn't route through the same-day
+    # warmup-required path (we're just asserting HK is not skipped here).
+    result = module.calculate_daily_group_rankings.run("2026-03-19", market="HK")
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "group_rankings_are_us_only"
-    fake_service.calculate_group_rankings.assert_not_called()
+    assert result.get("status") != "skipped"
+    # Service was called with market='HK' so it queries the Hong Kong taxonomy
+    call_kwargs = fake_service.calculate_group_rankings.call_args.kwargs
+    assert call_kwargs.get("market") == "HK"
 
 
 def test_daily_group_rankings_fail_explicitly_when_ibd_mappings_missing(monkeypatch):
@@ -416,12 +410,7 @@ def test_daily_group_rankings_fail_explicitly_when_ibd_mappings_missing(monkeypa
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_service = MagicMock()
     fake_service.price_cache = MagicMock()
@@ -447,11 +436,7 @@ def test_historical_group_rankings_do_not_repair_current_us_metadata(monkeypatch
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_service = MagicMock()
     fake_service.price_cache = MagicMock()
@@ -483,12 +468,7 @@ def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatc
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
-    monkeypatch.setattr(module, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(
-        module,
-        "get_eastern_now",
-        lambda: datetime(2026, 3, 20, 17, 40, 0),
-    )
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
 
     fake_service = MagicMock()
     fake_service.price_cache = MagicMock()

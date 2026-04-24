@@ -135,11 +135,18 @@ class IBDGroupPeerCache(Base):
 
 
 class IBDGroupRank(Base):
-    """Daily IBD Industry Group Rankings based on average RS rating"""
+    """Daily Industry Group Rankings based on average RS rating.
+
+    Rankings are partitioned by `market` — HK/JP/TW/IN use their own
+    classification schemas (EM Industry / TSE 33-Sector / local index)
+    instead of IBD's US-only taxonomy, so groups named identically in
+    different markets are distinct rows.
+    """
 
     __tablename__ = "ibd_group_ranks"
 
     id = Column(Integer, primary_key=True, index=True)
+    market = Column(String(8), nullable=False, default="US", index=True)
     industry_group = Column(String(100), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
 
@@ -162,7 +169,10 @@ class IBDGroupRank(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("industry_group", "date", name="uix_ibd_group_rank_date"),
+        UniqueConstraint(
+            "industry_group", "date", "market", name="uix_ibd_group_rank_market_date"
+        ),
         Index("idx_ibd_group_rank_date", "industry_group", "date"),
+        Index("idx_ibd_group_rank_market_date", "market", "date"),
         Index("idx_ibd_rank_by_date", "date", "rank"),
     )

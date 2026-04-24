@@ -90,25 +90,29 @@ class IBDGroupRankService:
         if calculation_date is None:
             calculation_date = datetime.now().date()
 
-        logger.info(f"Calculating IBD group rankings for {calculation_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Calculating industry group rankings for market=%s date=%s",
+            normalized_market, calculation_date,
+        )
         start_time = datetime.now()
 
-        # Get all unique IBD groups
-        all_groups = IBDIndustryService.get_all_groups(db)
+        # Get all unique industry groups for this market
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
         if not all_groups:
-            logger.error("No IBD industry groups found")
+            logger.error("No industry groups found for market %s", normalized_market)
             raise MissingIBDIndustryMappingsError()
 
-        logger.info(f"Found {len(all_groups)} IBD industry groups")
+        logger.info(
+            "Found %d industry groups for market %s", len(all_groups), normalized_market,
+        )
 
-        # Pre-fetch ALL data upfront (SPY + all stock prices in single bulk fetch)
-        prefetch_kwargs = {"cache_only": cache_only}
-        if market is not None:
-            prefetch_kwargs["market"] = market
+        # Pre-fetch all data upfront (benchmark + all stock prices).
         spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
             self._prefetch_all_data(
                 db,
-                **prefetch_kwargs,
+                market=normalized_market,
+                cache_only=cache_only,
             )
         )
 
@@ -127,16 +131,18 @@ class IBDGroupRankService:
                 )
 
         if spy_data is None or spy_data.empty:
-            logger.error("Failed to get SPY benchmark data")
+            logger.error(
+                "Failed to get benchmark data for market %s", normalized_market,
+            )
             return []
 
-        # Filter SPY data to calculation_date for accurate historical rankings
+        # Filter benchmark data to calculation_date for accurate historical rankings
         if calculation_date < datetime.now().date():
             spy_data_filtered = spy_data[spy_data.index.date <= calculation_date]
         else:
             spy_data_filtered = spy_data
 
-        # Prepare SPY prices series (most recent first for RS calculator)
+        # Prepare benchmark prices series (most recent first for RS calculator)
         spy_prices = spy_data_filtered['Close'].sort_index(ascending=False)
 
         # Calculate RS for each group using pre-fetched cached data
@@ -145,7 +151,8 @@ class IBDGroupRankService:
         for group_name in all_groups:
             try:
                 metrics = self._calculate_group_rs_from_cache(
-                    db, group_name, spy_prices, all_prices, active_symbols, market_caps, calculation_date
+                    db, group_name, spy_prices, all_prices, active_symbols, market_caps, calculation_date,
+                    market=normalized_market,
                 )
                 if metrics:
                     group_metrics.append(metrics)
@@ -164,7 +171,7 @@ class IBDGroupRankService:
             metrics['rank'] = rank
 
         # Store in database
-        self._store_rankings(db, calculation_date, group_metrics)
+        self._store_rankings(db, calculation_date, group_metrics, market=normalized_market)
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(
@@ -291,25 +298,27 @@ class IBDGroupRankService:
         self,
         db: Session,
         calculation_date: date,
-        group_metrics: List[Dict]
+        group_metrics: List[Dict],
+        *,
+        market: str = "US",
     ) -> None:
         """
         Store group rankings in database.
 
-        Upserts records (updates if exists, inserts if new).
+        Upserts records (updates if exists, inserts if new). Unique key is
+        ``(industry_group, date, market)``.
         """
         try:
             for metrics in group_metrics:
-                # Check if record exists for this group and date
                 existing = db.query(IBDGroupRank).filter(
                     and_(
                         IBDGroupRank.industry_group == metrics['industry_group'],
-                        IBDGroupRank.date == calculation_date
+                        IBDGroupRank.date == calculation_date,
+                        IBDGroupRank.market == market,
                     )
                 ).first()
 
                 if existing:
-                    # Update existing record
                     existing.rank = metrics['rank']
                     existing.avg_rs_rating = metrics['avg_rs_rating']
                     existing.num_stocks = metrics['num_stocks']
@@ -320,8 +329,8 @@ class IBDGroupRankService:
                     existing.weighted_avg_rs_rating = metrics.get('weighted_avg_rs_rating')
                     existing.rs_std_dev = metrics.get('rs_std_dev')
                 else:
-                    # Insert new record
                     record = IBDGroupRank(
+                        market=market,
                         industry_group=metrics['industry_group'],
                         date=calculation_date,
                         rank=metrics['rank'],
@@ -337,7 +346,10 @@ class IBDGroupRankService:
                     db.add(record)
 
             db.commit()
-            logger.info(f"Stored {len(group_metrics)} group rankings for {calculation_date}")
+            logger.info(
+                "Stored %d group rankings for market=%s date=%s",
+                len(group_metrics), market, calculation_date,
+            )
 
         except Exception as e:
             logger.error(f"Error storing rankings: {e}", exc_info=True)
@@ -754,22 +766,18 @@ class IBDGroupRankService:
         self,
         db: Session,
         group_name: str,
-        active_symbols: set
+        active_symbols: set,
+        *,
+        market: str = "US",
     ) -> list:
         """
         Get symbols for a group, filtered to only active stocks in stock_universe.
 
         This ensures group ranking uses the same universe as bulk scans.
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            active_symbols: Set of active symbols from stock_universe
-
-        Returns:
-            List of symbols that are both in the group AND active in stock_universe
         """
-        group_symbols = IBDIndustryService.get_group_symbols(db, group_name)
+        group_symbols = IBDIndustryService.get_group_symbols(
+            db, group_name, market=market
+        )
         return [
             symbol
             for symbol in group_symbols
@@ -829,15 +837,25 @@ class IBDGroupRankService:
         """
         from ..wiring.bootstrap import get_stock_universe_service
 
-        logger.info("Pre-fetching all data for optimized backfill...")
+        normalized_market = (market or "US").upper()
+        benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(normalized_market)
+        logger.info(
+            "Pre-fetching data for market=%s (benchmark=%s)...",
+            normalized_market, benchmark_symbol,
+        )
 
-        # 1. Get SPY data once
+        # 1. Get benchmark data once (SPY for US, HSI/N225/TAIEX/NIFTY for Asia)
         if cache_only:
-            spy_data = self.price_cache.get_cached_only_fresh("SPY", period="2y")
+            spy_data = self.price_cache.get_cached_only_fresh(benchmark_symbol, period="2y")
         else:
-            spy_data = self.benchmark_cache.get_spy_data(period="2y")
+            spy_data = self.benchmark_cache.get_benchmark_data(
+                market=normalized_market, period="2y",
+            )
         if spy_data is None or spy_data.empty:
-            logger.error("Failed to get SPY benchmark data")
+            logger.error(
+                "Failed to get benchmark data (%s) for market %s",
+                benchmark_symbol, normalized_market,
+            )
             return None, {}, set(), {}, {
                 "target_symbols": 0,
                 "symbols_with_prices": 0,
@@ -845,23 +863,23 @@ class IBDGroupRankService:
                 "spy_cached": False,
             }
 
-        logger.info(f"Fetched SPY data: {len(spy_data)} days")
+        logger.info(f"Fetched benchmark {benchmark_symbol}: {len(spy_data)} days")
 
         # 2. Get active symbols from stock_universe (same as bulk scans)
         active_symbols_list = get_stock_universe_service().get_active_symbols(
             db,
-            market=(market or "US").upper(),
+            market=normalized_market,
         )
         active_symbols = set(active_symbols_list)
         logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
 
-        # 3. Collect ALL unique symbols across ALL groups (filtered by active)
-        all_groups = IBDIndustryService.get_all_groups(db)
+        # 3. Collect ALL unique symbols across ALL groups for this market
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
         symbols_to_fetch = set()
         skipped_unsupported_symbols = set()
 
         for group in all_groups:
-            group_symbols = IBDIndustryService.get_group_symbols(db, group)
+            group_symbols = IBDIndustryService.get_group_symbols(db, group, market=normalized_market)
             validated = []
             for symbol in group_symbols:
                 if symbol not in active_symbols:
@@ -942,26 +960,19 @@ class IBDGroupRankService:
         all_prices: Dict[str, pd.DataFrame],
         active_symbols: set,
         market_caps: Dict[str, float],
-        calculation_date: date
+        calculation_date: date,
+        *,
+        market: str = "US",
     ) -> Optional[Dict]:
         """
         Calculate average RS rating for a single industry group using pre-fetched prices.
 
         Only uses symbols that are active in stock_universe (intersection approach).
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            spy_prices: SPY price series (most recent first, filtered to calculation_date)
-            all_prices: Dict of all pre-fetched prices {symbol: DataFrame}
-            active_symbols: Set of active symbols from stock_universe
-            calculation_date: Date for calculation
-
-        Returns:
-            Dict with group metrics or None if insufficient data
+        ``spy_prices`` is the per-market benchmark series (SPY for US, HSI for HK, etc).
         """
-        # Get validated symbols (intersection of IBD group and active stock_universe)
-        symbols = self._get_validated_group_symbols(db, group_name, active_symbols)
+        symbols = self._get_validated_group_symbols(
+            db, group_name, active_symbols, market=market,
+        )
 
         if not symbols:
             logger.debug(f"No validated symbols found for group: {group_name}")

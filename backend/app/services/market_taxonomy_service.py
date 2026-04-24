@@ -112,6 +112,33 @@ class MarketTaxonomyService:
                 return entry
         return None
 
+    def groups_for_market(self, market: str) -> list[str]:
+        """Return sorted distinct industry_group values for one market.
+
+        Feeds IBDGroupRankService for non-US markets — US-side continues to
+        query its persisted `ibd_industry_groups` table.
+        """
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        entries = self._entries.get(normalized, {})
+        groups = {
+            entry.industry_group
+            for entry in entries.values()
+            if entry.industry_group is not None
+        }
+        return sorted(groups)
+
+    def symbols_for_group(self, market: str, group: str) -> list[str]:
+        """Return sorted symbols that belong to a given industry group in a market."""
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        entries = self._entries.get(normalized, {})
+        return sorted(
+            entry.symbol
+            for entry in entries.values()
+            if entry.industry_group == group
+        )
+
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.refresh()
