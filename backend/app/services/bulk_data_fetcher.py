@@ -132,24 +132,40 @@ class BulkDataFetcher:
     ) -> tuple[Optional[int], Optional[int], Optional[float]]:
         """Return ``(market_cap, shares, last_price)`` from ``ticker.fast_info``
         via a second Yahoo endpoint used only as a fallback when ``.info`` is
-        truncated. Returns ``(None, None, None)`` on any failure."""
+        truncated. Each field is parsed independently so a malformed value on
+        one (e.g. NaN market_cap) does not discard valid fallbacks for the
+        others."""
         if ticker is None:
             return None, None, None
         try:
             fi = getattr(ticker, "fast_info", None)
-            if fi is None:
-                return None, None, None
-            mc = getattr(fi, "market_cap", None)
-            sh = getattr(fi, "shares", None)
-            lp = getattr(fi, "last_price", None)
-            return (
-                int(round(mc)) if mc is not None else None,
-                int(round(sh)) if sh is not None else None,
-                float(lp) if lp is not None else None,
-            )
         except Exception as exc:
-            logger.debug("fast_info read failed: %s", exc)
+            logger.debug("fast_info attribute access failed: %s", exc)
             return None, None, None
+        if fi is None:
+            return None, None, None
+
+        def _coerce_int(attr: str) -> Optional[int]:
+            try:
+                value = getattr(fi, attr, None)
+                if value is None:
+                    return None
+                return int(round(value))
+            except Exception as exc:
+                logger.debug("fast_info.%s read failed: %s", attr, exc)
+                return None
+
+        def _coerce_float(attr: str) -> Optional[float]:
+            try:
+                value = getattr(fi, attr, None)
+                if value is None:
+                    return None
+                return float(value)
+            except Exception as exc:
+                logger.debug("fast_info.%s read failed: %s", attr, exc)
+                return None
+
+        return _coerce_int("market_cap"), _coerce_int("shares"), _coerce_float("last_price")
 
     def _extract_fundamentals(self, ticker: Any, info: Dict) -> Dict:
         if info is None:
@@ -157,7 +173,12 @@ class BulkDataFetcher:
 
         info_market_cap = info.get("marketCap")
         info_shares = info.get("sharesOutstanding")
-        info_price = info.get("currentPrice") or info.get("regularMarketPrice")
+        info_current_price = info.get("currentPrice")
+        info_price = (
+            info_current_price
+            if info_current_price is not None
+            else info.get("regularMarketPrice")
+        )
         fast_market_cap = fast_shares = fast_last_price = None
         if info_market_cap is None or info_shares is None or info_price is None:
             fast_market_cap, fast_shares, fast_last_price = (

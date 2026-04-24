@@ -92,6 +92,11 @@ class ProviderSnapshotService:
         "eps_q2_yoy",
         "eps_raw_score",
         "eps_years_available",
+        # Market-state fields Yahoo can backfill when Finviz omits them.
+        # Without these, a Finviz snapshot missing only market_cap would skip
+        # hydration entirely and the Yahoo fallback would never run.
+        "market_cap",
+        "shares_outstanding",
     )
     YAHOO_UNSUPPORTED_SUFFIXES = ("U", "UN", "UNT", "UNIT", "R", "RT")
     YAHOO_UNSUPPORTED_PREFIXES = ("W", "WS", "WT")

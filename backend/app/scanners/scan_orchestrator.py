@@ -833,9 +833,9 @@ class ScanOrchestrator:
                 result["sales_growth_yy"] = qg["sales_growth_yy"]
 
         if stock_data.fundamentals:
-            if stock_data.fundamentals.get("market_cap"):
+            if stock_data.fundamentals.get("market_cap") is not None:
                 result["market_cap"] = stock_data.fundamentals["market_cap"]
-            if stock_data.fundamentals.get("market_cap_usd"):
+            if stock_data.fundamentals.get("market_cap_usd") is not None:
                 result["market_cap_usd"] = stock_data.fundamentals["market_cap_usd"]
 
         # Extract EPS Rating from fundamentals if available
@@ -940,9 +940,9 @@ class ScanOrchestrator:
             },
         }
         if stock_data.fundamentals:
-            if stock_data.fundamentals.get("market_cap"):
+            if stock_data.fundamentals.get("market_cap") is not None:
                 result["market_cap"] = stock_data.fundamentals["market_cap"]
-            if stock_data.fundamentals.get("market_cap_usd"):
+            if stock_data.fundamentals.get("market_cap_usd") is not None:
                 result["market_cap_usd"] = stock_data.fundamentals["market_cap_usd"]
             if stock_data.fundamentals.get("eps_rating") is not None:
                 result["eps_rating"] = stock_data.fundamentals["eps_rating"]

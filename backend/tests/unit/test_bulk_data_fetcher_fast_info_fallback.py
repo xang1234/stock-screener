@@ -50,6 +50,33 @@ def test_none_ticker_is_safe():
     assert result["market_cap"] == 42
 
 
+class _NaN:
+    """Non-numeric sentinel that raises on int()/round()."""
+
+    def __float__(self):
+        raise ValueError("NaN")
+
+    def __int__(self):
+        raise ValueError("NaN")
+
+    def __round__(self, _ndigits=None):
+        raise ValueError("NaN")
+
+
+def test_read_fast_info_parses_fields_independently():
+    """A malformed single field must not discard valid values for the others."""
+    fast = SimpleNamespace(market_cap=_NaN(), shares=500, last_price=42.5)
+    ticker = SimpleNamespace(fast_info=fast)
+
+    market_cap, shares, last_price = (
+        BulkDataFetcher._read_fast_info_market_state(ticker)
+    )
+
+    assert market_cap is None
+    assert shares == 500
+    assert last_price == 42.5
+
+
 def test_zero_from_info_is_preserved_not_replaced_by_fast_info():
     """If .info legitimately reports 0 for market_cap / shares_outstanding,
     keep the 0 instead of falling through to fast_info (truthiness would

@@ -311,6 +311,8 @@ def test_hydrate_published_snapshot_fetches_yahoo_only_fields_for_missing_scan_d
         "eps_q2_yoy": 13.0,
         "eps_raw_score": 78.0,
         "eps_years_available": 5,
+        "market_cap": 1_000,
+        "shares_outstanding": 50_000_000,
         "yahoo_profile_refreshed_at": "2026-03-19T00:00:00",
         "yahoo_statements_refreshed_at": "2026-03-19T00:00:00",
     }
