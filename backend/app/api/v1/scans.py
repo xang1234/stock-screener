@@ -43,7 +43,7 @@ from ...wiring.bootstrap import (
     get_ui_snapshot_service,
 )
 from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
-from ...use_cases.scanning.create_scan import ActiveScanConflictError
+from ...use_cases.scanning.create_scan import ActiveScanConflictError, StaleMarketDataError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -169,7 +169,8 @@ async def create_scan(
         from ...services.universe_compat_metrics import record_legacy_universe_usage
 
         record_legacy_universe_usage(universe_resolution.legacy_value)
-    market_refresh_conflict = _get_market_refresh_conflict_detail(_resolve_scan_guard_market(universe_def))
+    guard_market = _resolve_scan_guard_market(universe_def)
+    market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
     if market_refresh_conflict is not None:
         raise HTTPException(status_code=409, detail=market_refresh_conflict)
     cmd = CreateScanCommand(
@@ -189,6 +190,8 @@ async def create_scan(
     try:
         result = use_case.execute(uow, cmd)
     except ActiveScanConflictError as e:
+        raise HTTPException(status_code=409, detail=e.to_dict()) from e
+    except StaleMarketDataError as e:
         raise HTTPException(status_code=409, detail=e.to_dict()) from e
     except DomainValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
