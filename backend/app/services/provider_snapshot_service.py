@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import logging
+import math
 import shutil
 import tempfile
 from datetime import date, datetime
@@ -63,6 +64,16 @@ def _deserialize_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value)
+
+
+def _finite_or_none(value: Any) -> Any:
+    """Return ``None`` when ``value`` is NaN/inf; otherwise pass through.
+    Yahoo ``.info`` can return ``float('nan')`` for delisted or illiquid
+    tickers, and NaN survives ``is not None`` checks but later breaks FX
+    normalization and JSON serialization."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 class ProviderSnapshotService:
@@ -593,10 +604,11 @@ class ProviderSnapshotService:
                 yahoo_payload["description_yfinance"] = info.get("longBusinessSummary")
 
             # Finviz is the primary source for market_cap; fall back to Yahoo
-            # only when Finviz's snapshot omitted it. Use explicit None checks
-            # so a legitimate 0 from .info is preserved.
-            info_market_cap = info.get("marketCap")
-            info_shares = info.get("sharesOutstanding")
+            # only when Finviz's snapshot omitted it. Treat NaN/inf from
+            # .info (common for delisted / illiquid tickers) as missing so
+            # downstream FX normalization can't raise on ``int(nan * rate)``.
+            info_market_cap = _finite_or_none(info.get("marketCap"))
+            info_shares = _finite_or_none(info.get("sharesOutstanding"))
             if info_market_cap is None or info_shares is None:
                 fast_market_cap, fast_shares, _ = (
                     self.bulk_fetcher._read_fast_info_market_state(ticker)
