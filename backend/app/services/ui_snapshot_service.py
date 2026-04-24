@@ -402,11 +402,16 @@ class UISnapshotService:
         return latest[0] if latest else "none"
 
     def _resolve_breadth_source_revision(self, db: Session) -> str:
-        latest = db.query(func.max(MarketBreadth.date)).scalar()
+        # Bootstrap snapshots are US-scoped; non-US surfaces will get their own.
+        latest = db.query(func.max(MarketBreadth.date)).filter(
+            MarketBreadth.market == "US",
+        ).scalar()
         return latest.isoformat() if latest else "none"
 
     def _resolve_groups_source_revision(self, db: Session) -> str:
-        latest = db.query(func.max(IBDGroupRank.date)).scalar()
+        latest = db.query(func.max(IBDGroupRank.date)).filter(
+            IBDGroupRank.market == "US",
+        ).scalar()
         return latest.isoformat() if latest else "none"
 
     def _resolve_themes_source_revision(self, db: Session, pipeline: str) -> str:
@@ -565,22 +570,25 @@ class UISnapshotService:
 
     def _build_breadth_payload(self) -> dict[str, Any]:
         with self._session_factory() as db:
-            current = db.query(MarketBreadth).order_by(MarketBreadth.date.desc()).first()
-            total_records = db.query(func.count(MarketBreadth.id)).scalar() or 0
-            min_date = db.query(func.min(MarketBreadth.date)).scalar()
-            max_date = db.query(func.max(MarketBreadth.date)).scalar()
+            # Breadth bootstrap is US-scoped — non-US partitions will get their
+            # own bootstrap surface.
+            us_only = MarketBreadth.market == "US"
+            current = db.query(MarketBreadth).filter(us_only).order_by(MarketBreadth.date.desc()).first()
+            total_records = db.query(func.count(MarketBreadth.id)).filter(us_only).scalar() or 0
+            min_date = db.query(func.min(MarketBreadth.date)).filter(us_only).scalar()
+            max_date = db.query(func.max(MarketBreadth.date)).filter(us_only).scalar()
             end_date = datetime.utcnow().date()
             history_start = end_date - timedelta(days=90)
             chart_start = end_date - timedelta(days=31)
             history = (
                 db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date)
+                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date, us_only)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
             chart = (
                 db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date)
+                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date, us_only)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )

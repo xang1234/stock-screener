@@ -446,8 +446,11 @@ async def get_rankings_summary(db: Session = Depends(get_db)):
     """
     from sqlalchemy import func
 
-    # Get total record count
-    total_records = db.query(func.count(IBDGroupRank.id)).scalar() or 0
+    # This summary endpoint is US-scoped today; non-US partitions get their
+    # own surfaces via _get_market_group_service.
+    us_only = IBDGroupRank.market == "US"
+
+    total_records = db.query(func.count(IBDGroupRank.id)).filter(us_only).scalar() or 0
 
     if total_records == 0:
         return {
@@ -458,16 +461,16 @@ async def get_rankings_summary(db: Session = Depends(get_db)):
             "earliest_date": None,
         }
 
-    # Get date range
-    min_date = db.query(func.min(IBDGroupRank.date)).scalar()
-    max_date = db.query(func.max(IBDGroupRank.date)).scalar()
+    min_date = db.query(func.min(IBDGroupRank.date)).filter(us_only).scalar()
+    max_date = db.query(func.max(IBDGroupRank.date)).filter(us_only).scalar()
 
-    # Get unique group count
-    unique_groups = db.query(func.count(func.distinct(IBDGroupRank.industry_group))).scalar()
+    unique_groups = db.query(
+        func.count(func.distinct(IBDGroupRank.industry_group))
+    ).filter(us_only).scalar()
 
-    # Get count for latest date
     latest_count = db.query(func.count(IBDGroupRank.id)).filter(
-        IBDGroupRank.date == max_date
+        IBDGroupRank.date == max_date,
+        us_only,
     ).scalar()
 
     return {

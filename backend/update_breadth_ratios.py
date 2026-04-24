@@ -18,23 +18,25 @@ def calculate_and_update_ratios():
     db = SessionLocal()
 
     try:
-        # Get all breadth records ordered by date
-        all_records = db.query(MarketBreadth).order_by(
+        # This script is a one-shot US-scoped utility (predates multi-market
+        # breadth). Filter by market='US' so it only mutates US rows.
+        all_records = db.query(MarketBreadth).filter(
+            MarketBreadth.market == "US",
+        ).order_by(
             MarketBreadth.date.asc()
         ).all()
 
         logger.info(f"Found {len(all_records)} breadth records")
 
-        # Update each record's ratios
         updated_count = 0
 
         for i, record in enumerate(all_records):
-            # Get previous 10 days of data (excluding current day)
             lookback_start = record.date - timedelta(days=20)  # Generous window
 
             prev_records = db.query(MarketBreadth).filter(
                 MarketBreadth.date >= lookback_start,
-                MarketBreadth.date < record.date
+                MarketBreadth.date < record.date,
+                MarketBreadth.market == "US",
             ).order_by(MarketBreadth.date.desc()).limit(10).all()
 
             if len(prev_records) < 5:

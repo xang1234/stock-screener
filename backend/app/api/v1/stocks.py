@@ -733,6 +733,7 @@ async def get_stock_decision_dashboard(
 
         breadth = (
             db.query(MarketBreadth)
+            .filter(MarketBreadth.market == "US")
             .order_by(MarketBreadth.date.desc())
             .first()
         )

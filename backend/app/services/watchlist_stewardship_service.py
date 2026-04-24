@@ -224,7 +224,9 @@ class WatchlistStewardshipService:
         )
         if latest_feature_date is not None:
             candidates.append(latest_feature_date)
-        latest_breadth_date = db.query(func.max(MarketBreadth.date)).scalar()
+        latest_breadth_date = db.query(func.max(MarketBreadth.date)).filter(
+            MarketBreadth.market == "US",
+        ).scalar()
         if latest_breadth_date is not None:
             candidates.append(latest_breadth_date)
         latest_theme_alert_at = self._load_latest_theme_alert_at(db, None)
@@ -257,9 +259,13 @@ class WatchlistStewardshipService:
         )
 
     def _load_latest_breadth(self, db: Session, as_of_date: date) -> MarketBreadth | None:
+        # Watchlist stewardship is US-scoped today.
         return (
             db.query(MarketBreadth)
-            .filter(MarketBreadth.date <= as_of_date)
+            .filter(
+                MarketBreadth.date <= as_of_date,
+                MarketBreadth.market == "US",
+            )
             .order_by(MarketBreadth.date.desc())
             .first()
         )

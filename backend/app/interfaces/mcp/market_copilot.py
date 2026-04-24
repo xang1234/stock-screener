@@ -1129,6 +1129,7 @@ class MarketCopilotService:
         with self._session_scope() as db:
             rows = (
                 db.query(MarketBreadth)
+                .filter(MarketBreadth.market == "US")
                 .order_by(desc(MarketBreadth.date))
                 .limit(args.days)
                 .all()
@@ -1385,7 +1386,8 @@ class MarketCopilotService:
         )
 
     def _latest_breadth(self, db: Session, as_of_date: date | None) -> MarketBreadth | None:
-        query = db.query(MarketBreadth)
+        # Market copilot is US-scoped today.
+        query = db.query(MarketBreadth).filter(MarketBreadth.market == "US")
         if as_of_date is not None:
             query = query.filter(MarketBreadth.date <= as_of_date)
         return query.order_by(MarketBreadth.date.desc()).first()

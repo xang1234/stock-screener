@@ -219,7 +219,10 @@ def _enrich_feature_run_with_ibd_metadata(
                 industry_group: rank
                 for industry_group, rank in (
                     db.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
-                    .filter(IBDGroupRank.date == ranking_date)
+                    .filter(
+                        IBDGroupRank.date == ranking_date,
+                        IBDGroupRank.market == "US",
+                    )
                     .all()
                 )
             }
