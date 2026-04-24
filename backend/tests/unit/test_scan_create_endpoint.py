@@ -14,6 +14,7 @@ from app.use_cases.scanning.create_scan import (
     ActiveScanConflict,
     ActiveScanConflictError,
     CreateScanResult,
+    StaleMarketDataError,
 )
 
 
@@ -61,10 +62,6 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
 @pytest_asyncio.fixture
 async def client(monkeypatch):
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
-    monkeypatch.setattr(
-        "app.api.v1.scans._get_market_data_staleness_detail",
-        lambda market: None,
-    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -566,33 +563,37 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
 
 
 @pytest.mark.asyncio
-async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypatch):
-    """A scan should be rejected when cached prices haven't reached the
-    last-completed trading day — we'd rather tell the user to wait than
-    silently scan against yesterday's data."""
-    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
-
+async def test_create_scan_returns_409_when_market_price_data_is_stale(client):
+    """The staleness gate lives inside CreateScanUseCase (after idempotency
+    and symbol resolution) and surfaces as StaleMarketDataError; the route
+    maps that to 409 with the detail payload.
+    """
     stale_detail = {
         "code": "market_data_stale",
         "message": (
-            "US price data is stale "
-            "(oldest symbol last cached: 2026-04-22; expected: 2026-04-23). "
+            "Price data is stale for: US (oldest: 2026-04-22, expected: 2026-04-23). "
             "Wait for the next scheduled refresh before starting a scan."
         ),
-        "market": "US",
-        "oldest_last_cached_date": "2026-04-22",
-        "expected_date": "2026-04-23",
-        "covered_symbols": 2400,
-        "total_active_symbols": 2400,
-        "uncovered_symbols": 0,
+        "stale_markets": [
+            {
+                "market": "US",
+                "total_symbols": 3,
+                "covered_symbols": 2,
+                "uncovered_symbols": 1,
+                "oldest_last_cached_date": "2026-04-22",
+                "expected_date": "2026-04-23",
+            }
+        ],
     }
-    monkeypatch.setattr(
-        "app.api.v1.scans._get_market_data_staleness_detail",
-        lambda market: stale_detail if market == "US" else None,
-    )
+
+    class _StaleCreateScanUseCase(_FakeCreateScanUseCase):
+        def execute(self, uow, cmd):
+            self.received_uow = uow
+            self.received_cmd = cmd
+            raise StaleMarketDataError(stale_detail)
 
     fake_uow = _FakeUoW()
-    fake_use_case = _FakeCreateScanUseCase(
+    fake_use_case = _StaleCreateScanUseCase(
         CreateScanResult(
             scan_id="scan-stale",
             status="queued",
@@ -604,13 +605,11 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
 
     app.dependency_overrides[get_uow] = lambda: fake_uow
     app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
-    transport = httpx.ASGITransport(app=app)
     try:
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/scans",
-                json={"universe_def": {"type": "market", "market": "US"}},
-            )
+        response = await client.post(
+            "/api/v1/scans",
+            json={"universe_def": {"type": "market", "market": "US"}},
+        )
     finally:
         app.dependency_overrides.pop(get_uow, None)
         app.dependency_overrides.pop(get_create_scan_use_case, None)
@@ -618,13 +617,9 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
     assert response.status_code == 409
     payload = response.json()
     assert payload["detail"]["code"] == "market_data_stale"
-    assert payload["detail"]["market"] == "US"
-    assert payload["detail"]["oldest_last_cached_date"] == "2026-04-22"
-    assert payload["detail"]["expected_date"] == "2026-04-23"
-    assert payload["detail"]["covered_symbols"] == 2400
-    assert payload["detail"]["total_active_symbols"] == 2400
-    assert payload["detail"]["uncovered_symbols"] == 0
-    assert fake_use_case.received_cmd is None
+    assert payload["detail"]["stale_markets"][0]["market"] == "US"
+    assert payload["detail"]["stale_markets"][0]["uncovered_symbols"] == 1
+    assert payload["detail"]["stale_markets"][0]["oldest_last_cached_date"] == "2026-04-22"
 
 
 @pytest.mark.parametrize(

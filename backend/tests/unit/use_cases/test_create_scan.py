@@ -8,6 +8,7 @@ from app.use_cases.scanning.create_scan import (
     CreateScanCommand,
     CreateScanResult,
     CreateScanUseCase,
+    StaleMarketDataError,
 )
 from app.domain.scanning.errors import SingleActiveScanViolation
 
@@ -230,6 +231,91 @@ class TestIdempotency:
 
         assert result1.scan_id != result2.scan_id
         assert len(uow.scans.rows) == 2
+
+
+class TestFreshnessChecker:
+    """Staleness gate runs inside the use case, after idempotency + symbol resolution."""
+
+    _STALE_DETAIL = {
+        "code": "market_data_stale",
+        "message": "stale test",
+        "stale_markets": [{"market": "US", "uncovered_symbols": 1}],
+    }
+
+    def test_stale_universe_raises_stale_market_data_error(self):
+        uow = _make_uow(["AAPL", "MSFT"])
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(
+            dispatcher=dispatcher,
+            freshness_checker=lambda _symbols: self._STALE_DETAIL,
+        )
+
+        with pytest.raises(StaleMarketDataError) as exc_info:
+            uc.execute(uow, _make_command())
+
+        assert exc_info.value.to_dict()["code"] == "market_data_stale"
+        assert len(dispatcher.dispatched) == 0
+        assert len(uow.scans.rows) == 0
+
+    def test_fresh_universe_proceeds_normally(self):
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(
+            dispatcher=dispatcher,
+            freshness_checker=lambda _symbols: None,
+        )
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_idempotent_retry_bypasses_staleness_gate(self):
+        """Thread 3 (Codex P2): a retried request with a known idempotency_key
+        must return the existing scan even if market data is now stale.
+        """
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+        calls: list[list[str]] = []
+
+        def checker(symbols):
+            calls.append(list(symbols))
+            return self._STALE_DETAIL
+
+        # First call: freshness_checker returns None so the scan is created.
+        fresh_uc = CreateScanUseCase(
+            dispatcher=dispatcher,
+            freshness_checker=lambda _s: None,
+        )
+        result1 = fresh_uc.execute(uow, _make_command(idempotency_key="retry-key"))
+
+        # Second call: checker would return stale, but idempotency short-circuits first.
+        stale_uc = CreateScanUseCase(
+            dispatcher=dispatcher,
+            freshness_checker=checker,
+        )
+        result2 = stale_uc.execute(uow, _make_command(idempotency_key="retry-key"))
+
+        assert result2.is_duplicate is True
+        assert result2.scan_id == result1.scan_id
+        assert calls == [], "freshness checker must not run for idempotent retries"
+
+    def test_checker_receives_resolved_symbols_not_universe_def(self):
+        """Thread 1 (Codex P1): the checker gets the symbol list the scan will
+        actually process, not the whole market's active set.
+        """
+        uow = _make_uow(["AAPL", "MSFT", "GOOGL"])
+        dispatcher = FakeTaskDispatcher()
+        captured: list[list[str]] = []
+
+        def checker(symbols):
+            captured.append(list(symbols))
+            return None
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=checker)
+        uc.execute(uow, _make_command())
+
+        assert captured == [["AAPL", "MSFT", "GOOGL"]]
 
 
 class TestFeatureRunBinding:

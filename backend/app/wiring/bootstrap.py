@@ -695,8 +695,12 @@ def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
 def get_create_scan_use_case() -> CreateScanUseCase:
     """Build a CreateScanUseCase wired with infrastructure adapters."""
     from app.use_cases.scanning.create_scan import CreateScanUseCase
+    from app.services.market_data_freshness import check_symbol_freshness
 
-    return CreateScanUseCase(dispatcher=get_task_dispatcher())
+    return CreateScanUseCase(
+        dispatcher=get_task_dispatcher(),
+        freshness_checker=check_symbol_freshness,
+    )
 
 
 def get_get_scan_results_use_case() -> GetScanResultsUseCase:

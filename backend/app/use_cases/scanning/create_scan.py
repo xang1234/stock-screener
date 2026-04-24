@@ -16,6 +16,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Callable, Iterable, Optional
 
 from app.domain.common.errors import ValidationError
 from app.domain.common.uow import UnitOfWork
@@ -27,6 +28,8 @@ from app.domain.scanning.signature import (
 )
 from app.schemas.universe import UniverseType
 from app.domain.scanning.ports import TaskDispatcher
+
+FreshnessChecker = Callable[[Iterable[str]], Optional[dict]]
 
 logger = logging.getLogger(__name__)
 
@@ -109,14 +112,39 @@ class ActiveScanConflictError(RuntimeError):
         }
 
 
+class StaleMarketDataError(RuntimeError):
+    """Raised when the resolved universe includes symbols with stale cached prices.
+
+    Runs inside the use case AFTER idempotency resolution and universe symbol
+    resolution, so:
+      - idempotent retries return the existing scan without being blocked by
+        current market freshness
+      - the check is scoped to the actual scan universe, not every market-wide
+        symbol
+    """
+
+    def __init__(self, detail: dict) -> None:
+        super().__init__(detail.get("message", "market data is stale"))
+        self.detail = detail
+
+    def to_dict(self) -> dict:
+        return dict(self.detail)
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
 class CreateScanUseCase:
     """Create a scan record, resolve its universe, and dispatch execution."""
 
-    def __init__(self, dispatcher: TaskDispatcher) -> None:
+    def __init__(
+        self,
+        dispatcher: TaskDispatcher,
+        *,
+        freshness_checker: FreshnessChecker | None = None,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._freshness_checker = freshness_checker
 
     @staticmethod
     def _raise_active_scan_conflict(active_scan: object) -> None:
@@ -160,6 +188,16 @@ class CreateScanUseCase:
                     f"No symbols found for universe '{cmd.universe_label}'. "
                     "Try refreshing the universe."
                 )
+
+            # ── Staleness gate (scoped to resolved symbols) ──────────
+            # Runs after idempotency + active-scan + symbol resolution so:
+            #   - duplicate idempotent retries return the existing scan above
+            #   - 'all'-universe scans get checked across every resolved market
+            #   - unrelated market-wide symbol issues don't block narrow scans
+            if self._freshness_checker is not None:
+                staleness_detail = self._freshness_checker(symbols)
+                if staleness_detail is not None:
+                    raise StaleMarketDataError(staleness_detail)
 
             feature_run_id = None
             instant_match = None
