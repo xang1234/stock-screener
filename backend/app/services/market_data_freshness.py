@@ -61,11 +61,24 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
         try:
             expected_date = calendar.last_completed_trading_day(market)
         except Exception:
+            # Fail-closed: if we cannot verify freshness (unsupported market
+            # code, calendar backend outage, schedule lookup error), the safe
+            # default is to block the scan. Silently treating the market as
+            # fresh defeats the entire purpose of the gate.
             logger.warning(
-                "Could not resolve last completed trading day for market=%s; skipping staleness check",
+                "Could not resolve last completed trading day for market=%s; treating as stale",
                 market,
                 exc_info=True,
             )
+            stale_markets.append({
+                "market": market,
+                "total_symbols": len(market_rows),
+                "covered_symbols": sum(1 for r in market_rows if r.last_date is not None),
+                "uncovered_symbols": sum(1 for r in market_rows if r.last_date is None),
+                "oldest_last_cached_date": None,
+                "expected_date": None,
+                "reason": "calendar_unavailable",
+            })
             continue
 
         uncovered = sum(1 for r in market_rows if r.last_date is None)
@@ -85,12 +98,18 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
     if not stale_markets and not unresolved_symbols:
         return None
 
+    def _describe(market_entry: dict) -> str:
+        if market_entry.get("reason") == "calendar_unavailable":
+            return f"{market_entry['market']} (calendar unavailable — could not verify freshness)"
+        return (
+            f"{market_entry['market']} "
+            f"(oldest: {market_entry['oldest_last_cached_date'] or 'never'}, "
+            f"expected: {market_entry['expected_date']})"
+        )
+
     fragments: list[str] = []
     if stale_markets:
-        fragments.append(", ".join(
-            f"{m['market']} (oldest: {m['oldest_last_cached_date'] or 'never'}, expected: {m['expected_date']})"
-            for m in stale_markets
-        ))
+        fragments.append(", ".join(_describe(m) for m in stale_markets))
     if unresolved_symbols:
         preview = ", ".join(unresolved_symbols[:5])
         more = "" if len(unresolved_symbols) <= 5 else f" (+{len(unresolved_symbols) - 5} more)"

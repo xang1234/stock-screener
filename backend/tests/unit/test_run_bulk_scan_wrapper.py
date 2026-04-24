@@ -145,6 +145,41 @@ class TestRunBulkScanViaUseCase:
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")
+    def test_trigger_source_lookup_failure_still_closes_cancel_token(
+        self, mock_settings, mock_pipeline
+    ):
+        """Round 6 Codex P2: if the DB lookup that resolves trigger_source
+        raises, the cancellation token must still get closed and the scan
+        must be marked failed. Bug was that the lookup ran before the
+        try/finally block that owns the cleanup.
+        """
+        mock_settings.scan_usecase_chunk_size = 25
+
+        fake_session = MagicMock()
+        fake_session.query.side_effect = RuntimeError("transient DB error")
+
+        mock_cancel_instance = MagicMock()
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal", return_value=fake_session),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case"),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken", return_value=mock_cancel_instance),
+            patch(f"{_WRAPPER_PATH}._mark_scan_failed") as mock_mark_failed,
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+
+            with pytest.raises(RuntimeError, match="transient DB error"):
+                _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
+
+        mock_cancel_instance.close.assert_called_once()
+        mock_mark_failed.assert_called_once_with("scan-001")
+
+    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.settings")
     def test_manual_scan_runs_cache_only_true(self, mock_settings, mock_pipeline):
         """Round 5 Codex P2: manual scans must run cache_only=True."""
         mock_settings.scan_usecase_chunk_size = 25

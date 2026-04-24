@@ -317,6 +317,24 @@ class TestFreshnessChecker:
 
         assert captured == [["AAPL", "MSFT", "GOOGL"]]
 
+    def test_freshness_checker_exception_fails_closed(self):
+        """Round 6 CodeRabbit: if the checker itself raises (transient DB
+        error, etc.) the exception must propagate — we do not silently skip
+        the gate. Fail-closed is intentional for a safety check.
+        """
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+
+        def checker(_symbols):
+            raise RuntimeError("transient DB error")
+
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=checker)
+
+        with pytest.raises(RuntimeError, match="transient DB error"):
+            uc.execute(uow, _make_command())
+
+        assert len(dispatcher.dispatched) == 0
+
     def test_no_checker_skips_freshness_gate_entirely(self):
         """Round 4 Codex P1: internal callers (e.g., bootstrap scans) opt out
         of the gate by omitting the checker. They must proceed even when the
