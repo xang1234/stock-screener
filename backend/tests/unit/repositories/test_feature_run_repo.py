@@ -7,8 +7,10 @@ serialization issues that mocks would miss.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
+import numpy as np
 import pytest
 from sqlalchemy.orm import Session
 
@@ -153,6 +155,37 @@ class TestMarkQuarantined:
 
         assert result.status == RunStatus.QUARANTINED
         assert "Row count too low" in result.warnings
+
+    def test_converts_numpy_scalar_dq_values_before_json_storage(
+        self,
+        repo: SqlFeatureRunRepository,
+        session: Session,
+    ):
+        run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)
+        repo.mark_completed(run.id, _make_stats())
+
+        result = repo.mark_quarantined(
+            run.id,
+            [
+                DQResult(
+                    check_name="row_count",
+                    passed=np.bool_(False),
+                    severity=DQSeverity.CRITICAL,
+                    actual_value=np.float64(0.43414481897627966),
+                    threshold=np.float32(0.9),
+                    message="Symbol coverage too low",
+                ),
+            ],
+        )
+
+        row = session.get(FeatureRun, run.id)
+        assert row is not None
+        json.dumps(row.warnings_json)
+        warning = row.warnings_json[0]
+        assert warning["passed"] is False
+        assert isinstance(warning["actual_value"], float)
+        assert isinstance(warning["threshold"], float)
+        assert result.status == RunStatus.QUARANTINED
 
 
 class TestPublishAtomically:
