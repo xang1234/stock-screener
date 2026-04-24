@@ -27,6 +27,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _finite_or_none(value: Any) -> Any:
+    """Return ``None`` when ``value`` is NaN/inf; otherwise pass through.
+    Yahoo ``.info`` can return ``float('nan')`` for delisted or illiquid
+    tickers, and NaN survives ``is not None`` checks but later breaks FX
+    normalization (``int(nan * rate)`` raises) and JSON serialization."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 class BulkDataFetcher:
     """
     Fetch data for multiple stocks efficiently using ``yf.download()``.
@@ -175,13 +185,16 @@ class BulkDataFetcher:
         if info is None:
             info = {}
 
-        info_market_cap = info.get("marketCap")
-        info_shares = info.get("sharesOutstanding")
-        info_current_price = info.get("currentPrice")
+        # Reject NaN/inf from .info (common for delisted/illiquid tickers) up
+        # front so they don't bypass the fast_info fallback or later poison
+        # FX normalization when persisted.
+        info_market_cap = _finite_or_none(info.get("marketCap"))
+        info_shares = _finite_or_none(info.get("sharesOutstanding"))
+        info_current_price = _finite_or_none(info.get("currentPrice"))
         info_price = (
             info_current_price
             if info_current_price is not None
-            else info.get("regularMarketPrice")
+            else _finite_or_none(info.get("regularMarketPrice"))
         )
         fast_market_cap = fast_shares = fast_last_price = None
         if info_market_cap is None or info_shares is None or info_price is None:

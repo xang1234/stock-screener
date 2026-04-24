@@ -77,6 +77,34 @@ def test_read_fast_info_parses_fields_independently():
     assert last_price == 42.5
 
 
+def test_extract_fundamentals_rejects_nan_from_info_and_falls_back():
+    """NaN from .info must not survive as market_cap / shares / current_price;
+    it should be treated as missing and trigger the fast_info fallback."""
+    bdf = BulkDataFetcher()
+    ticker = _make_ticker(market_cap=7_777, shares=42, last_price=1.25)
+    result = bdf._extract_fundamentals(
+        ticker,
+        {
+            "marketCap": float("nan"),
+            "sharesOutstanding": float("nan"),
+            "currentPrice": float("nan"),
+            "regularMarketPrice": float("nan"),
+        },
+    )
+    assert result["market_cap"] == 7_777
+    assert result["shares_outstanding"] == 42
+    assert result["current_price"] == 1.25
+
+
+def test_extract_fundamentals_drops_nan_when_no_fallback():
+    """With a NaN from .info and no fast_info value, the key should be
+    filtered out (not stored as NaN) so downstream FX / JSON code is safe."""
+    bdf = BulkDataFetcher()
+    ticker = _make_ticker()  # all None
+    result = bdf._extract_fundamentals(ticker, {"marketCap": float("nan")})
+    assert "market_cap" not in result
+
+
 def test_read_fast_info_rejects_nan_and_inf_floats():
     """float('nan') survives float() silently; must be rejected so it can't
     poison JSON serialization or DB comparisons downstream."""
