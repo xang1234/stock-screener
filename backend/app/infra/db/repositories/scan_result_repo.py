@@ -666,7 +666,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.ibd_industry_group == ibd_industry_group)
-            .order_by(ScanResult.composite_score.desc())
+            .order_by(ScanResult.composite_score.desc().nullslast())
             .all()
         )
         return tuple(
@@ -680,7 +680,7 @@ class SqlScanResultRepository(ScanResultRepository):
         rows = (
             _scan_results_query(self._session, scan_id)
             .filter(ScanResult.gics_sector == gics_sector)
-            .order_by(ScanResult.composite_score.desc())
+            .order_by(ScanResult.composite_score.desc().nullslast())
             .all()
         )
         return tuple(

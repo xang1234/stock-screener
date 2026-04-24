@@ -141,7 +141,7 @@ def compute_industry_peer_metrics(db: Session, scan_id: str) -> None:
                 ScanResult.scan_id == scan_id,
                 ScanResult.ibd_industry_group == group.ibd_industry_group,
             ).order_by(
-                ScanResult.composite_score.desc()
+                ScanResult.composite_score.desc().nullslast()
             ).first()
 
             cache = IBDGroupPeerCache(
