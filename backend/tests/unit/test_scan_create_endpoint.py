@@ -67,6 +67,22 @@ async def client(monkeypatch):
         yield c
 
 
+def test_http_create_scan_factory_has_no_request_bound_parameters():
+    """Round 5 Codex P1: FastAPI exposes dependency-factory kwargs as
+    query parameters. The HTTP-bound factory MUST NOT accept kwargs —
+    otherwise a client could pass ?with_freshness_gate=false and bypass
+    the staleness gate.
+    """
+    import inspect
+    from app.wiring.bootstrap import get_create_scan_use_case
+
+    sig = inspect.signature(get_create_scan_use_case)
+    assert list(sig.parameters.keys()) == [], (
+        f"get_create_scan_use_case must have no parameters (FastAPI would expose "
+        f"them as query params and bypass security); found {list(sig.parameters)}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_scan_returns_completed_and_publishes_bootstraps(client):
     fake_uow = _FakeUoW()

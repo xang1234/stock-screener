@@ -61,6 +61,12 @@ class CreateScanCommand:
     # Idempotency
     idempotency_key: str | None = None
 
+    # Provenance — determines cache_only policy in the runner.
+    # Manual scans must run cache-only (no yfinance/Finviz fallback); bootstrap
+    # and other internal scans populate the cache and therefore must allow
+    # live fetch. See scan_tasks._run_bulk_scan_via_use_case.
+    trigger_source: str = "manual"
+
 
 # ── Result (output) ──────────────────────────────────────────────────────
 
@@ -249,7 +255,7 @@ class CreateScanUseCase:
                     total_stocks=len(symbols),
                     passed_stocks=0,
                     status="queued",
-                    trigger_source="manual",
+                    trigger_source=cmd.trigger_source,
                     task_id=None,
                     idempotency_key=cmd.idempotency_key,
                     feature_run_id=feature_run_id,

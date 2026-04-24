@@ -194,6 +194,16 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
     progress = CeleryProgressSink(task_instance)
     cancel = DbCancellationToken(SessionLocal, scan_id)
 
+    # Manual scans run cache-only (no yfinance/Finviz fallback). Bootstrap and
+    # other internal scans *populate* the cache — they must allow live fetches.
+    db = SessionLocal()
+    try:
+        scan_row = db.query(Scan).filter(Scan.scan_id == scan_id).first()
+        trigger_source = (getattr(scan_row, "trigger_source", None) or "manual").lower()
+    finally:
+        db.close()
+    cache_only = trigger_source == "manual"
+
     try:
         uow = SqlUnitOfWork(SessionLocal)
         use_case = get_run_bulk_scan_use_case()
@@ -203,7 +213,7 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
             criteria=criteria or {},
             chunk_size=settings.scan_usecase_chunk_size,
             correlation_id=task_instance.request.id,
-            cache_only=True,
+            cache_only=cache_only,
         )
         result = use_case.execute(uow, cmd, progress, cancel)
     except Exception:

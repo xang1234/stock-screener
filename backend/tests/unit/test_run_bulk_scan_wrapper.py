@@ -145,6 +145,82 @@ class TestRunBulkScanViaUseCase:
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")
+    def test_manual_scan_runs_cache_only_true(self, mock_settings, mock_pipeline):
+        """Round 5 Codex P2: manual scans must run cache_only=True."""
+        mock_settings.scan_usecase_chunk_size = 25
+
+        captured_cmd = None
+
+        def capture_execute(uow, cmd, progress, cancel):
+            nonlocal captured_cmd
+            captured_cmd = cmd
+            return _FakeResult()
+
+        mock_use_case = MagicMock()
+        mock_use_case.execute.side_effect = capture_execute
+
+        fake_scan = MagicMock()
+        fake_scan.trigger_source = "manual"
+        fake_session = MagicMock()
+        fake_session.query.return_value.filter.return_value.first.return_value = fake_scan
+
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal", return_value=fake_session),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken"),
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
+
+        assert captured_cmd is not None
+        assert captured_cmd.cache_only is True
+
+    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.settings")
+    def test_bootstrap_scan_runs_cache_only_false(self, mock_settings, mock_pipeline):
+        """Round 5 Codex P2: bootstrap scans populate the cache and must run
+        with cache_only=False — otherwise they'd fail every symbol on cold cache.
+        """
+        mock_settings.scan_usecase_chunk_size = 25
+
+        captured_cmd = None
+
+        def capture_execute(uow, cmd, progress, cancel):
+            nonlocal captured_cmd
+            captured_cmd = cmd
+            return _FakeResult()
+
+        mock_use_case = MagicMock()
+        mock_use_case.execute.side_effect = capture_execute
+
+        fake_scan = MagicMock()
+        fake_scan.trigger_source = "bootstrap"
+        fake_session = MagicMock()
+        fake_session.query.return_value.filter.return_value.first.return_value = fake_scan
+
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal", return_value=fake_session),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken"),
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
+
+        assert captured_cmd is not None
+        assert captured_cmd.cache_only is False
+
+    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.settings")
     def test_command_built_with_correct_params(self, mock_settings, mock_pipeline):
         mock_settings.scan_usecase_chunk_size = 25
 

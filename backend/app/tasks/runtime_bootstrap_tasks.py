@@ -141,12 +141,12 @@ def queue_market_bootstrap_scan(market: str) -> dict:
     from ..infra.db.uow import SqlUnitOfWork
     from ..schemas.universe import Market, UniverseDefinition, UniverseType
     from ..use_cases.scanning.create_scan import ActiveScanConflictError, CreateScanCommand
-    from ..wiring.bootstrap import get_create_scan_use_case
+    from ..wiring.bootstrap import get_create_scan_use_case_without_freshness_gate
 
     market_code = str(market).upper()
     defaults = get_default_scan_profile()
     universe_def = UniverseDefinition(type=UniverseType.MARKET, market=Market(market_code))
-    use_case = get_create_scan_use_case(with_freshness_gate=False)
+    use_case = get_create_scan_use_case_without_freshness_gate()
     uow = SqlUnitOfWork(SessionLocal)
 
     try:
@@ -161,6 +161,7 @@ def queue_market_bootstrap_scan(market: str) -> dict:
                 screeners=defaults["screeners"],
                 composite_method=defaults["composite_method"],
                 criteria=defaults["criteria"],
+                trigger_source="bootstrap",
             ),
         )
     except ActiveScanConflictError as exc:
