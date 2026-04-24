@@ -20,6 +20,7 @@ from app.domain.feature_store.ports import FeatureRunRepository
 from app.infra.db.models.feature_store import StockFeatureDaily
 from app.domain.feature_store.quality import DQResult
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
+from app.infra.serialization import convert_numpy_types
 
 
 class SqlFeatureRunRepository(FeatureRunRepository):
@@ -105,7 +106,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         validate_transition(RunStatus(row.status), RunStatus.QUARANTINED)
 
         row.status = RunStatus.QUARANTINED.value
-        row.warnings_json = [
+        row.warnings_json = convert_numpy_types([
             {
                 "check_name": r.check_name,
                 "passed": r.passed,
@@ -115,7 +116,7 @@ class SqlFeatureRunRepository(FeatureRunRepository):
                 "message": r.message,
             }
             for r in dq_results
-        ]
+        ])
         self._session.flush()
         return self._to_domain(row)
 
