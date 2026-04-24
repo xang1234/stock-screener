@@ -583,6 +583,8 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
         "oldest_last_cached_date": "2026-04-22",
         "expected_date": "2026-04-23",
         "covered_symbols": 2400,
+        "total_active_symbols": 2400,
+        "uncovered_symbols": 0,
     }
     monkeypatch.setattr(
         "app.api.v1.scans._get_market_data_staleness_detail",
@@ -620,6 +622,8 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypat
     assert payload["detail"]["oldest_last_cached_date"] == "2026-04-22"
     assert payload["detail"]["expected_date"] == "2026-04-23"
     assert payload["detail"]["covered_symbols"] == 2400
+    assert payload["detail"]["total_active_symbols"] == 2400
+    assert payload["detail"]["uncovered_symbols"] == 0
     assert fake_use_case.received_cmd is None
 
 

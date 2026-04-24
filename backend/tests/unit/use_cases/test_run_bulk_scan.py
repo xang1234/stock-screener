@@ -295,6 +295,52 @@ class TestRunBulkScanHappyPath:
         assert result.failed == 3
         assert result.passed == 0
 
+    def test_cache_only_skips_per_symbol_when_get_merged_requirements_raises(self):
+        """When get_merged_requirements() raises, merged_requirements stays None
+        and the bulk fetch block is never entered. The cache-only invariant must
+        still hold — symbols must NOT flow through the per-symbol prepare_data()
+        path which can still hit live yfinance/Finviz.
+        """
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        scan_calls: list[str] = []
+        bulk_calls: list[list[str]] = []
+
+        class FailingMergeScanner:
+            def get_merged_requirements(self, screener_names, criteria=None):
+                raise RuntimeError("simulated merge failure")
+
+            def scan_stock_multi(self, symbol, screener_names, **kwargs):
+                scan_calls.append(symbol)
+                return {"composite_score": 0.0, "rating": "Buy", "passes_template": False}
+
+        class TrackingProvider(_SpyDataProvider):
+            def prepare_data_bulk(self, symbols, requirements, **kwargs):
+                bulk_calls.append(list(symbols))
+                return super().prepare_data_bulk(symbols, requirements, **kwargs)
+
+        uc = RunBulkScanUseCase(scanner=FailingMergeScanner(), data_provider=TrackingProvider())
+        result = uc.execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "MSFT"],
+                chunk_size=10,
+                cache_only=True,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert bulk_calls == [], "bulk fetch should be skipped when merged_requirements is None"
+        assert scan_calls == [], (
+            "scan_stock_multi must not be called when cache_only=True and bulk path was never attempted"
+        )
+        assert result.failed == 2
+        assert result.passed == 0
+
     def test_bulk_fetch_failure_falls_back_to_per_symbol_when_not_cache_only(self):
         """When cache_only=False (default), bulk failure SHOULD fall back to
         per-symbol scanning — preserves legacy behavior for any non-manual caller.

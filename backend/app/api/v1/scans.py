@@ -129,6 +129,13 @@ def _get_market_data_staleness_detail(market: str | None) -> dict[str, object] |
 
     session = SessionLocal()
     try:
+        total_active_symbols = int(
+            session.query(func.count(StockUniverse.symbol))
+            .filter(StockUniverse.market == normalized_market)
+            .filter(StockUniverse.is_active.is_(True))
+            .scalar()
+            or 0
+        )
         per_symbol_last = (
             session.query(
                 StockPrice.symbol.label("symbol"),
@@ -149,21 +156,35 @@ def _get_market_data_staleness_detail(market: str | None) -> dict[str, object] |
     finally:
         session.close()
 
-    if covered_symbols > 0 and oldest_last_date is not None and oldest_last_date >= expected_date:
+    uncovered_symbols = max(total_active_symbols - covered_symbols, 0)
+    all_active_covered = total_active_symbols > 0 and uncovered_symbols == 0
+    oldest_is_fresh = oldest_last_date is not None and oldest_last_date >= expected_date
+    if all_active_covered and oldest_is_fresh:
         return None
 
     oldest_last_str = None if oldest_last_date is None else str(oldest_last_date)
+    reason_fragments = []
+    if uncovered_symbols > 0:
+        reason_fragments.append(
+            f"{uncovered_symbols} active symbol(s) have no cached prices"
+        )
+    if not oldest_is_fresh:
+        reason_fragments.append(
+            f"oldest symbol last cached: {oldest_last_str or 'never'}; expected: {expected_date}"
+        )
+    reason = "; ".join(reason_fragments) or f"expected: {expected_date}"
     return {
         "code": "market_data_stale",
         "message": (
-            f"{normalized_market} price data is stale "
-            f"(oldest symbol last cached: {oldest_last_str or 'never'}; expected: {expected_date}). "
+            f"{normalized_market} price data is stale ({reason}). "
             "Wait for the next scheduled refresh before starting a scan."
         ),
         "market": normalized_market,
         "oldest_last_cached_date": oldest_last_str,
         "expected_date": str(expected_date),
         "covered_symbols": covered_symbols,
+        "total_active_symbols": total_active_symbols,
+        "uncovered_symbols": uncovered_symbols,
     }
 
 

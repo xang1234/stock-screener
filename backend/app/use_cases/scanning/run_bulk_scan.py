@@ -229,7 +229,6 @@ class RunBulkScanUseCase:
                 )
 
             pre_fetched_data = {}
-            bulk_fetch_failed = False
             if self._data_provider is not None and merged_requirements is not None:
                 try:
                     pre_fetched_data = self._data_provider.prepare_data_bulk(
@@ -246,17 +245,17 @@ class RunBulkScanUseCase:
                         exc_info=True,
                     )
                     pre_fetched_data = {}
-                    bulk_fetch_failed = True
 
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []
             for symbol in chunk:
                 sym = symbol.upper()
-                # In cache-only mode, the bulk fetch is the only sanctioned data
-                # path; the per-symbol fallback route goes through prepare_data()
-                # which can still hit live APIs. Mark symbols as failed instead
-                # of silently leaking to yfinance/Finviz.
-                if bulk_fetch_failed and cmd.cache_only:
+                # cache_only invariant: the bulk prefetch is the only sanctioned
+                # data source. Any path that leaves a symbol out of pre_fetched_data
+                # (bulk raised, merged_requirements is None, data provider is None)
+                # must not fall through to per-symbol prepare_data() which can still
+                # hit live APIs.
+                if cmd.cache_only and sym not in pre_fetched_data:
                     failed += 1
                     processed += 1
                     continue
