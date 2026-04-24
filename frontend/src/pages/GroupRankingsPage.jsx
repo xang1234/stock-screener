@@ -63,6 +63,13 @@ const MARKET_LABELS = {
   TW: 'TW',
 };
 
+const REASON_HINTS = {
+  warmup_incomplete: 'Wait for the post-close cache warmup to finish, then retry.',
+  missing_ibd_mappings: 'Load IBD industry group mappings into the database first.',
+  no_groups_ranked: 'Run a price-data backfill so stocks have at least 252 days of history.',
+  invalid_date: 'Provide a valid YYYY-MM-DD date.',
+};
+
 // Helper to format rank change with color
 const RankChangeCell = ({ value }) => {
   if (value === null || value === undefined) {
@@ -504,6 +511,7 @@ function GroupRankingsPage() {
   const [order, setOrder] = useState('asc');
   const [isCalculating, setIsCalculating] = useState(false);
   const [calculationTaskId, setCalculationTaskId] = useState(null);
+  const [calculationError, setCalculationError] = useState(null);
   const [showHistoricalRanks, setShowHistoricalRanks] = useState(false); // Toggle between change vs actual rank
   const [bootstrapSettled, setBootstrapSettled] = useState(false);
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.groups);
@@ -602,9 +610,14 @@ function GroupRankingsPage() {
       setCalculationTaskId(null);
       setIsCalculating(false);
       if (calcStatus.status === 'completed') {
+        setCalculationError(null);
         refetchRankings();
       } else {
-        console.error('Calculation failed:', calcStatus.error);
+        const baseMessage = calcStatus.error || 'Calculation failed. See server logs for details.';
+        const hint = REASON_HINTS[calcStatus.reason_code];
+        const message = hint ? `${baseMessage} — ${hint}` : baseMessage;
+        console.error('Calculation failed:', message);
+        setCalculationError(message);
       }
     }
   }, [calcStatus, refetchRankings]);
@@ -624,11 +637,13 @@ function GroupRankingsPage() {
       return;
     }
     setIsCalculating(true);
+    setCalculationError(null);
     try {
       const response = await triggerCalculation(null);
       setCalculationTaskId(response.task_id);
     } catch (error) {
       console.error('Calculation error:', error);
+      setCalculationError(error?.response?.data?.detail || error?.message || 'Failed to queue calculation task.');
       setIsCalculating(false);
     }
   };
@@ -702,6 +717,14 @@ function GroupRankingsPage() {
     );
   }
 
+  const renderCalculationErrorAlert = (sx) => (
+    calculationError ? (
+      <Alert severity="error" sx={sx} onClose={() => setCalculationError(null)}>
+        Calculation failed: {calculationError}
+      </Alert>
+    ) : null
+  );
+
   if (errorRankings) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -721,6 +744,7 @@ function GroupRankingsPage() {
         <Alert severity="error">
           Error loading rankings: {errorRankings.message}
         </Alert>
+        {renderCalculationErrorAlert({ mt: 1 })}
       </Container>
     );
   }
@@ -744,6 +768,8 @@ function GroupRankingsPage() {
         </Box>
       )}
       </Box>
+
+      {renderCalculationErrorAlert({ mb: 1.5 })}
 
       {isLoadingRankings ? (
         <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">

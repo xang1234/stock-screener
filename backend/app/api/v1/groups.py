@@ -345,13 +345,17 @@ async def get_calculation_status(task_id: str):
                 return CalculationStatusResponse(
                     task_id=task_id,
                     status="failed",
-                    error=result.get('error', 'Unknown error')
+                    error=(result or {}).get('error', 'Unknown error'),
+                    reason_code=(result or {}).get('reason_code'),
                 )
         elif task_result.state == 'FAILURE':
+            from ...tasks.group_rank_tasks import GroupRankReasonCode
+
             return CalculationStatusResponse(
                 task_id=task_id,
                 status="failed",
-                error=str(task_result.result) if task_result.result else "Task failed"
+                error=str(task_result.result) if task_result.result else "Task failed",
+                reason_code=GroupRankReasonCode.UNKNOWN,
             )
         else:
             # Handle other states (RETRY, REVOKED, etc.)

@@ -34,6 +34,16 @@ from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+
+
+class GroupRankReasonCode:
+    INVALID_DATE = "invalid_date"
+    WARMUP_INCOMPLETE = "warmup_incomplete"
+    MISSING_IBD_MAPPINGS = "missing_ibd_mappings"
+    NO_GROUPS_RANKED = "no_groups_ranked"
+    UNKNOWN = "unknown"
+
+
 _ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_group_rank_warmup_bypass",
     default=False,
@@ -175,7 +185,11 @@ def calculate_daily_group_rankings(
             logger.info(f"Calculating group rankings for: {calc_date}")
         except ValueError as e:
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
-            return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
+            return {
+                'error': 'Invalid date format',
+                'reason_code': GroupRankReasonCode.INVALID_DATE,
+                'timestamp': datetime.now().isoformat(),
+            }
     else:
         calc_date = today_et
 
@@ -229,6 +243,7 @@ def calculate_daily_group_rankings(
                     )
                     return {
                         'error': completeness_error,
+                        'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
                         'date': calc_date.strftime('%Y-%m-%d'),
                         'timestamp': datetime.now().isoformat(),
                         'cache_only': True,
@@ -248,22 +263,25 @@ def calculate_daily_group_rankings(
         duration = time.time() - start_time
 
         if not results:
-            logger.warning(f"No groups ranked for {calc_date}")
-            mark_market_activity_completed(
+            no_groups_message = (
+                "No groups could be ranked (insufficient price data or all groups below 3-stock threshold)"
+            )
+            logger.warning("No groups ranked for %s", calc_date)
+            _mark_market_activity_failed_safely(
                 db,
                 market=effective_market,
                 stage_key="groups",
                 lifecycle=activity_lifecycle,
                 task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                 task_id=getattr(getattr(self, "request", None), "id", None),
-                current=0,
-                total=0,
-                message="No groups ranked",
+                message=no_groups_message,
             )
             return {
                 'date': calc_date.strftime('%Y-%m-%d'),
                 'groups_ranked': 0,
                 'warning': 'No groups could be ranked',
+                'error': no_groups_message,
+                'reason_code': GroupRankReasonCode.NO_GROUPS_RANKED,
                 'calculation_duration_seconds': round(duration, 2),
                 'timestamp': datetime.now().isoformat()
             }
@@ -347,6 +365,7 @@ def calculate_daily_group_rankings(
         )
         return {
             'error': str(e),
+            'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat(),
             'cache_only': True,
@@ -367,6 +386,7 @@ def calculate_daily_group_rankings(
         )
         return {
             'error': str(e),
+            'reason_code': GroupRankReasonCode.MISSING_IBD_MAPPINGS,
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat(),
             'cache_only': same_day_cache_only,
@@ -398,6 +418,7 @@ def calculate_daily_group_rankings(
         )
         return {
             'error': str(e),
+            'reason_code': GroupRankReasonCode.UNKNOWN,
             'date': calc_date.strftime('%Y-%m-%d') if calc_date else None,
             'timestamp': datetime.now().isoformat()
         }
