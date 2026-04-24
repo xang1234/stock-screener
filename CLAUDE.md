@@ -178,7 +178,7 @@ The Celery task `app.tasks.cache_tasks.cleanup_orphaned_scans` remains the sched
 - Manual user scans (`run_bulk_scan`) route to market-specific queues: `user_scans_us`, `user_scans_hk`, `user_scans_jp`, `user_scans_tw` (with `user_scans_shared` as fallback when no market is set)
 - `start_celery.sh` spawns one worker per market queue, so US and HK scans run in parallel on separate workers
 - `@serialized_market_workload` (see `tasks/workload_coordination.py`) holds a Redis lock keyed by market, so scans targeting the same market serialize while different markets remain independent
-- Manual scans run in **cache-only mode** — they do not fall back to yfinance/Finviz. The API boundary rejects scans with `409 market_data_stale` when cached prices haven't caught up to the last completed trading day for the market (see `api/v1/scans.py::_get_market_data_staleness_detail`)
+- Manual scans run in **cache-only mode** — they do not fall back to yfinance/Finviz. The API boundary rejects scans with `409 market_data_stale` when cached prices haven't caught up to the last completed trading day for the market (see `services/market_data_freshness.py::check_symbol_freshness`)
 
 **Redis Caching Strategy** (three-tier: Redis → PostgreSQL → API):
 - DB 0: Celery broker

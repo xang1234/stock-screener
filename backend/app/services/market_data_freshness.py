@@ -48,6 +48,9 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
     finally:
         session.close()
 
+    resolved_symbols = {row.symbol for row in rows}
+    unresolved_symbols = sorted(set(normalized) - resolved_symbols)
+
     per_market: dict[str, list] = {}
     for row in rows:
         per_market.setdefault(row.market, []).append(row)
@@ -79,18 +82,26 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
                 "expected_date": str(expected_date),
             })
 
-    if not stale_markets:
+    if not stale_markets and not unresolved_symbols:
         return None
 
-    summary = ", ".join(
-        f"{m['market']} (oldest: {m['oldest_last_cached_date'] or 'never'}, expected: {m['expected_date']})"
-        for m in stale_markets
-    )
+    fragments: list[str] = []
+    if stale_markets:
+        fragments.append(", ".join(
+            f"{m['market']} (oldest: {m['oldest_last_cached_date'] or 'never'}, expected: {m['expected_date']})"
+            for m in stale_markets
+        ))
+    if unresolved_symbols:
+        preview = ", ".join(unresolved_symbols[:5])
+        more = "" if len(unresolved_symbols) <= 5 else f" (+{len(unresolved_symbols) - 5} more)"
+        fragments.append(f"unknown symbols: {preview}{more}")
+
     return {
         "code": "market_data_stale",
         "message": (
-            f"Price data is stale for: {summary}. "
+            f"Price data is stale for: {'; '.join(fragments)}. "
             "Wait for the next scheduled refresh before starting a scan."
         ),
         "stale_markets": stale_markets,
+        "unresolved_symbols": unresolved_symbols,
     }

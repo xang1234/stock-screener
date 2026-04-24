@@ -317,6 +317,20 @@ class TestFreshnessChecker:
 
         assert captured == [["AAPL", "MSFT", "GOOGL"]]
 
+    def test_no_checker_skips_freshness_gate_entirely(self):
+        """Round 4 Codex P1: internal callers (e.g., bootstrap scans) opt out
+        of the gate by omitting the checker. They must proceed even when the
+        data they're about to create doesn't exist yet.
+        """
+        uow = _make_uow(["AAPL"])
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher, freshness_checker=None)
+
+        result = uc.execute(uow, _make_command())
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
 
 class TestFeatureRunBinding:
     """Scan binds only when an exact published feature run matches."""

@@ -692,14 +692,21 @@ def get_hybrid_fundamentals_service() -> HybridFundamentalsService:
 # ── Use Cases ────────────────────────────────────────────────────────────
 
 
-def get_create_scan_use_case() -> CreateScanUseCase:
-    """Build a CreateScanUseCase wired with infrastructure adapters."""
+def get_create_scan_use_case(*, with_freshness_gate: bool = True) -> CreateScanUseCase:
+    """Build a CreateScanUseCase wired with infrastructure adapters.
+
+    Interactive / HTTP callers leave ``with_freshness_gate=True`` so stale
+    data is rejected with a 409. Internal callers that *populate* the cache
+    (e.g. bootstrap scans during initial market provisioning) must pass
+    ``with_freshness_gate=False`` — otherwise they'd block themselves from
+    running before the data they're meant to create exists.
+    """
     from app.use_cases.scanning.create_scan import CreateScanUseCase
     from app.services.market_data_freshness import check_symbol_freshness
 
     return CreateScanUseCase(
         dispatcher=get_task_dispatcher(),
-        freshness_checker=check_symbol_freshness,
+        freshness_checker=check_symbol_freshness if with_freshness_gate else None,
     )
 
 

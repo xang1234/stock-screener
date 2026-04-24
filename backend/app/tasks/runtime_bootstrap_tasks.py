@@ -146,7 +146,7 @@ def queue_market_bootstrap_scan(market: str) -> dict:
     market_code = str(market).upper()
     defaults = get_default_scan_profile()
     universe_def = UniverseDefinition(type=UniverseType.MARKET, market=Market(market_code))
-    use_case = get_create_scan_use_case()
+    use_case = get_create_scan_use_case(with_freshness_gate=False)
     uow = SqlUnitOfWork(SessionLocal)
 
     try:
