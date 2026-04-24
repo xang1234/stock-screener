@@ -77,6 +77,20 @@ def test_read_fast_info_parses_fields_independently():
     assert last_price == 42.5
 
 
+def test_read_fast_info_rejects_nan_and_inf_floats():
+    """float('nan') survives float() silently; must be rejected so it can't
+    poison JSON serialization or DB comparisons downstream."""
+    fast = SimpleNamespace(market_cap=1_000, shares=10, last_price=float("nan"))
+    ticker = SimpleNamespace(fast_info=fast)
+    _, _, last_price = BulkDataFetcher._read_fast_info_market_state(ticker)
+    assert last_price is None
+
+    fast2 = SimpleNamespace(market_cap=1_000, shares=10, last_price=float("inf"))
+    ticker2 = SimpleNamespace(fast_info=fast2)
+    _, _, last_price2 = BulkDataFetcher._read_fast_info_market_state(ticker2)
+    assert last_price2 is None
+
+
 def test_zero_from_info_is_preserved_not_replaced_by_fast_info():
     """If .info legitimately reports 0 for market_cap / shares_outstanding,
     keep the 0 instead of falling through to fast_info (truthiness would

@@ -9,6 +9,7 @@ Canonical price contract ADR:
 docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
+import math
 from typing import TYPE_CHECKING, List, Dict, Optional, Any
 from threading import RLock
 import yfinance as yf
@@ -160,7 +161,10 @@ class BulkDataFetcher:
                 value = getattr(fi, attr, None)
                 if value is None:
                     return None
-                return float(value)
+                result = float(value)
+                if math.isnan(result) or math.isinf(result):
+                    return None
+                return result
             except Exception as exc:
                 logger.debug("fast_info.%s read failed: %s", attr, exc)
                 return None
