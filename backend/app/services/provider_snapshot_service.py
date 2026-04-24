@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import logging
+import math
 import shutil
 import tempfile
 from datetime import date, datetime
@@ -65,6 +66,16 @@ def _deserialize_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _finite_or_none(value: Any) -> Any:
+    """Return ``None`` when ``value`` is NaN/inf; otherwise pass through.
+    Yahoo ``.info`` can return ``float('nan')`` for delisted or illiquid
+    tickers, and NaN survives ``is not None`` checks but later breaks FX
+    normalization and JSON serialization."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 class ProviderSnapshotService:
     """Build, publish, and hydrate provider-backed fundamentals snapshots."""
 
@@ -92,6 +103,11 @@ class ProviderSnapshotService:
         "eps_q2_yoy",
         "eps_raw_score",
         "eps_years_available",
+        # Market-state fields Yahoo can backfill when Finviz omits them.
+        # Without these, a Finviz snapshot missing only market_cap would skip
+        # hydration entirely and the Yahoo fallback would never run.
+        "market_cap",
+        "shares_outstanding",
     )
     YAHOO_UNSUPPORTED_SUFFIXES = ("U", "UN", "UNT", "UNIT", "R", "RT")
     YAHOO_UNSUPPORTED_PREFIXES = ("W", "WS", "WT")
@@ -586,6 +602,26 @@ class ProviderSnapshotService:
                     )
             if info.get("longBusinessSummary"):
                 yahoo_payload["description_yfinance"] = info.get("longBusinessSummary")
+
+            # Finviz is the primary source for market_cap; fall back to Yahoo
+            # only when Finviz's snapshot omitted it. Treat NaN/inf from
+            # .info (common for delisted / illiquid tickers) as missing so
+            # downstream FX normalization can't raise on ``int(nan * rate)``.
+            info_market_cap = _finite_or_none(info.get("marketCap"))
+            info_shares = _finite_or_none(info.get("sharesOutstanding"))
+            if info_market_cap is None or info_shares is None:
+                fast_market_cap, fast_shares, _ = (
+                    self.bulk_fetcher._read_fast_info_market_state(ticker)
+                )
+                if info_market_cap is None:
+                    info_market_cap = fast_market_cap
+                if info_shares is None:
+                    info_shares = fast_shares
+            if info_market_cap is not None:
+                yahoo_payload["market_cap"] = info_market_cap
+            if info_shares is not None:
+                yahoo_payload["shares_outstanding"] = info_shares
+
             yahoo_payload["yahoo_profile_refreshed_at"] = now_iso
         except Exception as exc:
             logger.warning("Failed Yahoo profile hydration for %s: %s", symbol, exc)

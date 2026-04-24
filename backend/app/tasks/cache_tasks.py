@@ -2065,7 +2065,7 @@ def prewarm_chart_cache_for_scan(self, scan_id: str, top_n: int = 50):
         top_results = db.query(ScanResult.symbol).filter(
             ScanResult.scan_id == scan_id
         ).order_by(
-            ScanResult.composite_score.desc()
+            ScanResult.composite_score.desc().nullslast()
         ).limit(top_n).all()
 
         symbols = [r.symbol for r in top_results]

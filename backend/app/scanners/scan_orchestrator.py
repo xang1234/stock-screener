@@ -832,9 +832,11 @@ class ScanOrchestrator:
             if result.get("sales_growth_yy") is None and qg.get("sales_growth_yy") is not None:
                 result["sales_growth_yy"] = qg["sales_growth_yy"]
 
-        # Extract market_cap from fundamentals if available
-        if stock_data.fundamentals and stock_data.fundamentals.get("market_cap"):
-            result["market_cap"] = stock_data.fundamentals["market_cap"]
+        if stock_data.fundamentals:
+            if stock_data.fundamentals.get("market_cap") is not None:
+                result["market_cap"] = stock_data.fundamentals["market_cap"]
+            if stock_data.fundamentals.get("market_cap_usd") is not None:
+                result["market_cap_usd"] = stock_data.fundamentals["market_cap_usd"]
 
         # Extract EPS Rating from fundamentals if available
         if stock_data.fundamentals and stock_data.fundamentals.get("eps_rating") is not None:
@@ -938,8 +940,10 @@ class ScanOrchestrator:
             },
         }
         if stock_data.fundamentals:
-            if stock_data.fundamentals.get("market_cap"):
+            if stock_data.fundamentals.get("market_cap") is not None:
                 result["market_cap"] = stock_data.fundamentals["market_cap"]
+            if stock_data.fundamentals.get("market_cap_usd") is not None:
+                result["market_cap_usd"] = stock_data.fundamentals["market_cap_usd"]
             if stock_data.fundamentals.get("eps_rating") is not None:
                 result["eps_rating"] = stock_data.fundamentals["eps_rating"]
             if stock_data.fundamentals.get("ipo_date"):

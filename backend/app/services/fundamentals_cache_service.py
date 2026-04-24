@@ -32,6 +32,13 @@ from .redis_pool import get_redis_client, is_redis_enabled
 
 logger = logging.getLogger(__name__)
 
+def _assign_if_present(record: Any, attr: str, data: Dict[str, Any], key: str) -> None:
+    """Write ``data[key]`` only when non-None; prevents partial refresh
+    payloads from wiping previously stored market-state fields."""
+    if key in data and data[key] is not None:
+        setattr(record, attr, data[key])
+
+
 _RECOMMENDATION_SCORE_BY_KEY: dict[str, float | None] = {
     "strong_buy": 1.0,
     "buy": 2.0,
@@ -770,9 +777,9 @@ class FundamentalsCacheService:
             if existing_record:
                 # Update existing record - organized by category
                 # Market data
-                existing_record.market_cap = data.get("market_cap")
-                existing_record.shares_outstanding = data.get("shares_outstanding")
-                existing_record.avg_volume = data.get("avg_volume")
+                _assign_if_present(existing_record, "market_cap", data, "market_cap")
+                _assign_if_present(existing_record, "shares_outstanding", data, "shares_outstanding")
+                _assign_if_present(existing_record, "avg_volume", data, "avg_volume")
                 existing_record.relative_volume = data.get("relative_volume")
 
                 # Valuation metrics
@@ -903,9 +910,9 @@ class FundamentalsCacheService:
                 existing_record.field_completeness_score = completeness_score
                 existing_record.field_provenance = provenance
                 # T3 FX normalisation
-                existing_record.market_cap_usd = data.get("market_cap_usd")
-                existing_record.adv_usd = data.get("adv_usd")
-                existing_record.fx_metadata = data.get("fx_metadata")
+                _assign_if_present(existing_record, "market_cap_usd", data, "market_cap_usd")
+                _assign_if_present(existing_record, "adv_usd", data, "adv_usd")
+                _assign_if_present(existing_record, "fx_metadata", data, "fx_metadata")
                 existing_record.updated_at = datetime.now()
 
                 logger.info(f"Updated fundamental data for {symbol} in database")

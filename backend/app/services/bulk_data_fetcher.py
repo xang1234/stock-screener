@@ -9,6 +9,7 @@ Canonical price contract ADR:
 docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
+import math
 from typing import TYPE_CHECKING, List, Dict, Optional, Any
 from threading import RLock
 import yfinance as yf
@@ -24,6 +25,16 @@ if TYPE_CHECKING:
     from .rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_or_none(value: Any) -> Any:
+    """Return ``None`` when ``value`` is NaN/inf; otherwise pass through.
+    Yahoo ``.info`` can return ``float('nan')`` for delisted or illiquid
+    tickers, and NaN survives ``is not None`` checks but later breaks FX
+    normalization (``int(nan * rate)`` raises) and JSON serialization."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 class BulkDataFetcher:
@@ -126,24 +137,83 @@ class BulkDataFetcher:
         )
         return self.fetch_prices_in_batches(symbols, period=period)
 
-    def _extract_fundamentals(self, info: Dict) -> Dict:
-        """
-        Extract fundamental data from ticker info.
+    @staticmethod
+    def _read_fast_info_market_state(
+        ticker: Any,
+    ) -> tuple[Optional[int], Optional[int], Optional[float]]:
+        """Return ``(market_cap, shares, last_price)`` from ``ticker.fast_info``
+        via a second Yahoo endpoint used only as a fallback when ``.info`` is
+        truncated. Each field is parsed independently so a malformed value on
+        one (e.g. NaN market_cap) does not discard valid fallbacks for the
+        others."""
+        if ticker is None:
+            return None, None, None
+        try:
+            fi = getattr(ticker, "fast_info", None)
+        except Exception as exc:
+            logger.debug("fast_info attribute access failed: %s", exc)
+            return None, None, None
+        if fi is None:
+            return None, None, None
 
-        Args:
-            info: Ticker info dictionary from yfinance
+        def _coerce_int(attr: str) -> Optional[int]:
+            try:
+                value = getattr(fi, attr, None)
+                if value is None:
+                    return None
+                return int(round(value))
+            except Exception as exc:
+                logger.debug("fast_info.%s read failed: %s", attr, exc)
+                return None
 
-        Returns:
-            Dict with cleaned fundamental metrics
-        """
-        if not info:
-            return {}
+        def _coerce_float(attr: str) -> Optional[float]:
+            try:
+                value = getattr(fi, attr, None)
+                if value is None:
+                    return None
+                result = float(value)
+                if math.isnan(result) or math.isinf(result):
+                    return None
+                return result
+            except Exception as exc:
+                logger.debug("fast_info.%s read failed: %s", attr, exc)
+                return None
+
+        return _coerce_int("market_cap"), _coerce_int("shares"), _coerce_float("last_price")
+
+    def _extract_fundamentals(self, ticker: Any, info: Dict) -> Dict:
+        if info is None:
+            info = {}
+
+        # Reject NaN/inf from .info (common for delisted/illiquid tickers) up
+        # front so they don't bypass the fast_info fallback or later poison
+        # FX normalization when persisted.
+        info_market_cap = _finite_or_none(info.get("marketCap"))
+        info_shares = _finite_or_none(info.get("sharesOutstanding"))
+        info_current_price = _finite_or_none(info.get("currentPrice"))
+        info_price = (
+            info_current_price
+            if info_current_price is not None
+            else _finite_or_none(info.get("regularMarketPrice"))
+        )
+        fast_market_cap = fast_shares = fast_last_price = None
+        if info_market_cap is None or info_shares is None or info_price is None:
+            fast_market_cap, fast_shares, fast_last_price = (
+                self._read_fast_info_market_state(ticker)
+            )
+
+        # Explicit None-coalesce so a legitimate 0 from .info is preserved
+        # instead of falling through to fast_info (or dropping to None and
+        # later skipping the DB write via _assign_if_present).
+        market_cap_value = info_market_cap if info_market_cap is not None else fast_market_cap
+        shares_value = info_shares if info_shares is not None else fast_shares
+        current_price_value = info_price if info_price is not None else fast_last_price
 
         fundamentals = {
             # Market data
-            'market_cap': info.get('marketCap'),
+            'market_cap': market_cap_value,
             'enterprise_value': info.get('enterpriseValue'),
-            'shares_outstanding': info.get('sharesOutstanding'),
+            'shares_outstanding': shares_value,
             'shares_float': info.get('floatShares'),
 
             # Valuation metrics
@@ -197,7 +267,7 @@ class BulkDataFetcher:
             'week_52_low': info.get('fiftyTwoWeekLow'),
             'avg_volume': info.get('averageVolume'),
             'avg_volume_10d': info.get('averageVolume10days'),
-            'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
+            'current_price': current_price_value,
 
             # Company info
             'sector': info.get('sector'),
@@ -642,7 +712,7 @@ class BulkDataFetcher:
 
                         # Get info (fundamentals)
                         info = ticker.info
-                        fundamentals = self._extract_fundamentals(info)
+                        fundamentals = self._extract_fundamentals(ticker, info)
 
                         # Optionally get quarterly growth
                         if include_quarterly:
@@ -757,7 +827,7 @@ class BulkDataFetcher:
                     try:
                         ticker = tickers.tickers[symbol]
                         info = ticker.info
-                        fundamentals = self._extract_fundamentals(info)
+                        fundamentals = self._extract_fundamentals(ticker, info)
 
                         if include_quarterly:
                             quarterly = self._extract_quarterly_growth(
