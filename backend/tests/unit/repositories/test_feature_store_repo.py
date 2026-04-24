@@ -17,6 +17,7 @@ from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import (
     FilterSpec,
     PageSpec,
+    QuerySpec,
     SortOrder,
     SortSpec,
 )
@@ -443,6 +444,49 @@ class TestJoinedColumnFilters:
         assert tencent.extended_fields["currency"] == "HKD"
         assert tencent.extended_fields["market_cap_usd"] == 500_000_000_000
         assert tencent.extended_fields["adv_usd"] == 12_000_000
+
+    def test_young_ipo_partial_metrics_survive_scan_result_mapping(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        run_id = _create_run(session)
+        row = FeatureRowWrite(
+            symbol="NEWIPO",
+            as_of_date=date(2026, 2, 17),
+            composite_score=None,
+            overall_rating=0,
+            passes_count=0,
+            details={
+                "rating": "Insufficient Data",
+                "current_price": 10.0,
+                "data_status": "insufficient_history",
+                "is_scannable": False,
+                "scan_mode": "listing_only",
+                "history_bars": 45,
+                "price_sparkline_data": [1.0, 1.01, 1.02],
+                "price_trend": 1,
+                "price_change_1d": 2.5,
+                "rs_sparkline_data": [1.0, 0.99, 1.03],
+                "rs_trend": 1,
+                "adr_percent": 10.0,
+                "rs_rating_1m": 50.0,
+                "rs_rating": None,
+                "rs_rating_3m": None,
+                "rs_rating_12m": None,
+            },
+        )
+        repo.upsert_snapshot_rows(run_id, [row])
+
+        result = repo.query_run_as_scan_results(run_id, QuerySpec())
+
+        item = result.items[0]
+        assert item.composite_score is None
+        assert item.extended_fields["scan_mode"] == "listing_only"
+        assert item.extended_fields["price_sparkline_data"] == [1.0, 1.01, 1.02]
+        assert item.extended_fields["rs_sparkline_data"] == [1.0, 0.99, 1.03]
+        assert item.extended_fields["price_change_1d"] == 2.5
+        assert item.extended_fields["adr_percent"] == 10.0
+        assert item.extended_fields["rs_rating_1m"] == 50.0
+        assert item.extended_fields["rs_rating"] is None
 
 
 # ---------------------------------------------------------------------------

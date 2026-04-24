@@ -578,6 +578,45 @@ def test_static_scan_mode_sort_priority_matches_frontend_unknown_mode_fallback(
     assert service._static_scan_mode_sort_priority({"scan_mode": "mystery_mode"}) == 3  # noqa: SLF001
 
 
+def test_serialize_scan_row_preserves_young_ipo_partial_metrics(service_and_session_factory):
+    service, _session_factory = service_and_session_factory
+    row = SimpleNamespace(
+        symbol="NEWIPO",
+        company_name=None,
+        composite_score=None,
+        rating="Insufficient Data",
+        current_price=10.0,
+        screeners_run=[],
+        extended_fields={
+            "data_status": "insufficient_history",
+            "is_scannable": False,
+            "scan_mode": "listing_only",
+            "history_bars": 45,
+            "price_sparkline_data": [1.0, 1.01, 1.02],
+            "price_trend": 1,
+            "price_change_1d": 2.5,
+            "rs_sparkline_data": [1.0, 0.99, 1.03],
+            "rs_trend": 1,
+            "adr_percent": 10.0,
+            "rs_rating_1m": 50.0,
+            "rs_rating": None,
+            "rs_rating_3m": None,
+            "rs_rating_12m": None,
+        },
+    )
+
+    payload = service._serialize_scan_row(row)  # noqa: SLF001 - intentional unit coverage
+
+    assert payload["composite_score"] is None
+    assert payload["scan_mode"] == "listing_only"
+    assert payload["price_sparkline_data"] == [1.0, 1.01, 1.02]
+    assert payload["rs_sparkline_data"] == [1.0, 0.99, 1.03]
+    assert payload["price_change_1d"] == 2.5
+    assert payload["adr_percent"] == 10.0
+    assert payload["rs_rating_1m"] == 50.0
+    assert payload["rs_rating"] is None
+
+
 def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     artifacts_dir = tmp_path / "artifacts"
     us_dir = artifacts_dir / "job-us" / "markets" / "us"

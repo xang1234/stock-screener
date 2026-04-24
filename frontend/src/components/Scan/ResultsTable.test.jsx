@@ -24,8 +24,16 @@ vi.mock('@tanstack/react-virtual', () => ({
     getTotalSize: () => count * 32,
   }),
 }));
-vi.mock('./RSSparkline', () => ({ default: () => <span data-testid="rs-sparkline" /> }));
-vi.mock('./PriceSparkline', () => ({ default: () => <span data-testid="price-sparkline" /> }));
+vi.mock('./RSSparkline', () => ({
+  default: ({ data, trend }) => (
+    <span data-testid="rs-sparkline">RS:{data?.length ?? 'none'}:{trend}</span>
+  ),
+}));
+vi.mock('./PriceSparkline', () => ({
+  default: ({ data, trend, change1d }) => (
+    <span data-testid="price-sparkline">Price:{data?.length ?? 'none'}:{trend}:{change1d}</span>
+  ),
+}));
 vi.mock('../common/AddToWatchlistMenu', () => ({ default: () => null }));
 
 /** Default props for a basic render — 1 row, page 1. */
@@ -114,6 +122,43 @@ describe('ResultsTable', () => {
       expect(screen.getByText('62.1')).toBeInTheDocument();
       expect(screen.getByText('4.7%')).toBeInTheDocument();
       expect(screen.getByText('2.3x')).toBeInTheDocument();
+    });
+  });
+
+  describe('young IPO partial metrics', () => {
+    it('renders calculable short-history values while long-history values stay blank', () => {
+      const youngIpoRow = {
+        ...nullSeRow,
+        symbol: 'NEWIPO',
+        company_name: 'New IPO Inc.',
+        composite_score: null,
+        rating: 'Insufficient Data',
+        data_status: 'insufficient_history',
+        scan_mode: 'listing_only',
+        is_scannable: false,
+        history_bars: 45,
+        rs_sparkline_data: Array.from({ length: 30 }, (_, index) => 1 + index / 100),
+        rs_trend: 1,
+        price_sparkline_data: Array.from({ length: 30 }, (_, index) => 1 + index / 200),
+        price_trend: 1,
+        price_change_1d: 2.5,
+        adr_percent: 10.0,
+        rs_rating_1m: 50.0,
+        rs_rating: null,
+        rs_rating_3m: null,
+        rs_rating_12m: null,
+        stage: null,
+        ma_alignment: null,
+      };
+
+      renderWithProviders(<ResultsTable {...defaultProps} results={[youngIpoRow]} />);
+
+      expect(screen.getByText('New IPO')).toBeInTheDocument();
+      expect(screen.getByText('RS:30:1')).toBeInTheDocument();
+      expect(screen.getByText('Price:30:1:2.5')).toBeInTheDocument();
+      expect(screen.getByText('50')).toBeInTheDocument();
+      expect(screen.getByText('10.0%')).toBeInTheDocument();
+      expect(screen.queryByText('S2')).not.toBeInTheDocument();
     });
   });
 

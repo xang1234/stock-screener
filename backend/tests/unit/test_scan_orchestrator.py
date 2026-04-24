@@ -356,6 +356,87 @@ class TestScanOrchestratorErrorPaths:
         assert result["history_bars"] == 20
         assert result["applicable_screeners"] == []
         assert result["unavailable_screeners"] == ["ipo", "minervini"]
+        assert result["price_change_1d"] == 0.0
+        assert result["price_sparkline_data"] is None
+        assert result["price_trend"] is None
+        assert result["rs_sparkline_data"] is None
+        assert result["rs_trend"] is None
+        assert result["adr_percent"] == 10.0
+        assert result["rs_rating_1m"] is None
+
+    def test_young_ipo_insufficient_rows_include_partial_metrics_when_history_allows(self):
+        stock_data = _make_stock_data("TEST", n_days=30)
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        registry.register(type("FakeMinervini", (RecordingScreener,), {
+            "__init__": lambda self: RecordingScreener.__init__(self, name="minervini", score=90.0),
+        }))
+
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+        result = orch.scan_stock_multi("TEST", ["minervini"], composite_method="weighted_average")
+
+        assert result["rating"] == "Insufficient Data"
+        assert result["composite_score"] is None
+        assert result["scan_mode"] == "ipo_weighted"
+        assert result["is_scannable"] is False
+        assert len(result["price_sparkline_data"]) == 30
+        assert result["price_trend"] == 0
+        assert result["price_change_1d"] == 0.0
+        assert len(result["rs_sparkline_data"]) == 30
+        assert result["rs_trend"] == 0
+        assert result["adr_percent"] == 10.0
+        assert result["rs_rating_1m"] == 50.0
+        assert result["rs_rating"] is None
+        assert result["rs_rating_3m"] is None
+        assert result["rs_rating_12m"] is None
+        assert result["stage"] is None
+        assert result["ma_alignment"] is None
+
+    def test_young_ipo_invalid_1m_rs_stays_null_instead_of_zero(self):
+        stock_data = _make_stock_data("TEST", n_days=30)
+        stock_data.price_data.iloc[-21, stock_data.price_data.columns.get_loc("Close")] = 0.0
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        registry.register(type("FakeMinervini", (RecordingScreener,), {
+            "__init__": lambda self: RecordingScreener.__init__(self, name="minervini", score=90.0),
+        }))
+
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+        result = orch.scan_stock_multi("TEST", ["minervini"], composite_method="weighted_average")
+
+        assert result["rs_rating_1m"] is None
+
+    def test_young_ipo_adr_requires_twenty_valid_ohlc_rows(self):
+        stock_data = _make_stock_data("TEST", n_days=20)
+        stock_data.price_data.iloc[-1, stock_data.price_data.columns.get_loc("High")] = None
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        registry.register(type("FakeIpo", (RecordingScreener,), {
+            "__init__": lambda self: RecordingScreener.__init__(self, name="ipo", score=90.0),
+        }))
+
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+        result = orch.scan_stock_multi("TEST", ["ipo"], composite_method="weighted_average")
+
+        assert result["adr_percent"] is None
+
+    def test_young_ipo_nan_price_change_stays_null(self):
+        stock_data = _make_stock_data("TEST", n_days=20)
+        stock_data.price_data.iloc[-1, stock_data.price_data.columns.get_loc("Close")] = None
+        provider = FakeDataProvider({"TEST": stock_data})
+        registry = ScreenerRegistry()
+
+        registry.register(type("FakeIpo", (RecordingScreener,), {
+            "__init__": lambda self: RecordingScreener.__init__(self, name="ipo", score=90.0),
+        }))
+
+        orch = ScanOrchestrator(data_provider=provider, registry=registry)
+        result = orch.scan_stock_multi("TEST", ["ipo"], composite_method="weighted_average")
+
+        assert result["price_change_1d"] is None
 
     def test_partial_young_ipo_composite_uses_only_applicable_screeners(self):
         stock_data = _make_stock_data("TEST", n_days=60)
@@ -394,6 +475,10 @@ class TestScanOrchestratorErrorPaths:
         assert result["ipo_bonus"] > 0
         assert result["composite_reason"] == "ipo_uplift"
         assert result["composite_score"] > 70.0
+        assert len(result["price_sparkline_data"]) == 30
+        assert len(result["rs_sparkline_data"]) == 30
+        assert result["adr_percent"] == 10.0
+        assert result["rs_rating_1m"] == 50.0
 
     def test_partial_young_ipo_without_strong_ipo_score_gets_no_bonus(self):
         stock_data = _make_stock_data("TEST", n_days=60)

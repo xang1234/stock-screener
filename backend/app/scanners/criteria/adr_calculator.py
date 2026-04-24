@@ -18,7 +18,8 @@ class ADRCalculator:
     def calculate_adr_percent(
         self,
         price_data: pd.DataFrame,
-        period: int = 20
+        period: int = 20,
+        min_valid_rows: int | None = None,
     ) -> Optional[float]:
         """
         Calculate Average Daily Range as percentage of current price.
@@ -66,7 +67,10 @@ class ADRCalculator:
             ) * 100
 
             # Return None if we don't have enough valid days
-            if len(daily_ranges_pct) < period * 0.8:  # Allow 20% missing data
+            required_valid_rows = (
+                min_valid_rows if min_valid_rows is not None else period * 0.8
+            )
+            if len(daily_ranges_pct) < required_valid_rows:  # Allow 20% missing data by default
                 logger.warning(f"Too many invalid days: {len(daily_ranges_pct)} valid out of {period}")
                 return None
 
