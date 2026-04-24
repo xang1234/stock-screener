@@ -164,11 +164,18 @@ class BulkDataFetcher:
                 self._read_fast_info_market_state(ticker)
             )
 
+        # Explicit None-coalesce so a legitimate 0 from .info is preserved
+        # instead of falling through to fast_info (or dropping to None and
+        # later skipping the DB write via _assign_if_present).
+        market_cap_value = info_market_cap if info_market_cap is not None else fast_market_cap
+        shares_value = info_shares if info_shares is not None else fast_shares
+        current_price_value = info_price if info_price is not None else fast_last_price
+
         fundamentals = {
             # Market data
-            'market_cap': info.get('marketCap') or fast_market_cap,
+            'market_cap': market_cap_value,
             'enterprise_value': info.get('enterpriseValue'),
-            'shares_outstanding': info.get('sharesOutstanding') or fast_shares,
+            'shares_outstanding': shares_value,
             'shares_float': info.get('floatShares'),
 
             # Valuation metrics
@@ -222,7 +229,7 @@ class BulkDataFetcher:
             'week_52_low': info.get('fiftyTwoWeekLow'),
             'avg_volume': info.get('averageVolume'),
             'avg_volume_10d': info.get('averageVolume10days'),
-            'current_price': info.get('currentPrice') or info.get('regularMarketPrice') or fast_last_price,
+            'current_price': current_price_value,
 
             # Company info
             'sector': info.get('sector'),

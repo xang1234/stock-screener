@@ -48,3 +48,18 @@ def test_none_ticker_is_safe():
     # Prior signature only took info; confirm None ticker still works
     result = bdf._extract_fundamentals(None, {"marketCap": 42})
     assert result["market_cap"] == 42
+
+
+def test_zero_from_info_is_preserved_not_replaced_by_fast_info():
+    """If .info legitimately reports 0 for market_cap / shares_outstanding,
+    keep the 0 instead of falling through to fast_info (truthiness would
+    drop the 0 and — combined with _assign_if_present — leave stale prior
+    values in the DB)."""
+    bdf = BulkDataFetcher()
+    ticker = _make_ticker(market_cap=123_456_789, shares=999, last_price=5.0)
+    result = bdf._extract_fundamentals(
+        ticker,
+        {"marketCap": 0, "sharesOutstanding": 0},
+    )
+    assert result["market_cap"] == 0
+    assert result["shares_outstanding"] == 0
