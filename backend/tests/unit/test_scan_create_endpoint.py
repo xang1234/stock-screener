@@ -61,6 +61,10 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
 @pytest_asyncio.fixture
 async def client(monkeypatch):
     monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+    monkeypatch.setattr(
+        "app.api.v1.scans._get_market_data_staleness_detail",
+        lambda market: None,
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -558,6 +562,62 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
     payload = response.json()
     assert payload["detail"]["code"] == "market_refresh_active"
     assert payload["detail"]["market"] == "US"
+    assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_returns_409_when_market_price_data_is_stale(monkeypatch):
+    """A scan should be rejected when cached prices haven't reached the
+    last-completed trading day — we'd rather tell the user to wait than
+    silently scan against yesterday's data."""
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    stale_detail = {
+        "code": "market_data_stale",
+        "message": (
+            "US price data is stale "
+            "(last cached: 2026-04-22; expected: 2026-04-23). "
+            "Wait for the next scheduled refresh before starting a scan."
+        ),
+        "market": "US",
+        "last_cached_date": "2026-04-22",
+        "expected_date": "2026-04-23",
+    }
+    monkeypatch.setattr(
+        "app.api.v1.scans._get_market_data_staleness_detail",
+        lambda market: stale_detail if market == "US" else None,
+    )
+
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-stale",
+            status="queued",
+            total_stocks=100,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "market", "market": "US"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_data_stale"
+    assert payload["detail"]["market"] == "US"
+    assert payload["detail"]["last_cached_date"] == "2026-04-22"
+    assert payload["detail"]["expected_date"] == "2026-04-23"
     assert fake_use_case.received_cmd is None
 
 

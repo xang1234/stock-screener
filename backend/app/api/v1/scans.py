@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from typing import List, Literal, Any
 from pydantic import ValidationError
 import logging
@@ -27,6 +28,8 @@ from ...schemas.scanning import (
 from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...database import SessionLocal
+from ...models.stock import StockPrice
+from ...models.stock_universe import StockUniverse
 from ...services.market_activity_service import get_runtime_activity_status
 from ...wiring.bootstrap import (
     get_uow,
@@ -41,6 +44,7 @@ from ...wiring.bootstrap import (
     get_explain_stock_use_case,
     get_job_backend,
     get_ui_snapshot_service,
+    get_market_calendar_service,
 )
 from .scan_filter_params import parse_scan_filters, parse_scan_sort, parse_page_spec
 from ...use_cases.scanning.create_scan import ActiveScanConflictError
@@ -106,6 +110,51 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     return None
 
 
+def _get_market_data_staleness_detail(market: str | None) -> dict[str, object] | None:
+    """Return 409 detail when cached prices for the market haven't caught up to the last trading day."""
+    if not market:
+        return None
+
+    normalized_market = str(market).upper()
+
+    try:
+        expected_date = get_market_calendar_service().last_completed_trading_day(normalized_market)
+    except Exception:
+        logger.warning(
+            "Could not resolve last completed trading day for market=%s; skipping staleness gate",
+            normalized_market,
+            exc_info=True,
+        )
+        return None
+
+    session = SessionLocal()
+    try:
+        last_date = (
+            session.query(func.max(StockPrice.date))
+            .join(StockUniverse, StockUniverse.symbol == StockPrice.symbol)
+            .filter(StockUniverse.market == normalized_market)
+            .scalar()
+        )
+    finally:
+        session.close()
+
+    if last_date is not None and last_date >= expected_date:
+        return None
+
+    last_cached_str = None if last_date is None else str(last_date)
+    return {
+        "code": "market_data_stale",
+        "message": (
+            f"{normalized_market} price data is stale "
+            f"(last cached: {last_cached_str or 'never'}; expected: {expected_date}). "
+            "Wait for the next scheduled refresh before starting a scan."
+        ),
+        "market": normalized_market,
+        "last_cached_date": last_cached_str,
+        "expected_date": str(expected_date),
+    }
+
+
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
 async def get_scan_bootstrap(
     scan_id: str | None = Query(None, description="Optional explicit scan bootstrap variant"),
@@ -169,9 +218,13 @@ async def create_scan(
         from ...services.universe_compat_metrics import record_legacy_universe_usage
 
         record_legacy_universe_usage(universe_resolution.legacy_value)
-    market_refresh_conflict = _get_market_refresh_conflict_detail(_resolve_scan_guard_market(universe_def))
+    guard_market = _resolve_scan_guard_market(universe_def)
+    market_refresh_conflict = _get_market_refresh_conflict_detail(guard_market)
     if market_refresh_conflict is not None:
         raise HTTPException(status_code=409, detail=market_refresh_conflict)
+    market_data_stale = _get_market_data_staleness_detail(guard_market)
+    if market_data_stale is not None:
+        raise HTTPException(status_code=409, detail=market_data_stale)
     cmd = CreateScanCommand(
         universe_def=universe_def,
         universe_label=universe_def.label(),

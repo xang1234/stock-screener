@@ -203,6 +203,7 @@ def _run_bulk_scan_via_use_case(task_instance, scan_id, symbol_list, criteria):
             criteria=criteria or {},
             chunk_size=settings.scan_usecase_chunk_size,
             correlation_id=task_instance.request.id,
+            cache_only=True,
         )
         result = use_case.execute(uow, cmd, progress, cancel)
     except Exception:

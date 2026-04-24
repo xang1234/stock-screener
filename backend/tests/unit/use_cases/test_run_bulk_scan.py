@@ -48,6 +48,34 @@ def _make_use_case(scanner: FakeScanner | None = None) -> RunBulkScanUseCase:
     return RunBulkScanUseCase(scanner=scanner or FakeScanner())
 
 
+class _SpyDataProvider(FakeStockDataProvider):
+    """FakeStockDataProvider that records keyword args passed to prepare_data_bulk."""
+
+    def __init__(self):
+        super().__init__()
+        self.captured_bulk_kwargs: list[dict] = []
+
+    def prepare_data_bulk(self, symbols, requirements, **kwargs):
+        self.captured_bulk_kwargs.append(kwargs)
+        return super().prepare_data_bulk(symbols, requirements, **kwargs)
+
+
+class _BulkAwareScanner:
+    """Minimal scanner that advertises merged-requirements support so the
+    use case exercises the prepare_data_bulk path."""
+
+    def get_merged_requirements(self, screener_names, criteria=None):
+        return {"needs": "all"}
+
+    def scan_stock_multi(self, symbol, screener_names, **_):
+        return {
+            "composite_score": 80.0,
+            "rating": "Buy",
+            "passes_template": True,
+            "current_price": 100.0,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -192,6 +220,52 @@ class TestRunBulkScanHappyPath:
             for call in scanner.calls
         )
         assert all(call["pre_fetched_data"] is not None for call in scanner.calls)
+
+    def test_cache_only_flag_propagates_to_bulk_data_fetch(self):
+        """cache_only=True on the command must disable live-fetch fallback inside
+        prepare_data_bulk. This is the teeth behind the API-level staleness gate:
+        even if a scan slips past the 409, the data layer refuses to hit yfinance.
+        """
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        data_provider = _SpyDataProvider()
+        uc = RunBulkScanUseCase(scanner=_BulkAwareScanner(), data_provider=data_provider)
+
+        uc.execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "MSFT"],
+                chunk_size=10,
+                cache_only=True,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert data_provider.captured_bulk_kwargs, "prepare_data_bulk was not invoked"
+        call = data_provider.captured_bulk_kwargs[0]
+        assert call["batch_only_prices"] is True
+        assert call["batch_only_fundamentals"] is True
+
+    def test_cache_only_false_leaves_live_fetch_enabled(self):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1", screener_types=["minervini"])
+        uow = FakeUnitOfWork(scans=scan_repo)
+
+        data_provider = _SpyDataProvider()
+        uc = RunBulkScanUseCase(scanner=_BulkAwareScanner(), data_provider=data_provider)
+        uc.execute(
+            uow,
+            RunBulkScanCommand(scan_id="s1", symbols=["AAPL"]),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert data_provider.captured_bulk_kwargs[0]["batch_only_prices"] is False
+        assert data_provider.captured_bulk_kwargs[0]["batch_only_fundamentals"] is False
 
     def test_scan_status_transitions(self):
         scan_repo = FakeScanRepository()

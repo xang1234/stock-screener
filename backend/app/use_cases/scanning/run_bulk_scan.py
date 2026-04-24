@@ -75,6 +75,7 @@ class RunBulkScanCommand:
     criteria: dict = field(default_factory=dict)
     chunk_size: int = 50
     correlation_id: str | None = None
+    cache_only: bool = False
 
     def __post_init__(self) -> None:
         if self.chunk_size < 1:
@@ -234,6 +235,8 @@ class RunBulkScanUseCase:
                         [symbol.upper() for symbol in chunk],
                         merged_requirements,
                         allow_partial=True,
+                        batch_only_prices=cmd.cache_only,
+                        batch_only_fundamentals=cmd.cache_only,
                     )
                 except Exception:
                     logger.warning(
