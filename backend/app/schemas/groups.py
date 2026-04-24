@@ -136,6 +136,14 @@ class CalculationStatusResponse(BaseModel):
     status: str = Field(..., description="Task status: queued, running, completed, failed")
     result: Optional[CalculationResponse] = Field(None, description="Result when completed")
     error: Optional[str] = Field(None, description="Error message when failed")
+    reason_code: Optional[str] = Field(
+        None,
+        description=(
+            "Machine-readable failure category when status='failed'. "
+            "Known codes: warmup_incomplete, missing_ibd_mappings, "
+            "invalid_date, no_groups_ranked, unknown."
+        ),
+    )
 
 
 class BackfillRequest(BaseModel):
