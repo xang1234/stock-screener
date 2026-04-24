@@ -263,23 +263,24 @@ def calculate_daily_group_rankings(
         duration = time.time() - start_time
 
         if not results:
-            logger.warning(f"No groups ranked for {calc_date}")
-            mark_market_activity_completed(
+            no_groups_message = (
+                "No groups could be ranked (insufficient price data or all groups below 3-stock threshold)"
+            )
+            logger.warning("No groups ranked for %s", calc_date)
+            _mark_market_activity_failed_safely(
                 db,
                 market=effective_market,
                 stage_key="groups",
                 lifecycle=activity_lifecycle,
                 task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                 task_id=getattr(getattr(self, "request", None), "id", None),
-                current=0,
-                total=0,
-                message="No groups ranked",
+                message=no_groups_message,
             )
             return {
                 'date': calc_date.strftime('%Y-%m-%d'),
                 'groups_ranked': 0,
                 'warning': 'No groups could be ranked',
-                'error': 'No groups could be ranked (insufficient price data or all groups below 3-stock threshold)',
+                'error': no_groups_message,
                 'reason_code': GroupRankReasonCode.NO_GROUPS_RANKED,
                 'calculation_duration_seconds': round(duration, 2),
                 'timestamp': datetime.now().isoformat()
