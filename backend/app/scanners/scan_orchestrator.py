@@ -287,6 +287,8 @@ def _partial_history_metrics(stock_data: StockData) -> dict[str, object]:
             )
 
     if price_data is not None and not price_data.empty:
+        # Young IPO rows have little history, so require a fully valid
+        # 20-session ADR window instead of the scanner-wide 80% tolerance.
         metrics["adr_percent"] = ADRCalculator().calculate_adr_percent(
             price_data,
             period=20,
