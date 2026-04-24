@@ -461,6 +461,48 @@ def test_historical_group_rankings_do_not_repair_current_us_metadata(monkeypatch
     assert result["metadata_repair"] is None
 
 
+def test_non_us_market_never_invokes_us_metadata_repair(monkeypatch):
+    """The US feature-store repair helper must not fire for HK/JP/TW/IN runs,
+    even on same-day or bootstrap runs where the generic gate would otherwise
+    trigger it.
+    """
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.price_cache.get_warmup_metadata.return_value = None
+    fake_service.calculate_group_rankings.return_value = [
+        {"industry_group": "Banks", "avg_rs_rating": 90.0, "rank": 1, "num_stocks": 5}
+    ]
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    repair_calls: list = []
+    monkeypatch.setattr(
+        "app.interfaces.tasks.feature_store_tasks._repair_current_us_group_metadata",
+        lambda **kwargs: repair_calls.append(kwargs) or {"status": "ok"},
+    )
+
+    # Same-day HK run (calc_date == today_local from the calendar stub).
+    result = module.calculate_daily_group_rankings.run("2026-03-20", market="HK")
+
+    assert result.get("status") != "skipped"
+    assert repair_calls == [], (
+        "US-scoped metadata repair must not run for non-US markets"
+    )
+    assert result.get("metadata_repair") is None
+
+
 def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):
     import app.tasks.group_rank_tasks as module
     import app.services.ui_snapshot_service as snapshot_module

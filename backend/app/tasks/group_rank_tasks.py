@@ -295,7 +295,9 @@ def calculate_daily_group_rankings(
         logger.info("=" * 60)
 
         repair_stats = None
-        if _should_repair_current_us_metadata(
+        # US-only: the repair helper touches US-scoped feature-store metadata
+        # and has no equivalent on other markets. Non-US runs skip it.
+        if effective_market == "US" and _should_repair_current_us_metadata(
             calc_date=calc_date,
             today_et=today_local,
             activity_lifecycle=activity_lifecycle,
