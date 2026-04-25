@@ -48,7 +48,7 @@ def _build_market_bootstrap_signatures(
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
     from app.tasks.cache_tasks import smart_refresh_cache
     from app.tasks.fundamentals_tasks import refresh_all_fundamentals
-    from app.tasks.group_rank_tasks import calculate_daily_group_rankings
+    from app.tasks.group_rank_tasks import calculate_daily_group_rankings_with_gapfill
     from app.tasks.industry_tasks import load_tracked_ibd_industry_groups
     from app.tasks.universe_tasks import (
         refresh_official_market_universe,
@@ -92,11 +92,21 @@ def _build_market_bootstrap_signatures(
                 market=market,
                 activity_lifecycle="bootstrap",
             ).set(queue=market_jobs_queue_for_market(market)),
-            calculate_daily_group_rankings.si(
+            calculate_daily_group_rankings_with_gapfill.si(
                 market=market,
                 activity_lifecycle="bootstrap",
             ).set(queue=market_jobs_queue_for_market(market)),
         ])
+    else:
+        # Asian markets (HK/JP/TW/IN): no IBD CSV step (taxonomy is in-memory
+        # via MarketTaxonomyService) and no breadth (still US-only), but
+        # rankings DO compute via the per-market benchmark (HSI/N225/TAIEX/NIFTY).
+        signatures.append(
+            calculate_daily_group_rankings_with_gapfill.si(
+                market=market,
+                activity_lifecycle="bootstrap",
+            ).set(queue=market_jobs_queue_for_market(market))
+        )
     if market == "US":
         signatures.append(
             build_daily_snapshot.si(

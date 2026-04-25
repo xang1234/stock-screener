@@ -27,6 +27,11 @@ _TW_EXCHANGE_ALIASES = {
 }
 
 _EMPTY_TOKENS = {"", "-", "N/A", "NA", "NAN", "NONE", "NULL"}
+_LOAD_EXCEPTIONS = (OSError, csv.Error, UnicodeError)
+
+
+class TaxonomyLoadError(RuntimeError):
+    """Raised when committed taxonomy source files are missing or malformed."""
 
 
 @dataclass(frozen=True)
@@ -85,11 +90,20 @@ class MarketTaxonomyService:
 
     def refresh(self) -> None:
         self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "TW": {}}
-        self._load_us()
-        self._load_hk()
-        self._load_in()
-        self._load_jp()
-        self._load_tw()
+        try:
+            self._load_us()
+            self._load_hk()
+            self._load_in()
+            self._load_jp()
+            self._load_tw()
+        except TaxonomyLoadError:
+            self._loaded = False
+            raise
+        except _LOAD_EXCEPTIONS as exc:
+            self._loaded = False
+            raise TaxonomyLoadError(
+                f"Unable to load market taxonomy from {self._data_dir}: {exc}"
+            ) from exc
         self._loaded = True
 
     def get(
@@ -151,6 +165,15 @@ class MarketTaxonomyService:
         if text.upper() in _EMPTY_TOKENS:
             return None
         return text
+
+    @staticmethod
+    def _require_columns(path: Path, reader: csv.DictReader, required: tuple[str, ...]) -> None:
+        fieldnames = set(reader.fieldnames or ())
+        missing = [column for column in required if column not in fieldnames]
+        if missing:
+            raise TaxonomyLoadError(
+                f"Taxonomy CSV {path} is missing required columns: {', '.join(missing)}"
+            )
 
     def _merge_entry(
         self,
@@ -214,6 +237,7 @@ class MarketTaxonomyService:
         path = self._data_dir / "hk-deep.csv"
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
+            self._require_columns(path, reader, ("Symbol", "EM Industry (EN)", "Theme (EN)"))
             for row in reader:
                 symbol = self._canonicalize_hk_symbol(row.get("Symbol"))
                 if symbol is None:
@@ -233,6 +257,11 @@ class MarketTaxonomyService:
             return
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "Exchange", "Industry (Sector)", "Subgroup (Theme)", "Sub-industry"),
+            )
             for row in reader:
                 symbol = self._canonicalize_in_symbol(
                     row.get("Symbol"),
@@ -253,6 +282,11 @@ class MarketTaxonomyService:
         path = self._data_dir / "kabutan_themes_en.csv"
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "TSE 33-Sector", "TSE 17-Sector", "Theme (EN)"),
+            )
             for row in reader:
                 symbol = self._canonicalize_jp_symbol(row.get("Symbol"))
                 if symbol is None:
@@ -270,6 +304,7 @@ class MarketTaxonomyService:
         path = self._data_dir / "taiwan-deep.csv"
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
+            self._require_columns(path, reader, ("Symbol", "Market", "Industry (EN)"))
             for row in reader:
                 symbol = self._canonicalize_tw_symbol(
                     row.get("Symbol"),
@@ -494,5 +529,6 @@ def get_market_taxonomy_service() -> MarketTaxonomyService:
 __all__ = [
     "MarketTaxonomyEntry",
     "MarketTaxonomyService",
+    "TaxonomyLoadError",
     "get_market_taxonomy_service",
 ]

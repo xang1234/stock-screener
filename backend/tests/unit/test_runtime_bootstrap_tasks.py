@@ -47,8 +47,8 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
         _FakeTask("app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"),
     )
     monkeypatch.setattr(
-        "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
-        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings"),
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
+        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"),
     )
     monkeypatch.setattr(
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
@@ -67,12 +67,16 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
     assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" in task_names
     assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" not in task_names
     assert "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill" not in task_names
-    assert "app.tasks.group_rank_tasks.calculate_daily_group_rankings" not in task_names
+    # Non-US markets now run the group ranking orchestrator (taxonomy is in-memory).
+    assert (
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"
+        in task_names
+    )
     assert [
         signature.kwargs.get("activity_lifecycle")
         for signature in signatures
         if signature.task != "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan"
-    ] == ["bootstrap"] * 3
+    ] == ["bootstrap"] * 4
 
 
 def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
@@ -103,8 +107,8 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         _FakeTask("app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill"),
     )
     monkeypatch.setattr(
-        "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
-        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings"),
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
+        _FakeTask("app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"),
     )
     monkeypatch.setattr(
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
@@ -120,7 +124,7 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         "app.tasks.cache_tasks.smart_refresh_cache",
         "app.tasks.fundamentals_tasks.refresh_all_fundamentals",
         "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill",
-        "app.tasks.group_rank_tasks.calculate_daily_group_rankings",
+        "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill",
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
     ]
     assert signatures[1].kwargs == {

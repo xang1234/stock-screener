@@ -282,6 +282,7 @@ _MARKET_JOB_TASKS = (
     'app.tasks.breadth_tasks.calculate_daily_breadth',
     'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
     'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+    'app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill',
     'app.tasks.group_rank_tasks.gapfill_group_rankings',
     'app.tasks.group_rank_tasks.backfill_group_rankings',
     'app.tasks.group_rank_tasks.backfill_group_rankings_1year',
@@ -395,7 +396,7 @@ if settings.cache_warmup_enabled:
         }
         _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
         beat_schedule[f'daily-group-ranking-calculation-{_m_lower}'] = {
-            'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
+            'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill',
             'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
             'options': {'queue': market_jobs_queue_for_market(_market)},
             'kwargs': {'market': _market},

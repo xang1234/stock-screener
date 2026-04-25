@@ -315,7 +315,7 @@ class Settings(BaseSettings):
     theme_velocity_threshold: float = 1.5  # Minimum velocity for "emerging" status
 
     # IBD Group Rank Gap-Fill Configuration
-    group_rank_gapfill_enabled: bool = False  # Disabled - don't auto-run gap-fill on startup
+    group_rank_gapfill_enabled: bool = True  # Enable automatic gap-fill during scheduled / bootstrap runs
     group_rank_gapfill_max_days: int = 365  # Maximum days to look back for gaps
     group_rank_gapfill_chunk_size: int = 30  # Days per chunk for memory safety
     group_rank_backfill_max_days: int = 365  # API limit for backfill endpoint
