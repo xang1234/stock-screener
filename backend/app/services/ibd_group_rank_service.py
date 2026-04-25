@@ -1325,7 +1325,9 @@ class IBDGroupRankService:
     def fill_gaps_optimized(
         self,
         db: Session,
-        missing_dates: List[date]
+        missing_dates: List[date],
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Fill specific missing dates using optimized approach.
@@ -1350,11 +1352,17 @@ class IBDGroupRankService:
                 'errors': 0,
             }
 
-        logger.info(f"Filling {len(missing_dates)} missing dates (optimized)")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Filling %d missing dates (optimized) for market=%s",
+            len(missing_dates), normalized_market,
+        )
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+            self._prefetch_all_data(db, market=normalized_market)
+        )
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1366,7 +1374,7 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db)
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
 
         stats = {
             'total_dates': len(missing_dates),
@@ -1390,7 +1398,14 @@ class IBDGroupRankService:
                 group_metrics = []
                 for group_name in all_groups:
                     metrics = self._calculate_group_rs_from_cache(
-                        db, group_name, spy_prices, all_prices, active_symbols, market_caps, calc_date
+                        db,
+                        group_name,
+                        spy_prices,
+                        all_prices,
+                        active_symbols,
+                        market_caps,
+                        calc_date,
+                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)
@@ -1402,7 +1417,12 @@ class IBDGroupRankService:
                         metrics['rank'] = rank
 
                     # Store
-                    self._store_rankings(db, calc_date, group_metrics)
+                    self._store_rankings(
+                        db,
+                        calc_date,
+                        group_metrics,
+                        market=normalized_market,
+                    )
                     stats['processed'] += 1
                     logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
                 else:

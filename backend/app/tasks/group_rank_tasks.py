@@ -557,7 +557,11 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         service = get_group_rank_service()
 
         # Find missing dates
-        missing_dates = service.find_missing_dates(db, lookback_days=max_days)
+        missing_dates = service.find_missing_dates(
+            db,
+            lookback_days=max_days,
+            market=market,
+        )
 
         if not missing_dates:
             logger.info("No gaps found - data is complete")
@@ -572,7 +576,7 @@ def gapfill_group_rankings(self, max_days: int = 365, market: str = "US"):
         logger.info(f"Date range: {missing_dates[0]} to {missing_dates[-1]}")
 
         # Fill the gaps using optimized method
-        result = service.fill_gaps_optimized(db, missing_dates)
+        result = service.fill_gaps_optimized(db, missing_dates, market=market)
 
         duration = time.time() - start_time
 

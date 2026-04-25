@@ -515,6 +515,38 @@ def test_non_us_market_never_invokes_us_metadata_repair(monkeypatch):
     assert call_kwargs.get("market") == "HK"
 
 
+def test_gapfill_group_rankings_passes_market_to_service(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = [datetime(2026, 3, 19).date()]
+    fake_service.fill_gaps_optimized.return_value = {
+        "processed": 1,
+        "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.gapfill_group_rankings.run(max_days=30, market="HK")
+
+    assert result["status"] == "complete"
+    fake_service.find_missing_dates.assert_called_once_with(
+        fake_db,
+        lookback_days=30,
+        market="HK",
+    )
+    fake_service.fill_gaps_optimized.assert_called_once_with(
+        fake_db,
+        [datetime(2026, 3, 19).date()],
+        market="HK",
+    )
+
+
 def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):
     import app.tasks.group_rank_tasks as module
     import app.services.ui_snapshot_service as snapshot_module

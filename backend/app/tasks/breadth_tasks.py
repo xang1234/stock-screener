@@ -240,7 +240,7 @@ def calculate_daily_breadth(
                 completeness_error = _validate_same_day_cache_only_breadth(
                     calculator.price_cache,
                     metrics,
-                    market=market,
+                    market=effective_market,
                 )
             if completeness_error:
                 logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
@@ -266,9 +266,10 @@ def calculate_daily_breadth(
         logger.info(f"  5-day ratio: {metrics['ratio_5day']}")
         logger.info(f"  10-day ratio: {metrics['ratio_10day']}")
 
-        # Check if record already exists for this date
+        # Check if record already exists for this (date, market) partition
         existing_record = db.query(MarketBreadth).filter(
-            MarketBreadth.date == calc_date
+            MarketBreadth.date == calc_date,
+            MarketBreadth.market == effective_market,
         ).first()
 
         if existing_record:
@@ -291,6 +292,7 @@ def calculate_daily_breadth(
         else:
             # Create new MarketBreadth record
             breadth_record = MarketBreadth(
+                market=effective_market,
                 date=calc_date,
                 stocks_up_4pct=metrics['stocks_up_4pct'],
                 stocks_down_4pct=metrics['stocks_down_4pct'],

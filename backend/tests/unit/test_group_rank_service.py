@@ -474,11 +474,13 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
 def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
+    prefetch_kwargs: dict = {}
+    group_kwargs: dict = {}
 
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
-        lambda db, **kw: (
+        lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
             {"AAPL"},
@@ -488,13 +490,15 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: [],
+        lambda db, **kw: group_kwargs.update(kw) or [],
     )
 
-    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 17)])
+    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 17)], market="HK")
 
     assert stats["processed"] == 0
     assert stats["errors"] == 1
+    assert prefetch_kwargs["market"] == "HK"
+    assert group_kwargs["market"] == "HK"
 
 
 def test_get_current_rankings_can_target_explicit_date():
