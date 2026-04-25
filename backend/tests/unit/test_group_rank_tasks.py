@@ -790,6 +790,33 @@ def test_orchestrator_skips_market_with_no_taxonomy(monkeypatch):
     fake_service.find_missing_dates.assert_not_called()
 
 
+def test_orchestrator_skips_market_when_taxonomy_loader_fails(monkeypatch):
+    """Known taxonomy loader failures are treated like a missing taxonomy."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        MagicMock(side_effect=FileNotFoundError("hk-deep.csv")),
+    )
+
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="HK")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_taxonomy_for_market"
+    fake_service.find_missing_dates.assert_not_called()
+
+
 def test_orchestrator_runs_for_non_us_market(monkeypatch):
     """HK orchestrator runs end-to-end on a trading day."""
     import app.tasks.group_rank_tasks as module
@@ -831,6 +858,42 @@ def test_orchestrator_runs_for_non_us_market(monkeypatch):
     fake_service.find_missing_dates.assert_called_once_with(
         fake_db, lookback_days=365, market="HK",
     )
+
+
+def test_orchestrator_rolls_back_before_publishing_failure(monkeypatch):
+    """A failed ORM transaction is cleared before marking activity failed."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["Software"]),
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.side_effect = RuntimeError("session failed")
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    rollback_seen_by_failure_publish = []
+
+    def fake_mark_failed(db, **_kwargs):
+        rollback_seen_by_failure_publish.append(db.rollback.called)
+
+    monkeypatch.setattr(module, "mark_market_activity_failed", fake_mark_failed)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
+
+    assert "session failed" in result["error"]
+    fake_db.rollback.assert_called_once()
+    assert rollback_seen_by_failure_publish == [True]
 
 
 def test_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):

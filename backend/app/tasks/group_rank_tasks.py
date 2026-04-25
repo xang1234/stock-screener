@@ -10,6 +10,7 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+import csv
 import logging
 from typing import Optional
 from datetime import datetime, date, timedelta
@@ -34,6 +35,13 @@ from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
+TAXONOMY_UNAVAILABLE_EXCEPTIONS = (
+    MissingIBDIndustryMappingsError,
+    FileNotFoundError,
+    csv.Error,
+    UnicodeError,
+    ValueError,
+)
 
 
 class GroupRankReasonCode:
@@ -531,7 +539,18 @@ def calculate_daily_group_rankings_with_gapfill(
 
         # Defensive skip: a market with no taxonomy (e.g., enabled before its
         # CSV is loaded) would otherwise raise MissingIBDIndustryMappingsError.
-        all_groups = IBDIndustryService.get_all_groups(db, market=effective_market)
+        try:
+            all_groups = IBDIndustryService.get_all_groups(db, market=effective_market)
+        except TAXONOMY_UNAVAILABLE_EXCEPTIONS as e:
+            if effective_market == "US" and not isinstance(e, MissingIBDIndustryMappingsError):
+                raise
+            logger.warning(
+                "Taxonomy unavailable for market=%s; skipping rankings: %s",
+                effective_market,
+                e,
+                exc_info=True,
+            )
+            all_groups = []
         if not all_groups:
             logger.info(
                 "No industry groups available for market=%s; skipping rankings.",
@@ -667,6 +686,7 @@ def calculate_daily_group_rankings_with_gapfill(
         )
         _retry_transient_failure(self, "calculate_daily_group_rankings_with_gapfill", e)
     except Exception as e:
+        db.rollback()
         logger.error(
             "✗ Error in calculate_daily_group_rankings_with_gapfill: %s", e,
             exc_info=True,
