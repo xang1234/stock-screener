@@ -10,13 +10,12 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
-import csv
 import logging
 from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 
 from ..celery_app import celery_app
 from ..config import settings
@@ -30,6 +29,7 @@ from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
+from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
 from .workload_coordination import serialized_market_workload
 
@@ -37,10 +37,7 @@ logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 TAXONOMY_UNAVAILABLE_EXCEPTIONS = (
     MissingIBDIndustryMappingsError,
-    FileNotFoundError,
-    csv.Error,
-    UnicodeError,
-    ValueError,
+    TaxonomyLoadError,
 )
 
 
@@ -94,6 +91,15 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
+
+
+def _group_rank_result_error(result) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    error = result.get("error")
+    if error:
+        return str(error)
+    return None
 
 
 def _validate_same_day_cache_only_group_rankings(
@@ -622,6 +628,9 @@ def calculate_daily_group_rankings_with_gapfill(
                 activity_lifecycle=activity_lifecycle,
             )
             result['today'] = today_result
+            today_error = _group_rank_result_error(today_result)
+            if today_error:
+                raise RuntimeError(f"Daily group ranking failed: {today_error}")
         else:
             last_trading = calendar_service.last_completed_trading_day(effective_market)
             logger.info(
@@ -685,6 +694,22 @@ def calculate_daily_group_rankings_with_gapfill(
             message=str(e),
         )
         _retry_transient_failure(self, "calculate_daily_group_rankings_with_gapfill", e)
+    except Retry as e:
+        db.rollback()
+        logger.warning(
+            "Retry requested from calculate_daily_group_rankings_with_gapfill: %s",
+            e,
+        )
+        _mark_market_activity_failed_safely(
+            db,
+            market=effective_market,
+            stage_key="groups",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "calculate_daily_group_rankings_with_gapfill"),
+            task_id=getattr(getattr(self, "request", None), "id", None),
+            message=str(e) or "Retry requested",
+        )
+        raise
     except Exception as e:
         db.rollback()
         logger.error(

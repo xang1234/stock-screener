@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from app.services.market_taxonomy_service import MarketTaxonomyService
+import pytest
+
+from app.services.market_taxonomy_service import MarketTaxonomyService, TaxonomyLoadError
 
 
 def _write_csv(path, content: str) -> None:
@@ -117,6 +119,43 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
     assert service.symbols_for_group("HK", "Nonexistent Group") == []
     # Unknown market yields no groups (falls through the normalization path)
     assert service.groups_for_market("XX") == []
+
+
+def test_market_taxonomy_service_raises_load_error_for_missing_required_csv(tmp_path):
+    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(
+        tmp_path / "india-deep.csv",
+        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
+    )
+    _write_csv(
+        tmp_path / "kabutan_themes_en.csv",
+        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
+    )
+    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    with pytest.raises(TaxonomyLoadError, match="hk-deep.csv"):
+        service.groups_for_market("HK")
+
+
+def test_market_taxonomy_service_raises_load_error_for_malformed_csv(tmp_path):
+    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(tmp_path / "hk-deep.csv", "Ticker,Industry\n700,Internet Services\n")
+    _write_csv(
+        tmp_path / "india-deep.csv",
+        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
+    )
+    _write_csv(
+        tmp_path / "kabutan_themes_en.csv",
+        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
+    )
+    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    with pytest.raises(TaxonomyLoadError, match="missing required columns"):
+        service.groups_for_market("HK")
 
 
 def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp_path):
