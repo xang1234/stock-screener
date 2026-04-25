@@ -43,6 +43,10 @@ def _patch_calendar_service(
         "app.tasks.breadth_tasks.get_market_calendar_service",
         lambda: fake,
     )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: fake,
+    )
     return fake
 
 

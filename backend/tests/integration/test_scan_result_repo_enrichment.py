@@ -170,6 +170,73 @@ def test_persist_orchestrator_results_enriches_non_us_market_taxonomy(session: S
     assert row.details["market_themes"] == ["AI Infrastructure", "Cloud"]
 
 
+def test_non_us_rank_enrichment_honors_explicit_ranking_date(session: Session):
+    session.add(
+        StockUniverse(
+            symbol="0700.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="HKD",
+            timezone="Asia/Hong_Kong",
+        )
+    )
+    session.commit()
+
+    seen_dates: list[date | None] = []
+
+    class _FakeTaxonomyService:
+        def get(self, symbol, *, market=None, exchange=None):  # noqa: ARG002
+            if symbol == "0700.HK" and market == "HK":
+                return MarketTaxonomyEntry(
+                    market="HK",
+                    symbol="0700.HK",
+                    industry_group="Internet Services",
+                )
+            return None
+
+    class _FakeMarketGroupRankingService:
+        def get_current_rank_map(self, db, *, market, calculation_date=None):  # noqa: ARG002
+            assert market == "HK"
+            seen_dates.append(calculation_date)
+            return {"Internet Services": 7}
+
+    repo = SqlScanResultRepository(
+        session,
+        taxonomy_service=_FakeTaxonomyService(),
+        market_group_ranking_service=_FakeMarketGroupRankingService(),
+    )
+    session.add(
+        ScanResult(
+            scan_id="scan-hk-historical",
+            symbol="0700.HK",
+            composite_score=80.0,
+            rating="Buy",
+            details={},
+            ibd_industry_group=None,
+            ibd_group_rank=None,
+        )
+    )
+    session.commit()
+
+    stats = repo.backfill_ibd_metadata_for_scan(
+        "scan-hk-historical",
+        ranking_date=date(2026, 2, 19),
+    )
+
+    row = (
+        session.query(ScanResult)
+        .filter(
+            ScanResult.scan_id == "scan-hk-historical",
+            ScanResult.symbol == "0700.HK",
+        )
+        .one()
+    )
+
+    assert stats["updated_rows"] == 1
+    assert row.ibd_group_rank == 7
+    assert seen_dates == [date(2026, 2, 19)]
+
+
 def test_persist_orchestrator_results_overrides_non_us_sector_and_industry_with_taxonomy(session: Session):
     session.add(
         StockUniverse(

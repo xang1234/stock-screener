@@ -12,6 +12,28 @@ branch_labels = None
 depends_on = None
 
 
+SQLITE_BATCH_NAMING_CONVENTION = {
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+}
+
+
+def _unique_constraint_names_for_columns(
+    bind,
+    table_name: str,
+    columns: tuple[str, ...],
+    *,
+    unnamed_sqlite_name: str,
+) -> list[str]:
+    inspector = sa.inspect(bind)
+    names: list[str] = []
+    for constraint in inspector.get_unique_constraints(table_name):
+        if tuple(constraint.get("column_names") or ()) != columns:
+            continue
+        name = constraint.get("name") or unnamed_sqlite_name
+        names.append(name)
+    return names
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
@@ -30,8 +52,18 @@ def upgrade() -> None:
     # 2. Swap the uniqueness constraint to include market.
     # SQLite needs batch mode for constraint changes; Postgres can do it directly.
     if dialect == "sqlite":
-        with op.batch_alter_table("ibd_group_ranks") as batch_op:
-            batch_op.drop_constraint("uix_ibd_group_rank_date", type_="unique")
+        unique_names = _unique_constraint_names_for_columns(
+            bind,
+            "ibd_group_ranks",
+            ("industry_group", "date"),
+            unnamed_sqlite_name="uq_ibd_group_ranks_industry_group_date",
+        )
+        with op.batch_alter_table(
+            "ibd_group_ranks",
+            naming_convention=SQLITE_BATCH_NAMING_CONVENTION,
+        ) as batch_op:
+            for name in unique_names:
+                batch_op.drop_constraint(name, type_="unique")
             batch_op.create_unique_constraint(
                 "uix_ibd_group_rank_market_date",
                 ["industry_group", "date", "market"],

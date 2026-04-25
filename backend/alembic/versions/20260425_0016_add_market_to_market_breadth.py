@@ -12,6 +12,28 @@ branch_labels = None
 depends_on = None
 
 
+SQLITE_BATCH_NAMING_CONVENTION = {
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+}
+
+
+def _unique_constraint_names_for_columns(
+    bind,
+    table_name: str,
+    columns: tuple[str, ...],
+    *,
+    unnamed_sqlite_name: str,
+) -> list[str]:
+    inspector = sa.inspect(bind)
+    names: list[str] = []
+    for constraint in inspector.get_unique_constraints(table_name):
+        if tuple(constraint.get("column_names") or ()) != columns:
+            continue
+        name = constraint.get("name") or unnamed_sqlite_name
+        names.append(name)
+    return names
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
@@ -31,27 +53,28 @@ def upgrade() -> None:
     # named date unique — only ORM-side models declared `unique=True`. So the
     # constraint may or may not exist depending on how the DB was built. We
     # inspect first to avoid failing mid-migration on production DBs.
-    inspector = sa.inspect(bind)
-    existing_uniques = {uc["name"] for uc in inspector.get_unique_constraints("market_breadth")}
+    date_unique_names = _unique_constraint_names_for_columns(
+        bind,
+        "market_breadth",
+        ("date",),
+        unnamed_sqlite_name="uq_market_breadth_date",
+    )
 
     if dialect == "sqlite":
-        with op.batch_alter_table("market_breadth") as batch_op:
-            # Try all plausible names for the date-only unique; ignore if none exist.
-            for name in ("market_breadth_date_key", "uq_market_breadth_date"):
-                try:
-                    batch_op.drop_constraint(name, type_="unique")
-                    break
-                except Exception:
-                    continue
+        with op.batch_alter_table(
+            "market_breadth",
+            naming_convention=SQLITE_BATCH_NAMING_CONVENTION,
+        ) as batch_op:
+            for name in date_unique_names:
+                batch_op.drop_constraint(name, type_="unique")
             batch_op.create_unique_constraint(
                 "uix_breadth_date_market",
                 ["date", "market"],
             )
     else:
         # Postgres: drop each known implicit/explicit name ONLY if it exists.
-        for name in ("market_breadth_date_key", "uq_market_breadth_date"):
-            if name in existing_uniques:
-                op.drop_constraint(name, "market_breadth", type_="unique")
+        for name in date_unique_names:
+            op.drop_constraint(name, "market_breadth", type_="unique")
         op.create_unique_constraint(
             "uix_breadth_date_market",
             "market_breadth",

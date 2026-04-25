@@ -393,6 +393,7 @@ class SqlScanResultRepository(ScanResultRepository):
             market: self._market_group_ranking_service.get_current_rank_map(
                 self._session,
                 market=market,
+                calculation_date=ranking_date,
             )
             for market in requested_markets
         }
