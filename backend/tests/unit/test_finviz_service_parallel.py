@@ -56,7 +56,7 @@ class TestPerMarketRouting:
         limiter = _RecordingLimiter()
         service = FinvizService(rate_limiter=limiter)
 
-        with patch("finvizfinance.quote.finvizfinance") as mock_finviz:
+        with patch("app.services.finviz_service.finvizfinance") as mock_finviz:
             stock = MagicMock()
             stock.flag = True
             stock.ticker_fundament.return_value = {}
@@ -75,7 +75,7 @@ class TestPerMarketRouting:
 
         # ``settings`` is imported lazily inside ``_rate_limited_call``;
         # patch the singleton attribute so the deferred import sees it.
-        with patch("finvizfinance.quote.finvizfinance") as mock_finviz, \
+        with patch("app.services.finviz_service.finvizfinance") as mock_finviz, \
              patch.object(settings_singleton, "finviz_rate_limit_interval", 0.5):
             stock = MagicMock()
             stock.flag = True
@@ -96,7 +96,7 @@ class TestParallelBatch:
         service = FinvizService(rate_limiter=limiter)
 
         symbols = [f"S{i}" for i in range(8)]
-        with patch("finvizfinance.quote.finvizfinance") as mock_finviz:
+        with patch("app.services.finviz_service.finvizfinance") as mock_finviz:
             stock = MagicMock()
             stock.flag = True
             stock.ticker_fundament.return_value = {}
@@ -107,6 +107,9 @@ class TestParallelBatch:
             )
 
         assert set(results.keys()) == set(symbols)
+        # Confirm the mock was actually invoked — guards against the patch
+        # target silently missing the real binding.
+        assert mock_finviz.call_count == len(symbols)
         # Verified parallelism: at some point >1 thread was inside the limiter.
         assert limiter.concurrent_max >= 2, (
             f"Expected concurrent threads, only saw {limiter.concurrent_max}"
@@ -120,7 +123,7 @@ class TestParallelBatch:
         service = FinvizService(rate_limiter=limiter)
 
         symbols = ["A", "B", "C"]
-        with patch("finvizfinance.quote.finvizfinance") as mock_finviz:
+        with patch("app.services.finviz_service.finvizfinance") as mock_finviz:
             stock = MagicMock()
             stock.flag = True
             stock.ticker_fundament.return_value = {}
@@ -135,7 +138,7 @@ class TestParallelBatch:
         service = FinvizService(rate_limiter=limiter)
 
         symbols = ["A", "B"]
-        with patch("finvizfinance.quote.finvizfinance") as mock_finviz, \
+        with patch("app.services.finviz_service.finvizfinance") as mock_finviz, \
              patch("app.services.rate_budget_policy.get_rate_budget_policy") as get_policy:
             mock_policy = MagicMock()
             mock_policy.get_provider_workers.return_value = 2

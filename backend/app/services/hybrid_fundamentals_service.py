@@ -278,29 +278,26 @@ class HybridFundamentalsService:
 
             finviz_total = len(finviz_eligible)
             finviz_success = 0
-            # Phase 3 is US-only (per routing policy above); use the per-market
-            # finviz worker policy and bail early when the circuit opens.
-            from .provider_circuit_breaker import CircuitOpenError, get_circuit_breaker
-            breaker = get_circuit_breaker()
+            # Phase 3 is US-only (per routing policy above); the breaker check
+            # inside ``_rate_limited_call`` is the single gate. An additional
+            # ``breaker.check()`` here would mutate state — it can promote
+            # open→half_open and consume the single probe before the actual
+            # call runs, leaving the probe wasted (and, in the no-Redis
+            # fallback, permanently wedging the circuit).
+            from .provider_circuit_breaker import CircuitOpenError
 
             for i, symbol in enumerate(finviz_eligible):
                 # Resolve the symbol's market for per-market rate budgeting;
                 # finviz routing already constrained this to supported markets.
                 symbol_market = (market_by_symbol or {}).get(symbol) or "US"
-                if breaker.check("finviz", symbol_market) == "open":
-                    logger.warning(
-                        "Phase 3 aborted at %d/%d: finviz circuit open for %s",
-                        i, finviz_total, symbol_market,
-                    )
-                    break
                 try:
                     finviz_data = self.finviz_service.get_finviz_only_fields(
                         symbol, market=symbol_market,
                     )
                 except CircuitOpenError:
                     logger.warning(
-                        "Phase 3 aborted at %d/%d: circuit opened mid-batch",
-                        i, finviz_total,
+                        "Phase 3 aborted at %d/%d: circuit open for finviz:%s",
+                        i, finviz_total, symbol_market.lower(),
                     )
                     break
                 if finviz_data:

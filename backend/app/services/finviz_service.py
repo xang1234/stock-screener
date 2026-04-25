@@ -13,6 +13,7 @@ from finvizfinance.quote import finvizfinance
 
 from .finviz_parser import FinvizParser
 from .finviz_validator import FinvizValidator
+from .provider_circuit_breaker import CircuitOpenError
 
 if TYPE_CHECKING:
     from app.services.rate_limiter import RedisRateLimiter
@@ -378,6 +379,12 @@ class FinvizService:
 
             return result
 
+        except CircuitOpenError:
+            # Let the breaker signal propagate so batch/phase loops can
+            # short-circuit. The broad ``except Exception`` below would
+            # otherwise swallow it and return ``None``, making every
+            # ``except CircuitOpenError`` handler in callers dead code.
+            raise
         except Exception as e:
             logger.warning(f"Error fetching finviz-only fields for {symbol}: {e}")
             return None
@@ -430,7 +437,6 @@ class FinvizService:
         # Sequential path keeps the legacy code path bit-for-bit identical
         # when the policy chooses 1 worker (e.g., non-US markets).
         if max_workers == 1:
-            from .provider_circuit_breaker import CircuitOpenError
             for i, symbol in enumerate(symbols):
                 if i > 0 and i % 50 == 0:
                     logger.info(f"Progress: {i}/{total} symbols ({i/total*100:.1f}%)")
@@ -444,8 +450,6 @@ class FinvizService:
             success_count = sum(1 for v in results.values() if v is not None)
             logger.info(f"Finviz-only batch complete: {success_count}/{total} successful")
             return results
-
-        from .provider_circuit_breaker import CircuitOpenError
 
         circuit_open = False
         completed = 0

@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit: int = 1  # requests per second (aggregate across all markets)
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
-    yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
+    yfinance_batch_rate_limit_interval: float = 2.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
     universe_source_timeout_seconds: int = 60
     universe_source_user_agent: str = (
