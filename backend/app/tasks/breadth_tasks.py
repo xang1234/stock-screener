@@ -29,7 +29,7 @@ from ..services.market_activity_service import (
 from ..models.market_breadth import MarketBreadth
 from ..config import settings
 from .workload_coordination import serialized_market_workload
-from ..wiring.bootstrap import get_price_cache
+from ..wiring.bootstrap import get_market_calendar_service, get_price_cache
 
 logger = logging.getLogger(__name__)
 TRANSIENT_TASK_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
@@ -132,16 +132,17 @@ def _validate_same_day_cache_only_breadth_metrics(metrics: dict) -> Optional[str
     return None
 
 
-def _generate_trading_dates(start: date, end: date) -> tuple[list[date], int]:
+def _generate_trading_dates(
+    start: date, end: date, *, market: str = "US",
+) -> tuple[list[date], int]:
     """Return trading dates in chronological order and the skipped non-trading-day count."""
-    from ..utils.market_hours import is_trading_day
-
+    calendar_service = get_market_calendar_service()
     current_date = start
     trading_dates: list[date] = []
     skipped_non_trading_days = 0
 
     while current_date <= end:
-        if is_trading_day(current_date):
+        if calendar_service.is_trading_day(market, current_date):
             trading_dates.append(current_date)
         else:
             skipped_non_trading_days += 1
@@ -178,20 +179,12 @@ def calculate_daily_breadth(
             'timestamp': str
         }
     """
+    effective_market = (market or "US").upper()
     logger.info("=" * 60)
-    logger.info("TASK: Calculate Daily Market Breadth")
-    if market is not None and market.upper() != "US":
-        return {
-            'status': 'skipped',
-            'reason': 'breadth_calculation_is_us_only',
-            'market': market.upper(),
-            'timestamp': datetime.now().isoformat(),
-        }
+    logger.info("TASK: Calculate Daily Market Breadth (%s)", effective_market)
 
-    # Parse date
-    from ..utils.market_hours import is_trading_day, get_eastern_now
-
-    today_et = get_eastern_now().date()
+    calendar_service = get_market_calendar_service()
+    today_local = calendar_service.market_now(effective_market).date()
     if calculation_date:
         try:
             calc_date = datetime.strptime(calculation_date, '%Y-%m-%d').date()
@@ -200,10 +193,13 @@ def calculate_daily_breadth(
             logger.error(f"Invalid date format: {calculation_date}. Use YYYY-MM-DD")
             return {'error': 'Invalid date format', 'timestamp': datetime.now().isoformat()}
     else:
-        calc_date = today_et
+        calc_date = today_local
 
-        if not is_trading_day(calc_date):
-            logger.warning(f"Today ({calc_date}) is not a trading day. Skipping.")
+        if not calendar_service.is_trading_day(effective_market, calc_date):
+            logger.warning(
+                "Today (%s) is not a trading day for %s. Skipping.",
+                calc_date, effective_market,
+            )
             return {
                 'skipped': True,
                 'reason': f'{calc_date} is not a trading day',
@@ -211,7 +207,7 @@ def calculate_daily_breadth(
                 'timestamp': datetime.now().isoformat()
             }
 
-        logger.info(f"Calculating breadth for today: {calc_date}")
+        logger.info(f"Calculating breadth for today ({effective_market}): {calc_date}")
 
     logger.info("=" * 60)
 
@@ -219,9 +215,9 @@ def calculate_daily_breadth(
     start_time = time.time()
 
     try:
-        # Initialize breadth calculator service
-        calculator = BreadthCalculatorService(db, get_price_cache())
-        cache_only = force_cache_only or calc_date == today_et
+        # Initialize breadth calculator service (market-scoped for universe selection)
+        calculator = BreadthCalculatorService(db, get_price_cache(), market=effective_market)
+        cache_only = force_cache_only or calc_date == today_local
 
         # Calculate breadth indicators
         logger.info(f"Starting breadth calculation for {calc_date}...")
@@ -244,7 +240,7 @@ def calculate_daily_breadth(
                 completeness_error = _validate_same_day_cache_only_breadth(
                     calculator.price_cache,
                     metrics,
-                    market=market,
+                    market=effective_market,
                 )
             if completeness_error:
                 logger.error("✗ Refusing to publish daily breadth: %s", completeness_error)
@@ -270,9 +266,10 @@ def calculate_daily_breadth(
         logger.info(f"  5-day ratio: {metrics['ratio_5day']}")
         logger.info(f"  10-day ratio: {metrics['ratio_10day']}")
 
-        # Check if record already exists for this date
+        # Check if record already exists for this (date, market) partition
         existing_record = db.query(MarketBreadth).filter(
-            MarketBreadth.date == calc_date
+            MarketBreadth.date == calc_date,
+            MarketBreadth.market == effective_market,
         ).first()
 
         if existing_record:
@@ -295,6 +292,7 @@ def calculate_daily_breadth(
         else:
             # Create new MarketBreadth record
             breadth_record = MarketBreadth(
+                market=effective_market,
                 date=calc_date,
                 stocks_up_4pct=metrics['stocks_up_4pct'],
                 stocks_down_4pct=metrics['stocks_down_4pct'],
@@ -421,7 +419,9 @@ def backfill_breadth_data(self, start_date: str, end_date: str, market: str = "U
             'timestamp': datetime.now().isoformat()
         }
 
-    trading_dates, skipped_non_trading_days = _generate_trading_dates(start, end)
+    trading_dates, skipped_non_trading_days = _generate_trading_dates(
+        start, end, market=(market or "US").upper(),
+    )
 
     logger.info(f"Generated {len(trading_dates)} trading days to process")
     logger.info(f"Skipped {skipped_non_trading_days} non-trading days")
@@ -430,7 +430,9 @@ def backfill_breadth_data(self, start_date: str, end_date: str, market: str = "U
     start_time = time.time()
 
     try:
-        calculator = BreadthCalculatorService(db, get_price_cache())
+        calculator = BreadthCalculatorService(
+            db, get_price_cache(), market=(market or "US").upper(),
+        )
         result = calculator.backfill_range(start, end, trading_dates=trading_dates)
         total_duration = time.time() - start_time
 
@@ -521,14 +523,6 @@ def calculate_daily_breadth_with_gapfill(
         extra=_log_extra,
     )
     logger.info("=" * 60)
-    if market is not None and normalize_market(market) != "US":
-        logger.info("Skipping breadth calculation for unsupported market %s", market, extra=_log_extra)
-        return {
-            'status': 'skipped',
-            'reason': 'breadth_calculation_is_us_only',
-            'market': effective_market,
-            'timestamp': datetime.now().isoformat(),
-        }
     if market is not None and not is_market_enabled_now(normalize_market(market)):
         logger.info("Skipping breadth calculation for disabled market %s", market, extra=_log_extra)
         return {
@@ -560,7 +554,7 @@ def calculate_daily_breadth_with_gapfill(
             task_id=getattr(getattr(self, "request", None), "id", None),
             message="Calculating market breadth",
         )
-        calculator = BreadthCalculatorService(db, get_price_cache())
+        calculator = BreadthCalculatorService(db, get_price_cache(), market=effective_market)
 
         # Step 1: Check if gap-fill is enabled
         if settings.breadth_gapfill_enabled:
@@ -593,21 +587,24 @@ def calculate_daily_breadth_with_gapfill(
             logger.info("Gap-fill disabled in settings, skipping gap detection")
             result['gap_fill'] = {'message': 'Gap-fill disabled'}
 
-        # Step 2: Calculate today's breadth (only if trading day)
-        from ..utils.market_hours import is_trading_day, get_last_trading_day, get_eastern_now
+        # Step 2: Calculate today's breadth (only if it's a trading day for this market)
+        from ..wiring.bootstrap import get_market_calendar_service
+        calendar_service = get_market_calendar_service()
+        today = calendar_service.market_now(effective_market).date()
 
-        today = get_eastern_now().date()
-
-        if is_trading_day(today):
-            logger.info(f"Calculating breadth for today ({today})...")
+        if calendar_service.is_trading_day(effective_market, today):
+            logger.info(f"Calculating breadth for today ({effective_market}, {today})...")
             today_result = _calculate_daily_breadth_in_process(market=market)
             result['today'] = today_result
         else:
-            last_trading = get_last_trading_day(today)
-            logger.info(f"Today ({today}) is not a trading day. Skipping.")
+            last_trading = calendar_service.last_completed_trading_day(effective_market)
+            logger.info(
+                "Today (%s) is not a trading day for %s. Skipping.",
+                today, effective_market,
+            )
             result['today'] = {
                 'skipped': True,
-                'reason': f'{today} is not a trading day (weekend or holiday)',
+                'reason': f'{today} is not a trading day for {effective_market}',
                 'last_trading_day': last_trading.strftime('%Y-%m-%d'),
                 'date': today.strftime('%Y-%m-%d'),
                 'timestamp': datetime.now().isoformat()

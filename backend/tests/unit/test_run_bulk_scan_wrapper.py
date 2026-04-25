@@ -70,9 +70,9 @@ class TestRunBulkScanViaUseCase:
             "scan_path": "use_case",
         }
 
-    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.finalize_scan_artifacts")
     @patch(f"{_WRAPPER_PATH}.settings")
-    def test_post_scan_pipeline_called_on_completed(self, mock_settings, mock_pipeline):
+    def test_post_scan_finalization_queued_on_completed(self, mock_settings, mock_finalize):
         mock_settings.scan_usecase_chunk_size = 25
 
         mock_use_case = MagicMock()
@@ -91,6 +91,34 @@ class TestRunBulkScanViaUseCase:
             from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
             _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
 
+        mock_finalize.delay.assert_called_once_with("scan-001")
+
+    @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
+    @patch(f"{_WRAPPER_PATH}.finalize_scan_artifacts")
+    @patch(f"{_WRAPPER_PATH}.settings")
+    def test_post_scan_pipeline_runs_inline_when_queueing_fails(
+        self, mock_settings, mock_finalize, mock_pipeline
+    ):
+        mock_settings.scan_usecase_chunk_size = 25
+        mock_finalize.delay.side_effect = RuntimeError("broker down")
+
+        mock_use_case = MagicMock()
+        mock_use_case.execute.return_value = _FakeResult(status="completed")
+
+        task_instance = MagicMock()
+        task_instance.request.id = "task-id"
+
+        with (
+            patch(f"{_WRAPPER_PATH}.SessionLocal"),
+            patch("app.wiring.bootstrap.get_run_bulk_scan_use_case", return_value=mock_use_case),
+            patch("app.infra.db.uow.SqlUnitOfWork"),
+            patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
+            patch("app.infra.tasks.cancellation.DbCancellationToken"),
+        ):
+            from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
+            _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
+
+        mock_finalize.delay.assert_called_once_with("scan-001")
         mock_pipeline.assert_called_once_with("scan-001")
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")

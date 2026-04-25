@@ -1,4 +1,10 @@
-"""Service for loading and managing IBD Industry Group data"""
+"""Service for loading and managing IBD Industry Group data.
+
+The ``market`` parameter on the read helpers routes non-US markets through
+``MarketTaxonomyService``, which loads per-market classification CSVs at
+runtime. US continues to read from the ``ibd_industry_groups`` DB table that
+``load_from_csv`` populates, so legacy callers are unaffected.
+"""
 import csv
 import logging
 from pathlib import Path
@@ -9,6 +15,18 @@ from ..config.settings import get_project_root
 from ..models.industry import IBDIndustryGroup
 
 logger = logging.getLogger(__name__)
+
+
+def _market_taxonomy_service():
+    from .market_taxonomy_service import MarketTaxonomyService
+
+    global _TAXONOMY_SINGLETON
+    if _TAXONOMY_SINGLETON is None:
+        _TAXONOMY_SINGLETON = MarketTaxonomyService()
+    return _TAXONOMY_SINGLETON
+
+
+_TAXONOMY_SINGLETON = None
 
 
 class IBDIndustryService:
@@ -162,17 +180,23 @@ class IBDIndustryService:
             return {}
 
     @staticmethod
-    def get_group_symbols(db: Session, industry_group: str) -> list:
-        """
-        Get all symbols in an IBD industry group.
+    def get_group_symbols(db: Session, industry_group: str, *, market: str | None = None) -> list:
+        """Get all symbols in an industry group.
 
-        Args:
-            db: Database session
-            industry_group: Industry group name
-
-        Returns:
-            List of symbols in the group
+        For ``market='US'`` (default) reads the persisted ``ibd_industry_groups``
+        table. For HK/JP/TW/IN, delegates to ``MarketTaxonomyService`` which
+        loads classification CSVs from ``data/`` at runtime.
         """
+        normalized = (market or "US").upper()
+        if normalized != "US":
+            try:
+                return _market_taxonomy_service().symbols_for_group(normalized, industry_group)
+            except Exception as e:
+                logger.error(
+                    "Error getting symbols for group %s in market %s: %s",
+                    industry_group, normalized, e,
+                )
+                return []
         try:
             records = db.query(IBDIndustryGroup.symbol).filter(
                 IBDIndustryGroup.industry_group == industry_group
@@ -183,16 +207,22 @@ class IBDIndustryService:
             return []
 
     @staticmethod
-    def get_all_groups(db: Session) -> list:
-        """
-        Get list of all unique industry groups.
+    def get_all_groups(db: Session, *, market: str | None = None) -> list:
+        """Get list of all unique industry groups for a market.
 
-        Args:
-            db: Database session
-
-        Returns:
-            List of unique industry group names
+        For ``market='US'`` (default) reads the persisted ``ibd_industry_groups``
+        table. For HK/JP/TW/IN, delegates to ``MarketTaxonomyService``.
         """
+        normalized = (market or "US").upper()
+        if normalized != "US":
+            try:
+                return _market_taxonomy_service().groups_for_market(normalized)
+            except Exception as e:
+                logger.error(
+                    "Error getting groups for market %s: %s",
+                    normalized, e, exc_info=True,
+                )
+                raise
         try:
             records = db.query(IBDIndustryGroup.industry_group).distinct().all()
             return [r.industry_group for r in records]

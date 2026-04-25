@@ -216,7 +216,11 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
         existing_dates = {
             record_date
             for record_date, in db.query(IBDGroupRank.date)
-            .filter(IBDGroupRank.date >= start_date, IBDGroupRank.date <= as_of_date)
+            .filter(
+                IBDGroupRank.date >= start_date,
+                IBDGroupRank.date <= as_of_date,
+                IBDGroupRank.market == "US",
+            )
             .distinct()
             .all()
         }
@@ -275,7 +279,11 @@ def _ensure_breadth_history(
         existing_dates = {
             record_date
             for record_date, in db.query(MarketBreadth.date)
-            .filter(MarketBreadth.date >= target_dates[0], MarketBreadth.date <= as_of_date)
+            .filter(
+                MarketBreadth.date >= target_dates[0],
+                MarketBreadth.date <= as_of_date,
+                MarketBreadth.market == "US",
+            )
             .all()
         }
         missing_dates = [calc_date for calc_date in target_dates if calc_date not in existing_dates]

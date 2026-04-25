@@ -47,7 +47,9 @@ async def get_current_breadth(db: Session = Depends(get_db)):
 
     Returns the latest breadth snapshot from the database.
     """
-    breadth = db.query(MarketBreadth).order_by(
+    breadth = db.query(MarketBreadth).filter(
+        MarketBreadth.market == "US",
+    ).order_by(
         MarketBreadth.date.desc()
     ).first()
 
@@ -105,7 +107,8 @@ async def get_historical_breadth(
     # Query breadth data
     breadth_records = db.query(MarketBreadth).filter(
         MarketBreadth.date >= start_date,
-        MarketBreadth.date <= end_date
+        MarketBreadth.date <= end_date,
+        MarketBreadth.market == "US",
     ).order_by(
         MarketBreadth.date.desc()
     ).limit(limit).all()
@@ -158,7 +161,8 @@ async def get_indicator_trend(
 
     breadth_records = db.query(MarketBreadth).filter(
         MarketBreadth.date >= start_date,
-        MarketBreadth.date <= end_date
+        MarketBreadth.date <= end_date,
+        MarketBreadth.market == "US",
     ).order_by(
         MarketBreadth.date.asc()
     ).all()
@@ -299,8 +303,10 @@ async def get_breadth_summary(db: Session = Depends(get_db)):
     Returns information about the breadth data coverage,
     including date ranges and record counts.
     """
-    # Get total record count
-    total_records = db.query(func.count(MarketBreadth.id)).scalar() or 0
+    # Get total record count (US scope — non-US partitions have their own surfaces)
+    total_records = db.query(func.count(MarketBreadth.id)).filter(
+        MarketBreadth.market == "US",
+    ).scalar() or 0
 
     if total_records == 0:
         return BreadthSummary(
@@ -310,9 +316,13 @@ async def get_breadth_summary(db: Session = Depends(get_db)):
             date_range_end=None
         )
 
-    # Get date range
-    min_date = db.query(func.min(MarketBreadth.date)).scalar()
-    max_date = db.query(func.max(MarketBreadth.date)).scalar()
+    # Get date range (US scope)
+    min_date = db.query(func.min(MarketBreadth.date)).filter(
+        MarketBreadth.market == "US",
+    ).scalar()
+    max_date = db.query(func.max(MarketBreadth.date)).filter(
+        MarketBreadth.market == "US",
+    ).scalar()
 
     return BreadthSummary(
         latest_date=max_date,

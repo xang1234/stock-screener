@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from uuid import uuid4
 from unittest.mock import Mock
 
@@ -47,6 +47,28 @@ def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: M
         price_cache=price_cache or Mock(),
         benchmark_cache=benchmark_cache or Mock(),
     )
+
+
+def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    class _FakeCalendarService:
+        def market_now(self, market):
+            assert market == "HK"
+            return datetime(2026, 3, 20, 9, 0, 0)
+
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 19)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+
+    missing = service.find_missing_dates(db_session, lookback_days=2, market="HK")
+
+    assert missing == [date(2026, 3, 19)]
 
 
 def test_get_historical_rank_picks_closest_date():
@@ -174,7 +196,8 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     service.price_cache = price_cache
 
     benchmark_cache = Mock()
-    benchmark_cache.get_spy_data.side_effect = AssertionError("benchmark fetch should not be used")
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
     service.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
@@ -185,11 +208,11 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: ["Software"],
+        lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group: ["AAPL"],
+        lambda db, group, **kw: ["AAPL"],
     )
     monkeypatch.setattr(
         service,
@@ -228,7 +251,8 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
     service.price_cache = price_cache
 
     benchmark_cache = Mock()
-    benchmark_cache.get_spy_data.side_effect = AssertionError("benchmark fetch should not be used")
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_data.side_effect = AssertionError("benchmark fetch should not be used")
     service.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
@@ -239,11 +263,11 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: ["Software"],
+        lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group: ["AAPL"],
+        lambda db, group, **kw: ["AAPL"],
     )
     monkeypatch.setattr(
         service,
@@ -281,7 +305,8 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
     service.price_cache = price_cache
 
     benchmark_cache = Mock()
-    benchmark_cache.get_spy_data.return_value = spy_data
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_data.return_value = spy_data
     service.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
@@ -292,11 +317,11 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: ["Software"],
+        lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group: ["AAPL"],
+        lambda db, group, **kw: ["AAPL"],
     )
     monkeypatch.setattr(
         service,
@@ -320,7 +345,7 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
         "spy_cached": True,
         "skipped_unsupported_symbols": 0,
     }
-    benchmark_cache.get_spy_data.assert_called_once_with(period="2y")
+    benchmark_cache.get_benchmark_data.assert_called_once_with(market="US", period="2y")
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
@@ -334,7 +359,8 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
     service.price_cache = price_cache
 
     benchmark_cache = Mock()
-    benchmark_cache.get_spy_data.return_value = spy_data
+    benchmark_cache.get_benchmark_symbol.return_value = "SPY"
+    benchmark_cache.get_benchmark_data.return_value = spy_data
     service.benchmark_cache = benchmark_cache
 
     stock_universe_service = Mock()
@@ -345,11 +371,11 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: ["Software"],
+        lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
-        lambda db, group: ["AAPL", "MZYX-U"],
+        lambda db, group, **kw: ["AAPL", "MZYX-U"],
     )
     monkeypatch.setattr(
         service,
@@ -375,12 +401,12 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
 
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: ["Software"],
+        lambda db, **kw: ["Software"],
     )
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
-        lambda db, cache_only=False: (
+        lambda db, cache_only=False, **kw: (
             price_data,
             {"AAPL": price_data},
             {"AAPL"},
@@ -413,7 +439,7 @@ def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_
 
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: [],
+        lambda db, **kw: [],
     )
 
     with pytest.raises(MissingIBDIndustryMappingsError, match="IBD industry mappings are not loaded"):
@@ -425,7 +451,7 @@ def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, m
 
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+        lambda db, **kw: (_ for _ in ()).throw(RuntimeError("database unavailable")),
     )
 
     with pytest.raises(RuntimeError, match="database unavailable"):
@@ -435,16 +461,29 @@ def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, m
 def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
+    delete_kwargs: dict = {}
+    prefetch_kwargs: dict = {}
+    group_kwargs: dict = {}
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 17)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
 
     monkeypatch.setattr(
         service,
         "_delete_rankings_for_range",
-        lambda db, start_date, end_date: 0,
+        lambda db, start_date, end_date, **kw: delete_kwargs.update(kw) or 0,
     )
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
-        lambda db: (
+        lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
             {"AAPL"},
@@ -454,27 +493,115 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: [],
+        lambda db, **kw: group_kwargs.update(kw) or [],
     )
 
     stats = service.backfill_rankings_optimized(
         db_session,
         date(2026, 3, 17),
         date(2026, 3, 17),
+        market="HK",
     )
 
     assert stats["processed"] == 0
     assert stats["errors"] == 1
+    assert delete_kwargs["market"] == "HK"
+    assert prefetch_kwargs["market"] == "HK"
+    assert group_kwargs["market"] == "HK"
+
+
+def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    calendar_calls: list[tuple[str, date]] = []
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            calendar_calls.append((market, day))
+            return market == "HK" and day == date(2026, 3, 18)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, **kw: (
+            price_data,
+            {"0700.HK": price_data},
+            {"0700.HK"},
+            {"0700.HK": 1_000_000_000},
+            {"target_symbols": 1, "symbols_with_prices": 1, "cache_miss_symbols": 0, "spy_cached": True},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: [],
+    )
+
+    stats = service.backfill_rankings_optimized(
+        db_session,
+        date(2026, 3, 17),
+        date(2026, 3, 19),
+        market="HK",
+    )
+
+    assert stats["total_dates"] == 1
+    assert stats["errors"] == 1
+    assert calendar_calls == [
+        ("HK", date(2026, 3, 19)),
+        ("HK", date(2026, 3, 18)),
+        ("HK", date(2026, 3, 17)),
+    ]
+
+
+def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    _add_rank(db_session, "Software", date(2026, 3, 17), 5)
+    db_session.commit()
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 17)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+
+    calculate_calls: list[date] = []
+    monkeypatch.setattr(
+        service,
+        "calculate_group_rankings",
+        lambda db, calc_date, **kw: calculate_calls.append(calc_date) or [{"rank": 1}],
+    )
+
+    stats = service.backfill_rankings(
+        db_session,
+        date(2026, 3, 17),
+        date(2026, 3, 17),
+        market="HK",
+    )
+
+    assert stats["processed"] == 1
+    assert stats["skipped"] == 0
+    assert calculate_calls == [date(2026, 3, 17)]
 
 
 def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
+    prefetch_kwargs: dict = {}
+    group_kwargs: dict = {}
 
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
-        lambda db: (
+        lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
             {"AAPL"},
@@ -484,13 +611,15 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db: [],
+        lambda db, **kw: group_kwargs.update(kw) or [],
     )
 
-    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 17)])
+    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 17)], market="HK")
 
     assert stats["processed"] == 0
     assert stats["errors"] == 1
+    assert prefetch_kwargs["market"] == "HK"
+    assert group_kwargs["market"] == "HK"
 
 
 def test_get_current_rankings_can_target_explicit_date():

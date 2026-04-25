@@ -180,12 +180,13 @@ class BreadthCalculatorService:
         requested trading date in chronological order.
         """
         if trading_dates is None:
-            from ..utils.market_hours import is_trading_day
+            from ..wiring.bootstrap import get_market_calendar_service
 
+            calendar_service = get_market_calendar_service()
             trading_dates = [
                 current_date
                 for current_date in pd.date_range(start=start_date, end=end_date, freq="D").date
-                if is_trading_day(current_date)
+                if calendar_service.is_trading_day(self.market, current_date)
             ]
 
         ordered_dates = sorted(trading_dates)
@@ -462,9 +463,10 @@ class BreadthCalculatorService:
         )
 
     def _get_prior_breadth_counts(self, start_date: date, limit: int = 10) -> List[Dict[str, int]]:
-        """Fetch up to the prior 10 breadth count rows before a backfill window."""
+        """Fetch up to the prior 10 breadth count rows before a backfill window (scoped to this market)."""
         prior_records = self.db.query(MarketBreadth).filter(
-            MarketBreadth.date < start_date
+            MarketBreadth.date < start_date,
+            MarketBreadth.market == self.market,
         ).order_by(MarketBreadth.date.desc()).limit(limit).all()
 
         ordered_records = list(reversed(prior_records))
@@ -520,7 +522,8 @@ class BreadthCalculatorService:
 
             breadth_records = self.db.query(MarketBreadth).filter(
                 MarketBreadth.date >= start_date,
-                MarketBreadth.date < calculation_date  # Don't include today
+                MarketBreadth.date < calculation_date,  # Don't include today
+                MarketBreadth.market == self.market,
             ).order_by(MarketBreadth.date.desc()).limit(10).all()
 
             if len(breadth_records) < 5:
@@ -571,26 +574,28 @@ class BreadthCalculatorService:
             List of missing trading dates (oldest first)
         """
         from sqlalchemy import func
-        from ..utils.market_hours import is_trading_day, get_eastern_now
+        from ..wiring.bootstrap import get_market_calendar_service
 
-        today = get_eastern_now().date()
+        calendar_service = get_market_calendar_service()
+        today = calendar_service.market_now(self.market).date()
         start_date = today - timedelta(days=lookback_days)
 
-        # Get all dates that have breadth data
+        # Get all dates that have breadth data for this market
         existing_dates = self.db.query(
             func.distinct(MarketBreadth.date)
         ).filter(
-            MarketBreadth.date >= start_date
+            MarketBreadth.date >= start_date,
+            MarketBreadth.market == self.market,
         ).all()
 
         existing_date_set = {d[0] for d in existing_dates}
 
-        # Generate all trading days in range using market calendar
+        # Generate all trading days in range using the per-market calendar
         missing_dates = []
         current_date = start_date
 
         while current_date < today:  # Exclude today (will be calculated separately)
-            if is_trading_day(current_date):
+            if calendar_service.is_trading_day(self.market, current_date):
                 if current_date not in existing_date_set:
                     missing_dates.append(current_date)
             current_date += timedelta(days=1)
@@ -670,13 +675,13 @@ class BreadthCalculatorService:
             calc_date: Date of the breadth record
             metrics: Calculated breadth metrics
         """
-        # Check if record already exists
+        # Check if record already exists for this (date, market) partition
         existing_record = self.db.query(MarketBreadth).filter(
-            MarketBreadth.date == calc_date
+            MarketBreadth.date == calc_date,
+            MarketBreadth.market == self.market,
         ).first()
 
         if existing_record:
-            # Update existing record
             existing_record.stocks_up_4pct = metrics['stocks_up_4pct']
             existing_record.stocks_down_4pct = metrics['stocks_down_4pct']
             existing_record.ratio_5day = metrics.get('ratio_5day')
@@ -691,10 +696,10 @@ class BreadthCalculatorService:
             existing_record.stocks_down_13pct_34days = metrics['stocks_down_13pct_34days']
             existing_record.total_stocks_scanned = metrics['total_stocks_scanned']
             existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
-            logger.debug(f"Updated existing breadth record for {calc_date}")
+            logger.debug(f"Updated existing breadth record for {self.market} {calc_date}")
         else:
-            # Create new record
             breadth_record = MarketBreadth(
+                market=self.market,
                 date=calc_date,
                 stocks_up_4pct=metrics['stocks_up_4pct'],
                 stocks_down_4pct=metrics['stocks_down_4pct'],
@@ -712,7 +717,7 @@ class BreadthCalculatorService:
                 calculation_duration_seconds=metrics.get('calculation_duration_seconds')
             )
             self.db.add(breadth_record)
-            logger.debug(f"Created new breadth record for {calc_date}")
+            logger.debug(f"Created new breadth record for {self.market} {calc_date}")
 
         self.db.commit()
 
@@ -725,6 +730,7 @@ class BreadthCalculatorService:
         existing_records = self.db.query(MarketBreadth).filter(
             MarketBreadth.date >= dates[0],
             MarketBreadth.date <= dates[-1],
+            MarketBreadth.market == self.market,
         ).all()
         existing_by_date = {record.date: record for record in existing_records}
 
@@ -748,6 +754,7 @@ class BreadthCalculatorService:
                 existing_record.calculation_duration_seconds = metrics.get('calculation_duration_seconds')
             else:
                 self.db.add(MarketBreadth(
+                    market=self.market,
                     date=calc_date,
                     stocks_up_4pct=metrics['stocks_up_4pct'],
                     stocks_down_4pct=metrics['stocks_down_4pct'],

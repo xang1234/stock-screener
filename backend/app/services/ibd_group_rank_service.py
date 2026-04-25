@@ -90,25 +90,29 @@ class IBDGroupRankService:
         if calculation_date is None:
             calculation_date = datetime.now().date()
 
-        logger.info(f"Calculating IBD group rankings for {calculation_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Calculating industry group rankings for market=%s date=%s",
+            normalized_market, calculation_date,
+        )
         start_time = datetime.now()
 
-        # Get all unique IBD groups
-        all_groups = IBDIndustryService.get_all_groups(db)
+        # Get all unique industry groups for this market
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
         if not all_groups:
-            logger.error("No IBD industry groups found")
+            logger.error("No industry groups found for market %s", normalized_market)
             raise MissingIBDIndustryMappingsError()
 
-        logger.info(f"Found {len(all_groups)} IBD industry groups")
+        logger.info(
+            "Found %d industry groups for market %s", len(all_groups), normalized_market,
+        )
 
-        # Pre-fetch ALL data upfront (SPY + all stock prices in single bulk fetch)
-        prefetch_kwargs = {"cache_only": cache_only}
-        if market is not None:
-            prefetch_kwargs["market"] = market
+        # Pre-fetch all data upfront (benchmark + all stock prices).
         spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
             self._prefetch_all_data(
                 db,
-                **prefetch_kwargs,
+                market=normalized_market,
+                cache_only=cache_only,
             )
         )
 
@@ -127,16 +131,18 @@ class IBDGroupRankService:
                 )
 
         if spy_data is None or spy_data.empty:
-            logger.error("Failed to get SPY benchmark data")
+            logger.error(
+                "Failed to get benchmark data for market %s", normalized_market,
+            )
             return []
 
-        # Filter SPY data to calculation_date for accurate historical rankings
+        # Filter benchmark data to calculation_date for accurate historical rankings
         if calculation_date < datetime.now().date():
             spy_data_filtered = spy_data[spy_data.index.date <= calculation_date]
         else:
             spy_data_filtered = spy_data
 
-        # Prepare SPY prices series (most recent first for RS calculator)
+        # Prepare benchmark prices series (most recent first for RS calculator)
         spy_prices = spy_data_filtered['Close'].sort_index(ascending=False)
 
         # Calculate RS for each group using pre-fetched cached data
@@ -145,7 +151,8 @@ class IBDGroupRankService:
         for group_name in all_groups:
             try:
                 metrics = self._calculate_group_rs_from_cache(
-                    db, group_name, spy_prices, all_prices, active_symbols, market_caps, calculation_date
+                    db, group_name, spy_prices, all_prices, active_symbols, market_caps, calculation_date,
+                    market=normalized_market,
                 )
                 if metrics:
                     group_metrics.append(metrics)
@@ -164,7 +171,7 @@ class IBDGroupRankService:
             metrics['rank'] = rank
 
         # Store in database
-        self._store_rankings(db, calculation_date, group_metrics)
+        self._store_rankings(db, calculation_date, group_metrics, market=normalized_market)
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(
@@ -291,25 +298,27 @@ class IBDGroupRankService:
         self,
         db: Session,
         calculation_date: date,
-        group_metrics: List[Dict]
+        group_metrics: List[Dict],
+        *,
+        market: str = "US",
     ) -> None:
         """
         Store group rankings in database.
 
-        Upserts records (updates if exists, inserts if new).
+        Upserts records (updates if exists, inserts if new). Unique key is
+        ``(industry_group, date, market)``.
         """
         try:
             for metrics in group_metrics:
-                # Check if record exists for this group and date
                 existing = db.query(IBDGroupRank).filter(
                     and_(
                         IBDGroupRank.industry_group == metrics['industry_group'],
-                        IBDGroupRank.date == calculation_date
+                        IBDGroupRank.date == calculation_date,
+                        IBDGroupRank.market == market,
                     )
                 ).first()
 
                 if existing:
-                    # Update existing record
                     existing.rank = metrics['rank']
                     existing.avg_rs_rating = metrics['avg_rs_rating']
                     existing.num_stocks = metrics['num_stocks']
@@ -320,8 +329,8 @@ class IBDGroupRankService:
                     existing.weighted_avg_rs_rating = metrics.get('weighted_avg_rs_rating')
                     existing.rs_std_dev = metrics.get('rs_std_dev')
                 else:
-                    # Insert new record
                     record = IBDGroupRank(
+                        market=market,
                         industry_group=metrics['industry_group'],
                         date=calculation_date,
                         rank=metrics['rank'],
@@ -337,7 +346,10 @@ class IBDGroupRankService:
                     db.add(record)
 
             db.commit()
-            logger.info(f"Stored {len(group_metrics)} group rankings for {calculation_date}")
+            logger.info(
+                "Stored %d group rankings for market=%s date=%s",
+                len(group_metrics), market, calculation_date,
+            )
 
         except Exception as e:
             logger.error(f"Error storing rankings: {e}", exc_info=True)
@@ -349,22 +361,24 @@ class IBDGroupRankService:
         db: Session,
         limit: int = 197,
         calculation_date: date | None = None,
+        *,
+        market: str = "US",
     ) -> List[Dict]:
         """
-        Get most recent group rankings with rank changes.
+        Get most recent group rankings with rank changes for one market.
 
-        Args:
-            db: Database session
-            limit: Max number of groups to return
-
-        Returns:
-            List of groups with rankings and rank changes
+        Rankings are partitioned by market — each market maintains its own
+        rank ordering (both US and HK can have a rank #1), so every query
+        must filter by market to avoid mixing them.
         """
+        normalized_market = (market or "US").upper()
         if calculation_date is not None:
             latest_date = calculation_date
         else:
-            # Get most recent date with rankings
-            latest_record = db.query(IBDGroupRank).order_by(
+            # Get most recent date with rankings for THIS market
+            latest_record = db.query(IBDGroupRank).filter(
+                IBDGroupRank.market == normalized_market,
+            ).order_by(
                 desc(IBDGroupRank.date)
             ).first()
 
@@ -373,9 +387,10 @@ class IBDGroupRankService:
 
             latest_date = latest_record.date
 
-        # Get all rankings for latest date
+        # Get all rankings for latest date + market
         rankings = db.query(IBDGroupRank).filter(
-            IBDGroupRank.date == latest_date
+            IBDGroupRank.date == latest_date,
+            IBDGroupRank.market == normalized_market,
         ).order_by(IBDGroupRank.rank).limit(limit).all()
 
         if not rankings:
@@ -392,7 +407,8 @@ class IBDGroupRankService:
         # Batch fetch all historical ranks in ONE query instead of 197*4=788 queries
         group_names = [r.industry_group for r in rankings]
         historical_ranks = self._get_historical_ranks_batch(
-            db, group_names, latest_date, period_days
+            db, group_names, latest_date, period_days,
+            market=normalized_market,
         )
 
         # Build result with rank changes
@@ -461,22 +477,14 @@ class IBDGroupRankService:
         db: Session,
         group_names: List[str],
         current_date: date,
-        period_days: Dict[str, int]
+        period_days: Dict[str, int],
+        *,
+        market: str = "US",
     ) -> Dict[tuple, int]:
-        """
-        Batch fetch historical ranks for all groups and periods in ONE query.
+        """Batch fetch historical ranks for all groups and periods in ONE query.
 
-        This replaces N*M individual queries (N groups × M periods) with a single
-        query, reducing DB churn under heavy load.
-
-        Args:
-            db: Database session
-            group_names: List of industry group names
-            current_date: Current/latest ranking date
-            period_days: Dict mapping period names to days back
-
-        Returns:
-            Dict mapping (group_name, period_name) -> historical rank
+        Scoped by ``market`` so multi-market data doesn't cross-contaminate
+        rank-change calculations.
         """
         if not group_names or not period_days:
             return {}
@@ -494,7 +502,8 @@ class IBDGroupRankService:
             and_(
                 IBDGroupRank.industry_group.in_(group_names),
                 IBDGroupRank.date >= earliest_date,
-                IBDGroupRank.date < current_date  # Exclude current date
+                IBDGroupRank.date < current_date,  # Exclude current date
+                IBDGroupRank.market == (market or "US").upper(),
             )
         ).all()
 
@@ -541,26 +550,19 @@ class IBDGroupRankService:
         self,
         db: Session,
         industry_group: str,
-        days: int = 180
+        days: int = 180,
+        *,
+        market: str = "US",
     ) -> Dict:
-        """
-        Get historical ranking data for a specific group.
-
-        Args:
-            db: Database session
-            industry_group: Group name
-            days: Number of days of history
-
-        Returns:
-            Dict with current info and historical data points
-        """
+        """Get historical ranking data for a specific group, scoped by market."""
+        normalized_market = (market or "US").upper()
         cutoff_date = datetime.now().date() - timedelta(days=days)
 
-        # Get historical records
         records = db.query(IBDGroupRank).filter(
             and_(
                 IBDGroupRank.industry_group == industry_group,
-                IBDGroupRank.date >= cutoff_date
+                IBDGroupRank.date >= cutoff_date,
+                IBDGroupRank.market == normalized_market,
             )
         ).order_by(IBDGroupRank.date.desc()).all()
 
@@ -575,7 +577,8 @@ class IBDGroupRankService:
         rank_changes = {}
 
         historical_ranks = self._get_historical_ranks_batch(
-            db, [industry_group], current.date, period_days
+            db, [industry_group], current.date, period_days,
+            market=normalized_market,
         )
         for period_name in period_days:
             historical_rank = historical_ranks.get((industry_group, period_name))
@@ -699,18 +702,10 @@ class IBDGroupRankService:
         period: str = '1w',
         limit: int = 20,
         calculation_date: date | None = None,
+        *,
+        market: str = "US",
     ) -> Dict:
-        """
-        Get groups with biggest rank changes over a period.
-
-        Args:
-            db: Database session
-            period: '1w', '1m', '3m', or '6m'
-            limit: Number of top gainers/losers to return
-
-        Returns:
-            Dict with 'gainers' and 'losers' lists
-        """
+        """Get groups with biggest rank changes over a period, scoped by market."""
         period_days_map = {
             '1w': 5,
             '1m': 21,
@@ -720,11 +715,11 @@ class IBDGroupRankService:
 
         days = period_days_map.get(period, 5)
 
-        # Get current rankings
         current_rankings = self.get_current_rankings(
             db,
             limit=197,
             calculation_date=calculation_date,
+            market=market,
         )
 
         if not current_rankings:
@@ -754,22 +749,18 @@ class IBDGroupRankService:
         self,
         db: Session,
         group_name: str,
-        active_symbols: set
+        active_symbols: set,
+        *,
+        market: str = "US",
     ) -> list:
         """
         Get symbols for a group, filtered to only active stocks in stock_universe.
 
         This ensures group ranking uses the same universe as bulk scans.
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            active_symbols: Set of active symbols from stock_universe
-
-        Returns:
-            List of symbols that are both in the group AND active in stock_universe
         """
-        group_symbols = IBDIndustryService.get_group_symbols(db, group_name)
+        group_symbols = IBDIndustryService.get_group_symbols(
+            db, group_name, market=market
+        )
         return [
             symbol
             for symbol in group_symbols
@@ -829,15 +820,25 @@ class IBDGroupRankService:
         """
         from ..wiring.bootstrap import get_stock_universe_service
 
-        logger.info("Pre-fetching all data for optimized backfill...")
+        normalized_market = (market or "US").upper()
+        benchmark_symbol = self.benchmark_cache.get_benchmark_symbol(normalized_market)
+        logger.info(
+            "Pre-fetching data for market=%s (benchmark=%s)...",
+            normalized_market, benchmark_symbol,
+        )
 
-        # 1. Get SPY data once
+        # 1. Get benchmark data once (SPY for US, HSI/N225/TAIEX/NIFTY for Asia)
         if cache_only:
-            spy_data = self.price_cache.get_cached_only_fresh("SPY", period="2y")
+            spy_data = self.price_cache.get_cached_only_fresh(benchmark_symbol, period="2y")
         else:
-            spy_data = self.benchmark_cache.get_spy_data(period="2y")
+            spy_data = self.benchmark_cache.get_benchmark_data(
+                market=normalized_market, period="2y",
+            )
         if spy_data is None or spy_data.empty:
-            logger.error("Failed to get SPY benchmark data")
+            logger.error(
+                "Failed to get benchmark data (%s) for market %s",
+                benchmark_symbol, normalized_market,
+            )
             return None, {}, set(), {}, {
                 "target_symbols": 0,
                 "symbols_with_prices": 0,
@@ -845,23 +846,23 @@ class IBDGroupRankService:
                 "spy_cached": False,
             }
 
-        logger.info(f"Fetched SPY data: {len(spy_data)} days")
+        logger.info(f"Fetched benchmark {benchmark_symbol}: {len(spy_data)} days")
 
         # 2. Get active symbols from stock_universe (same as bulk scans)
         active_symbols_list = get_stock_universe_service().get_active_symbols(
             db,
-            market=(market or "US").upper(),
+            market=normalized_market,
         )
         active_symbols = set(active_symbols_list)
         logger.info(f"Found {len(active_symbols)} active symbols in stock_universe")
 
-        # 3. Collect ALL unique symbols across ALL groups (filtered by active)
-        all_groups = IBDIndustryService.get_all_groups(db)
+        # 3. Collect ALL unique symbols across ALL groups for this market
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
         symbols_to_fetch = set()
         skipped_unsupported_symbols = set()
 
         for group in all_groups:
-            group_symbols = IBDIndustryService.get_group_symbols(db, group)
+            group_symbols = IBDIndustryService.get_group_symbols(db, group, market=normalized_market)
             validated = []
             for symbol in group_symbols:
                 if symbol not in active_symbols:
@@ -908,30 +909,29 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> int:
+        """Delete existing rankings for one market in a date range.
+
+        Scoped by ``market`` — a US backfill must not wipe HK/JP/TW/IN rows
+        that share the same date range.
         """
-        Delete all existing rankings in the date range.
-
-        This allows recalculation of existing data (no skipping).
-
-        Args:
-            db: Database session
-            start_date: Start of range
-            end_date: End of range
-
-        Returns:
-            Number of records deleted
-        """
+        normalized_market = (market or "US").upper()
         deleted = db.query(IBDGroupRank).filter(
             and_(
                 IBDGroupRank.date >= start_date,
-                IBDGroupRank.date <= end_date
+                IBDGroupRank.date <= end_date,
+                IBDGroupRank.market == normalized_market,
             )
         ).delete(synchronize_session=False)
 
         db.commit()
-        logger.info(f"Deleted {deleted} existing rankings for {start_date} to {end_date}")
+        logger.info(
+            "Deleted %d existing rankings for market=%s %s to %s",
+            deleted, normalized_market, start_date, end_date,
+        )
         return deleted
 
     def _calculate_group_rs_from_cache(
@@ -942,26 +942,19 @@ class IBDGroupRankService:
         all_prices: Dict[str, pd.DataFrame],
         active_symbols: set,
         market_caps: Dict[str, float],
-        calculation_date: date
+        calculation_date: date,
+        *,
+        market: str = "US",
     ) -> Optional[Dict]:
         """
         Calculate average RS rating for a single industry group using pre-fetched prices.
 
         Only uses symbols that are active in stock_universe (intersection approach).
-
-        Args:
-            db: Database session
-            group_name: IBD industry group name
-            spy_prices: SPY price series (most recent first, filtered to calculation_date)
-            all_prices: Dict of all pre-fetched prices {symbol: DataFrame}
-            active_symbols: Set of active symbols from stock_universe
-            calculation_date: Date for calculation
-
-        Returns:
-            Dict with group metrics or None if insufficient data
+        ``spy_prices`` is the per-market benchmark series (SPY for US, HSI for HK, etc).
         """
-        # Get validated symbols (intersection of IBD group and active stock_universe)
-        symbols = self._get_validated_group_symbols(db, group_name, active_symbols)
+        symbols = self._get_validated_group_symbols(
+            db, group_name, active_symbols, market=market,
+        )
 
         if not symbols:
             logger.debug(f"No validated symbols found for group: {group_name}")
@@ -1053,7 +1046,9 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Optimized backfill that:
@@ -1069,14 +1064,25 @@ class IBDGroupRankService:
         Returns:
             Dict with backfill statistics
         """
-        logger.info(f"Starting optimized backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting optimized backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
         start_time = datetime.now()
 
         # 1. Delete existing rankings in range
-        deleted = self._delete_rankings_for_range(db, start_date, end_date)
+        deleted = self._delete_rankings_for_range(
+            db,
+            start_date,
+            end_date,
+            market=normalized_market,
+        )
 
         # 2. Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+            self._prefetch_all_data(db, market=normalized_market)
+        )
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1091,13 +1097,16 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db)
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
 
-        # 3. Generate trading dates (weekdays)
+        # 3. Generate trading dates using the target market's calendar.
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        calendar_service = get_market_calendar_service()
         dates_to_process = []
         current = end_date
         while current >= start_date:
-            if current.weekday() < 5:  # Monday=0, Friday=4
+            if calendar_service.is_trading_day(normalized_market, current):
                 dates_to_process.append(current)
             current -= timedelta(days=1)
 
@@ -1125,7 +1134,14 @@ class IBDGroupRankService:
                 group_metrics = []
                 for group_name in all_groups:
                     metrics = self._calculate_group_rs_from_cache(
-                        db, group_name, spy_prices, all_prices, active_symbols, market_caps, calc_date
+                        db,
+                        group_name,
+                        spy_prices,
+                        all_prices,
+                        active_symbols,
+                        market_caps,
+                        calc_date,
+                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)
@@ -1137,7 +1153,12 @@ class IBDGroupRankService:
                         metrics['rank'] = rank
 
                     # Store
-                    self._store_rankings(db, calc_date, group_metrics)
+                    self._store_rankings(
+                        db,
+                        calc_date,
+                        group_metrics,
+                        market=normalized_market,
+                    )
                     processed += 1
 
                     if processed % 10 == 0:
@@ -1174,7 +1195,9 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Backfill historical rankings from existing price data.
@@ -1189,15 +1212,21 @@ class IBDGroupRankService:
         Returns:
             Dict with backfill statistics
         """
-        logger.info(f"Starting backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
 
-        # Generate list of dates to process (weekdays only)
+        # Generate list of dates to process using the target market's calendar.
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        calendar_service = get_market_calendar_service()
         current_date = end_date
         dates_to_process = []
 
         while current_date >= start_date:
-            # Skip weekends
-            if current_date.weekday() < 5:  # Monday=0, Friday=4
+            if calendar_service.is_trading_day(normalized_market, current_date):
                 dates_to_process.append(current_date)
             current_date -= timedelta(days=1)
 
@@ -1211,7 +1240,8 @@ class IBDGroupRankService:
             try:
                 # Check if already calculated
                 existing = db.query(IBDGroupRank).filter(
-                    IBDGroupRank.date == calc_date
+                    IBDGroupRank.date == calc_date,
+                    IBDGroupRank.market == normalized_market,
                 ).first()
 
                 if existing:
@@ -1220,7 +1250,11 @@ class IBDGroupRankService:
                     continue
 
                 # Calculate rankings for this date
-                results = self.calculate_group_rankings(db, calc_date)
+                results = self.calculate_group_rankings(
+                    db,
+                    calc_date,
+                    market=normalized_market,
+                )
 
                 if results:
                     processed += 1
@@ -1249,39 +1283,35 @@ class IBDGroupRankService:
     def find_missing_dates(
         self,
         db: Session,
-        lookback_days: int = 365
+        lookback_days: int = 365,
+        *,
+        market: str = "US",
     ) -> List[date]:
-        """
-        Find missing trading dates in the ranking data.
-
-        Args:
-            db: Database session
-            lookback_days: How many days back to check for gaps
-
-        Returns:
-            List of missing trading dates (weekdays without ranking data)
-        """
+        """Find missing trading dates in the ranking data for one market."""
         from sqlalchemy import func
 
-        today = datetime.now().date()
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        normalized_market = (market or "US").upper()
+        calendar_service = get_market_calendar_service()
+        today = calendar_service.market_now(normalized_market).date()
         start_date = today - timedelta(days=lookback_days)
 
-        # Get all dates that have ranking data
         existing_dates = db.query(
             func.distinct(IBDGroupRank.date)
         ).filter(
-            IBDGroupRank.date >= start_date
+            IBDGroupRank.date >= start_date,
+            IBDGroupRank.market == normalized_market,
         ).all()
 
         existing_date_set = {d[0] for d in existing_dates}
 
-        # Generate all weekdays in range
+        # Generate all market trading days in range
         missing_dates = []
         current_date = start_date
 
         while current_date < today:  # Exclude today
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current_date.weekday() < 5:
+            if calendar_service.is_trading_day(normalized_market, current_date):
                 if current_date not in existing_date_set:
                     missing_dates.append(current_date)
             current_date += timedelta(days=1)
@@ -1292,7 +1322,9 @@ class IBDGroupRankService:
     def fill_gaps(
         self,
         db: Session,
-        missing_dates: List[date]
+        missing_dates: List[date],
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Fill specific missing dates (used by startup gap-fill).
@@ -1304,7 +1336,11 @@ class IBDGroupRankService:
         Returns:
             Statistics about the gap-fill operation
         """
-        logger.info(f"Filling {len(missing_dates)} missing dates")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Filling %d missing dates for market=%s",
+            len(missing_dates), normalized_market,
+        )
 
         stats = {
             'total_dates': len(missing_dates),
@@ -1315,7 +1351,11 @@ class IBDGroupRankService:
 
         for calc_date in missing_dates:
             try:
-                results = self.calculate_group_rankings(db, calc_date)
+                results = self.calculate_group_rankings(
+                    db,
+                    calc_date,
+                    market=normalized_market,
+                )
 
                 if results:
                     stats['processed'] += 1
@@ -1338,7 +1378,9 @@ class IBDGroupRankService:
     def fill_gaps_optimized(
         self,
         db: Session,
-        missing_dates: List[date]
+        missing_dates: List[date],
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Fill specific missing dates using optimized approach.
@@ -1363,11 +1405,17 @@ class IBDGroupRankService:
                 'errors': 0,
             }
 
-        logger.info(f"Filling {len(missing_dates)} missing dates (optimized)")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Filling %d missing dates (optimized) for market=%s",
+            len(missing_dates), normalized_market,
+        )
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+            self._prefetch_all_data(db, market=normalized_market)
+        )
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1379,7 +1427,7 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db)
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
 
         stats = {
             'total_dates': len(missing_dates),
@@ -1403,7 +1451,14 @@ class IBDGroupRankService:
                 group_metrics = []
                 for group_name in all_groups:
                     metrics = self._calculate_group_rs_from_cache(
-                        db, group_name, spy_prices, all_prices, active_symbols, market_caps, calc_date
+                        db,
+                        group_name,
+                        spy_prices,
+                        all_prices,
+                        active_symbols,
+                        market_caps,
+                        calc_date,
+                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)
@@ -1415,7 +1470,12 @@ class IBDGroupRankService:
                         metrics['rank'] = rank
 
                     # Store
-                    self._store_rankings(db, calc_date, group_metrics)
+                    self._store_rankings(
+                        db,
+                        calc_date,
+                        group_metrics,
+                        market=normalized_market,
+                    )
                     stats['processed'] += 1
                     logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
                 else:
@@ -1440,7 +1500,9 @@ class IBDGroupRankService:
         db: Session,
         start_date: date,
         end_date: date,
-        chunk_size_days: int = 30
+        chunk_size_days: int = 30,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Backfill rankings in chunks to avoid memory issues.
@@ -1456,7 +1518,11 @@ class IBDGroupRankService:
         Returns:
             Aggregate statistics from all chunks
         """
-        logger.info(f"Starting chunked backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting chunked backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
 
         total_stats = {
             'start_date': start_date.isoformat(),
@@ -1476,7 +1542,12 @@ class IBDGroupRankService:
             logger.info(f"Processing chunk: {chunk_start} to {chunk_end}")
 
             try:
-                chunk_result = self.backfill_rankings(db, chunk_start, chunk_end)
+                chunk_result = self.backfill_rankings(
+                    db,
+                    chunk_start,
+                    chunk_end,
+                    market=normalized_market,
+                )
 
                 # Aggregate stats
                 total_stats['total_dates'] += chunk_result.get('total_dates', 0)

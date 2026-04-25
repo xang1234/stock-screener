@@ -361,12 +361,20 @@ class SqlScanResultRepository(ScanResultRepository):
             d = enrichment.setdefault(row.symbol, {})
             d["ibd_industry_group"] = row.industry_group
 
-        latest_rank_date = ranking_date or self._session.query(func.max(IBDGroupRank.date)).scalar()
+        # Scan-result enrichment is US-scoped today (the joined ibd_industry_groups
+        # table only contains US symbols). Filter the rank lookup by market='US'
+        # so non-US ranking rows can't bump the latest-date or pollute the map.
+        latest_rank_date = ranking_date or self._session.query(
+            func.max(IBDGroupRank.date)
+        ).filter(IBDGroupRank.market == "US").scalar()
         rank_by_group: dict[str, int] = {}
         if latest_rank_date is not None:
             rank_rows = (
                 self._session.query(IBDGroupRank.industry_group, IBDGroupRank.rank)
-                .filter(IBDGroupRank.date == latest_rank_date)
+                .filter(
+                    IBDGroupRank.date == latest_rank_date,
+                    IBDGroupRank.market == "US",
+                )
                 .all()
             )
             rank_by_group = {g: rank for g, rank in rank_rows}
@@ -385,6 +393,7 @@ class SqlScanResultRepository(ScanResultRepository):
             market: self._market_group_ranking_service.get_current_rank_map(
                 self._session,
                 market=market,
+                calculation_date=ranking_date,
             )
             for market in requested_markets
         }

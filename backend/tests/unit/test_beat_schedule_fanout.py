@@ -90,16 +90,20 @@ class TestBeatScheduleFanout:
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )
 
-    def test_breadth_and_group_rankings_run_only_for_us(self):
+    def test_breadth_and_group_rankings_fan_out_to_every_market(self):
+        """Breadth + industry-group rankings now run daily for every
+        SUPPORTED_MARKETS entry, each with its own market-jobs queue and the
+        correct market kwarg. Previously US-only.
+        """
         schedule = celery_app.conf.beat_schedule or {}
-        assert "daily-breadth-calculation-us" in schedule
-        assert "daily-group-ranking-calculation-us" in schedule
-        assert schedule["daily-breadth-calculation-us"]["options"]["queue"] == (
-            market_jobs_queue_for_market("US")
-        )
-        assert schedule["daily-group-ranking-calculation-us"]["options"]["queue"] == (
-            market_jobs_queue_for_market("US")
-        )
-        for market in (m.lower() for m in SUPPORTED_MARKETS if m != "US"):
-            assert f"daily-breadth-calculation-{market}" not in schedule
-            assert f"daily-group-ranking-calculation-{market}" not in schedule
+        for market in SUPPORTED_MARKETS:
+            m_lower = market.lower()
+            breadth_key = f"daily-breadth-calculation-{m_lower}"
+            groups_key = f"daily-group-ranking-calculation-{m_lower}"
+            assert breadth_key in schedule, f"missing {breadth_key}"
+            assert groups_key in schedule, f"missing {groups_key}"
+            assert schedule[breadth_key]["kwargs"]["market"] == market
+            assert schedule[groups_key]["kwargs"]["market"] == market
+            expected_queue = market_jobs_queue_for_market(market)
+            assert schedule[breadth_key]["options"]["queue"] == expected_queue
+            assert schedule[groups_key]["options"]["queue"] == expected_queue
