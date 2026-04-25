@@ -692,6 +692,59 @@ def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatc
     assert calculate_calls == [date(2026, 3, 17)]
 
 
+def test_backfill_optimized_legacy_prefetch_tuple_falls_back_to_validated_group_symbols(
+    db_session,
+    monkeypatch,
+):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    symbols = ["AAA", "BBB", "CCC"]
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            assert market == "US"
+            return day == date(2026, 3, 20)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, **kw: (
+            price_data,
+            {symbol: price_data for symbol in symbols},
+            set(symbols),
+            {symbol: 1_000_000_000 for symbol in symbols},
+            {"target_symbols": 3, "symbols_with_prices": 3, "cache_miss_symbols": 0, "spy_cached": True},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["Software"],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
+        lambda db, group, **kw: symbols if group == "Software" else [],
+    )
+
+    stats = service.backfill_rankings_optimized(
+        db_session,
+        date(2026, 3, 20),
+        date(2026, 3, 20),
+        market="US",
+    )
+
+    assert stats["processed"] == 1
+    row = db_session.query(IBDGroupRank).filter(
+        IBDGroupRank.date == date(2026, 3, 20),
+        IBDGroupRank.industry_group == "Software",
+    ).one()
+    assert row.rank == 1
+    assert row.num_stocks == 3
+
+
 def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()

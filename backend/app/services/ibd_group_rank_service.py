@@ -160,20 +160,18 @@ class IBDGroupRankService:
 
         # Calculate RS for each group using pre-fetched cached data
         group_metrics = []
+        symbols_by_group = self._symbols_by_group_for_run(
+            db,
+            all_groups,
+            prefetch,
+            market=normalized_market,
+        )
 
         for group_name in all_groups:
             try:
-                symbols = prefetch.symbols_by_group.get(group_name)
-                if symbols is None:
-                    symbols = self._get_validated_group_symbols(
-                        db,
-                        group_name,
-                        prefetch.active_symbols,
-                        market=normalized_market,
-                    )
                 metrics = self._calculate_group_metrics_from_rs(
                     group_name,
-                    symbols,
+                    symbols_by_group.get(group_name, []),
                     rs_by_symbol,
                     prefetch.market_caps,
                     calculation_date,
@@ -892,6 +890,28 @@ class IBDGroupRankService:
             symbols_by_group={},
         )
 
+    def _symbols_by_group_for_run(
+        self,
+        db: Session,
+        group_names: List[str],
+        prefetch: GroupRankPrefetchData,
+        *,
+        market: str,
+    ) -> Dict[str, List[str]]:
+        """Return prefetched group symbols, or build them once for legacy prefetch tuples."""
+        symbols_by_group: Dict[str, List[str]] = {}
+        for group_name in group_names:
+            if group_name in prefetch.symbols_by_group:
+                symbols_by_group[group_name] = prefetch.symbols_by_group[group_name]
+            else:
+                symbols_by_group[group_name] = self._get_validated_group_symbols(
+                    db,
+                    group_name,
+                    prefetch.active_symbols,
+                    market=market,
+                )
+        return symbols_by_group
+
     def _prefetch_all_data(
         self,
         db: Session,
@@ -1384,6 +1404,12 @@ class IBDGroupRankService:
 
         processed = 0
         errors = 0
+        symbols_by_group = self._symbols_by_group_for_run(
+            db,
+            all_groups,
+            prefetch,
+            market=normalized_market,
+        )
         rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, dates_to_process)
 
         # 4. Process each date using cached data
@@ -1395,7 +1421,7 @@ class IBDGroupRankService:
                 for group_name in all_groups:
                     metrics = self._calculate_group_metrics_from_rs(
                         group_name,
-                        prefetch.symbols_by_group.get(group_name, []),
+                        symbols_by_group.get(group_name, []),
                         rs_by_symbol,
                         prefetch.market_caps,
                         calc_date,
@@ -1696,6 +1722,12 @@ class IBDGroupRankService:
             'errors': 0,
         }
 
+        symbols_by_group = self._symbols_by_group_for_run(
+            db,
+            all_groups,
+            prefetch,
+            market=normalized_market,
+        )
         rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, missing_dates)
 
         for calc_date in missing_dates:
@@ -1706,7 +1738,7 @@ class IBDGroupRankService:
                 for group_name in all_groups:
                     metrics = self._calculate_group_metrics_from_rs(
                         group_name,
-                        prefetch.symbols_by_group.get(group_name, []),
+                        symbols_by_group.get(group_name, []),
                         rs_by_symbol,
                         prefetch.market_caps,
                         calc_date,
