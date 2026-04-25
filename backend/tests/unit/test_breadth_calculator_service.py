@@ -144,7 +144,7 @@ def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch
     ]
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = {
+    price_cache.get_many_cached_only_fresh.return_value = {
         "AAA": _make_price_df(date(2026, 3, 19), 100.0),
         "BBB": None,
     }
@@ -161,6 +161,8 @@ def test_calculate_daily_breadth_preserves_historical_fetch_fallback(monkeypatch
     assert metrics["total_stocks_scanned"] == 2
     assert metrics["cache_miss_stocks"] == 1
     assert metrics["skipped_stocks"] == 0
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only.assert_not_called()
     price_cache.get_historical_data.assert_called_once_with(symbol="BBB", period="2y")
 
 
@@ -211,7 +213,7 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     bbb_df.loc[pd.Timestamp(date(2026, 3, 13)), "Close"] = 100.0
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = {"AAA": aaa_df, "BBB": None}
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": aaa_df, "BBB": None}
     price_cache.get_historical_data.return_value = bbb_df
     service = BreadthCalculatorService(db, price_cache)
     trading_dates = [date(2026, 3, 12), date(2026, 3, 13)]
@@ -224,7 +226,8 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
         "errors": 0,
         "error_dates": [],
     }
-    price_cache.get_many_cached_only.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
+    price_cache.get_many_cached_only.assert_not_called()
     price_cache.get_historical_data.assert_called_once_with(symbol="BBB", period="2y")
 
     stored = db.query(MarketBreadth).filter(
@@ -265,6 +268,7 @@ def test_backfill_range_fallback_uses_market_calendar(monkeypatch):
         "errors": 1,
         "error_dates": ["2026-03-13"],
     }
+    price_cache.get_many_cached_only_fresh.assert_not_called()
     price_cache.get_many_cached_only.assert_not_called()
 
 
@@ -279,7 +283,7 @@ def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
     down_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 95.0
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.side_effect = [
+    price_cache.get_many_cached_only_fresh.side_effect = [
         {"AAA": up_df},
         {"AAA": down_df},
     ]
@@ -380,6 +384,38 @@ def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):
     )
 
 
+def test_fill_gaps_refreshes_stale_cached_prices_before_counting():
+    db = _make_db_session()
+    db.add(StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE))
+    db.commit()
+
+    trading_date = date(2026, 3, 12)
+    fresh_df = _flat_price_df(trading_date)
+    fresh_df.loc[pd.Timestamp(trading_date), "Close"] = 105.0
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only.side_effect = AssertionError(
+        "gap fill must not use stale cache-only price data"
+    )
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": None}
+    price_cache.get_historical_data.return_value = fresh_df
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.fill_gaps([trading_date])
+
+    assert result == {
+        "total_dates": 1,
+        "processed": 1,
+        "errors": 0,
+        "error_dates": [],
+    }
+    price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA"], period="2y")
+    price_cache.get_historical_data.assert_called_once_with(symbol="AAA", period="2y")
+    row = db.query(MarketBreadth).filter(MarketBreadth.date == trading_date).one()
+    assert row.stocks_up_4pct == 1
+    assert row.total_stocks_scanned == 1
+
+
 def test_backfill_range_sparse_dates_include_existing_intervening_counts_in_ratios():
     db = _make_db_session()
     db.add_all([
@@ -414,7 +450,7 @@ def test_backfill_range_sparse_dates_include_existing_intervening_counts_in_rati
         bbb_df.loc[pd.Timestamp(item_date), "Close"] = bbb_close
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = {"AAA": aaa_df, "BBB": bbb_df}
+    price_cache.get_many_cached_only_fresh.return_value = {"AAA": aaa_df, "BBB": bbb_df}
     service = BreadthCalculatorService(db, price_cache)
 
     result = service.backfill_range(
@@ -457,7 +493,7 @@ def test_backfill_range_vectorized_changes_preserve_rounded_thresholds():
         price_data[symbol] = frame
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = price_data
+    price_cache.get_many_cached_only_fresh.return_value = price_data
     service = BreadthCalculatorService(db, price_cache)
 
     result = service.backfill_range(latest_date, latest_date, trading_dates=[latest_date])
