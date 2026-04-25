@@ -295,7 +295,7 @@ def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
     assert records[0].stocks_down_4pct == 1
 
 
-def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
+def test_backfill_range_cache_only_skips_historical_fetch_fallback():
     db = _make_db_session()
     db.add_all([
         StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
@@ -303,12 +303,9 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
     ])
     db.commit()
 
-    aaa_df = _make_price_df(date(2026, 3, 20), 100.0)
-    aaa_df.attrs["symbol"] = "AAA"
-
     price_cache = MagicMock()
     price_cache.get_many_cached_only_fresh.return_value = {
-        "AAA": aaa_df,
+        "AAA": _make_price_df(date(2026, 3, 20), 100.0),
         "BBB": None,
     }
     price_cache.get_historical_data.side_effect = AssertionError(
@@ -316,16 +313,6 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
     )
     service = BreadthCalculatorService(db, price_cache)
     trading_date = date(2026, 3, 12)
-    monkeypatch.setattr(
-        service,
-        "_calculate_stock_metrics_from_prices",
-        lambda prices_df, end_date: {
-            "pct_change_1d": 5.0,
-            "pct_change_21d": 0.0,
-            "pct_change_34d": 0.0,
-            "pct_change_63d": 0.0,
-        },
-    )
 
     result = service.backfill_range(
         trading_date,
@@ -339,6 +326,30 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
     assert result["errors"] == 0
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
     price_cache.get_historical_data.assert_not_called()
+
+
+def test_vectorized_stock_metrics_preserve_invalid_close_semantics():
+    service = BreadthCalculatorService(MagicMock(), MagicMock())
+    latest_date = date(2026, 3, 20)
+
+    previous_nan = _flat_price_df(latest_date)
+    previous_nan.iloc[-2, previous_nan.columns.get_loc("Close")] = float("nan")
+    previous_nan.loc[pd.Timestamp(latest_date), "Close"] = 105.0
+
+    current_nan = _flat_price_df(latest_date)
+    current_nan.iloc[-2, current_nan.columns.get_loc("Close")] = 125.0
+    current_nan.loc[pd.Timestamp(latest_date), "Close"] = float("nan")
+
+    previous_zero = _flat_price_df(latest_date)
+    previous_zero.iloc[-2, previous_zero.columns.get_loc("Close")] = 0.0
+    previous_zero.loc[pd.Timestamp(latest_date), "Close"] = 105.0
+
+    for prices in (previous_nan, current_nan, previous_zero):
+        metrics = service._calculate_stock_metrics_by_date_from_prices(
+            prices,
+            [latest_date],
+        )
+        assert metrics[latest_date]["pct_change_1d"] == 0.0
 
 
 def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):

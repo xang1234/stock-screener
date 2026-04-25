@@ -4,6 +4,7 @@ Service for calculating and managing IBD Industry Group Rankings.
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
 import logging
+import math
 import statistics
 from dataclasses import dataclass
 from typing import Any, Optional, Dict, List
@@ -1211,7 +1212,7 @@ class IBDGroupRankService:
     @staticmethod
     def _period_returns(close: pd.Series, periods) -> Dict[int, pd.Series]:
         return {
-            period: close.pct_change(periods=period - 1)
+            period: close.pct_change(periods=period - 1, fill_method=None)
             for period in periods
         }
 
@@ -1231,7 +1232,7 @@ class IBDGroupRankService:
             value = series.iloc[index]
         except IndexError:
             return None
-        if pd.isna(value):
+        if pd.isna(value) or not math.isfinite(float(value)):
             return None
         return float(value)
 

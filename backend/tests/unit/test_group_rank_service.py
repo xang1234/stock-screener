@@ -821,6 +821,68 @@ def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_histor
     assert vectorized_metrics == legacy_metrics
 
 
+def test_vectorized_group_rs_preserves_invalid_period_return_semantics(
+    db_session,
+    monkeypatch,
+):
+    service = _make_group_rank_service()
+    calculation_date = date(2026, 3, 20)
+    symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+    benchmark_prices = _trend_price_frame(daily_return=0.0004)
+    prices_by_symbol = {
+        "AAA": _trend_price_frame(start_close=100.0, daily_return=0.0020),
+        "BBB": _trend_price_frame(start_close=80.0, daily_return=0.0011),
+        "CCC": _trend_price_frame(start_close=120.0, daily_return=-0.0002),
+        "DDD": _trend_price_frame(start_close=90.0, daily_return=0.0017),
+        "EEE": _trend_price_frame(start_close=70.0, daily_return=0.0009),
+    }
+    prices_by_symbol["BBB"].iloc[-63, prices_by_symbol["BBB"].columns.get_loc("Close")] = 0.0
+    prices_by_symbol["DDD"].iloc[-1, prices_by_symbol["DDD"].columns.get_loc("Close")] = float("nan")
+    prices_by_symbol["EEE"].iloc[-63, prices_by_symbol["EEE"].columns.get_loc("Close")] = float("nan")
+    market_caps = {
+        "AAA": 10_000_000_000,
+        "BBB": 5_000_000_000,
+        "CCC": 1_000_000_000,
+        "DDD": 7_000_000_000,
+        "EEE": 2_000_000_000,
+    }
+    active_symbols = set(symbols)
+    monkeypatch.setattr(
+        service,
+        "_get_validated_group_symbols",
+        lambda *_args, **_kwargs: symbols,
+    )
+    legacy_metrics = service._calculate_group_rs_from_cache(
+        db_session,
+        "Software",
+        benchmark_prices["Close"].sort_index(ascending=False),
+        prices_by_symbol,
+        active_symbols,
+        market_caps,
+        calculation_date,
+    )
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=benchmark_prices,
+        prices_by_symbol=prices_by_symbol,
+        active_symbols=active_symbols,
+        market_caps=market_caps,
+        stats={},
+        symbols_by_group={"Software": symbols},
+    )
+
+    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
+    vectorized_metrics = service._calculate_group_metrics_from_rs(
+        "Software",
+        symbols,
+        rs_by_date[calculation_date],
+        market_caps,
+        calculation_date,
+    )
+
+    assert set(rs_by_date[calculation_date]) == {"AAA", "BBB", "CCC", "EEE"}
+    assert vectorized_metrics == legacy_metrics
+
+
 def test_get_current_rankings_can_target_explicit_date():
     service = _make_group_rank_service()
     db_session = _make_session()

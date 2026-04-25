@@ -6,6 +6,7 @@ in the universe, including daily movers, multi-period ratios, and
 monthly/quarterly performance indicators.
 """
 import logging
+import math
 from collections import deque
 from typing import Dict, Optional, List
 from datetime import date, datetime, timedelta
@@ -312,7 +313,7 @@ class BreadthCalculatorService:
         prices_df = prices_df.sort_index()
         close = prices_df["Close"]
         pct_changes = {
-            days: close.pct_change(periods=days).mul(100).round(2).replace(
+            days: close.pct_change(periods=days, fill_method=None).mul(100).round(2).replace(
                 [float("inf"), float("-inf")],
                 0.0,
             )
@@ -349,7 +350,7 @@ class BreadthCalculatorService:
             value = series.iloc[latest_idx]
         except IndexError:
             return 0.0
-        if pd.isna(value):
+        if pd.isna(value) or not math.isfinite(float(value)):
             return 0.0
         return float(value)
 
