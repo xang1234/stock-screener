@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     yfinance_rate_limit: int = 1  # requests per second (aggregate across all markets)
     alphavantage_rate_limit: int = 25  # requests per day
     finviz_rate_limit_interval: float = 0.5  # seconds between finviz API calls
-    yfinance_batch_rate_limit_interval: float = 5.0  # seconds between yfinance batch downloads
+    yfinance_batch_rate_limit_interval: float = 2.0  # seconds between yfinance batch downloads
     yfinance_per_ticker_delay: float = 0.2  # Deprecated: bulk scheduled jobs should not use per-ticker fetches
     universe_source_timeout_seconds: int = 60
     universe_source_user_agent: str = (
@@ -196,6 +196,36 @@ class Settings(BaseSettings):
     yfinance_backoff_max_s_in: int | None = None
     yfinance_backoff_max_s_jp: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
+
+    # Per-market parallel worker counts for finviz (which has no batch API,
+    # so concurrency is the only knob). Defaults live in
+    # RateBudgetPolicy.get_provider_workers; the per-market Redis rate
+    # limiter still serializes egress, so worker count only buys "fill the
+    # pipeline during HTTP RTT" — never raises req/sec to the upstream IP.
+    finviz_workers_us: int | None = None
+    finviz_workers_hk: int | None = None
+    finviz_workers_in: int | None = None
+    finviz_workers_jp: int | None = None
+    finviz_workers_tw: int | None = None
+
+    # Provider circuit breaker (services/provider_circuit_breaker.py).
+    # Trips when N consecutive batches/calls hit transient 429-style errors;
+    # short-circuits subsequent calls until cooldown elapses, then admits a
+    # single probe (half-open) before fully closing.
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_threshold: int = 3  # consecutive 429s to trip
+    circuit_breaker_cooldown_us: int = 120  # seconds
+    circuit_breaker_cooldown_hk: int = 300
+    circuit_breaker_cooldown_in: int = 300
+    circuit_breaker_cooldown_jp: int = 300
+    circuit_breaker_cooldown_tw: int = 300
+
+    # yfinance HTTP session: when enabled, calls are routed through a
+    # process-wide curl_cffi session impersonating Chrome to dramatically
+    # reduce Yahoo's bot-detection 429s and reuse cookies/crumb across
+    # batches. Falls back silently if curl_cffi is not installed.
+    yfinance_use_curl_cffi: bool = True
+    yfinance_curl_cffi_impersonate: str = "chrome"
 
     # Scanning
     default_universe: str = "all"

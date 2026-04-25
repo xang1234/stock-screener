@@ -278,8 +278,28 @@ class HybridFundamentalsService:
 
             finviz_total = len(finviz_eligible)
             finviz_success = 0
+            # Phase 3 is US-only (per routing policy above); the breaker check
+            # inside ``_rate_limited_call`` is the single gate. An additional
+            # ``breaker.check()`` here would mutate state — it can promote
+            # open→half_open and consume the single probe before the actual
+            # call runs, leaving the probe wasted (and, in the no-Redis
+            # fallback, permanently wedging the circuit).
+            from .provider_circuit_breaker import CircuitOpenError
+
             for i, symbol in enumerate(finviz_eligible):
-                finviz_data = self.finviz_service.get_finviz_only_fields(symbol)
+                # Resolve the symbol's market for per-market rate budgeting;
+                # finviz routing already constrained this to supported markets.
+                symbol_market = (market_by_symbol or {}).get(symbol) or "US"
+                try:
+                    finviz_data = self.finviz_service.get_finviz_only_fields(
+                        symbol, market=symbol_market,
+                    )
+                except CircuitOpenError:
+                    logger.warning(
+                        "Phase 3 aborted at %d/%d: circuit open for finviz:%s",
+                        i, finviz_total, symbol_market.lower(),
+                    )
+                    break
                 if finviz_data:
                     results[symbol].update(finviz_data)
                     finviz_success += 1
@@ -348,23 +368,29 @@ class HybridFundamentalsService:
         self,
         symbols: List[str],
         include_technicals: bool = True,
-        finviz_workers: int = 2,
+        finviz_workers: Optional[int] = None,
         progress_callback=None,
         market_by_symbol: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals with parallel finviz fetching for faster performance.
 
-        WARNING: Using multiple workers for finviz may trigger rate limiting.
-        Use with caution and monitor for errors.
+        The Redis-backed rate limiter still serializes egress per market, so
+        ``finviz_workers > 1`` does not raise the request rate above the
+        configured cadence — it only fills idle time during HTTP RTT. The
+        provider circuit breaker pauses the market entirely on sustained
+        429s.
 
         Args:
             symbols: List of ticker symbols
             include_technicals: Whether to calculate technical indicators
-            finviz_workers: Number of parallel workers for finviz (default 2)
+            finviz_workers: Number of parallel workers for finviz. When
+                ``None``, resolved per-market via
+                ``RateBudgetPolicy.get_provider_workers``.
             progress_callback: Optional progress callback
             market_by_symbol: Optional mapping ``{symbol: market}`` forwarded
-                to cadence-aware quarterly growth extraction.
+                to cadence-aware quarterly growth extraction and to
+                per-market finviz rate budgeting.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -407,37 +433,44 @@ class HybridFundamentalsService:
             if progress_callback:
                 progress_callback(int(total * 0.4), total)
 
-        # Phase 3: Parallel finviz fetching
-        logger.info(f"Phase 3: Parallel finviz fetching ({finviz_workers} workers)...")
+        # Phase 3: Parallel finviz fetching, grouped by market so the
+        # per-market rate limiter and circuit breaker apply correctly.
+        from . import provider_routing_policy as routing_policy
+        from .rate_budget_policy import get_rate_budget_policy
 
-        # Split symbols into chunks for workers
-        chunk_size = (len(symbols) + finviz_workers - 1) // finviz_workers
-        chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+        market_by_symbol = market_by_symbol or {}
+        eligible_by_market: Dict[str, List[str]] = {}
+        for symbol in symbols:
+            market = market_by_symbol.get(symbol) or "US"
+            if not routing_policy.is_supported(market, routing_policy.PROVIDER_FINVIZ):
+                continue
+            eligible_by_market.setdefault(market, []).append(symbol)
 
-        def fetch_finviz_chunk(chunk_symbols: List[str]) -> Dict[str, Dict]:
-            """Fetch finviz data for a chunk of symbols."""
-            chunk_results = {}
-            # Create a separate FinvizService instance for thread safety
-            finviz = FinvizService(rate_limiter=self._finviz_rate_limiter)
-            for symbol in chunk_symbols:
-                data = finviz.get_finviz_only_fields(symbol)
-                chunk_results[symbol] = data or {}
-            return chunk_results
+        policy = get_rate_budget_policy()
+        completed = 0
+        for market, market_symbols in eligible_by_market.items():
+            workers = (
+                finviz_workers
+                if finviz_workers is not None
+                else policy.get_provider_workers("finviz", market)
+            )
+            logger.info(
+                "Phase 3: finviz for market=%s (%d symbols, workers=%d)",
+                market, len(market_symbols), workers,
+            )
+            market_results = self.finviz_service.get_finviz_only_fields_batch(
+                market_symbols,
+                max_workers=workers,
+                market=market,
+            )
+            for symbol, data in market_results.items():
+                if data:
+                    results[symbol].update(data)
 
-        with ThreadPoolExecutor(max_workers=finviz_workers) as executor:
-            futures = {executor.submit(fetch_finviz_chunk, chunk): chunk for chunk in chunks}
-
-            completed = 0
-            for future in as_completed(futures):
-                chunk_results = future.result()
-                for symbol, data in chunk_results.items():
-                    if data:
-                        results[symbol].update(data)
-
-                completed += len(futures[future])
-                if progress_callback:
-                    phase3_progress = 0.4 + (completed / total) * 0.6
-                    progress_callback(int(total * phase3_progress), total)
+            completed += len(market_symbols)
+            if progress_callback:
+                phase3_progress = 0.4 + (completed / total) * 0.6
+                progress_callback(int(total * phase3_progress), total)
 
         # Add metadata
         for symbol in symbols:
