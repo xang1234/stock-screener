@@ -71,6 +71,7 @@ class GitHubReleaseSyncService:
         bundle_asset_name: str | None = None,
         source_revision: str | None = None,
         reason: str | None = None,
+        stale_reason: str | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class GitHubReleaseSyncService:
             "bundle_asset_name": bundle_asset_name,
             "source_revision": source_revision,
             "reason": reason,
+            "stale_reason": stale_reason,
             "error": error,
         }
 
@@ -94,6 +96,7 @@ class GitHubReleaseSyncService:
         expected_manifest_schema: str | None = None,
         required_manifest_keys: Iterable[str] = (),
         stale_validator: Callable[[dict[str, Any]], Any] | None = None,
+        allow_stale: bool = False,
         github_token: str | None = None,
         request_timeout_seconds: int = 60,
         output_dir: str | Path | None = None,
@@ -214,28 +217,40 @@ class GitHubReleaseSyncService:
                 error=f"Invalid bundle asset name: {bundle_asset_name!r}",
             )
 
+        manifest_is_stale = False
+        stale_reason: str | None = None
         if stale_validator is not None:
             try:
-                is_stale, stale_reason = self._resolve_stale_validation(
+                is_stale, resolved_stale_reason = self._resolve_stale_validation(
                     stale_validator(manifest)
                 )
             except ValueError as exc:
                 return self._result("invalid_manifest", manifest=manifest, error=str(exc))
             if is_stale:
-                return self._result(
-                    "stale",
-                    manifest=manifest,
-                    bundle_asset_name=bundle_asset_name,
-                    source_revision=source_revision,
-                    reason=stale_reason,
-                )
+                manifest_is_stale = True
+                stale_reason = resolved_stale_reason
+                if not allow_stale:
+                    return self._result(
+                        "stale",
+                        manifest=manifest,
+                        bundle_asset_name=bundle_asset_name,
+                        source_revision=source_revision,
+                        reason=stale_reason,
+                        stale_reason=stale_reason,
+                    )
 
-        if current_revision and source_revision and current_revision == source_revision:
+        if (
+            not manifest_is_stale
+            and current_revision
+            and source_revision
+            and current_revision == source_revision
+        ):
             return self._result(
                 "up_to_date",
                 manifest=manifest,
                 bundle_asset_name=bundle_asset_name,
                 source_revision=source_revision,
+                stale_reason=stale_reason,
             )
 
         bundle_asset = next(
@@ -253,6 +268,7 @@ class GitHubReleaseSyncService:
                 bundle_asset_name=bundle_asset_name,
                 source_revision=source_revision,
                 reason=f"Bundle asset {bundle_asset_name!r} is not present on release {release_tag!r}",
+                stale_reason=stale_reason,
             )
 
         bundle_url = str(
@@ -265,6 +281,7 @@ class GitHubReleaseSyncService:
                 bundle_asset_name=bundle_asset_name,
                 source_revision=source_revision,
                 reason=f"Bundle asset {bundle_asset_name!r} has no download URL",
+                stale_reason=stale_reason,
             )
 
         try:
@@ -279,6 +296,7 @@ class GitHubReleaseSyncService:
                 manifest=manifest,
                 bundle_asset_name=bundle_asset_name,
                 source_revision=source_revision,
+                stale_reason=stale_reason,
                 error=str(exc),
             )
 
@@ -299,6 +317,7 @@ class GitHubReleaseSyncService:
                 bundle_asset_name=bundle_asset_name,
                 source_revision=source_revision,
                 reason=f"Bundle checksum mismatch: {digest} != {expected_sha}",
+                stale_reason=stale_reason,
             )
 
         return self._result(
@@ -307,4 +326,5 @@ class GitHubReleaseSyncService:
             bundle_path=str(bundle_path),
             bundle_asset_name=bundle_asset_name,
             source_revision=source_revision,
+            stale_reason=stale_reason,
         )

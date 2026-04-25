@@ -417,6 +417,7 @@ class DailyPriceBundleService:
         *,
         market: str,
         warm_redis_symbols: int | None = None,
+        allow_stale: bool = False,
         github_sync_service: GitHubReleaseSyncService | None = None,
     ) -> dict[str, Any]:
         normalized_market = str(market or "").strip().upper()
@@ -449,6 +450,7 @@ class DailyPriceBundleService:
                 "symbol_count",
             ),
             stale_validator=self._validate_manifest_freshness,
+            allow_stale=allow_stale,
             github_token=settings.github_data_token,
             request_timeout_seconds=settings.github_data_timeout_seconds,
             output_dir=download_dir,
