@@ -439,16 +439,19 @@ def test_calculate_group_rankings_propagates_group_lookup_failures(db_session, m
 def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):
     service = _make_group_rank_service()
     price_data = _price_frame()
+    delete_kwargs: dict = {}
+    prefetch_kwargs: dict = {}
+    group_kwargs: dict = {}
 
     monkeypatch.setattr(
         service,
         "_delete_rankings_for_range",
-        lambda db, start_date, end_date: 0,
+        lambda db, start_date, end_date, **kw: delete_kwargs.update(kw) or 0,
     )
     monkeypatch.setattr(
         service,
         "_prefetch_all_data",
-        lambda db, **kw: (
+        lambda db, **kw: prefetch_kwargs.update(kw) or (
             price_data,
             {"AAPL": price_data},
             {"AAPL"},
@@ -458,17 +461,46 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     )
     monkeypatch.setattr(
         "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
-        lambda db, **kw: [],
+        lambda db, **kw: group_kwargs.update(kw) or [],
     )
 
     stats = service.backfill_rankings_optimized(
         db_session,
         date(2026, 3, 17),
         date(2026, 3, 17),
+        market="HK",
     )
 
     assert stats["processed"] == 0
     assert stats["errors"] == 1
+    assert delete_kwargs["market"] == "HK"
+    assert prefetch_kwargs["market"] == "HK"
+    assert group_kwargs["market"] == "HK"
+
+
+def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    _add_rank(db_session, "Software", date(2026, 3, 17), 5)
+    db_session.commit()
+
+    calculate_calls: list[date] = []
+    monkeypatch.setattr(
+        service,
+        "calculate_group_rankings",
+        lambda db, calc_date, **kw: calculate_calls.append(calc_date) or [{"rank": 1}],
+    )
+
+    stats = service.backfill_rankings(
+        db_session,
+        date(2026, 3, 17),
+        date(2026, 3, 17),
+        market="HK",
+    )
+
+    assert stats["processed"] == 1
+    assert stats["skipped"] == 0
+    assert calculate_calls == [date(2026, 3, 17)]
 
 
 def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatch):

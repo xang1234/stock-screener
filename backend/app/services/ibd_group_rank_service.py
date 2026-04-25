@@ -1046,7 +1046,9 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Optimized backfill that:
@@ -1062,14 +1064,25 @@ class IBDGroupRankService:
         Returns:
             Dict with backfill statistics
         """
-        logger.info(f"Starting optimized backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting optimized backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
         start_time = datetime.now()
 
         # 1. Delete existing rankings in range
-        deleted = self._delete_rankings_for_range(db, start_date, end_date)
+        deleted = self._delete_rankings_for_range(
+            db,
+            start_date,
+            end_date,
+            market=normalized_market,
+        )
 
         # 2. Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = self._prefetch_all_data(db)
+        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+            self._prefetch_all_data(db, market=normalized_market)
+        )
 
         if spy_data is None or spy_data.empty:
             logger.error("Cannot proceed without SPY data")
@@ -1084,7 +1097,7 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db)
+        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
 
         # 3. Generate trading dates (weekdays)
         dates_to_process = []
@@ -1118,7 +1131,14 @@ class IBDGroupRankService:
                 group_metrics = []
                 for group_name in all_groups:
                     metrics = self._calculate_group_rs_from_cache(
-                        db, group_name, spy_prices, all_prices, active_symbols, market_caps, calc_date
+                        db,
+                        group_name,
+                        spy_prices,
+                        all_prices,
+                        active_symbols,
+                        market_caps,
+                        calc_date,
+                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)
@@ -1130,7 +1150,12 @@ class IBDGroupRankService:
                         metrics['rank'] = rank
 
                     # Store
-                    self._store_rankings(db, calc_date, group_metrics)
+                    self._store_rankings(
+                        db,
+                        calc_date,
+                        group_metrics,
+                        market=normalized_market,
+                    )
                     processed += 1
 
                     if processed % 10 == 0:
@@ -1167,7 +1192,9 @@ class IBDGroupRankService:
         self,
         db: Session,
         start_date: date,
-        end_date: date
+        end_date: date,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Backfill historical rankings from existing price data.
@@ -1182,7 +1209,11 @@ class IBDGroupRankService:
         Returns:
             Dict with backfill statistics
         """
-        logger.info(f"Starting backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
 
         # Generate list of dates to process (weekdays only)
         current_date = end_date
@@ -1204,7 +1235,8 @@ class IBDGroupRankService:
             try:
                 # Check if already calculated
                 existing = db.query(IBDGroupRank).filter(
-                    IBDGroupRank.date == calc_date
+                    IBDGroupRank.date == calc_date,
+                    IBDGroupRank.market == normalized_market,
                 ).first()
 
                 if existing:
@@ -1213,7 +1245,11 @@ class IBDGroupRankService:
                     continue
 
                 # Calculate rankings for this date
-                results = self.calculate_group_rankings(db, calc_date)
+                results = self.calculate_group_rankings(
+                    db,
+                    calc_date,
+                    market=normalized_market,
+                )
 
                 if results:
                     processed += 1
@@ -1279,7 +1315,9 @@ class IBDGroupRankService:
     def fill_gaps(
         self,
         db: Session,
-        missing_dates: List[date]
+        missing_dates: List[date],
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Fill specific missing dates (used by startup gap-fill).
@@ -1291,7 +1329,11 @@ class IBDGroupRankService:
         Returns:
             Statistics about the gap-fill operation
         """
-        logger.info(f"Filling {len(missing_dates)} missing dates")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Filling %d missing dates for market=%s",
+            len(missing_dates), normalized_market,
+        )
 
         stats = {
             'total_dates': len(missing_dates),
@@ -1302,7 +1344,11 @@ class IBDGroupRankService:
 
         for calc_date in missing_dates:
             try:
-                results = self.calculate_group_rankings(db, calc_date)
+                results = self.calculate_group_rankings(
+                    db,
+                    calc_date,
+                    market=normalized_market,
+                )
 
                 if results:
                     stats['processed'] += 1
@@ -1447,7 +1493,9 @@ class IBDGroupRankService:
         db: Session,
         start_date: date,
         end_date: date,
-        chunk_size_days: int = 30
+        chunk_size_days: int = 30,
+        *,
+        market: str = "US",
     ) -> Dict:
         """
         Backfill rankings in chunks to avoid memory issues.
@@ -1463,7 +1511,11 @@ class IBDGroupRankService:
         Returns:
             Aggregate statistics from all chunks
         """
-        logger.info(f"Starting chunked backfill from {start_date} to {end_date}")
+        normalized_market = (market or "US").upper()
+        logger.info(
+            "Starting chunked backfill for market=%s from %s to %s",
+            normalized_market, start_date, end_date,
+        )
 
         total_stats = {
             'start_date': start_date.isoformat(),
@@ -1483,7 +1535,12 @@ class IBDGroupRankService:
             logger.info(f"Processing chunk: {chunk_start} to {chunk_end}")
 
             try:
-                chunk_result = self.backfill_rankings(db, chunk_start, chunk_end)
+                chunk_result = self.backfill_rankings(
+                    db,
+                    chunk_start,
+                    chunk_end,
+                    market=normalized_market,
+                )
 
                 # Aggregate stats
                 total_stats['total_dates'] += chunk_result.get('total_dates', 0)

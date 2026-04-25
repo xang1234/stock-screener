@@ -475,7 +475,7 @@ def backfill_group_rankings(self, start_date: str, end_date: str, market: str = 
         service = get_group_rank_service()
 
         # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(db, start, end)
+        result = service.backfill_rankings_optimized(db, start, end, market=market)
 
         # Calculate total duration
         total_duration = time.time() - start_time
@@ -646,7 +646,12 @@ def backfill_group_rankings_1year(self, market: str = "US"):
         start_date = end_date - timedelta(days=365)
 
         # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
-        result = service.backfill_rankings_optimized(db, start_date, end_date)
+        result = service.backfill_rankings_optimized(
+            db,
+            start_date,
+            end_date,
+            market=market,
+        )
 
         duration = time.time() - start_time
 

@@ -547,6 +547,67 @@ def test_gapfill_group_rankings_passes_market_to_service(monkeypatch):
     )
 
 
+def test_backfill_group_rankings_passes_market_to_service(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+
+    fake_service = MagicMock()
+    fake_service.backfill_rankings_optimized.return_value = {
+        "total_dates": 1,
+        "deleted": 0,
+        "processed": 1,
+        "skipped": 0,
+        "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.backfill_group_rankings.run("2026-03-17", "2026-03-17", market="HK")
+
+    assert result["processed"] == 1
+    fake_service.backfill_rankings_optimized.assert_called_once_with(
+        fake_db,
+        datetime(2026, 3, 17).date(),
+        datetime(2026, 3, 17).date(),
+        market="HK",
+    )
+
+
+def test_backfill_group_rankings_1year_passes_market_to_service(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    import app.services.ui_snapshot_service as snapshot_module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
+    monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 3, 20, 17, 40, 0))
+
+    fake_service = MagicMock()
+    fake_service.backfill_rankings_optimized.return_value = {
+        "total_dates": 1,
+        "deleted": 0,
+        "processed": 1,
+        "skipped": 0,
+        "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.backfill_group_rankings_1year.run(market="HK")
+
+    assert result["processed"] == 1
+    fake_service.backfill_rankings_optimized.assert_called_once_with(
+        fake_db,
+        datetime(2025, 3, 20).date(),
+        datetime(2026, 3, 20).date(),
+        market="HK",
+    )
+
+
 def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatch):
     import app.tasks.group_rank_tasks as module
     import app.services.ui_snapshot_service as snapshot_module
