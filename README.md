@@ -190,3 +190,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 ## Disclaimer
 
 This software is for educational and research purposes only. It is not financial advice. Always do your own research and consult with a licensed financial advisor before making investment decisions.
+
+## License
+
+Released under the [Apache License 2.0](LICENSE).
