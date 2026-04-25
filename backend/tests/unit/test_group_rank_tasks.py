@@ -644,3 +644,225 @@ def test_daily_group_rankings_fail_when_current_metadata_repair_fails(monkeypatc
     assert "repair failed" in result["error"].lower()
     completed.assert_not_called()
     publish_snapshot.assert_not_called()
+
+
+def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
+    """On a trading day, orchestrator gap-fills missing dates then runs the daily task."""
+    import app.tasks.group_rank_tasks as module
+    from datetime import date as date_cls
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 3, 20, 17, 40, 0),
+        is_trading_day=True,
+    )
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["Software", "Banks"]),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = [date_cls(2026, 3, 19)]
+    fake_service.fill_gaps_optimized.return_value = {
+        "total_dates": 1, "processed": 1, "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    daily_calls: list[dict] = []
+    monkeypatch.setattr(
+        module,
+        "_calculate_daily_group_rankings_in_process",
+        lambda **kw: daily_calls.append(kw) or {"date": "2026-03-20", "groups_ranked": 2},
+    )
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
+
+    assert result["gap_fill"]["processed"] == 1
+    assert result["today"]["date"] == "2026-03-20"
+    assert daily_calls == [{"market": "US", "activity_lifecycle": "daily_refresh"}]
+    fake_service.find_missing_dates.assert_called_once_with(
+        fake_db, lookback_days=365, market="US",
+    )
+    fake_service.fill_gaps_optimized.assert_called_once_with(
+        fake_db, [date_cls(2026, 3, 19)], market="US",
+    )
+
+
+def test_orchestrator_gapfills_but_skips_today_on_non_trading_day(monkeypatch):
+    """On a non-trading day, orchestrator still gap-fills but skips the daily call."""
+    import app.tasks.group_rank_tasks as module
+    from datetime import date as date_cls
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 4, 25, 9, 0, 0),  # Saturday
+        is_trading_day=False,
+    )
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["Software"]),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = [date_cls(2026, 4, 24)]
+    fake_service.fill_gaps_optimized.return_value = {
+        "total_dates": 1, "processed": 1, "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    daily_helper = MagicMock()
+    monkeypatch.setattr(
+        module, "_calculate_daily_group_rankings_in_process", daily_helper,
+    )
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
+
+    assert result["gap_fill"]["processed"] == 1
+    assert result["today"]["skipped"] is True
+    assert "not a trading day" in result["today"]["reason"].lower()
+    daily_helper.assert_not_called()
+
+
+def test_orchestrator_no_gaps_no_calc_when_disabled_market(monkeypatch):
+    """A market disabled in runtime preferences short-circuits without DB work."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: False,
+    )
+
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="HK")
+
+    assert result["status"] == "skipped"
+    assert "disabled" in result["reason"].lower()
+    fake_service.find_missing_dates.assert_not_called()
+    fake_service.fill_gaps_optimized.assert_not_called()
+
+
+def test_orchestrator_skips_market_with_no_taxonomy(monkeypatch):
+    """An enabled market with no industry-group taxonomy is skipped gracefully."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: []),
+    )
+
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="JP")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no_taxonomy_for_market"
+    fake_service.find_missing_dates.assert_not_called()
+
+
+def test_orchestrator_runs_for_non_us_market(monkeypatch):
+    """HK orchestrator runs end-to-end on a trading day."""
+    import app.tasks.group_rank_tasks as module
+    from datetime import date as date_cls
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 3, 20, 17, 40, 0),
+        is_trading_day=True,
+    )
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["HK_Software"]),
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_calculate_daily_group_rankings_in_process",
+        lambda **kw: {"date": "2026-03-20", "market": kw.get("market")},
+    )
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="HK")
+
+    assert "status" not in result
+    assert result["market"] == "HK"
+    assert result["today"]["market"] == "HK"
+    assert result["today"]["date"] == "2026-03-20"
+    fake_service.find_missing_dates.assert_called_once_with(
+        fake_db, lookback_days=365, market="HK",
+    )
+
+
+def test_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):
+    """The shim must engage `disable_serialized_market_workload()` so the inner
+    daily task's @serialized_market_workload decorator doesn't try to re-acquire
+    the per-market lease the orchestrator already holds.
+    """
+    import app.tasks.group_rank_tasks as module
+    import app.tasks.workload_coordination as wc
+
+    seen_disabled_state: list[bool] = []
+
+    real_task = MagicMock()
+    real_task.__module__ = "app.tasks.group_rank_tasks"
+    real_task.request = MagicMock()
+
+    def fake_run(market=None, activity_lifecycle=None):
+        seen_disabled_state.append(wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get())
+        return {"date": "2026-03-20", "market": market}
+
+    real_task.run = fake_run
+    monkeypatch.setattr(module, "calculate_daily_group_rankings", real_task)
+
+    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False
+    result = module._calculate_daily_group_rankings_in_process(
+        market="US", activity_lifecycle="daily_refresh",
+    )
+
+    assert result == {"date": "2026-03-20", "market": "US"}
+    assert seen_disabled_state == [True], (
+        "The lease bypass ContextVar must be set to True while the inner task runs"
+    )
+    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False, (
+        "The bypass must be reset on context exit"
+    )
