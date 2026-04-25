@@ -790,6 +790,40 @@ def test_orchestrator_skips_market_with_no_taxonomy(monkeypatch):
     fake_service.find_missing_dates.assert_not_called()
 
 
+def test_orchestrator_fails_when_us_taxonomy_is_empty(monkeypatch):
+    """US group taxonomy is required; an empty table is not a skip condition."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: []),
+    )
+
+    fake_service = MagicMock()
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    completed = MagicMock()
+    failed = MagicMock()
+    monkeypatch.setattr(module, "mark_market_activity_completed", completed)
+    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
+
+    assert result["error"] == "IBD industry mappings are not loaded"
+    assert result.get("reason") != "no_taxonomy_for_market"
+    completed.assert_not_called()
+    failed.assert_called_once()
+    fake_service.find_missing_dates.assert_not_called()
+
+
 def test_orchestrator_skips_market_when_taxonomy_loader_fails(monkeypatch):
     """Known taxonomy loader failures are treated like a missing taxonomy."""
     import app.tasks.group_rank_tasks as module
@@ -974,7 +1008,7 @@ def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
         module.calculate_daily_group_rankings_with_gapfill.run(market="US")
 
     fake_db.rollback.assert_called_once()
-    failed.assert_called_once()
+    failed.assert_not_called()
 
 
 def test_orchestrator_rolls_back_before_publishing_failure(monkeypatch):
@@ -1046,3 +1080,44 @@ def test_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):
     assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False, (
         "The bypass must be reset on context exit"
     )
+
+
+def test_in_process_daily_call_propagates_transient_without_inner_retry(monkeypatch):
+    """Nested daily runs let the orchestrator own retry scheduling."""
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+
+    fake_service = MagicMock()
+    fake_service.price_cache = MagicMock()
+    fake_service.price_cache.get_warmup_metadata.return_value = {
+        "status": "completed",
+        "count": 10000,
+        "total": 10000,
+        "completed_at": datetime.now().isoformat(),
+    }
+    fake_service.calculate_group_rankings.side_effect = ConnectionError("network down")
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    inner_retry = MagicMock(side_effect=AssertionError("inner retry scheduled"))
+    failed = MagicMock()
+    monkeypatch.setattr(module.calculate_daily_group_rankings, "retry", inner_retry)
+    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+
+    with pytest.raises(ConnectionError):
+        module._calculate_daily_group_rankings_in_process(
+            market="HK",
+            activity_lifecycle="daily_refresh",
+        )
+
+    fake_db.rollback.assert_called_once()
+    inner_retry.assert_not_called()
+    failed.assert_not_called()
+    assert module._PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.get() is False

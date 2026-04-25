@@ -53,6 +53,10 @@ _ALLOW_SAME_DAY_WARMUP_BYPASS: ContextVar[bool] = ContextVar(
     "allow_same_day_group_rank_warmup_bypass",
     default=False,
 )
+_PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS: ContextVar[bool] = ContextVar(
+    "propagate_in_process_group_rank_transient_errors",
+    default=False,
+)
 
 
 @contextmanager
@@ -405,6 +409,8 @@ def calculate_daily_group_rankings(
         }
     except TRANSIENT_TASK_EXCEPTIONS as e:
         db.rollback()
+        if _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.get():
+            raise
         _mark_market_activity_failed_safely(
             db,
             market=effective_market,
@@ -453,16 +459,26 @@ def _calculate_daily_group_rankings_in_process(
     call's task_id resolves to "unknown" (Celery's per-class request_stack is
     empty for direct invocation), the reentrancy check is skipped, the SET NX
     fails, and Retry propagates back into the orchestrator.
+
+    Transient exceptions are also propagated directly here so the outer
+    orchestrator owns retry scheduling. Calling the Celery task body via
+    ``task.run()`` does not provide a worker request context for the requested
+    market, so allowing the inner task to call ``self.retry()`` can schedule an
+    orphan retry with default arguments.
     """
     from .workload_coordination import disable_serialized_market_workload
 
     task = calculate_daily_group_rankings
-    if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
-        return task(market=market, activity_lifecycle=activity_lifecycle)
-    with disable_serialized_market_workload():
-        if hasattr(task, "request") and callable(getattr(task, "run", None)):
-            return task.run(market=market, activity_lifecycle=activity_lifecycle)
-        return task(market=market, activity_lifecycle=activity_lifecycle)
+    transient_token = _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.set(True)
+    try:
+        if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
+            return task(market=market, activity_lifecycle=activity_lifecycle)
+        with disable_serialized_market_workload():
+            if hasattr(task, "request") and callable(getattr(task, "run", None)):
+                return task.run(market=market, activity_lifecycle=activity_lifecycle)
+            return task(market=market, activity_lifecycle=activity_lifecycle)
+    finally:
+        _PROPAGATE_IN_PROCESS_TRANSIENT_ERRORS.reset(transient_token)
 
 
 @celery_app.task(
@@ -543,12 +559,12 @@ def calculate_daily_group_rankings_with_gapfill(
             message="Calculating group rankings (with gap-fill)",
         )
 
-        # Defensive skip: a market with no taxonomy (e.g., enabled before its
-        # CSV is loaded) would otherwise raise MissingIBDIndustryMappingsError.
+        # Defensive skip: non-US markets can be enabled before their CSV is
+        # loaded, but missing US group mappings are a bootstrap failure.
         try:
             all_groups = IBDIndustryService.get_all_groups(db, market=effective_market)
         except TAXONOMY_UNAVAILABLE_EXCEPTIONS as e:
-            if effective_market == "US" and not isinstance(e, MissingIBDIndustryMappingsError):
+            if effective_market == "US":
                 raise
             logger.warning(
                 "Taxonomy unavailable for market=%s; skipping rankings: %s",
@@ -558,6 +574,8 @@ def calculate_daily_group_rankings_with_gapfill(
             )
             all_groups = []
         if not all_groups:
+            if effective_market == "US":
+                raise MissingIBDIndustryMappingsError()
             logger.info(
                 "No industry groups available for market=%s; skipping rankings.",
                 effective_market,
@@ -699,15 +717,6 @@ def calculate_daily_group_rankings_with_gapfill(
         logger.warning(
             "Retry requested from calculate_daily_group_rankings_with_gapfill: %s",
             e,
-        )
-        _mark_market_activity_failed_safely(
-            db,
-            market=effective_market,
-            stage_key="groups",
-            lifecycle=activity_lifecycle,
-            task_name=getattr(self, "name", "calculate_daily_group_rankings_with_gapfill"),
-            task_id=getattr(getattr(self, "request", None), "id", None),
-            message=str(e) or "Retry requested",
         )
         raise
     except Exception as e:
