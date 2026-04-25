@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING, Dict, List, Optional
 from finvizfinance.quote import finvizfinance
 
 from .finviz_parser import FinvizParser
@@ -17,6 +18,16 @@ if TYPE_CHECKING:
     from app.services.rate_limiter import RedisRateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+_FINVIZ_RATE_LIMIT_INDICATORS = ("rate", "429", "too many", "limit", "throttl")
+
+
+def _is_finviz_rate_limit_error(exc: BaseException) -> bool:
+    """Return True when the exception text matches the throttle/rate-limit
+    pattern shared with bulk_data_fetcher's classifier."""
+    text = str(exc).lower()
+    return any(indicator in text for indicator in _FINVIZ_RATE_LIMIT_INDICATORS)
 
 
 class FinvizService:
@@ -32,20 +43,51 @@ class FinvizService:
         self.validator = FinvizValidator()
         self._rate_limiter = rate_limiter
 
-    def _rate_limited_call(self, func, *args, **kwargs):
+    def _rate_limited_call(self, func, *args, market: Optional[str] = None, **kwargs):
         """
         Execute a function with rate limiting via Redis-backed distributed limiter.
 
+        When ``market`` is supplied, uses the per-market provider key
+        (``finviz:us`` etc.) so cross-market refreshes don't starve each
+        other. When ``market`` is None, falls back to the legacy global
+        ``finviz`` key for backward compatibility with single-market scripts.
+
+        The provider circuit breaker is consulted before the wait — if the
+        market's circuit is open, raises ``CircuitOpenError`` immediately
+        instead of sleeping through the backoff. Transient
+        rate-limit/throttle errors detected by ``func`` are recorded against
+        the breaker after the call.
+
         Args:
             func: Function to execute
+            market: Optional market code for per-market rate budgeting
             *args, **kwargs: Arguments to pass to function
 
         Returns:
             Result from function
         """
         from ..config import settings
-        self._rate_limiter.wait("finviz", min_interval_s=settings.finviz_rate_limit_interval)
-        return func(*args, **kwargs)
+        from .provider_circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker()
+        # Raise CircuitOpenError when the market is paused; ``half_open_probe``
+        # falls through and is the single permitted probe call.
+        breaker.raise_if_open("finviz", market)
+
+        if market is not None:
+            self._rate_limiter.wait_for_market("finviz", market)
+        else:
+            self._rate_limiter.wait("finviz", min_interval_s=settings.finviz_rate_limit_interval)
+
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            if _is_finviz_rate_limit_error(exc):
+                breaker.record_429("finviz", market)
+            raise
+        else:
+            breaker.record_success("finviz", market)
+            return result
 
     def get_fundamentals(self, symbol: str) -> Optional[Dict]:
         """
@@ -252,7 +294,11 @@ class FinvizService:
         'Sales past 5Y': 'sales_past_5y',
     }
 
-    def get_finviz_only_fields(self, symbol: str) -> Optional[Dict]:
+    def get_finviz_only_fields(
+        self,
+        symbol: str,
+        market: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Fetch ONLY the fields that are unique to finviz (not available in yfinance).
 
@@ -261,6 +307,7 @@ class FinvizService:
 
         Args:
             symbol: Stock ticker symbol
+            market: Optional market code for per-market rate budgeting
 
         Returns:
             Dict with finviz-only fields, or None if error
@@ -284,7 +331,7 @@ class FinvizService:
                     description = None
                 return fundament, description
 
-            finviz_data, description = self._rate_limited_call(fetch)
+            finviz_data, description = self._rate_limited_call(fetch, market=market)
 
             if not finviz_data:
                 return None
@@ -337,35 +384,99 @@ class FinvizService:
 
     def get_finviz_only_fields_batch(
         self,
-        symbols: list,
-        max_workers: int = 1,
+        symbols: List[str],
+        max_workers: Optional[int] = None,
+        market: Optional[str] = None,
     ) -> Dict[str, Optional[Dict]]:
         """
-        Fetch finviz-only fields for multiple symbols.
+        Fetch finviz-only fields for multiple symbols, in parallel.
 
-        Note: finvizfinance doesn't support batch fetching, so this is sequential
-        with rate limiting. However, it only fetches ~15 fields per stock.
+        finvizfinance has no batch endpoint, so each symbol is a separate
+        HTTP call. The Redis-backed ``RedisRateLimiter`` keyed on
+        ``finviz:<market>`` serializes egress globally across threads, so
+        increasing ``max_workers`` does not raise the request rate against
+        the upstream IP — it only fills idle time during in-flight HTTP
+        RTT (typical RTT ~1-2s vs. 0.5s rate-limit interval).
 
         Args:
             symbols: List of ticker symbols
-            max_workers: Number of concurrent workers (default 1 for safety)
+            max_workers: Number of concurrent workers. When ``None``,
+                resolved via ``RateBudgetPolicy.get_provider_workers`` for
+                the given market.
+            market: Market code (``US``, ``HK``, ...) used for per-market
+                rate budgeting and worker count resolution.
 
         Returns:
-            Dict mapping symbols to their finviz-only data
+            Dict mapping symbols to their finviz-only data (or ``None`` on
+            per-symbol error). Stops early and fills remaining symbols with
+            ``None`` if the circuit breaker opens mid-batch.
         """
-        results = {}
         total = len(symbols)
+        if total == 0:
+            return {}
 
-        logger.info(f"Fetching finviz-only fields for {total} symbols")
+        if max_workers is None:
+            from .rate_budget_policy import get_rate_budget_policy
+            max_workers = get_rate_budget_policy().get_provider_workers("finviz", market)
+        max_workers = max(1, int(max_workers))
 
-        for i, symbol in enumerate(symbols):
-            if i > 0 and i % 50 == 0:
-                logger.info(f"Progress: {i}/{total} symbols ({i/total*100:.1f}%)")
+        logger.info(
+            "Fetching finviz-only fields for %d symbols (workers=%d, market=%s)",
+            total, max_workers, market or "shared",
+        )
 
-            result = self.get_finviz_only_fields(symbol)
-            results[symbol] = result
+        results: Dict[str, Optional[Dict]] = {symbol: None for symbol in symbols}
 
-        success_count = len([r for r in results.values() if r is not None])
+        # Sequential path keeps the legacy code path bit-for-bit identical
+        # when the policy chooses 1 worker (e.g., non-US markets).
+        if max_workers == 1:
+            from .provider_circuit_breaker import CircuitOpenError
+            for i, symbol in enumerate(symbols):
+                if i > 0 and i % 50 == 0:
+                    logger.info(f"Progress: {i}/{total} symbols ({i/total*100:.1f}%)")
+                try:
+                    results[symbol] = self.get_finviz_only_fields(symbol, market=market)
+                except CircuitOpenError as exc:
+                    logger.warning(
+                        "Finviz batch aborted at %d/%d: %s", i, total, exc,
+                    )
+                    break
+            success_count = sum(1 for v in results.values() if v is not None)
+            logger.info(f"Finviz-only batch complete: {success_count}/{total} successful")
+            return results
+
+        from .provider_circuit_breaker import CircuitOpenError
+
+        circuit_open = False
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self.get_finviz_only_fields, symbol, market=market): symbol
+                for symbol in symbols
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    results[symbol] = future.result()
+                except CircuitOpenError:
+                    # Once the breaker trips, everything else queued is
+                    # going to short-circuit too — log once, leave the
+                    # remaining slots as None and let callers decide.
+                    if not circuit_open:
+                        logger.warning(
+                            "Circuit open for finviz:%s; remaining symbols "
+                            "in batch will return None",
+                            (market or "shared").lower(),
+                        )
+                        circuit_open = True
+                    results[symbol] = None
+                except Exception as exc:
+                    logger.debug("finviz batch error for %s: %s", symbol, exc)
+                    results[symbol] = None
+                completed += 1
+                if completed % 50 == 0:
+                    logger.info(f"Progress: {completed}/{total} symbols")
+
+        success_count = sum(1 for v in results.values() if v is not None)
         logger.info(f"Finviz-only batch complete: {success_count}/{total} successful")
-
         return results

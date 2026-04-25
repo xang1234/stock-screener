@@ -37,6 +37,36 @@ def _finite_or_none(value: Any) -> Any:
     return value
 
 
+def _get_yf_session():
+    """Return the process-wide curl_cffi session (or ``None`` to fall back).
+
+    Centralised here so both ``yf.download`` and ``yf.Tickers`` callsites
+    stay in sync. Returns ``None`` when curl_cffi is unavailable or
+    disabled — callers must not pass a ``None`` session to yfinance, so
+    construct kwargs conditionally.
+    """
+    try:
+        from .yf_session import get_session
+        return get_session()
+    except Exception as exc:
+        logger.debug("yf_session import/get failed: %s", exc)
+        return None
+
+
+def _new_yf_tickers(symbols_str: str):
+    """Construct a ``yf.Tickers`` instance, attaching the curl_cffi session
+    when available. yfinance's older versions don't accept ``session`` on
+    Tickers; the try/except keeps us compatible with both."""
+    session = _get_yf_session()
+    if session is not None:
+        try:
+            return yf.Tickers(symbols_str, session=session)
+        except TypeError:
+            # Older yfinance: no session kwarg on Tickers; fall through.
+            pass
+    return yf.Tickers(symbols_str)
+
+
 class BulkDataFetcher:
     """
     Fetch data for multiple stocks efficiently using ``yf.download()``.
@@ -411,7 +441,7 @@ class BulkDataFetcher:
             # yf.download with group_by='ticker' returns MultiIndex columns: (ticker, OHLCV)
             # threads=False avoids threading issues inside Celery workers
             # progress=False suppresses the tqdm progress bar
-            raw = yf.download(
+            download_kwargs = dict(
                 tickers=symbols,
                 period=period,
                 group_by='ticker',
@@ -420,6 +450,10 @@ class BulkDataFetcher:
                 auto_adjust=False,
                 actions=True,
             )
+            session = _get_yf_session()
+            if session is not None:
+                download_kwargs["session"] = session
+            raw = yf.download(**download_kwargs)
 
             if raw is None or raw.empty:
                 logger.warning("yf.download returned empty DataFrame")
@@ -503,6 +537,9 @@ class BulkDataFetcher:
             from .rate_budget_policy import get_rate_budget_policy
             start_batch_size = get_rate_budget_policy().get_batch_size("yfinance", market)
 
+        from .provider_circuit_breaker import get_circuit_breaker
+        breaker = get_circuit_breaker()
+
         batch_size = max(
             self.MIN_PRICE_BATCH_SIZE,
             min(start_batch_size or self.DEFAULT_PRICE_BATCH_SIZE, self.MAX_PRICE_BATCH_SIZE),
@@ -512,6 +549,22 @@ class BulkDataFetcher:
         combined_results: Dict[str, Dict] = {}
         batch_start = 0
         while batch_start < len(symbols):
+            # Bail out early when the per-market circuit is open — no point
+            # spinning through 30+ second internal retries when we know the
+            # provider is throttling this market.
+            if market is not None and breaker.check("yfinance", market) == "open":
+                logger.warning(
+                    "Yahoo circuit open for market=%s; aborting price fetch "
+                    "(remaining %d/%d symbols)",
+                    market, len(symbols) - batch_start, len(symbols),
+                )
+                for symbol in symbols[batch_start:]:
+                    combined_results.setdefault(
+                        symbol,
+                        {**self._build_error_result(symbol, "circuit_open"), "error_kind": "circuit_open"},
+                    )
+                break
+
             batch_symbols = symbols[batch_start:batch_start + batch_size]
             batch_results = self._fetch_price_batch_with_retries(
                 batch_symbols,
@@ -525,11 +578,15 @@ class BulkDataFetcher:
                 success_streak = 0
                 batch_size = max(self.MIN_PRICE_BATCH_SIZE, batch_size // 2)
                 growth_cooldown_remaining = self.PRICE_BATCH_GROWTH_COOLDOWN_BATCHES
+                # Sustained transient failure → pulse the breaker. Threshold
+                # tripping is done after consecutive batches.
+                breaker.record_429("yfinance", market)
             else:
                 if growth_cooldown_remaining > 0:
                     growth_cooldown_remaining -= 1
                 if failure_rate < 0.02:
                     success_streak += 1
+                    breaker.record_success("yfinance", market)
                     if growth_cooldown_remaining == 0 and success_streak >= self.PRICE_BATCH_SUCCESS_STREAK_TO_GROW:
                         batch_size = min(
                             self.MAX_PRICE_BATCH_SIZE,
@@ -693,10 +750,29 @@ class BulkDataFetcher:
         total_batches = (len(symbols) + batch_size - 1) // batch_size
         consecutive_backoffs = 0  # Track consecutive rate-limited batches
 
+        # Circuit breaker check is per-batch — when open, skip remaining
+        # batches rather than spinning through dozens of independent retries.
+        from .provider_circuit_breaker import CircuitOpenError, get_circuit_breaker
+        breaker = get_circuit_breaker()
+
         for batch_num in range(total_batches):
             start_idx = batch_num * batch_size
             end_idx = min(start_idx + batch_size, len(symbols))
             batch_symbols = symbols[start_idx:end_idx]
+
+            # Short-circuit doomed batches when the per-market breaker is open.
+            if market is not None and breaker.check("yfinance", market) == "open":
+                logger.warning(
+                    "Yahoo circuit open for market=%s; skipping remaining %d batches",
+                    market, total_batches - batch_num,
+                )
+                for symbol in symbols[start_idx:]:
+                    all_results.setdefault(symbol, {
+                        "has_error": True,
+                        "error": "circuit_open",
+                        "error_kind": "circuit_open",
+                    })
+                break
 
             logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_symbols)} symbols)")
 
@@ -704,7 +780,7 @@ class BulkDataFetcher:
 
             try:
                 # Use yf.Tickers for efficient batch fetching
-                tickers = yf.Tickers(' '.join(batch_symbols))
+                tickers = _new_yf_tickers(' '.join(batch_symbols))
 
                 for i, symbol in enumerate(batch_symbols):
                     try:
@@ -737,6 +813,7 @@ class BulkDataFetcher:
                             if market is not None:
                                 from .rate_budget_policy import get_rate_budget_policy
                                 get_rate_budget_policy().record_429("yfinance", market)
+                            breaker.record_429("yfinance", market)
 
                     # Rate limit between individual ticker fetches within batch
                     if i < len(batch_symbols) - 1 and delay_per_ticker > 0:
@@ -765,6 +842,10 @@ class BulkDataFetcher:
                 time.sleep(backoff_time)
             else:
                 consecutive_backoffs = 0  # Reset on successful batch
+                # Reset the circuit breaker counter so a healthy batch
+                # promptly closes a half-open circuit.
+                if batch_rate_limit_failures == 0:
+                    breaker.record_success("yfinance", market)
                 # Normal rate limit between batches
                 if batch_num < total_batches - 1:
                     if market is not None:
@@ -821,7 +902,7 @@ class BulkDataFetcher:
             """Fetch a single batch."""
             batch_results = {}
             try:
-                tickers = yf.Tickers(' '.join(batch_symbols))
+                tickers = _new_yf_tickers(' '.join(batch_symbols))
 
                 for i, symbol in enumerate(batch_symbols):
                     try:

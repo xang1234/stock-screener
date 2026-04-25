@@ -44,7 +44,11 @@ class RateBudgetPolicy:
     # Used for providers without an explicit global setting.
     _DEFAULT_GLOBAL_INTERVALS_S: Dict[str, float] = {
         "yfinance": 1.0,
-        "yfinance:batch": 5.0,
+        # Tightened from 5.0s → 2.0s. yf.download is one HTTP round-trip
+        # per batch; 2s spacing between batches is well under any plausible
+        # per-batch rate cap, and the adaptive shrink + circuit breaker
+        # handle the failure mode if Yahoo objects.
+        "yfinance:batch": 2.0,
         "finviz": 0.5,
         "alpha_vantage": 3.0,  # 25 req/day → ~3s spacing if batched
         "sec_edgar": 0.15,     # 10 req/sec
@@ -53,8 +57,25 @@ class RateBudgetPolicy:
     # Per-market batch sizes. Keep the defaults uniform unless operators
     # explicitly override them via settings.
     _DEFAULT_BATCH_SIZE: Dict[str, Dict[str, int]] = {
-        "yfinance": {"US": 50, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
+        # US bumped to 150 — Yahoo accepts batches up to MAX_PRICE_BATCH_SIZE
+        # (200) and the adaptive shrink in fetch_prices_in_batches halves the
+        # batch on transient failure, so this is safe.
+        "yfinance": {"US": 150, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
         "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
+    }
+
+    # Per-market default worker counts for providers that benefit from
+    # concurrency. The Redis rate limiter still serializes egress, so this
+    # only fills idle time during in-flight HTTP RTT — total req/sec to the
+    # upstream IP stays at the configured cadence.
+    _DEFAULT_PROVIDER_WORKERS: Dict[str, Dict[str, int]] = {
+        # finvizfinance has no batch endpoint; concurrency is the only
+        # speedup lever. US gets more workers because its rate-limit
+        # interval is 0.5s and per-call RTT is typically ~1-2s.
+        "finviz": {"US": 4, "HK": 2, "IN": 2, "JP": 2, "TW": 2},
+        # yfinance batch is already a single bulk HTTP call; threading
+        # there caused fork issues in Celery workers, so default to 1.
+        "yfinance": {"US": 1, "HK": 1, "IN": 1, "JP": 1, "TW": 1},
     }
 
     # Per-market backoff caps. Non-US markets get longer caps because
@@ -273,6 +294,36 @@ class RateBudgetPolicy:
         if override is not None and override > 0:
             return int(override)
         return self._DEFAULT_BATCH_SIZE.get(provider, {}).get(normalized, 50)
+
+    # ------------------------------------------------------------------
+    # Worker count per provider × market
+    # ------------------------------------------------------------------
+    def get_provider_workers(self, provider: str, market: Optional[str]) -> int:
+        """Return the number of parallel workers to use for ``provider`` calls
+        targeting ``market``.
+
+        Resolution: ``settings.<provider>_workers_<market>`` env override →
+        built-in default → 1.
+
+        The Redis rate limiter still serializes egress globally for the
+        provider×market key, so this number does not increase req/sec —
+        it only fills idle time during HTTP RTT.
+        """
+        normalized = normalize_market(market)
+        if normalized == SHARED_SENTINEL:
+            normalized = "US"
+
+        attr_provider = provider.replace(":", "_")
+        attr = f"{attr_provider}_workers_{normalized.lower()}"
+        override = getattr(settings, attr, None)
+        if override is not None:
+            try:
+                value = int(override)
+                if value > 0:
+                    return value
+            except (TypeError, ValueError):
+                logger.warning("RateBudgetPolicy: invalid workers override %s=%r", attr, override)
+        return self._DEFAULT_PROVIDER_WORKERS.get(provider, {}).get(normalized, 1)
 
     # ------------------------------------------------------------------
     # Backoff parameters

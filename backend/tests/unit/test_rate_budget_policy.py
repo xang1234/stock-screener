@@ -89,7 +89,10 @@ class TestRateInterval:
 
 class TestBatchSize:
     @pytest.mark.parametrize("market,expected_default", [
-        ("US", 50), ("HK", 50), ("JP", 50), ("TW", 50),
+        # US bumped to 150 in steady-crunching-candle: Yahoo accepts up to
+        # MAX_PRICE_BATCH_SIZE (200) and the adaptive shrink halves on
+        # transient failure. Non-US markets stay at 50 (smaller universes).
+        ("US", 150), ("HK", 50), ("JP", 50), ("TW", 50),
     ])
     def test_default_batch_sizes(self, market, expected_default):
         with patch("app.services.rate_budget_policy.settings") as mock_settings:
