@@ -211,6 +211,32 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
     assert stored[1].ratio_10day == 1.9
 
 
+def test_backfill_range_fallback_uses_market_calendar(monkeypatch):
+    db = _make_db_session()
+    price_cache = MagicMock()
+    service = BreadthCalculatorService(db, price_cache, market="HK")
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, current_date):
+            assert market == "HK"
+            return current_date == date(2026, 3, 13)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+
+    result = service.backfill_range(date(2026, 3, 12), date(2026, 3, 14))
+
+    assert result == {
+        "total_dates": 1,
+        "processed": 0,
+        "errors": 1,
+        "error_dates": ["2026-03-13"],
+    }
+    price_cache.get_many_cached_only.assert_not_called()
+
+
 def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
     db = _make_db_session()
     db.add(StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE))

@@ -180,12 +180,13 @@ class BreadthCalculatorService:
         requested trading date in chronological order.
         """
         if trading_dates is None:
-            from ..utils.market_hours import is_trading_day
+            from ..wiring.bootstrap import get_market_calendar_service
 
+            calendar_service = get_market_calendar_service()
             trading_dates = [
                 current_date
                 for current_date in pd.date_range(start=start_date, end=end_date, freq="D").date
-                if is_trading_day(current_date)
+                if calendar_service.is_trading_day(self.market, current_date)
             ]
 
         ordered_dates = sorted(trading_dates)
