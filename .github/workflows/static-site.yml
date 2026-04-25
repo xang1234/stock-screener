@@ -200,7 +200,8 @@ jobs:
         run: |
           cd backend
           python -m app.scripts.sync_daily_price_bundle_from_github \
-            --market "${{ matrix.market }}"
+            --market "${{ matrix.market }}" \
+            --allow-stale
 
       - name: Export market static data bundle
         run: |

@@ -27,6 +27,11 @@ def main() -> int:
         default=None,
         help="Override the number of imported symbols to warm back into Redis immediately.",
     )
+    parser.add_argument(
+        "--allow-stale",
+        action="store_true",
+        help="Import a stale GitHub bundle as a baseline before refreshing daily prices.",
+    )
     args = parser.parse_args()
 
     prepare_runtime()
@@ -37,6 +42,7 @@ def main() -> int:
             db,
             market=args.market,
             warm_redis_symbols=args.warm_redis_symbols,
+            allow_stale=args.allow_stale,
         )
 
     print("Daily GitHub price sync result:")

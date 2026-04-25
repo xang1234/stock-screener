@@ -169,6 +169,34 @@ def test_sync_from_github_up_to_date_exposes_manifest_metadata():
     db.close()
 
 
+def test_sync_from_github_passes_allow_stale_to_release_sync_service():
+    session_factory = _make_session()
+    db = session_factory()
+    service = _make_service(session_factory)
+    captured_kwargs = {}
+
+    def _fetch_latest_bundle(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {
+            "status": "missing_manifest",
+            "manifest": None,
+            "bundle_path": None,
+            "bundle_asset_name": None,
+            "source_revision": None,
+        }
+
+    result = service.sync_from_github(
+        db,
+        market="US",
+        allow_stale=True,
+        github_sync_service=SimpleNamespace(fetch_latest_bundle=_fetch_latest_bundle),
+    )
+
+    assert result["status"] == "missing_manifest"
+    assert captured_kwargs["allow_stale"] is True
+    db.close()
+
+
 def test_sync_from_github_rejects_manifest_market_mismatch():
     session_factory = _make_session()
     db = session_factory()

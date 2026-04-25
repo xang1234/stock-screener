@@ -108,6 +108,35 @@ def test_sync_daily_price_bundle_from_github_script_calls_service(monkeypatch, c
     assert "Daily GitHub price sync result:" in capsys.readouterr().out
 
 
+def test_sync_daily_price_bundle_from_github_script_passes_allow_stale(monkeypatch, capsys):
+    monkeypatch.setattr(sync_daily_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(sync_daily_script, "SessionLocal", _fake_session)
+    captured_kwargs = {}
+
+    def _sync_from_github(db, **kwargs):
+        _ = db
+        captured_kwargs.update(kwargs)
+        return {
+            "status": "success",
+            "market": kwargs["market"],
+            "source_revision": "daily_prices_us:20260421120000",
+        }
+
+    monkeypatch.setattr(
+        sync_daily_script,
+        "get_daily_price_bundle_service",
+        lambda: SimpleNamespace(sync_from_github=_sync_from_github),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["sync_daily_price_bundle_from_github", "--market", "US", "--allow-stale"],
+    )
+
+    assert sync_daily_script.main() == 0
+    assert captured_kwargs["allow_stale"] is True
+    assert "Daily GitHub price sync result:" in capsys.readouterr().out
+
+
 def test_sync_daily_price_bundle_treats_live_only_as_non_fatal(monkeypatch, capsys):
     monkeypatch.setattr(sync_daily_script, "prepare_runtime", lambda: None)
     monkeypatch.setattr(sync_daily_script, "SessionLocal", _fake_session)
