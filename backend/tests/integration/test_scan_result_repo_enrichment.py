@@ -17,6 +17,9 @@ from app.models.stock_universe import StockUniverse
 from app.services.market_taxonomy_service import MarketTaxonomyEntry
 
 
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture
 def session():
     """Create an isolated in-memory DB with full schema."""

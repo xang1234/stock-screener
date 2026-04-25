@@ -102,6 +102,49 @@ async def test_get_current_rankings_supports_non_us_market_scope(monkeypatch, cl
 
 
 @pytest.mark.asyncio
+async def test_get_current_rankings_supports_india_market_scope(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    class _FakeMarketGroupService:
+        def get_current_rankings(self, db, *, market, limit=197, calculation_date=None):  # noqa: ARG002
+            assert market == "IN"
+            return [
+                {
+                    "industry_group": "Banks",
+                    "date": "2026-04-18",
+                    "rank": 8,
+                    "avg_rs_rating": 78.0,
+                    "median_rs_rating": 77.5,
+                    "weighted_avg_rs_rating": 79.0,
+                    "rs_std_dev": 4.2,
+                    "num_stocks": 12,
+                    "num_stocks_rs_above_80": 5,
+                    "pct_rs_above_80": 41.67,
+                    "top_symbol": "HDFCBANK.NS",
+                    "top_rs_rating": 94.0,
+                    "rank_change_1w": -1,
+                    "rank_change_1m": 3,
+                    "rank_change_3m": None,
+                    "rank_change_6m": None,
+                }
+            ]
+
+    monkeypatch.setattr(
+        "app.api.v1.groups._get_market_group_service",
+        lambda: _FakeMarketGroupService(),
+    )
+
+    response = await client.get("/api/v1/groups/rankings/current", params={"market": "IN"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["market_scope"] == "IN"
+    assert payload["rankings"][0]["top_symbol"] == "HDFCBANK.NS"
+
+
+@pytest.mark.asyncio
 async def test_get_rank_movers_supports_non_us_market_scope(monkeypatch, client):
     from app.services import server_auth
 

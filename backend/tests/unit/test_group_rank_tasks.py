@@ -584,8 +584,8 @@ def test_backfill_group_rankings_1year_passes_market_to_service(monkeypatch):
     fake_db = MagicMock()
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(monkeypatch, datetime(2026, 3, 20, 17, 40, 0))
     monkeypatch.setattr(snapshot_module, "safe_publish_groups_bootstrap", lambda: None)
-    monkeypatch.setattr(module, "get_eastern_now", lambda: datetime(2026, 3, 20, 17, 40, 0))
 
     fake_service = MagicMock()
     fake_service.backfill_rankings_optimized.return_value = {

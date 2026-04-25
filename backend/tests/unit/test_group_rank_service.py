@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from uuid import uuid4
 from unittest.mock import Mock
 
@@ -47,6 +47,28 @@ def _make_group_rank_service(price_cache: Mock | None = None, benchmark_cache: M
         price_cache=price_cache or Mock(),
         benchmark_cache=benchmark_cache or Mock(),
     )
+
+
+def test_find_missing_dates_uses_market_calendar(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    class _FakeCalendarService:
+        def market_now(self, market):
+            assert market == "HK"
+            return datetime(2026, 3, 20, 9, 0, 0)
+
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 19)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+
+    missing = service.find_missing_dates(db_session, lookback_days=2, market="HK")
+
+    assert missing == [date(2026, 3, 19)]
 
 
 def test_get_historical_rank_picks_closest_date():

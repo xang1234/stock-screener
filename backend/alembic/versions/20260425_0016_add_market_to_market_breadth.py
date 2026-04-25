@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -10,6 +12,8 @@ revision = "20260425_0016"
 down_revision = "20260424_0015"
 branch_labels = None
 depends_on = None
+
+logger = logging.getLogger(__name__)
 
 
 SQLITE_BATCH_NAMING_CONVENTION = {
@@ -92,17 +96,31 @@ def downgrade() -> None:
     dialect = bind.dialect.name
 
     # Non-US rows would collide with a date-only UNIQUE; drop them first.
+    logger.warning(
+        "Downgrading %s deletes all non-US market_breadth rows before removing "
+        "the market column: DELETE FROM market_breadth WHERE market <> 'US'",
+        revision,
+    )
     bind.execute(sa.text("DELETE FROM market_breadth WHERE market <> 'US'"))
 
     if dialect == "sqlite":
-        with op.batch_alter_table("market_breadth") as batch_op:
-            try:
-                batch_op.drop_constraint("uix_breadth_date_market", type_="unique")
-            except Exception:
-                pass
+        date_market_unique_names = _unique_constraint_names_for_columns(
+            bind,
+            "market_breadth",
+            ("date", "market"),
+            unnamed_sqlite_name="uix_breadth_date_market",
+        )
+        with op.batch_alter_table(
+            "market_breadth",
+            naming_convention=SQLITE_BATCH_NAMING_CONVENTION,
+        ) as batch_op:
+            for name in date_market_unique_names:
+                batch_op.drop_constraint(name, type_="unique")
             # Don't re-create the date-only unique: the baseline migration
             # never materialized it as a named constraint, so recreating here
             # could leave production in a state it never had before.
+            batch_op.drop_index("idx_breadth_market_date")
+            batch_op.drop_column("market")
     else:
         inspector = sa.inspect(bind)
         existing = {
@@ -112,6 +130,5 @@ def downgrade() -> None:
             op.drop_constraint(
                 "uix_breadth_date_market", "market_breadth", type_="unique"
             )
-
-    op.drop_index("idx_breadth_market_date", table_name="market_breadth")
-    op.drop_column("market_breadth", "market")
+        op.drop_index("idx_breadth_market_date", table_name="market_breadth")
+        op.drop_column("market_breadth", "market")

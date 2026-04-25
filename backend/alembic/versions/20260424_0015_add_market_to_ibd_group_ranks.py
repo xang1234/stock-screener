@@ -92,13 +92,19 @@ def downgrade() -> None:
     # the schema half-reverted.
     bind.execute(sa.text("DELETE FROM ibd_group_ranks WHERE market <> 'US'"))
 
+    op.drop_index("idx_ibd_group_rank_market_date", table_name="ibd_group_ranks")
+
     if dialect == "sqlite":
-        with op.batch_alter_table("ibd_group_ranks") as batch_op:
+        with op.batch_alter_table(
+            "ibd_group_ranks",
+            naming_convention=SQLITE_BATCH_NAMING_CONVENTION,
+        ) as batch_op:
             batch_op.drop_constraint("uix_ibd_group_rank_market_date", type_="unique")
             batch_op.create_unique_constraint(
                 "uix_ibd_group_rank_date",
                 ["industry_group", "date"],
             )
+            batch_op.drop_column("market")
     else:
         op.drop_constraint(
             "uix_ibd_group_rank_market_date", "ibd_group_ranks", type_="unique"
@@ -108,6 +114,4 @@ def downgrade() -> None:
             "ibd_group_ranks",
             ["industry_group", "date"],
         )
-
-    op.drop_index("idx_ibd_group_rank_market_date", table_name="ibd_group_ranks")
-    op.drop_column("ibd_group_ranks", "market")
+        op.drop_column("ibd_group_ranks", "market")

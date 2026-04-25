@@ -1285,8 +1285,11 @@ class IBDGroupRankService:
         """Find missing trading dates in the ranking data for one market."""
         from sqlalchemy import func
 
+        from ..wiring.bootstrap import get_market_calendar_service
+
         normalized_market = (market or "US").upper()
-        today = datetime.now().date()
+        calendar_service = get_market_calendar_service()
+        today = calendar_service.market_now(normalized_market).date()
         start_date = today - timedelta(days=lookback_days)
 
         existing_dates = db.query(
@@ -1298,13 +1301,12 @@ class IBDGroupRankService:
 
         existing_date_set = {d[0] for d in existing_dates}
 
-        # Generate all weekdays in range
+        # Generate all market trading days in range
         missing_dates = []
         current_date = start_date
 
         while current_date < today:  # Exclude today
-            # Skip weekends (Saturday=5, Sunday=6)
-            if current_date.weekday() < 5:
+            if calendar_service.is_trading_day(normalized_market, current_date):
                 if current_date not in existing_date_set:
                     missing_dates.append(current_date)
             current_date += timedelta(days=1)

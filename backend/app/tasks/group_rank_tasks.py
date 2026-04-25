@@ -29,7 +29,6 @@ from ..services.ibd_group_rank_service import (
     MissingIBDIndustryMappingsError,
 )
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
-from ..utils.market_hours import get_eastern_now  # retained for non-market-scoped call sites
 from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
@@ -631,8 +630,15 @@ def backfill_group_rankings_1year(self, market: str = "US"):
     Returns:
         Dict with backfill statistics
     """
+    from .market_queues import normalize_market
+
+    effective_market = normalize_market(market)
+
     logger.info("=" * 60)
-    logger.info("TASK: 1-Year Backfill IBD Group Rankings (Optimized)")
+    logger.info(
+        "TASK: 1-Year Backfill IBD Group Rankings (Optimized) (%s)",
+        effective_market,
+    )
     logger.info("=" * 60)
 
     db = SessionLocal()
@@ -641,8 +647,9 @@ def backfill_group_rankings_1year(self, market: str = "US"):
     try:
         service = get_group_rank_service()
 
-        # Calculate date range
-        end_date = get_eastern_now().date()
+        # Calculate date range in the target market's local calendar.
+        calendar_service = get_market_calendar_service()
+        end_date = calendar_service.market_now(effective_market).date()
         start_date = end_date - timedelta(days=365)
 
         # Use optimized backfill (deletes existing, pre-fetches all data, uses validated universe)
@@ -650,7 +657,7 @@ def backfill_group_rankings_1year(self, market: str = "US"):
             db,
             start_date,
             end_date,
-            market=market,
+            market=effective_market,
         )
 
         duration = time.time() - start_time
