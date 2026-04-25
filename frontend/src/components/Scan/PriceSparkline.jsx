@@ -120,7 +120,7 @@ function PriceSparkline({
         }}
       >
         {/* Sparkline Chart */}
-        <Box sx={{ width: showChange ? 60 : '100%', height: '100%', flex: showChange ? 'none' : 1 }}>
+        <Box sx={{ width: showChange ? 150 : '100%', height: '100%', flex: showChange ? 'none' : 1 }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={chartData}

@@ -301,7 +301,7 @@ function StaticHomePage() {
                           trend={row.price_trend}
                           change1d={row.price_change_1d}
                           industry={row.ibd_industry_group}
-                          width={390}
+                          width={195}
                           height={28}
                         />
                       </Box>
