@@ -29,11 +29,52 @@ def _make_price_df(end_date: date, base_close: float = 100.0) -> pd.DataFrame:
     )
 
 
+def _flat_price_df(end_date: date, close: float = 100.0, periods: int = 80) -> pd.DataFrame:
+    index = pd.bdate_range(end=end_date, periods=periods)
+    closes = [close] * len(index)
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": [1_000_000] * len(index),
+        },
+        index=index,
+    )
+
+
 def _make_db_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[StockUniverse.__table__, MarketBreadth.__table__])
     testing_session_local = sessionmaker(bind=engine)
     return testing_session_local()
+
+
+def _add_breadth_row(
+    db,
+    row_date: date,
+    *,
+    up: int,
+    down: int,
+    total: int = 2,
+) -> None:
+    db.add(MarketBreadth(
+        date=row_date,
+        stocks_up_4pct=up,
+        stocks_down_4pct=down,
+        ratio_5day=None,
+        ratio_10day=None,
+        stocks_up_25pct_quarter=0,
+        stocks_down_25pct_quarter=0,
+        stocks_up_25pct_month=0,
+        stocks_down_25pct_month=0,
+        stocks_up_50pct_month=0,
+        stocks_down_50pct_month=0,
+        stocks_up_13pct_34days=0,
+        stocks_down_13pct_34days=0,
+        total_stocks_scanned=total,
+    ))
 
 
 def test_calculate_daily_breadth_uses_bulk_cached_prices(monkeypatch):
@@ -162,28 +203,18 @@ def test_backfill_range_reuses_loaded_histories_and_computes_chronological_ratio
         ))
     db.commit()
 
-    aaa_df = _make_price_df(date(2026, 3, 20), 100.0)
-    aaa_df.attrs["symbol"] = "AAA"
-    bbb_df = _make_price_df(date(2026, 3, 20), 200.0)
-    bbb_df.attrs["symbol"] = "BBB"
+    aaa_df = _flat_price_df(date(2026, 3, 13))
+    bbb_df = _flat_price_df(date(2026, 3, 13))
+    aaa_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 105.0
+    aaa_df.loc[pd.Timestamp(date(2026, 3, 13)), "Close"] = 110.0
+    bbb_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 95.0
+    bbb_df.loc[pd.Timestamp(date(2026, 3, 13)), "Close"] = 100.0
 
     price_cache = MagicMock()
     price_cache.get_many_cached_only.return_value = {"AAA": aaa_df, "BBB": None}
     price_cache.get_historical_data.return_value = bbb_df
     service = BreadthCalculatorService(db, price_cache)
     trading_dates = [date(2026, 3, 12), date(2026, 3, 13)]
-
-    def fake_stock_metrics(prices_df, end_date):
-        symbol = prices_df.attrs["symbol"]
-        if end_date == trading_dates[0]:
-            if symbol == "AAA":
-                return {"pct_change_1d": 5.0, "pct_change_21d": 0.0, "pct_change_34d": 0.0, "pct_change_63d": 0.0}
-            return {"pct_change_1d": -5.0, "pct_change_21d": 0.0, "pct_change_34d": 0.0, "pct_change_63d": 0.0}
-        if symbol == "AAA":
-            return {"pct_change_1d": 5.0, "pct_change_21d": 0.0, "pct_change_34d": 0.0, "pct_change_63d": 0.0}
-        return {"pct_change_1d": 4.5, "pct_change_21d": 0.0, "pct_change_34d": 0.0, "pct_change_63d": 0.0}
-
-    monkeypatch.setattr(service, "_calculate_stock_metrics_from_prices", fake_stock_metrics)
 
     result = service.backfill_range(trading_dates[0], trading_dates[-1], trading_dates=trading_dates)
 
@@ -242,36 +273,19 @@ def test_backfill_range_is_idempotent_for_existing_records(monkeypatch):
     db.add(StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE))
     db.commit()
 
-    aaa_df = _make_price_df(date(2026, 3, 20), 100.0)
-    aaa_df.attrs["symbol"] = "AAA"
+    up_df = _flat_price_df(date(2026, 3, 12))
+    up_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 105.0
+    down_df = _flat_price_df(date(2026, 3, 12))
+    down_df.loc[pd.Timestamp(date(2026, 3, 12)), "Close"] = 95.0
 
     price_cache = MagicMock()
-    price_cache.get_many_cached_only.return_value = {"AAA": aaa_df}
+    price_cache.get_many_cached_only.side_effect = [
+        {"AAA": up_df},
+        {"AAA": down_df},
+    ]
     service = BreadthCalculatorService(db, price_cache)
     trading_date = date(2026, 3, 12)
-
-    monkeypatch.setattr(
-        service,
-        "_calculate_stock_metrics_from_prices",
-        lambda prices_df, end_date: {
-            "pct_change_1d": 5.0,
-            "pct_change_21d": 0.0,
-            "pct_change_34d": 0.0,
-            "pct_change_63d": 0.0,
-        },
-    )
     service.backfill_range(trading_date, trading_date, trading_dates=[trading_date])
-
-    monkeypatch.setattr(
-        service,
-        "_calculate_stock_metrics_from_prices",
-        lambda prices_df, end_date: {
-            "pct_change_1d": -5.0,
-            "pct_change_21d": 0.0,
-            "pct_change_34d": 0.0,
-            "pct_change_63d": 0.0,
-        },
-    )
     service.backfill_range(trading_date, trading_date, trading_dates=[trading_date])
 
     records = db.query(MarketBreadth).filter(MarketBreadth.date == trading_date).all()
@@ -325,3 +339,123 @@ def test_backfill_range_cache_only_skips_historical_fetch_fallback(monkeypatch):
     assert result["errors"] == 0
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAA", "BBB"], period="2y")
     price_cache.get_historical_data.assert_not_called()
+
+
+def test_fill_gaps_delegates_to_single_backfill_range_call(monkeypatch):
+    db = _make_db_session()
+    price_cache = MagicMock()
+    service = BreadthCalculatorService(db, price_cache)
+    expected = {
+        "total_dates": 2,
+        "processed": 2,
+        "errors": 0,
+        "error_dates": [],
+    }
+    backfill_range = MagicMock(return_value=expected)
+    monkeypatch.setattr(service, "backfill_range", backfill_range)
+    monkeypatch.setattr(
+        service,
+        "calculate_daily_breadth",
+        MagicMock(side_effect=AssertionError("fill_gaps should use range backfill")),
+    )
+
+    result = service.fill_gaps([date(2026, 3, 16), date(2026, 3, 12)])
+
+    assert result == expected
+    backfill_range.assert_called_once_with(
+        date(2026, 3, 12),
+        date(2026, 3, 16),
+        trading_dates=[date(2026, 3, 12), date(2026, 3, 16)],
+    )
+
+
+def test_backfill_range_sparse_dates_include_existing_intervening_counts_in_ratios():
+    db = _make_db_session()
+    db.add_all([
+        StockUniverse(symbol="AAA", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+        StockUniverse(symbol="BBB", is_active=True, status=UNIVERSE_STATUS_ACTIVE),
+    ])
+
+    for prior_date in [
+        date(2026, 2, 26),
+        date(2026, 2, 27),
+        date(2026, 3, 2),
+        date(2026, 3, 3),
+        date(2026, 3, 4),
+        date(2026, 3, 5),
+        date(2026, 3, 6),
+        date(2026, 3, 9),
+        date(2026, 3, 10),
+        date(2026, 3, 11),
+    ]:
+        _add_breadth_row(db, prior_date, up=1, down=1)
+    _add_breadth_row(db, date(2026, 3, 13), up=10, down=1)
+    db.commit()
+
+    aaa_df = _flat_price_df(date(2026, 3, 16))
+    bbb_df = _flat_price_df(date(2026, 3, 16))
+    for item_date, aaa_close, bbb_close in (
+        (date(2026, 3, 12), 105.0, 95.0),
+        (date(2026, 3, 13), 100.0, 100.0),
+        (date(2026, 3, 16), 105.0, 95.0),
+    ):
+        aaa_df.loc[pd.Timestamp(item_date), "Close"] = aaa_close
+        bbb_df.loc[pd.Timestamp(item_date), "Close"] = bbb_close
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only.return_value = {"AAA": aaa_df, "BBB": bbb_df}
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.backfill_range(
+        date(2026, 3, 12),
+        date(2026, 3, 16),
+        trading_dates=[date(2026, 3, 12), date(2026, 3, 16)],
+    )
+
+    assert result["processed"] == 2
+    rows = {
+        row.date: row
+        for row in db.query(MarketBreadth)
+        .filter(MarketBreadth.date.in_([date(2026, 3, 12), date(2026, 3, 16)]))
+        .all()
+    }
+    assert rows[date(2026, 3, 12)].ratio_5day == 1.0
+    assert rows[date(2026, 3, 16)].ratio_5day == 2.8
+
+
+def test_backfill_range_vectorized_changes_preserve_rounded_thresholds():
+    db = _make_db_session()
+    symbols = ["UP4", "UP13", "UP25", "UP50"]
+    db.add_all([
+        StockUniverse(symbol=symbol, is_active=True, status=UNIVERSE_STATUS_ACTIVE)
+        for symbol in symbols
+    ])
+    db.commit()
+
+    latest_date = date(2026, 3, 20)
+    latest_closes = {
+        "UP4": 103.995,
+        "UP13": 112.995,
+        "UP25": 124.995,
+        "UP50": 149.995,
+    }
+    price_data = {}
+    for symbol, latest_close in latest_closes.items():
+        frame = _flat_price_df(latest_date)
+        frame.loc[pd.Timestamp(latest_date), "Close"] = latest_close
+        price_data[symbol] = frame
+
+    price_cache = MagicMock()
+    price_cache.get_many_cached_only.return_value = price_data
+    service = BreadthCalculatorService(db, price_cache)
+
+    result = service.backfill_range(latest_date, latest_date, trading_dates=[latest_date])
+
+    assert result["processed"] == 1
+    row = db.query(MarketBreadth).filter(MarketBreadth.date == latest_date).one()
+    assert row.total_stocks_scanned == 4
+    assert row.stocks_up_4pct == 4
+    assert row.stocks_up_13pct_34days == 3
+    assert row.stocks_up_25pct_month == 2
+    assert row.stocks_up_25pct_quarter == 2
+    assert row.stocks_up_50pct_month == 1

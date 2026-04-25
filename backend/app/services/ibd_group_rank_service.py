@@ -5,11 +5,13 @@ Calculates daily rankings based on average RS rating of constituent stocks.
 """
 import logging
 import statistics
-from typing import Optional, Dict, List
+from dataclasses import dataclass
+from typing import Any, Optional, Dict, List
 from datetime import datetime, date, timedelta
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
@@ -42,6 +44,18 @@ class MissingIBDIndustryMappingsError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("IBD industry mappings are not loaded")
+
+
+@dataclass(frozen=True)
+class GroupRankPrefetchData:
+    """Cached inputs shared by daily, backfill, and gap-fill group rank runs."""
+
+    benchmark_prices: Optional[pd.DataFrame]
+    prices_by_symbol: Dict[str, Optional[pd.DataFrame]]
+    active_symbols: set[str]
+    market_caps: Dict[str, float]
+    stats: Dict[str, Any]
+    symbols_by_group: Dict[str, List[str]]
 
 
 class IBDGroupRankService:
@@ -108,13 +122,14 @@ class IBDGroupRankService:
         )
 
         # Pre-fetch all data upfront (benchmark + all stock prices).
-        spy_data, all_prices, active_symbols, market_caps, prefetch_stats = (
+        prefetch = self._coerce_prefetch_data(
             self._prefetch_all_data(
                 db,
                 market=normalized_market,
                 cache_only=cache_only,
             )
         )
+        prefetch_stats = prefetch.stats
 
         if require_complete_cache:
             if not prefetch_stats.get("spy_cached"):
@@ -130,29 +145,37 @@ class IBDGroupRankService:
                     cache_miss_symbols, target_symbols, miss_ratio * 100,
                 )
 
-        if spy_data is None or spy_data.empty:
+        if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
             logger.error(
                 "Failed to get benchmark data for market %s", normalized_market,
             )
             return []
 
-        # Filter benchmark data to calculation_date for accurate historical rankings
-        if calculation_date < datetime.now().date():
-            spy_data_filtered = spy_data[spy_data.index.date <= calculation_date]
-        else:
-            spy_data_filtered = spy_data
-
-        # Prepare benchmark prices series (most recent first for RS calculator)
-        spy_prices = spy_data_filtered['Close'].sort_index(ascending=False)
+        rs_by_date = self._calculate_rs_by_symbol_for_dates(
+            prefetch,
+            [calculation_date],
+        )
+        rs_by_symbol = rs_by_date.get(calculation_date, {})
 
         # Calculate RS for each group using pre-fetched cached data
         group_metrics = []
 
         for group_name in all_groups:
             try:
-                metrics = self._calculate_group_rs_from_cache(
-                    db, group_name, spy_prices, all_prices, active_symbols, market_caps, calculation_date,
-                    market=normalized_market,
+                symbols = prefetch.symbols_by_group.get(group_name)
+                if symbols is None:
+                    symbols = self._get_validated_group_symbols(
+                        db,
+                        group_name,
+                        prefetch.active_symbols,
+                        market=normalized_market,
+                    )
+                metrics = self._calculate_group_metrics_from_rs(
+                    group_name,
+                    symbols,
+                    rs_by_symbol,
+                    prefetch.market_caps,
+                    calculation_date,
                 )
                 if metrics:
                     group_metrics.append(metrics)
@@ -309,41 +332,40 @@ class IBDGroupRankService:
         ``(industry_group, date, market)``.
         """
         try:
-            for metrics in group_metrics:
-                existing = db.query(IBDGroupRank).filter(
-                    and_(
-                        IBDGroupRank.industry_group == metrics['industry_group'],
-                        IBDGroupRank.date == calculation_date,
-                        IBDGroupRank.market == market,
-                    )
-                ).first()
+            values = [
+                self._ranking_values(calculation_date, metrics, market=market)
+                for metrics in group_metrics
+            ]
+            if not values:
+                db.commit()
+                return
 
-                if existing:
-                    existing.rank = metrics['rank']
-                    existing.avg_rs_rating = metrics['avg_rs_rating']
-                    existing.num_stocks = metrics['num_stocks']
-                    existing.num_stocks_rs_above_80 = metrics['num_stocks_rs_above_80']
-                    existing.top_symbol = metrics['top_symbol']
-                    existing.top_rs_rating = metrics['top_rs_rating']
-                    existing.median_rs_rating = metrics.get('median_rs_rating')
-                    existing.weighted_avg_rs_rating = metrics.get('weighted_avg_rs_rating')
-                    existing.rs_std_dev = metrics.get('rs_std_dev')
-                else:
-                    record = IBDGroupRank(
-                        market=market,
-                        industry_group=metrics['industry_group'],
-                        date=calculation_date,
-                        rank=metrics['rank'],
-                        avg_rs_rating=metrics['avg_rs_rating'],
-                        median_rs_rating=metrics.get('median_rs_rating'),
-                        weighted_avg_rs_rating=metrics.get('weighted_avg_rs_rating'),
-                        rs_std_dev=metrics.get('rs_std_dev'),
-                        num_stocks=metrics['num_stocks'],
-                        num_stocks_rs_above_80=metrics['num_stocks_rs_above_80'],
-                        top_symbol=metrics['top_symbol'],
-                        top_rs_rating=metrics['top_rs_rating'],
+            bind = db.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                stmt = pg_insert(IBDGroupRank).values(values)
+                db.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["industry_group", "date", "market"],
+                        set_={
+                            "rank": stmt.excluded.rank,
+                            "avg_rs_rating": stmt.excluded.avg_rs_rating,
+                            "median_rs_rating": stmt.excluded.median_rs_rating,
+                            "weighted_avg_rs_rating": stmt.excluded.weighted_avg_rs_rating,
+                            "rs_std_dev": stmt.excluded.rs_std_dev,
+                            "num_stocks": stmt.excluded.num_stocks,
+                            "num_stocks_rs_above_80": stmt.excluded.num_stocks_rs_above_80,
+                            "top_symbol": stmt.excluded.top_symbol,
+                            "top_rs_rating": stmt.excluded.top_rs_rating,
+                        },
                     )
-                    db.add(record)
+                )
+            else:
+                self._store_rankings_sqlalchemy_fallback(
+                    db,
+                    calculation_date,
+                    values,
+                    market=market,
+                )
 
             db.commit()
             logger.info(
@@ -355,6 +377,57 @@ class IBDGroupRankService:
             logger.error(f"Error storing rankings: {e}", exc_info=True)
             db.rollback()
             raise
+
+    @staticmethod
+    def _ranking_values(calculation_date: date, metrics: Dict, *, market: str) -> Dict[str, Any]:
+        return {
+            "market": market,
+            "industry_group": metrics["industry_group"],
+            "date": calculation_date,
+            "rank": metrics["rank"],
+            "avg_rs_rating": metrics["avg_rs_rating"],
+            "median_rs_rating": metrics.get("median_rs_rating"),
+            "weighted_avg_rs_rating": metrics.get("weighted_avg_rs_rating"),
+            "rs_std_dev": metrics.get("rs_std_dev"),
+            "num_stocks": metrics["num_stocks"],
+            "num_stocks_rs_above_80": metrics["num_stocks_rs_above_80"],
+            "top_symbol": metrics["top_symbol"],
+            "top_rs_rating": metrics["top_rs_rating"],
+        }
+
+    def _store_rankings_sqlalchemy_fallback(
+        self,
+        db: Session,
+        calculation_date: date,
+        values: List[Dict[str, Any]],
+        *,
+        market: str,
+    ) -> None:
+        """SQLite-compatible bulk upsert fallback for tests/local tools."""
+        group_names = [value["industry_group"] for value in values]
+        existing_records = db.query(IBDGroupRank).filter(
+            and_(
+                IBDGroupRank.industry_group.in_(group_names),
+                IBDGroupRank.date == calculation_date,
+                IBDGroupRank.market == market,
+            )
+        ).all()
+        existing_by_group = {record.industry_group: record for record in existing_records}
+
+        for value in values:
+            existing = existing_by_group.get(value["industry_group"])
+            if existing:
+                existing.rank = value["rank"]
+                existing.avg_rs_rating = value["avg_rs_rating"]
+                existing.num_stocks = value["num_stocks"]
+                existing.num_stocks_rs_above_80 = value["num_stocks_rs_above_80"]
+                existing.top_symbol = value["top_symbol"]
+                existing.top_rs_rating = value["top_rs_rating"]
+                existing.median_rs_rating = value.get("median_rs_rating")
+                existing.weighted_avg_rs_rating = value.get("weighted_avg_rs_rating")
+                existing.rs_std_dev = value.get("rs_std_dev")
+            else:
+                db.add(IBDGroupRank(**value))
 
     def get_current_rankings(
         self,
@@ -396,12 +469,14 @@ class IBDGroupRankService:
         if not rankings:
             return []
 
-        # Get historical dates for rank changes
+        # Calendar-day target offsets for rank changes. The lookup below picks
+        # the closest stored ranking within a small window; these are not exact
+        # trading-session offsets.
         period_days = {
-            '1w': 5,    # 5 trading days
-            '1m': 21,   # ~1 month
-            '3m': 63,   # ~3 months
-            '6m': 126,  # ~6 months
+            '1w': 5,
+            '1m': 21,
+            '3m': 63,
+            '6m': 126,
         }
 
         # Batch fetch all historical ranks in ONE query instead of 197*4=788 queries
@@ -489,7 +564,8 @@ class IBDGroupRankService:
         if not group_names or not period_days:
             return {}
 
-        # Calculate date range covering all periods (max period + 7-day buffer)
+        # Calculate calendar-date range covering all target offsets plus the
+        # closest-record match window.
         max_days = max(period_days.values())
         earliest_date = current_date - timedelta(days=max_days + 7)
 
@@ -526,7 +602,7 @@ class IBDGroupRankService:
             for period_name, days in period_days.items():
                 target_date = current_date - timedelta(days=days)
 
-                # Filter to records within 7-day window of target
+                # Filter to records within a 7-calendar-day window of target
                 candidates = [
                     (d, r) for d, r in history
                     if abs((d - target_date).days) <= 7
@@ -572,7 +648,7 @@ class IBDGroupRankService:
         # Current (most recent) data
         current = records[0]
 
-        # Get rank changes
+        # Get rank changes using calendar-day target offsets with closest-record matching.
         period_days = {'1w': 5, '1m': 21, '3m': 63, '6m': 126}
         rank_changes = {}
 
@@ -800,13 +876,28 @@ class IBDGroupRankService:
         count = count_above_80 or 0
         return round((count / total_count) * 100, 1)
 
+    @staticmethod
+    def _coerce_prefetch_data(prefetch: Any) -> GroupRankPrefetchData:
+        """Accept legacy test tuples while the service uses a named prefetch object."""
+        if isinstance(prefetch, GroupRankPrefetchData):
+            return prefetch
+        spy_data, all_prices, active_symbols, market_caps, stats = prefetch
+        return GroupRankPrefetchData(
+            benchmark_prices=spy_data,
+            prices_by_symbol=all_prices,
+            active_symbols=active_symbols,
+            market_caps=market_caps,
+            stats=stats,
+            symbols_by_group={},
+        )
+
     def _prefetch_all_data(
         self,
         db: Session,
         *,
         market: str | None = None,
         cache_only: bool = False,
-    ) -> tuple:
+    ) -> GroupRankPrefetchData:
         """
         Pre-fetch all data needed for backfill in one batch.
 
@@ -839,12 +930,19 @@ class IBDGroupRankService:
                 "Failed to get benchmark data (%s) for market %s",
                 benchmark_symbol, normalized_market,
             )
-            return None, {}, set(), {}, {
-                "target_symbols": 0,
-                "symbols_with_prices": 0,
-                "cache_miss_symbols": 0,
-                "spy_cached": False,
-            }
+            return GroupRankPrefetchData(
+                benchmark_prices=None,
+                prices_by_symbol={},
+                active_symbols=set(),
+                market_caps={},
+                stats={
+                    "target_symbols": 0,
+                    "symbols_with_prices": 0,
+                    "cache_miss_symbols": 0,
+                    "spy_cached": False,
+                },
+                symbols_by_group={},
+            )
 
         logger.info(f"Fetched benchmark {benchmark_symbol}: {len(spy_data)} days")
 
@@ -859,6 +957,7 @@ class IBDGroupRankService:
         # 3. Collect ALL unique symbols across ALL groups for this market
         all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
         symbols_to_fetch = set()
+        symbols_by_group: Dict[str, List[str]] = {}
         skipped_unsupported_symbols = set()
 
         for group in all_groups:
@@ -871,6 +970,7 @@ class IBDGroupRankService:
                     skipped_unsupported_symbols.add(symbol)
                     continue
                 validated.append(symbol)
+            symbols_by_group[group] = validated
             symbols_to_fetch.update(validated)
 
         logger.info(
@@ -903,7 +1003,14 @@ class IBDGroupRankService:
             "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
         }
 
-        return spy_data, all_prices, active_symbols, market_caps, stats
+        return GroupRankPrefetchData(
+            benchmark_prices=spy_data,
+            prices_by_symbol=all_prices,
+            active_symbols=active_symbols,
+            market_caps=market_caps,
+            stats=stats,
+            symbols_by_group=symbols_by_group,
+        )
 
     def _delete_rankings_for_range(
         self,
@@ -1042,6 +1149,162 @@ class IBDGroupRankService:
             'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
         }
 
+    def _calculate_rs_by_symbol_for_dates(
+        self,
+        prefetch: GroupRankPrefetchData,
+        calculation_dates: List[date],
+    ) -> Dict[date, Dict[str, float]]:
+        """Precompute RS ratings once per symbol/date for group aggregation."""
+        ordered_dates = sorted(calculation_dates)
+        result: Dict[date, Dict[str, float]] = {calc_date: {} for calc_date in ordered_dates}
+        benchmark_close = self._close_series(prefetch.benchmark_prices)
+        if benchmark_close is None:
+            return result
+
+        periods = self.rs_calculator.PERIODS
+        max_period = max(periods.keys())
+        benchmark_returns = self._period_returns(benchmark_close, periods.keys())
+        benchmark_positions = self._positions_by_date(benchmark_close.index, ordered_dates)
+
+        for symbol, prices in prefetch.prices_by_symbol.items():
+            close = self._close_series(prices)
+            if close is None:
+                continue
+
+            symbol_returns = self._period_returns(close, periods.keys())
+            symbol_positions = self._positions_by_date(close.index, ordered_dates)
+            for calc_date in ordered_dates:
+                latest_idx = symbol_positions.get(calc_date, -1)
+                if latest_idx < max_period - 1:
+                    continue
+
+                benchmark_idx = benchmark_positions.get(calc_date, -1)
+                weighted_performance = 0.0
+                total_weight = 0.0
+                for period, weight in periods.items():
+                    if benchmark_idx < period - 1:
+                        continue
+                    stock_return = self._series_value_at(symbol_returns[period], latest_idx)
+                    benchmark_return = self._series_value_at(benchmark_returns[period], benchmark_idx)
+                    if stock_return is None or benchmark_return is None:
+                        continue
+                    weighted_performance += (stock_return - benchmark_return) * weight
+                    total_weight += weight
+
+                if total_weight == 0:
+                    continue
+
+                relative_performance = weighted_performance / total_weight
+                rs_rating = self._scale_relative_performance_to_rs(relative_performance)
+                if rs_rating > 0:
+                    result[calc_date][symbol] = rs_rating
+
+        return result
+
+    @staticmethod
+    def _close_series(prices: Optional[pd.DataFrame]) -> Optional[pd.Series]:
+        if prices is None or prices.empty or "Close" not in prices.columns:
+            return None
+        close = prices["Close"].sort_index()
+        return close
+
+    @staticmethod
+    def _period_returns(close: pd.Series, periods) -> Dict[int, pd.Series]:
+        return {
+            period: close.pct_change(periods=period - 1)
+            for period in periods
+        }
+
+    @staticmethod
+    def _positions_by_date(index, calculation_dates: List[date]) -> Dict[date, int]:
+        positions: Dict[date, int] = {}
+        for calc_date in calculation_dates:
+            exclusive_end = pd.Timestamp(calc_date) + pd.Timedelta(days=1)
+            if isinstance(index, pd.DatetimeIndex) and index.tz is not None and exclusive_end.tz is None:
+                exclusive_end = exclusive_end.tz_localize(index.tz)
+            positions[calc_date] = index.searchsorted(exclusive_end, side="left") - 1
+        return positions
+
+    @staticmethod
+    def _series_value_at(series: pd.Series, index: int) -> Optional[float]:
+        try:
+            value = series.iloc[index]
+        except IndexError:
+            return None
+        if pd.isna(value):
+            return None
+        return float(value)
+
+    @staticmethod
+    def _scale_relative_performance_to_rs(relative_performance: float) -> float:
+        if relative_performance >= 0:
+            rs_rating = min(100, 50 + (relative_performance * 100))
+        else:
+            rs_rating = max(0, 50 + (relative_performance * 100))
+        return round(rs_rating, 2)
+
+    def _calculate_group_metrics_from_rs(
+        self,
+        group_name: str,
+        symbols: List[str],
+        rs_by_symbol: Dict[str, float],
+        market_caps: Dict[str, float],
+        calculation_date: date,
+    ) -> Optional[Dict]:
+        """Aggregate precomputed per-symbol RS ratings into one group metric row."""
+        if not symbols:
+            logger.debug(f"No validated symbols found for group: {group_name}")
+            return None
+
+        rs_ratings = []
+        top_symbol = None
+        top_rs = -1
+        rs_above_80_count = 0
+        weighted_sum = 0.0
+        weighted_total = 0.0
+
+        for symbol in symbols:
+            rs_rating = rs_by_symbol.get(symbol)
+            if rs_rating is None or rs_rating <= 0:
+                continue
+
+            rs_ratings.append(rs_rating)
+            if rs_rating > top_rs:
+                top_rs = rs_rating
+                top_symbol = symbol
+            if rs_rating >= 80:
+                rs_above_80_count += 1
+
+            market_cap = market_caps.get(symbol)
+            if market_cap:
+                weighted_sum += rs_rating * market_cap
+                weighted_total += market_cap
+
+        if len(rs_ratings) < 3:
+            logger.debug(
+                f"Insufficient data for group {group_name}: "
+                f"only {len(rs_ratings)} stocks with valid RS"
+            )
+            return None
+
+        avg_rs = sum(rs_ratings) / len(rs_ratings)
+        median_rs = statistics.median(rs_ratings)
+        rs_std_dev = statistics.pstdev(rs_ratings) if len(rs_ratings) > 1 else None
+        weighted_avg_rs = (weighted_sum / weighted_total) if weighted_total > 0 else None
+
+        return {
+            'industry_group': group_name,
+            'date': calculation_date,
+            'avg_rs_rating': round(avg_rs, 2),
+            'median_rs_rating': round(median_rs, 2),
+            'weighted_avg_rs_rating': round(weighted_avg_rs, 2) if weighted_avg_rs is not None else None,
+            'rs_std_dev': round(rs_std_dev, 2) if rs_std_dev is not None else None,
+            'num_stocks': len(rs_ratings),
+            'num_stocks_rs_above_80': rs_above_80_count,
+            'top_symbol': top_symbol,
+            'top_rs_rating': round(top_rs, 2) if top_rs > 0 else None,
+        }
+
     def backfill_rankings_optimized(
         self,
         db: Session,
@@ -1080,11 +1343,11 @@ class IBDGroupRankService:
         )
 
         # 2. Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+        prefetch = self._coerce_prefetch_data(
             self._prefetch_all_data(db, market=normalized_market)
         )
 
-        if spy_data is None or spy_data.empty:
+        if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
             logger.error("Cannot proceed without SPY data")
             return {
                 'start_date': start_date.isoformat(),
@@ -1097,7 +1360,10 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
+        all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
+            db,
+            market=normalized_market,
+        )
 
         # 3. Generate trading dates using the target market's calendar.
         from ..wiring.bootstrap import get_market_calendar_service
@@ -1112,36 +1378,26 @@ class IBDGroupRankService:
 
         logger.info(
             f"Processing {len(dates_to_process)} trading days with "
-            f"{len(all_prices)} symbols across {len(all_groups)} groups"
+            f"{len(prefetch.prices_by_symbol)} symbols across {len(all_groups)} groups"
         )
 
         processed = 0
         errors = 0
+        rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, dates_to_process)
 
         # 4. Process each date using cached data
         for calc_date in dates_to_process:
             try:
-                # Filter SPY to calculation_date
-                spy_filtered = spy_data[spy_data.index.date <= calc_date]
-                if spy_filtered.empty:
-                    logger.warning(f"No SPY data for {calc_date}")
-                    errors += 1
-                    continue
-
-                spy_prices = spy_filtered['Close'].sort_index(ascending=False)
-
                 # Calculate RS for each group from cache
                 group_metrics = []
+                rs_by_symbol = rs_by_date.get(calc_date, {})
                 for group_name in all_groups:
-                    metrics = self._calculate_group_rs_from_cache(
-                        db,
+                    metrics = self._calculate_group_metrics_from_rs(
                         group_name,
-                        spy_prices,
-                        all_prices,
-                        active_symbols,
-                        market_caps,
+                        prefetch.symbols_by_group.get(group_name, []),
+                        rs_by_symbol,
+                        prefetch.market_caps,
                         calc_date,
-                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)
@@ -1413,11 +1669,11 @@ class IBDGroupRankService:
         start_time = datetime.now()
 
         # Pre-fetch ALL data upfront
-        spy_data, all_prices, active_symbols, market_caps, _prefetch_stats = (
+        prefetch = self._coerce_prefetch_data(
             self._prefetch_all_data(db, market=normalized_market)
         )
 
-        if spy_data is None or spy_data.empty:
+        if prefetch.benchmark_prices is None or prefetch.benchmark_prices.empty:
             logger.error("Cannot proceed without SPY data")
             return {
                 'total_dates': len(missing_dates),
@@ -1427,7 +1683,10 @@ class IBDGroupRankService:
                 'error': 'Failed to fetch SPY benchmark data',
             }
 
-        all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
+        all_groups = list(prefetch.symbols_by_group) or IBDIndustryService.get_all_groups(
+            db,
+            market=normalized_market,
+        )
 
         stats = {
             'total_dates': len(missing_dates),
@@ -1436,29 +1695,20 @@ class IBDGroupRankService:
             'errors': 0,
         }
 
+        rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, missing_dates)
+
         for calc_date in missing_dates:
             try:
-                # Filter SPY to calculation_date
-                spy_filtered = spy_data[spy_data.index.date <= calc_date]
-                if spy_filtered.empty:
-                    logger.warning(f"No SPY data for {calc_date}")
-                    stats['errors'] += 1
-                    continue
-
-                spy_prices = spy_filtered['Close'].sort_index(ascending=False)
-
                 # Calculate RS for each group from cache
                 group_metrics = []
+                rs_by_symbol = rs_by_date.get(calc_date, {})
                 for group_name in all_groups:
-                    metrics = self._calculate_group_rs_from_cache(
-                        db,
+                    metrics = self._calculate_group_metrics_from_rs(
                         group_name,
-                        spy_prices,
-                        all_prices,
-                        active_symbols,
-                        market_caps,
+                        prefetch.symbols_by_group.get(group_name, []),
+                        rs_by_symbol,
+                        prefetch.market_caps,
                         calc_date,
-                        market=normalized_market,
                     )
                     if metrics:
                         group_metrics.append(metrics)

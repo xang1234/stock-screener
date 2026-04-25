@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -15,6 +15,7 @@ from app.services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
+from app.services import ibd_group_rank_service as group_rank_module
 
 
 def _add_rank(session, group, rank_date, rank):
@@ -184,6 +185,27 @@ def _price_frame() -> pd.DataFrame:
     )
 
 
+def _trend_price_frame(
+    *,
+    end: str = "2026-03-20",
+    periods: int = 260,
+    start_close: float = 100.0,
+    daily_return: float = 0.001,
+) -> pd.DataFrame:
+    dates = pd.date_range(end=end, periods=periods, freq="B")
+    closes = [start_close * ((1 + daily_return) ** idx) for idx in range(periods)]
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes,
+            "Low": closes,
+            "Close": closes,
+            "Volume": 1_000_000,
+        },
+        index=dates,
+    )
+
+
 def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monkeypatch):
     service = _make_group_rank_service()
     spy_data = _price_frame()
@@ -220,16 +242,17 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    spy, all_prices, active_symbols, market_caps, stats = service._prefetch_all_data(
+    prefetch = service._prefetch_all_data(
         db_session,
         cache_only=True,
     )
 
-    assert spy is spy_data
-    assert all_prices == {"AAPL": aapl_data}
-    assert active_symbols == {"AAPL"}
-    assert market_caps == {"AAPL": 1_000_000_000}
-    assert stats == {
+    assert prefetch.benchmark_prices is spy_data
+    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
+    assert prefetch.active_symbols == {"AAPL"}
+    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
+    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
+    assert prefetch.stats == {
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
@@ -275,16 +298,17 @@ def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, mo
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    spy, all_prices, active_symbols, market_caps, stats = service._prefetch_all_data(
+    prefetch = service._prefetch_all_data(
         db_session,
         cache_only=True,
     )
 
-    assert spy is spy_data
-    assert all_prices == {"AAPL": None}
-    assert active_symbols == {"AAPL"}
-    assert market_caps == {"AAPL": 1_000_000_000}
-    assert stats == {
+    assert prefetch.benchmark_prices is spy_data
+    assert prefetch.prices_by_symbol == {"AAPL": None}
+    assert prefetch.active_symbols == {"AAPL"}
+    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
+    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
+    assert prefetch.stats == {
         "target_symbols": 1,
         "symbols_with_prices": 0,
         "cache_miss_symbols": 1,
@@ -329,16 +353,17 @@ def test_prefetch_all_data_uses_fetch_capable_prices_for_historical(db_session, 
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    spy, all_prices, active_symbols, market_caps, stats = service._prefetch_all_data(
+    prefetch = service._prefetch_all_data(
         db_session,
         cache_only=False,
     )
 
-    assert spy is spy_data
-    assert all_prices == {"AAPL": aapl_data}
-    assert active_symbols == {"AAPL"}
-    assert market_caps == {"AAPL": 1_000_000_000}
-    assert stats == {
+    assert prefetch.benchmark_prices is spy_data
+    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
+    assert prefetch.active_symbols == {"AAPL"}
+    assert prefetch.market_caps == {"AAPL": 1_000_000_000}
+    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
+    assert prefetch.stats == {
         "target_symbols": 1,
         "symbols_with_prices": 1,
         "cache_miss_symbols": 0,
@@ -383,15 +408,16 @@ def test_prefetch_all_data_skips_unsupported_suffix_symbols(db_session, monkeypa
         lambda db, symbols: {"AAPL": 1_000_000_000},
     )
 
-    _spy, all_prices, active_symbols, _market_caps, stats = service._prefetch_all_data(
+    prefetch = service._prefetch_all_data(
         db_session,
         cache_only=False,
     )
 
-    assert active_symbols == {"AAPL", "MZYX-U"}
-    assert all_prices == {"AAPL": aapl_data}
-    assert stats["target_symbols"] == 1
-    assert stats["skipped_unsupported_symbols"] == 1
+    assert prefetch.active_symbols == {"AAPL", "MZYX-U"}
+    assert prefetch.prices_by_symbol == {"AAPL": aapl_data}
+    assert prefetch.symbols_by_group == {"Software": ["AAPL"]}
+    assert prefetch.stats["target_symbols"] == 1
+    assert prefetch.stats["skipped_unsupported_symbols"] == 1
     price_cache.get_many.assert_called_once_with(["AAPL"], period="2y")
 
 
@@ -432,6 +458,80 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
     store_rankings.assert_not_called()
+
+
+def test_store_rankings_bulk_loads_existing_rows_once_for_sqlite_fallback():
+    service = _make_group_rank_service()
+    db_session = _make_session()
+    engine = db_session.get_bind()
+    query_counts = {"select": 0}
+
+    def count_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            query_counts["select"] += 1
+
+    try:
+        db_session.add(
+            IBDGroupRank(
+                industry_group="Software",
+                date=date(2026, 3, 20),
+                rank=9,
+                avg_rs_rating=70.0,
+                num_stocks=3,
+                num_stocks_rs_above_80=1,
+                top_symbol="OLD",
+                top_rs_rating=80.0,
+            )
+        )
+        db_session.commit()
+
+        event.listen(engine, "before_cursor_execute", count_selects)
+        service._store_rankings(
+            db_session,
+            date(2026, 3, 20),
+            [
+                {
+                    "industry_group": "Software",
+                    "rank": 1,
+                    "avg_rs_rating": 91.0,
+                    "median_rs_rating": 90.0,
+                    "weighted_avg_rs_rating": 92.0,
+                    "rs_std_dev": 1.5,
+                    "num_stocks": 4,
+                    "num_stocks_rs_above_80": 3,
+                    "top_symbol": "AAPL",
+                    "top_rs_rating": 99.0,
+                },
+                {
+                    "industry_group": "Semiconductors",
+                    "rank": 2,
+                    "avg_rs_rating": 88.0,
+                    "median_rs_rating": 87.0,
+                    "weighted_avg_rs_rating": 89.0,
+                    "rs_std_dev": 2.5,
+                    "num_stocks": 5,
+                    "num_stocks_rs_above_80": 4,
+                    "top_symbol": "NVDA",
+                    "top_rs_rating": 98.0,
+                },
+            ],
+        )
+        event.remove(engine, "before_cursor_execute", count_selects)
+
+        rows = db_session.query(IBDGroupRank).order_by(IBDGroupRank.rank).all()
+
+        assert query_counts["select"] == 1
+        assert len(rows) == 2
+        assert rows[0].industry_group == "Software"
+        assert rows[0].top_symbol == "AAPL"
+        assert rows[1].industry_group == "Semiconductors"
+    finally:
+        try:
+            event.remove(engine, "before_cursor_execute", count_selects)
+        except Exception:
+            pass
+        db_session.rollback()
+        db_session.close()
 
 
 def test_calculate_group_rankings_fails_explicitly_when_ibd_mappings_missing(db_session, monkeypatch):
@@ -620,6 +720,105 @@ def test_fill_gaps_optimized_accepts_prefetch_stats_tuple(db_session, monkeypatc
     assert stats["errors"] == 1
     assert prefetch_kwargs["market"] == "HK"
     assert group_kwargs["market"] == "HK"
+
+
+def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    symbols = ["AAA", "BBB", "CCC"]
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=price_data,
+        prices_by_symbol={symbol: price_data for symbol in symbols},
+        active_symbols=set(symbols),
+        market_caps={symbol: 1_000_000_000 for symbol in symbols},
+        stats={
+            "target_symbols": 3,
+            "symbols_with_prices": 3,
+            "cache_miss_symbols": 0,
+            "spy_cached": True,
+            "skipped_unsupported_symbols": 0,
+        },
+        symbols_by_group={"Software": symbols},
+    )
+    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["Software"],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("optimized gapfill should reuse prefetched symbols_by_group")
+        ),
+    )
+
+    stats = service.fill_gaps_optimized(db_session, [date(2026, 3, 20)], market="US")
+
+    assert stats["processed"] == 1
+    row = db_session.query(IBDGroupRank).filter(
+        IBDGroupRank.date == date(2026, 3, 20),
+        IBDGroupRank.industry_group == "Software",
+    ).one()
+    assert row.rank == 1
+    assert row.num_stocks == 3
+    assert row.avg_rs_rating == 50.0
+
+
+def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_history(
+    db_session,
+    monkeypatch,
+):
+    service = _make_group_rank_service()
+    calculation_date = date(2026, 3, 20)
+    symbols = ["AAA", "BBB", "CCC", "NEW"]
+    benchmark_prices = _trend_price_frame(daily_return=0.0004)
+    prices_by_symbol = {
+        "AAA": _trend_price_frame(start_close=100.0, daily_return=0.0020),
+        "BBB": _trend_price_frame(start_close=80.0, daily_return=0.0011),
+        "CCC": _trend_price_frame(start_close=120.0, daily_return=-0.0002),
+        "NEW": _trend_price_frame(start_close=50.0, daily_return=0.0040, periods=200),
+    }
+    market_caps = {
+        "AAA": 10_000_000_000,
+        "BBB": 5_000_000_000,
+        "CCC": 1_000_000_000,
+        "NEW": 50_000_000_000,
+    }
+    active_symbols = set(symbols)
+    monkeypatch.setattr(
+        service,
+        "_get_validated_group_symbols",
+        lambda *_args, **_kwargs: symbols,
+    )
+    legacy_metrics = service._calculate_group_rs_from_cache(
+        db_session,
+        "Software",
+        benchmark_prices["Close"].sort_index(ascending=False),
+        prices_by_symbol,
+        active_symbols,
+        market_caps,
+        calculation_date,
+    )
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=benchmark_prices,
+        prices_by_symbol=prices_by_symbol,
+        active_symbols=active_symbols,
+        market_caps=market_caps,
+        stats={},
+        symbols_by_group={"Software": symbols},
+    )
+
+    rs_by_date = service._calculate_rs_by_symbol_for_dates(prefetch, [calculation_date])
+    vectorized_metrics = service._calculate_group_metrics_from_rs(
+        "Software",
+        symbols,
+        rs_by_date[calculation_date],
+        market_caps,
+        calculation_date,
+    )
+
+    assert set(rs_by_date[calculation_date]) == {"AAA", "BBB", "CCC"}
+    assert vectorized_metrics == legacy_metrics
 
 
 def test_get_current_rankings_can_target_explicit_date():

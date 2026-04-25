@@ -236,14 +236,11 @@ class BreadthCalculatorService:
                     if price_history is None or price_history.empty:
                         continue
 
-                    for calc_date in ordered_dates:
-                        stock_metrics = self._calculate_stock_metrics_from_prices(
-                            prices_df=price_history,
-                            end_date=calc_date,
-                        )
-                        if stock_metrics is None:
-                            continue
-
+                    stock_metrics_by_date = self._calculate_stock_metrics_by_date_from_prices(
+                        prices_df=price_history,
+                        calculation_dates=ordered_dates,
+                    )
+                    for calc_date, stock_metrics in stock_metrics_by_date.items():
                         daily_metrics = metrics_by_date[calc_date]
                         self._apply_stock_metrics(daily_metrics, stock_metrics)
                         daily_metrics['total_stocks_scanned'] += 1
@@ -253,25 +250,35 @@ class BreadthCalculatorService:
                         metrics_by_date[calc_date]['error_stocks'] += 1
 
         prior_counts = self._get_prior_breadth_counts(ordered_dates[0], limit=10)
+        existing_counts = self._get_existing_breadth_counts_by_date(
+            ordered_dates[0],
+            ordered_dates[-1],
+        )
         rolling_counts = deque(prior_counts, maxlen=10)
 
         processed_dates: list[date] = []
         error_dates: list[str] = []
 
-        for calc_date in ordered_dates:
-            metrics = metrics_by_date[calc_date]
-            ratios = self._calculate_ratios_from_counts(list(rolling_counts))
-            metrics['ratio_5day'] = ratios['ratio_5day']
-            metrics['ratio_10day'] = ratios['ratio_10day']
+        requested_dates = set(ordered_dates)
+        timeline_dates = sorted(set(existing_counts.keys()) | requested_dates)
+        for calc_date in timeline_dates:
+            if calc_date in requested_dates:
+                metrics = metrics_by_date[calc_date]
+                ratios = self._calculate_ratios_from_counts(list(rolling_counts))
+                metrics['ratio_5day'] = ratios['ratio_5day']
+                metrics['ratio_10day'] = ratios['ratio_10day']
 
-            if metrics['total_stocks_scanned'] > 0:
-                processed_dates.append(calc_date)
-                rolling_counts.append({
-                    'stocks_up_4pct': metrics['stocks_up_4pct'],
-                    'stocks_down_4pct': metrics['stocks_down_4pct'],
-                })
-            else:
-                error_dates.append(calc_date.strftime('%Y-%m-%d'))
+                if metrics['total_stocks_scanned'] > 0:
+                    processed_dates.append(calc_date)
+                    rolling_counts.append({
+                        'stocks_up_4pct': metrics['stocks_up_4pct'],
+                        'stocks_down_4pct': metrics['stocks_down_4pct'],
+                    })
+                else:
+                    error_dates.append(calc_date.strftime('%Y-%m-%d'))
+                continue
+
+            rolling_counts.append(existing_counts[calc_date])
 
         if processed_dates:
             total_duration_seconds = (datetime.now() - start_time).total_seconds()
@@ -292,6 +299,59 @@ class BreadthCalculatorService:
             'errors': len(error_dates),
             'error_dates': error_dates,
         }
+
+    def _calculate_stock_metrics_by_date_from_prices(
+        self,
+        prices_df: Optional[pd.DataFrame],
+        calculation_dates: List[date],
+    ) -> Dict[date, Dict]:
+        """Vectorized per-symbol breadth metrics for multiple dates."""
+        if prices_df is None or prices_df.empty or "Close" not in prices_df.columns:
+            return {}
+
+        prices_df = prices_df.sort_index()
+        close = prices_df["Close"]
+        pct_changes = {
+            days: close.pct_change(periods=days).mul(100).round(2).replace(
+                [float("inf"), float("-inf")],
+                0.0,
+            )
+            for days in (1, 21, 34, 63)
+        }
+
+        metrics_by_date: Dict[date, Dict] = {}
+        for calc_date in calculation_dates:
+            end_ts = self._timestamp_for_index(calc_date, prices_df.index)
+            latest_idx = prices_df.index.searchsorted(end_ts, side='right') - 1
+            if latest_idx < 69:
+                logger.debug(f"Insufficient cached data through {calc_date}: {latest_idx + 1} days")
+                continue
+
+            metrics_by_date[calc_date] = {
+                'pct_change_1d': self._pct_change_at_index(pct_changes[1], latest_idx),
+                'pct_change_21d': self._pct_change_at_index(pct_changes[21], latest_idx),
+                'pct_change_34d': self._pct_change_at_index(pct_changes[34], latest_idx),
+                'pct_change_63d': self._pct_change_at_index(pct_changes[63], latest_idx),
+            }
+
+        return metrics_by_date
+
+    @staticmethod
+    def _timestamp_for_index(item_date: date, index) -> pd.Timestamp:
+        timestamp = pd.Timestamp(item_date)
+        if isinstance(index, pd.DatetimeIndex) and index.tz is not None and timestamp.tz is None:
+            return timestamp.tz_localize(index.tz)
+        return timestamp
+
+    @staticmethod
+    def _pct_change_at_index(series: pd.Series, latest_idx: int) -> float:
+        try:
+            value = series.iloc[latest_idx]
+        except IndexError:
+            return 0.0
+        if pd.isna(value):
+            return 0.0
+        return float(value)
 
     def _calculate_stock_metrics_from_prices(
         self,
@@ -478,6 +538,21 @@ class BreadthCalculatorService:
             for record in ordered_records
         ]
 
+    def _get_existing_breadth_counts_by_date(self, start_date: date, end_date: date) -> Dict[date, Dict[str, int]]:
+        """Fetch existing breadth counts inside a sparse backfill window."""
+        records = self.db.query(MarketBreadth).filter(
+            MarketBreadth.date >= start_date,
+            MarketBreadth.date <= end_date,
+            MarketBreadth.market == self.market,
+        ).order_by(MarketBreadth.date.asc()).all()
+        return {
+            record.date: {
+                'stocks_up_4pct': record.stocks_up_4pct,
+                'stocks_down_4pct': record.stocks_down_4pct,
+            }
+            for record in records
+        }
+
     def _calculate_ratios_from_counts(self, prior_counts: List[Dict[str, int]]) -> Dict:
         """Calculate 5-day and 10-day ratios from prior daily counts."""
         if len(prior_counts) < 5:
@@ -630,35 +705,13 @@ class BreadthCalculatorService:
                 'error_dates': []
             }
 
-        logger.info(f"Filling {len(missing_dates)} missing breadth dates")
-
-        stats = {
-            'total_dates': len(missing_dates),
-            'processed': 0,
-            'errors': 0,
-            'error_dates': []
-        }
-
-        # Process oldest first for ratio calculation accuracy
-        for calc_date in sorted(missing_dates):
-            try:
-                # Calculate breadth for this date
-                metrics = self.calculate_daily_breadth(calculation_date=calc_date)
-
-                if metrics and metrics.get('total_stocks_scanned', 0) > 0:
-                    # Store the record
-                    self._store_breadth_record(calc_date, metrics)
-                    stats['processed'] += 1
-                    logger.debug(f"Filled gap for {calc_date}: {metrics['total_stocks_scanned']} stocks")
-                else:
-                    stats['errors'] += 1
-                    stats['error_dates'].append(calc_date.strftime('%Y-%m-%d'))
-                    logger.warning(f"No data for {calc_date}")
-
-            except Exception as e:
-                stats['errors'] += 1
-                stats['error_dates'].append(calc_date.strftime('%Y-%m-%d'))
-                logger.error(f"Error filling gap for {calc_date}: {e}")
+        ordered_dates = sorted(missing_dates)
+        logger.info(f"Filling {len(ordered_dates)} missing breadth dates")
+        stats = self.backfill_range(
+            ordered_dates[0],
+            ordered_dates[-1],
+            trading_dates=ordered_dates,
+        )
 
         logger.info(
             f"Gap-fill complete: {stats['processed']} processed, "
