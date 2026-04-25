@@ -23,6 +23,7 @@ function PriceSparkline({
   width = 100,
   height = 28,
   showChange = true,  // Whether to show the 1-day change text
+  sparklineWidth = 60,  // Width of the inner sparkline chart when showChange is true
 }) {
   // Transform data for chart
   const { chartData, domain, color, fillColor } = useMemo(() => {
@@ -120,7 +121,7 @@ function PriceSparkline({
         }}
       >
         {/* Sparkline Chart */}
-        <Box sx={{ width: showChange ? 150 : '100%', height: '100%', flex: showChange ? 'none' : 1 }}>
+        <Box sx={{ width: showChange ? sparklineWidth : '100%', height: '100%', flex: showChange ? 'none' : 1 }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={chartData}
@@ -165,7 +166,8 @@ export default memo(PriceSparkline, (prevProps, nextProps) => {
       prevProps.trend === nextProps.trend &&
       prevProps.change1d === nextProps.change1d &&
       prevProps.width === nextProps.width &&
-      prevProps.height === nextProps.height
+      prevProps.height === nextProps.height &&
+      prevProps.sparklineWidth === nextProps.sparklineWidth
     );
   }
 
@@ -179,6 +181,7 @@ export default memo(PriceSparkline, (prevProps, nextProps) => {
     prevProps.trend === nextProps.trend &&
     prevProps.change1d === nextProps.change1d &&
     prevProps.width === nextProps.width &&
-    prevProps.height === nextProps.height
+    prevProps.height === nextProps.height &&
+    prevProps.sparklineWidth === nextProps.sparklineWidth
   );
 });

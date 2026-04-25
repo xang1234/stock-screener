@@ -303,6 +303,7 @@ function StaticHomePage() {
                           industry={row.ibd_industry_group}
                           width={195}
                           height={28}
+                          sparklineWidth={150}
                         />
                       </Box>
                     ) : '-'}
