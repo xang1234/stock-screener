@@ -465,6 +465,16 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     prefetch_kwargs: dict = {}
     group_kwargs: dict = {}
 
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 17)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+
     monkeypatch.setattr(
         service,
         "_delete_rankings_for_range",
@@ -500,11 +510,68 @@ def test_backfill_rankings_optimized_accepts_prefetch_stats_tuple(db_session, mo
     assert group_kwargs["market"] == "HK"
 
 
+def test_backfill_rankings_optimized_uses_market_calendar(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    calendar_calls: list[tuple[str, date]] = []
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            calendar_calls.append((market, day))
+            return market == "HK" and day == date(2026, 3, 18)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
+    monkeypatch.setattr(service, "_delete_rankings_for_range", lambda *args, **kw: 0)
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, **kw: (
+            price_data,
+            {"0700.HK": price_data},
+            {"0700.HK"},
+            {"0700.HK": 1_000_000_000},
+            {"target_symbols": 1, "symbols_with_prices": 1, "cache_miss_symbols": 0, "spy_cached": True},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: [],
+    )
+
+    stats = service.backfill_rankings_optimized(
+        db_session,
+        date(2026, 3, 17),
+        date(2026, 3, 19),
+        market="HK",
+    )
+
+    assert stats["total_dates"] == 1
+    assert stats["errors"] == 1
+    assert calendar_calls == [
+        ("HK", date(2026, 3, 19)),
+        ("HK", date(2026, 3, 18)),
+        ("HK", date(2026, 3, 17)),
+    ]
+
+
 def test_backfill_rankings_checks_existing_rows_by_market(db_session, monkeypatch):
     service = _make_group_rank_service()
 
     _add_rank(db_session, "Software", date(2026, 3, 17), 5)
     db_session.commit()
+
+    class _FakeCalendarService:
+        def is_trading_day(self, market, day):
+            assert market == "HK"
+            return day == date(2026, 3, 17)
+
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_market_calendar_service",
+        lambda: _FakeCalendarService(),
+    )
 
     calculate_calls: list[date] = []
     monkeypatch.setattr(

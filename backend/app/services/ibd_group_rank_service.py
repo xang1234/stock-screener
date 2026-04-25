@@ -1099,11 +1099,14 @@ class IBDGroupRankService:
 
         all_groups = IBDIndustryService.get_all_groups(db, market=normalized_market)
 
-        # 3. Generate trading dates (weekdays)
+        # 3. Generate trading dates using the target market's calendar.
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        calendar_service = get_market_calendar_service()
         dates_to_process = []
         current = end_date
         while current >= start_date:
-            if current.weekday() < 5:  # Monday=0, Friday=4
+            if calendar_service.is_trading_day(normalized_market, current):
                 dates_to_process.append(current)
             current -= timedelta(days=1)
 
@@ -1215,13 +1218,15 @@ class IBDGroupRankService:
             normalized_market, start_date, end_date,
         )
 
-        # Generate list of dates to process (weekdays only)
+        # Generate list of dates to process using the target market's calendar.
+        from ..wiring.bootstrap import get_market_calendar_service
+
+        calendar_service = get_market_calendar_service()
         current_date = end_date
         dates_to_process = []
 
         while current_date >= start_date:
-            # Skip weekends
-            if current_date.weekday() < 5:  # Monday=0, Friday=4
+            if calendar_service.is_trading_day(normalized_market, current_date):
                 dates_to_process.append(current_date)
             current_date -= timedelta(days=1)
 
