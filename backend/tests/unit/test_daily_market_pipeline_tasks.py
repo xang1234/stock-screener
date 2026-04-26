@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 
 class _FakeSignature:
     def __init__(self, task: str, *, args=None, kwargs=None):
@@ -79,3 +81,15 @@ def test_queue_daily_market_pipeline_skips_disabled_market(monkeypatch):
     assert result["status"] == "skipped"
     assert result["reason"] == "market HK is disabled in local runtime preferences"
 
+
+def test_guard_price_refresh_fails_lock_contention_skip_result():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "already_running",
+        "skipped": True,
+        "reason": "data_fetch_lock_active",
+    }
+
+    with pytest.raises(RuntimeError, match="Daily price refresh failed for HK"):
+        module.guard_price_refresh.run(result, market="HK")

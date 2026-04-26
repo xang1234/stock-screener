@@ -35,7 +35,14 @@ def _result_failed(result: Any) -> bool:
         return True
     if result.get("error") or result.get("reason") == "not_trading_day":
         return True
-    return str(result.get("status", "")).lower() in {"failed", "partial"}
+    if result.get("skipped") is True:
+        return True
+    return str(result.get("status", "")).lower() in {
+        "already_running",
+        "failed",
+        "partial",
+        "skipped",
+    }
 
 
 @celery_app.task(

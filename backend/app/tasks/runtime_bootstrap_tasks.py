@@ -187,7 +187,6 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: li
                 db,
                 market=str(market).upper(),
                 lifecycle="bootstrap",
-                task_name="runtime_bootstrap",
                 message="Bootstrap failed",
             )
     finally:
@@ -198,8 +197,8 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: li
         extra={
             "primary_market": primary_market,
             "enabled_markets": enabled_markets,
-            "args": args,
-            "kwargs": kwargs,
+            "callback_args": args,
+            "callback_kwargs": kwargs,
         },
     )
     return {

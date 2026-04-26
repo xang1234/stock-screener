@@ -171,3 +171,38 @@ def test_queue_local_runtime_bootstrap_chains_all_enabled_markets_before_complet
         "task:TW",
         "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
     ]
+
+
+def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    calls = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda _db, _state: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_current_market_activity_failed",
+        lambda _db, **kwargs: calls.append(kwargs),
+    )
+
+    result = module.fail_local_runtime_bootstrap.run(
+        primary_market="US",
+        enabled_markets=["HK"],
+    )
+
+    assert result["status"] == "failed"
+    assert calls == [
+        {
+            "market": "HK",
+            "lifecycle": "bootstrap",
+            "message": "Bootstrap failed",
+        }
+    ]
