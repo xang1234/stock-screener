@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Iterator, Protocol, Sequence
 
@@ -49,6 +49,11 @@ from app.domain.scanning.ports import (
     ProgressSink,
     StockDataProvider,
     StockScanner,
+)
+from app.services.bootstrap_cache_coverage import (
+    BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+    MISSING_SYMBOL_PREVIEW_LIMIT,
+    evaluate_bootstrap_cache_coverage,
 )
 from app.utils.symbol_support import split_supported_price_symbols
 from app.use_cases.feature_store.publish_run import (
@@ -164,6 +169,8 @@ class BuildDailySnapshotCommand:
     require_bulk_prefetch: bool = False
     static_parallel_workers: int = 1
     static_chunk_size: int | None = None
+    bootstrap_cache_only_if_covered: bool = False
+    bootstrap_coverage_report: dict | None = None
     publish_pointer_key: str = "latest_published"
     market: str = "US"
 
@@ -260,7 +267,64 @@ class BuildDailyFeatureSnapshotUseCase:
                 raise ValidationError("Universe resolved to zero symbols")
             run_warnings: list[str] = []
             skipped_symbols: list[str] = []
-            if cmd.exclude_unsupported_price_symbols:
+            bootstrap_gate_report: dict | None = None
+            if cmd.bootstrap_cache_only_if_covered:
+                supported_symbols, unsupported_symbols = split_supported_price_symbols(symbols)
+                bootstrap_gate_report = dict(cmd.bootstrap_coverage_report or {})
+                if not bootstrap_gate_report and supported_symbols:
+                    session = getattr(uow, "session", None)
+                    if session is None:
+                        raise RuntimeError(
+                            "Bootstrap cache-only coverage gate requires a SQLAlchemy session "
+                            "or bootstrap_coverage_report"
+                        )
+                    bootstrap_gate_report = evaluate_bootstrap_cache_coverage(
+                        session,
+                        market=cmd.market,
+                        symbols=supported_symbols,
+                        as_of_date=cmd.as_of_date,
+                    )
+                elif not bootstrap_gate_report:
+                    bootstrap_gate_report = {"eligible": False}
+                eligible = bool(bootstrap_gate_report.get("eligible"))
+                bootstrap_gate_report.update(
+                    {
+                        "threshold": BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+                        "mode": "cache_only" if eligible else "fallback_existing",
+                        "unsupported_skipped_count": (
+                            len(unsupported_symbols) if eligible else 0
+                        ),
+                        "unsupported_symbols_preview": (
+                            unsupported_symbols[:MISSING_SYMBOL_PREVIEW_LIMIT]
+                            if eligible
+                            else []
+                        ),
+                    }
+                )
+                if eligible:
+                    if not supported_symbols:
+                        raise ValidationError(
+                            "Universe resolved to zero symbols after excluding unsupported Yahoo price symbols"
+                        )
+                    cmd = replace(
+                        cmd,
+                        exclude_unsupported_price_symbols=True,
+                        batch_only_prices=True,
+                        batch_only_fundamentals=True,
+                        require_bulk_prefetch=True,
+                    )
+                    symbols = supported_symbols
+                    skipped_symbols = unsupported_symbols
+                    if skipped_symbols:
+                        run_warnings.append(
+                            "Skipped unsupported Yahoo price symbols in bootstrap cache-only snapshot: "
+                            f"{len(skipped_symbols)}"
+                        )
+                else:
+                    run_warnings.append(
+                        "Bootstrap cache-only coverage below threshold; using existing fallback snapshot mode"
+                    )
+            elif cmd.exclude_unsupported_price_symbols:
                 symbols, skipped_symbols = split_supported_price_symbols(symbols)
                 if skipped_symbols:
                     run_warnings.append(
@@ -291,6 +355,8 @@ class BuildDailyFeatureSnapshotUseCase:
                 "market": cmd.market,
                 "publish_pointer_key": cmd.publish_pointer_key,
             }
+            if bootstrap_gate_report is not None:
+                run_config["bootstrap_cache_only_gate"] = bootstrap_gate_report
 
             # Start run BEFORE the try-except so run_id is available
             # for best-effort error handling.
@@ -476,6 +542,11 @@ class BuildDailyFeatureSnapshotUseCase:
 
             # 3b — Scan each symbol in the chunk
             pre_fetched_data: dict[str, object] = {}
+            cache_only_symbol_data = (
+                cmd.batch_only_prices
+                or cmd.batch_only_fundamentals
+                or cmd.require_bulk_prefetch
+            )
             if bulk_prefetch_enabled and merged_requirements is not None:
                 try:
                     pre_fetched_data = self._data_provider.prepare_data_bulk(
@@ -488,7 +559,7 @@ class BuildDailyFeatureSnapshotUseCase:
                 except Exception as exc:
                     if cmd.require_bulk_prefetch:
                         raise RuntimeError(
-                            "Static daily snapshot bulk prefetch failed; refusing per-symbol fallback"
+                            "Cache-only snapshot bulk prefetch failed; refusing per-symbol fallback"
                         ) from exc
                     logger.warning(
                         "Run %d: bulk data fetch failed for chunk; "
@@ -503,6 +574,8 @@ class BuildDailyFeatureSnapshotUseCase:
             def _scan_symbol(symbol: str) -> tuple[str, FeatureRowWrite | None, bool]:
                 sym = symbol.upper()
                 try:
+                    if cache_only_symbol_data and sym not in pre_fetched_data:
+                        return sym, None, False
                     scan_kwargs: dict[str, object] = {}
                     if merged_requirements is not None:
                         scan_kwargs["pre_merged_requirements"] = merged_requirements

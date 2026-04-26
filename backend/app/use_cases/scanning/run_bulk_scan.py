@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Iterator, Sequence
 
@@ -76,10 +77,13 @@ class RunBulkScanCommand:
     chunk_size: int = 50
     correlation_id: str | None = None
     cache_only: bool = False
+    parallel_workers: int = 1
 
     def __post_init__(self) -> None:
         if self.chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
+        if self.parallel_workers < 1:
+            raise ValueError("parallel_workers must be >= 1")
 
 
 # ── Result (output) ──────────────────────────────────────────────────────
@@ -248,7 +252,8 @@ class RunBulkScanUseCase:
 
             # 5b — Scan each symbol in the chunk
             chunk_results: list[tuple[str, dict]] = []
-            for symbol in chunk:
+
+            def _scan_one(symbol: str) -> tuple[str, dict | None, bool, bool]:
                 sym = symbol.upper()
                 # cache_only invariant: the bulk prefetch is the only sanctioned
                 # data source. Any path that leaves a symbol out of pre_fetched_data
@@ -256,9 +261,7 @@ class RunBulkScanUseCase:
                 # must not fall through to per-symbol prepare_data() which can still
                 # hit live APIs.
                 if cmd.cache_only and sym not in pre_fetched_data:
-                    failed += 1
-                    processed += 1
-                    continue
+                    return (sym, None, False, False)
                 scan_kwargs: dict[str, object] = {}
                 if merged_requirements is not None:
                     scan_kwargs["pre_merged_requirements"] = merged_requirements
@@ -272,19 +275,50 @@ class RunBulkScanUseCase:
                         composite_method=composite_method,
                         **scan_kwargs,
                     )
-                    if _should_persist_result(result):
-                        chunk_results.append((sym, result))
-                        if result.get("passes_template"):
-                            passed += 1
-                    else:
-                        failed += 1
+                    persistable = _should_persist_result(result)
+                    passed_flag = (
+                        bool(result.get("passes_template"))
+                        if isinstance(result, dict)
+                        else False
+                    )
+                    return (sym, result, passed_flag, persistable)
                 except Exception:
                     logger.debug(
                         "Error scanning %s in scan %s",
-                        symbol,
+                        sym,
                         cmd.scan_id,
                         exc_info=True,
                     )
+                    return (sym, None, False, False)
+
+            outcomes: list[tuple[str, dict | None, bool, bool] | None] = [
+                None for _ in chunk
+            ]
+            effective_workers = cmd.parallel_workers if cmd.cache_only else 1
+            if effective_workers > 1 and len(chunk) > 1:
+                workers = min(effective_workers, len(chunk))
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {
+                        executor.submit(_scan_one, symbol): index
+                        for index, symbol in enumerate(chunk)
+                    }
+                    for future in as_completed(futures):
+                        outcomes[futures[future]] = future.result()
+            else:
+                for index, symbol in enumerate(chunk):
+                    outcomes[index] = _scan_one(symbol)
+
+            for outcome in outcomes:
+                if outcome is None:
+                    failed += 1
+                    processed += 1
+                    continue
+                sym, result, passed_flag, persistable = outcome
+                if persistable and result is not None:
+                    chunk_results.append((sym, result))
+                    if passed_flag:
+                        passed += 1
+                else:
                     failed += 1
                 processed += 1
 

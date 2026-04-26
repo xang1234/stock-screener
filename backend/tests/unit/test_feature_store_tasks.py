@@ -284,6 +284,83 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     }]
 
 
+def test_build_daily_snapshot_bootstrap_skip_if_published_uses_cache_only_supported_hash():
+    lookup_calls = []
+    hash_calls = []
+
+    class _CheckUoW:
+        def __init__(self) -> None:
+            self.universe = SimpleNamespace(resolve_symbols=lambda _universe_def: ["AAPL", "BAD-WT", "MSFT"])
+            self.feature_runs = SimpleNamespace(
+                find_latest_published_exact=lambda **kwargs: (
+                    lookup_calls.append(kwargs),
+                    SimpleNamespace(
+                        id=51,
+                        as_of_date=date(2026, 3, 16),
+                    ),
+                )[1] if kwargs["universe_hash"] == "AAPL,MSFT" else None
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    fake_use_case = _FakeUseCase()
+
+    def _hash_universe(symbols):
+        hash_calls.append(list(symbols))
+        return ",".join(symbols)
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.hash_scan_signature",
+        return_value="same-input",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.hash_universe_symbols",
+        side_effect=_hash_universe,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        return_value=_CheckUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={"eligible": True},
+        )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "already_published"
+    assert result["existing_run_id"] == 51
+    assert result["skipped_symbols"] == 1
+    assert fake_use_case.received_cmd is None
+    assert hash_calls == [["AAPL", "MSFT"]]
+    assert lookup_calls == [{
+        "input_hash": "same-input",
+        "universe_hash": "AAPL,MSFT",
+        "as_of_date": date(2026, 3, 16),
+    }]
+
+
 def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
     class _CheckUoW:
         def __init__(self) -> None:
@@ -499,6 +576,9 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
     fake_use_case = _FakeUseCase()
 
     with patch(
+        "app.utils.parallelism.os.cpu_count",
+        return_value=4,
+    ), patch(
         "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
         return_value=True,
     ), patch(
@@ -534,6 +614,45 @@ def test_build_daily_snapshot_static_daily_mode_requires_bulk_prefetch():
         fake_use_case.received_cmd.static_chunk_size
         == settings.static_snapshot_chunk_size
     )
+    assert (
+        fake_use_case.received_cmd.static_parallel_workers
+        == 2
+    )
+
+
+def test_build_daily_snapshot_static_daily_mode_keeps_setting_as_upper_bound_on_larger_hosts():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.utils.parallelism.os.cpu_count",
+        return_value=16,
+    ), patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            static_daily_mode=True,
+        )
+
     assert (
         fake_use_case.received_cmd.static_parallel_workers
         == settings.static_snapshot_parallel_workers
@@ -575,6 +694,107 @@ def test_build_daily_snapshot_static_daily_mode_uses_null_progress_sink():
 
     assert result["status"] == "published"
     mock_null_progress.assert_called_once_with()
+
+
+def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_progress():
+    fake_use_case = _FakeUseCase()
+    celery_progress = object()
+
+    with patch(
+        "app.utils.parallelism.os.cpu_count",
+        return_value=4,
+    ), patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=celery_progress,
+    ) as mock_celery_progress, patch(
+        "app.domain.scanning.ports.NullProgressSink",
+        side_effect=AssertionError("bootstrap gate must keep normal progress"),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={
+                "eligible": True,
+                "price_coverage_ratio": 1.0,
+                "fundamentals_coverage_ratio": 1.0,
+            },
+        )
+
+    assert result["status"] == "published"
+    assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
+    assert not hasattr(fake_use_case.received_cmd, "bootstrap_coverage_threshold")
+    assert fake_use_case.received_cmd.bootstrap_coverage_report["eligible"] is True
+    assert fake_use_case.received_cmd.static_chunk_size == settings.static_snapshot_chunk_size
+    assert fake_use_case.received_cmd.static_parallel_workers == 2
+    assert fake_use_case.received_cmd.batch_only_prices is False
+    assert fake_use_case.received_cmd.require_bulk_prefetch is False
+    mock_celery_progress.assert_called_once()
+
+
+def test_build_daily_snapshot_bootstrap_gate_fail_preserves_non_static_command():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={
+                "eligible": False,
+                "price_coverage_ratio": 0.9,
+                "fundamentals_coverage_ratio": 1.0,
+            },
+        )
+
+    assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
+    assert fake_use_case.received_cmd.batch_only_prices is False
+    assert fake_use_case.received_cmd.batch_only_fundamentals is False
+    assert fake_use_case.received_cmd.require_bulk_prefetch is False
+    assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is False
+
+
+def test_build_daily_snapshot_does_not_expose_bootstrap_threshold_override():
+    assert "bootstrap_coverage_threshold" not in inspect.signature(_TASK_BODY).parameters
 
 
 def test_enrich_feature_run_with_ibd_metadata_updates_details_json():

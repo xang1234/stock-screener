@@ -236,12 +236,19 @@ class TestRunBulkScanViaUseCase:
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
             patch("app.infra.tasks.cancellation.DbCancellationToken"),
+            patch(
+                f"{_WRAPPER_PATH}.bounded_symbol_workers",
+                return_value=2,
+                create=True,
+            ) as mock_bounded,
         ):
             from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
             _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
 
         assert captured_cmd is not None
         assert captured_cmd.cache_only is True
+        assert captured_cmd.parallel_workers == 2
+        mock_bounded.assert_called_once_with(4)
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")
@@ -275,12 +282,19 @@ class TestRunBulkScanViaUseCase:
             patch("app.infra.db.uow.SqlUnitOfWork"),
             patch("app.infra.tasks.progress_sink.CeleryProgressSink"),
             patch("app.infra.tasks.cancellation.DbCancellationToken"),
+            patch(
+                f"{_WRAPPER_PATH}.bounded_symbol_workers",
+                return_value=2,
+                create=True,
+            ) as mock_bounded,
         ):
             from app.tasks.scan_tasks import _run_bulk_scan_via_use_case
             _run_bulk_scan_via_use_case(task_instance, "scan-001", ["AAPL"], {})
 
         assert captured_cmd is not None
         assert captured_cmd.cache_only is False
+        assert captured_cmd.parallel_workers == 1
+        mock_bounded.assert_not_called()
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")
