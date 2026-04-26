@@ -928,7 +928,7 @@ def prewarm_all_active_symbols(self):
     """
     Warm cache for all active symbols after market close.
 
-    Runs at 5:30 PM ET daily, takes ~2-3 hours for 5000 stocks.
+    Runs after the configured post-close buffer, takes ~2-3 hours for 5000 stocks.
     Next day's scans will be instant (served from cache).
 
     This is the nightly cache warming job that ensures all active

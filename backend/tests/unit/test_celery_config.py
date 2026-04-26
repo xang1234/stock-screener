@@ -127,11 +127,11 @@ class TestSettingsValidators:
             market: settings.cache_warm_schedule_for(market)
             for market in ("US", "HK", "IN", "JP", "TW")
         } == {
-            "US": (17, 45),
-            "HK": (5, 45),
-            "IN": (7, 45),
-            "JP": (3, 45),
-            "TW": (3, 15),
+            "US": (16, 30),
+            "HK": (4, 30),
+            "IN": (6, 30),
+            "JP": (2, 30),
+            "TW": (2, 0),
         }
 
     @pytest.mark.parametrize(

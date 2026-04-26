@@ -189,7 +189,7 @@ class MarketCalendarService:
             market_close = market_close.tz_localize("UTC")
         close_with_buffer = (
             market_close.tz_convert(self.market_timezone(normalized)).to_pydatetime()
-            + timedelta(hours=1, minutes=45)
+            + timedelta(minutes=30)
         )
         if market_now >= close_with_buffer:
             return current_session.date()
