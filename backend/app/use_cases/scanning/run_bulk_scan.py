@@ -291,29 +291,29 @@ class RunBulkScanUseCase:
                     )
                     return (sym, None, False, False)
 
-            outcomes: dict[str, tuple[dict | None, bool, bool]] = {}
+            outcomes: list[tuple[str, dict | None, bool, bool] | None] = [
+                None for _ in chunk
+            ]
             effective_workers = cmd.parallel_workers if cmd.cache_only else 1
             if effective_workers > 1 and len(chunk) > 1:
                 workers = min(effective_workers, len(chunk))
                 with ThreadPoolExecutor(max_workers=workers) as executor:
                     futures = {
-                        executor.submit(_scan_one, symbol): symbol
-                        for symbol in chunk
+                        executor.submit(_scan_one, symbol): index
+                        for index, symbol in enumerate(chunk)
                     }
                     for future in as_completed(futures):
-                        sym, result, passed_flag, persistable = future.result()
-                        outcomes[sym] = (result, passed_flag, persistable)
+                        outcomes[futures[future]] = future.result()
             else:
-                for symbol in chunk:
-                    sym, result, passed_flag, persistable = _scan_one(symbol)
-                    outcomes[sym] = (result, passed_flag, persistable)
+                for index, symbol in enumerate(chunk):
+                    outcomes[index] = _scan_one(symbol)
 
-            for symbol in chunk:
-                sym = symbol.upper()
-                result, passed_flag, persistable = outcomes.get(
-                    sym,
-                    (None, False, False),
-                )
+            for outcome in outcomes:
+                if outcome is None:
+                    failed += 1
+                    processed += 1
+                    continue
+                sym, result, passed_flag, persistable = outcome
                 if persistable and result is not None:
                     chunk_results.append((sym, result))
                     if passed_flag:

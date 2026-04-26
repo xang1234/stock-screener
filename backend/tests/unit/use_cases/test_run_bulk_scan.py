@@ -5,7 +5,9 @@ No DB, no Redis, no Celery — pure domain logic testing.
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
+from threading import Lock
 
 import pytest
 
@@ -452,6 +454,66 @@ class TestRunBulkScanHappyPath:
             (2, 1, 0),
             (4, 2, 1),
         ]
+
+    @pytest.mark.parametrize("parallel_workers", [1, 4])
+    def test_duplicate_symbols_are_accounted_per_input_position(
+        self, parallel_workers
+    ):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+        progress = FakeProgressSink()
+
+        class DuplicateAwareScanner:
+            def __init__(self):
+                self._lock = Lock()
+                self._aapl_calls = 0
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol, screener_names, **_):
+                if symbol == "AAPL":
+                    with self._lock:
+                        self._aapl_calls += 1
+                        call_number = self._aapl_calls
+                    if parallel_workers > 1 and call_number == 1:
+                        time.sleep(0.05)
+                    if call_number == 2:
+                        return {"error": "duplicate failed independently"}
+                return {
+                    "composite_score": 80,
+                    "rating": "Buy",
+                    "passes_template": True,
+                }
+
+        result = RunBulkScanUseCase(
+            scanner=DuplicateAwareScanner(),
+            data_provider=FakeStockDataProvider(),
+        ).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "aapl", "MSFT"],
+                chunk_size=3,
+                cache_only=True,
+                parallel_workers=parallel_workers,
+            ),
+            progress,
+            FakeCancellationToken(),
+        )
+
+        assert result.total_scanned == 3
+        assert result.passed == 2
+        assert result.failed == 1
+        assert [
+            symbol for _scan_id, symbol, _result in result_repo._persisted_results
+        ] == ["AAPL", "MSFT"]
+        assert [
+            (event.current, event.passed, event.failed)
+            for event in progress.events
+        ] == [(3, 2, 1)]
 
     def test_parallel_workers_are_bounded_by_chunk_length(self, monkeypatch):
         scan_repo = FakeScanRepository()
