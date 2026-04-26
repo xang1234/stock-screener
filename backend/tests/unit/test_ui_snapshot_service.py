@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
 from app.models.industry import IBDGroupRank
+from app.models.market_breadth import MarketBreadth
 from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.models.theme import ThemeAlert, ThemeCluster, ThemeMergeSuggestion, ThemeMetrics, ThemePipelineRun
@@ -256,6 +257,64 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     assert published["breadth_in"] == fake_snapshot
     assert published_breadth_markets == ["US", "HK", "IN", "JP", "TW"]
     assert published["groups"] is None
+
+
+def test_breadth_payload_uses_benchmark_fallback_when_primary_cache_is_empty(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[MarketBreadth.__table__])
+    Session = sessionmaker(bind=engine)
+    service = UISnapshotService(Session)
+
+    with Session() as db:
+        db.add(
+            MarketBreadth(
+                market="HK",
+                date=date(2026, 4, 24),
+                stocks_up_4pct=22,
+                stocks_down_4pct=8,
+                ratio_5day=2.75,
+                ratio_10day=2.5,
+                stocks_up_25pct_quarter=30,
+                stocks_down_25pct_quarter=12,
+                stocks_up_25pct_month=24,
+                stocks_down_25pct_month=10,
+                stocks_up_50pct_month=6,
+                stocks_down_50pct_month=2,
+                stocks_up_13pct_34days=18,
+                stocks_down_13pct_34days=7,
+                total_stocks_scanned=30,
+                calculation_duration_seconds=1.25,
+            )
+        )
+        db.commit()
+
+    class _FakeBenchmarkCache:
+        def get_benchmark_candidates(self, market):
+            assert market == "HK"
+            return ["^HSI", "2800.HK"]
+
+        def get_benchmark_symbol(self, market):
+            assert market == "HK"
+            return "^HSI"
+
+    monkeypatch.setattr("app.wiring.bootstrap.get_benchmark_cache", lambda: _FakeBenchmarkCache())
+
+    history_calls = []
+
+    def fake_cached_price_history(symbol, period):
+        history_calls.append((symbol, period))
+        if symbol == "2800.HK":
+            return [{"date": "2026-04-24", "close": 18.4}]
+        return []
+
+    monkeypatch.setattr(service, "_get_cached_price_history", fake_cached_price_history)
+
+    payload = service._build_breadth_payload("HK")  # noqa: SLF001 - intentional unit coverage
+
+    assert payload["benchmark_symbol"] == "2800.HK"
+    assert payload["benchmark_overlay"] == [{"date": "2026-04-24", "close": 18.4}]
+    assert payload["spy_overlay"] == payload["benchmark_overlay"]
+    assert history_calls == [("^HSI", "1mo"), ("2800.HK", "1mo")]
 
 
 def test_publish_groups_bootstrap_serializes_rankings_when_available():

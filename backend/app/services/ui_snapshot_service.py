@@ -611,8 +611,11 @@ class UISnapshotService:
             # Local import: wiring.bootstrap imports this module, so a
             # top-level import would cycle.
             from ..wiring.bootstrap import get_benchmark_cache
-            benchmark_symbol = get_benchmark_cache().get_benchmark_symbol(normalized_market)
-            benchmark_overlay = self._get_cached_price_history(benchmark_symbol, "1mo")
+            benchmark_symbol, benchmark_overlay = self._get_cached_benchmark_overlay(
+                get_benchmark_cache(),
+                normalized_market,
+                "1mo",
+            )
             return {
                 "current": market_breadth_to_dict(current),
                 "summary": {
@@ -810,6 +813,17 @@ class UISnapshotService:
 
     def _themes_variant_key(self, pipeline: str, theme_view: str) -> str:
         return f"{pipeline}:{theme_view}"
+
+    def _get_cached_benchmark_overlay(self, benchmark_cache, market: str, period: str) -> tuple[str, list[dict[str, Any]]]:
+        candidates = list(benchmark_cache.get_benchmark_candidates(market))
+        if not candidates:
+            candidates = [benchmark_cache.get_benchmark_symbol(market)]
+        primary_symbol = candidates[0]
+        for symbol in candidates:
+            overlay = self._get_cached_price_history(symbol, period)
+            if overlay:
+                return symbol, overlay
+        return primary_symbol, []
 
     def _get_cached_price_history(self, symbol: str, period: str) -> list[dict[str, Any]]:
         import pandas as pd
