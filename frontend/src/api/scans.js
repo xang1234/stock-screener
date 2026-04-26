@@ -39,6 +39,18 @@ export const createScan = async ({
 };
 
 /**
+ * Trigger a market-scoped price cache refresh from the scan workflow.
+ * @param {Object} params - Refresh parameters
+ * @param {string} params.market - Market code: US, HK, IN, JP, or TW
+ * @param {string} params.mode - Refresh mode: 'auto' or 'full'
+ * @returns {Promise<Object>} Refresh queue response with task_id
+ */
+export const refreshScanCache = async ({ market, mode = 'full' }) => {
+  const response = await apiClient.post('/v1/scans/refresh-cache', { market, mode });
+  return response.data;
+};
+
+/**
  * Get scan status and progress
  * @param {string} scanId - Scan ID
  * @returns {Promise<Object>} Scan status with progress information

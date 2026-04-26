@@ -37,7 +37,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-POLICY_VERSION: str = "2026.04.20.1"
+POLICY_VERSION: str = "2026.04.26.1"
 
 _US_MARKET: str = "US"
 
@@ -56,9 +56,6 @@ class AnalyticsFeature(str, Enum):
 _US_ONLY_FEATURES: dict[AnalyticsFeature, str] = {
     AnalyticsFeature.THEME_DISCOVERY: (
         "theme content sources are English-language biased; no non-US coverage"
-    ),
-    AnalyticsFeature.BREADTH_SNAPSHOT: (
-        "breadth indicators are computed from the US universe only"
     ),
 }
 

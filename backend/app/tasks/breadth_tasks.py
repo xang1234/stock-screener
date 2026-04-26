@@ -316,7 +316,7 @@ def calculate_daily_breadth(
         try:
             from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
 
-            safe_publish_breadth_bootstrap()
+            safe_publish_breadth_bootstrap(effective_market)
         except Exception as snapshot_error:
             logger.warning("Breadth snapshot publish failed: %s", snapshot_error)
 
@@ -461,7 +461,7 @@ def backfill_breadth_data(self, start_date: str, end_date: str, market: str = "U
     try:
         from ..services.ui_snapshot_service import safe_publish_breadth_bootstrap
 
-        safe_publish_breadth_bootstrap()
+        safe_publish_breadth_bootstrap((market or "US").upper())
     except Exception as snapshot_error:
         logger.warning("Breadth snapshot publish failed after backfill: %s", snapshot_error)
 

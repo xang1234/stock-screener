@@ -821,7 +821,7 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
     monkeypatch.setattr(
         service._ui_snapshot_service,
         "publish_breadth_bootstrap",
-        lambda: SimpleNamespace(
+        lambda market="US": SimpleNamespace(
             to_dict=lambda: {
                 "published_at": "2026-04-02T22:00:00Z",
                 "source_revision": "breadth:2026-04-02",

@@ -32,12 +32,13 @@ class TestUsOnlyTag:
         # rejected-field errors.
         assert "policy_version" not in tag
 
-    def test_each_us_only_feature_has_its_own_reason(self):
+    def test_breadth_snapshot_is_market_aware(self):
         themes = us_only_tag(AnalyticsFeature.THEME_DISCOVERY)
-        breadth = us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT)
+        breadth = market_scope_tag("HK")
 
-        # Reasons must differ — each feature has a distinct justification.
-        assert themes["scope_reason"] != breadth["scope_reason"]
+        assert themes["market_scope"] == "US"
+        assert "scope_reason" in themes
+        assert breadth == {"market_scope": "HK"}
 
 
 class TestRequireUsScope:
@@ -50,7 +51,6 @@ class TestRequireUsScope:
         "market,feature",
         [
             ("JP", AnalyticsFeature.THEME_DISCOVERY),
-            ("TW", AnalyticsFeature.BREADTH_SNAPSHOT),
             ("hk", AnalyticsFeature.THEME_DISCOVERY),  # case-folded
         ],
     )
@@ -73,6 +73,7 @@ class TestRequireUsScope:
     def test_market_aware_features_bypass_us_only_guard(self):
         require_us_scope("HK", AnalyticsFeature.IBD_GROUP_RANK)
         require_us_scope("TW", AnalyticsFeature.IBD_GROUP_RANK)
+        require_us_scope("TW", AnalyticsFeature.BREADTH_SNAPSHOT)
 
 
 class TestMarketScopeTag:
@@ -91,7 +92,8 @@ class TestDescribePolicy:
         snap = describe_policy()
         assert snap["policy_version"] == POLICY_VERSION
         us_only = snap["us_only_features"]
-        for feature in (AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT):
+        for feature in (AnalyticsFeature.THEME_DISCOVERY,):
             assert feature.value in us_only
             assert isinstance(us_only[feature.value], str)
         assert AnalyticsFeature.IBD_GROUP_RANK.value not in us_only
+        assert AnalyticsFeature.BREADTH_SNAPSHOT.value not in us_only

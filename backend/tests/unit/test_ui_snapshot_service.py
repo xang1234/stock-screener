@@ -145,13 +145,23 @@ def test_publish_scan_bootstrap_serializes_universe_stats_counts():
 
     snapshot = service.publish_scan_bootstrap()
 
-    assert snapshot.payload["universe_stats"] == {
+    universe_stats = snapshot.payload["universe_stats"]
+    core_universe_stats = {
+        key: universe_stats[key]
+        for key in ("total", "active", "by_exchange", "sp500", "by_status", "recent_deactivations")
+    }
+    assert core_universe_stats == {
         "total": 4,
         "active": 3,
         "by_exchange": {"NASDAQ": 2, "NYSE": 1},
         "sp500": 2,
         "by_status": {"active": 3, "inactive_manual": 1},
         "recent_deactivations": [],
+    }
+    assert universe_stats["by_market"]["US"]["counts"] == {
+        "total": 4,
+        "active": 3,
+        "inactive": 1,
     }
     assert json.loads(json.dumps(snapshot.payload)) == snapshot.payload
 

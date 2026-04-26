@@ -60,8 +60,6 @@ EXPECTED_PRIMARY_BENCHMARK = {
 EXPECTED_SCOPE_REASON = {
     AnalyticsFeature.THEME_DISCOVERY:
         "theme content sources are English-language biased; no non-US coverage",
-    AnalyticsFeature.BREADTH_SNAPSHOT:
-        "breadth indicators are computed from the US universe only",
 }
 
 
@@ -127,7 +125,7 @@ class TestUSParityAnalyticsScope:
 
     @pytest.mark.parametrize(
         "feature",
-        [AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT],
+        [AnalyticsFeature.THEME_DISCOVERY],
     )
     def test_us_tag_shape_is_stable(self, feature: AnalyticsFeature):
         tag = us_only_tag(feature)
@@ -147,6 +145,11 @@ class TestUSParityAnalyticsScope:
         tag = market_scope_tag("HK")
         assert tag == {"market_scope": "HK"}
         require_us_scope("HK", AnalyticsFeature.IBD_GROUP_RANK)
+
+    def test_breadth_scope_is_market_aware(self):
+        tag = market_scope_tag("HK")
+        assert tag == {"market_scope": "HK"}
+        require_us_scope("HK", AnalyticsFeature.BREADTH_SNAPSHOT)
 
 
 class TestUSParityScanner:
@@ -282,12 +285,16 @@ class TestNonUSAnalyticsScope:
     @pytest.mark.parametrize("market", ["HK", "JP", "TW", "hk", " JP ", "eu"])
     @pytest.mark.parametrize(
         "feature",
-        [AnalyticsFeature.THEME_DISCOVERY, AnalyticsFeature.BREADTH_SNAPSHOT],
+        [AnalyticsFeature.THEME_DISCOVERY],
     )
     def test_non_us_scope_is_rejected(self, market, feature):
         with pytest.raises(UnsupportedMarketError) as exc:
             require_us_scope(market, feature)
         assert feature.value in str(exc.value)
+
+    @pytest.mark.parametrize("market", ["HK", "JP", "TW", "hk", " JP ", "eu"])
+    def test_breadth_scope_is_not_rejected(self, market):
+        require_us_scope(market, AnalyticsFeature.BREADTH_SNAPSHOT)
 
     @pytest.mark.parametrize("market", ["HK", "JP", "TW", "hk", " JP ", "eu"])
     def test_group_rank_scope_is_not_rejected(self, market):
@@ -340,7 +347,7 @@ class TestPolicyVersions:
         assert MIXED_MARKET_POLICY_VERSION == "2026.04.13.1"
 
     def test_analytics_scope_policy_version(self):
-        assert ANALYTICS_POLICY_VERSION == "2026.04.20.1"
+        assert ANALYTICS_POLICY_VERSION == "2026.04.26.1"
 
 
 # ---------------------------------------------------------------------------

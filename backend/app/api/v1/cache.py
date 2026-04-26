@@ -32,6 +32,7 @@ from ...tasks.cache_tasks import (
     force_refresh_stale_intraday,
     smart_refresh_cache
 )
+from ...tasks.market_queues import SHARED_SENTINEL, data_fetch_queue_for_market, normalize_market
 from ...wiring.bootstrap import get_data_fetch_lock, get_price_cache
 from ...utils.market_hours import format_market_status, is_market_open
 from ...database import SessionLocal
@@ -40,13 +41,27 @@ from ...models.stock import StockFundamental
 router = APIRouter(prefix="/cache", tags=["cache"])
 
 
-def _get_running_refresh_response() -> SmartRefreshResponse | None:
+def _normalize_refresh_market(market: str | None) -> str | None:
+    """Validate and normalize an optional market for manual refresh routes."""
+    if market is None:
+        return None
+    normalized = normalize_market(market)
+    return None if normalized == SHARED_SENTINEL else normalized
+
+
+def _get_running_refresh_response(market: str | None = None) -> SmartRefreshResponse | None:
     """Return the active refresh task when a data-fetch job is already running.
 
-    Checks across all market lock keys so per-market Beat tasks are visible.
+    Market-scoped manual refreshes only conflict with the same market. Legacy
+    shared calls preserve the old global duplicate check.
     """
     lock = get_data_fetch_lock()
-    running = lock.get_any_current_task()
+    normalized_market = _normalize_refresh_market(market)
+    running = (
+        lock.get_current_task(market=normalized_market)
+        if normalized_market is not None
+        else lock.get_any_current_task()
+    )
     if not running:
         return None
 
@@ -59,17 +74,21 @@ def _get_running_refresh_response() -> SmartRefreshResponse | None:
 
 def _queue_manual_smart_refresh(mode: str, market: str | None = None) -> SmartRefreshResponse:
     """Queue a smart refresh after rejecting duplicate active refreshes."""
-    running_response = _get_running_refresh_response()
+    normalized_market = _normalize_refresh_market(market)
+    running_response = _get_running_refresh_response(normalized_market)
     if running_response is not None:
         return running_response
 
     task_kwargs = {"mode": mode}
-    if market is not None:
-        task_kwargs["market"] = market
+    task_options = {}
+    if normalized_market is not None:
+        task_kwargs["market"] = normalized_market
+        task_options["queue"] = data_fetch_queue_for_market(normalized_market)
 
     task = smart_refresh_cache.apply_async(
         kwargs=task_kwargs,
         headers={"origin": "manual"},
+        **task_options,
     )
     mode_desc = (
         "full universe (skips recently refreshed)"
@@ -454,6 +473,8 @@ async def smart_refresh(request: SmartRefreshRequest):
     """
     try:
         return _queue_manual_smart_refresh(mode=request.mode, market=request.market)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     except Exception as e:
         raise HTTPException(

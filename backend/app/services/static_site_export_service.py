@@ -782,7 +782,7 @@ class StaticSiteExportService:
         serialized_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if serialized_rows is None:
-            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap().to_dict()
+            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(market=market).to_dict()
             payload = snapshot.get("payload", {})
             current_date = ((payload.get("current") or {}).get("date"))
             if current_date != expected_as_of_date.isoformat():

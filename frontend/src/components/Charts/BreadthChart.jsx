@@ -1,8 +1,8 @@
 /**
- * Market Breadth Chart with SPY Overlay
+ * Market Breadth Chart with optional benchmark overlay
  *
  * Displays daily breadth movers (stocks up/down 4%+)
- * with S&P 500 price overlay on secondary axis
+ * with benchmark price overlay on secondary axis when available
  */
 import { useMemo } from 'react';
 import {
@@ -31,7 +31,7 @@ import { format, parseISO } from 'date-fns';
 /**
  * Custom tooltip component for breadth chart
  */
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, benchmarkLabel = 'SPY' }) => {
   if (!active || !payload || !payload.length) return null;
 
   return (
@@ -51,7 +51,7 @@ const CustomTooltip = ({ active, payload, label }) => {
       {payload.map((entry, index) => (
         <Typography key={index} variant="body2" sx={{ color: entry.color }}>
           {entry.name}:{' '}
-          {entry.name === 'SPY' ? `$${entry.value?.toFixed(2)}` : entry.value}
+          {entry.name === benchmarkLabel ? `$${entry.value?.toFixed(2)}` : entry.value}
         </Typography>
       ))}
     </Box>
@@ -63,7 +63,7 @@ const CustomTooltip = ({ active, payload, label }) => {
  *
  * @param {Object} props
  * @param {Array} props.breadthData - Historical breadth data array
- * @param {Array} props.spyData - SPY historical price data array
+ * @param {Array} props.spyData - Benchmark historical price data array
  * @param {boolean} props.isLoading - Loading state
  * @param {Error} props.error - Error object if any
  * @param {string} props.timeRange - Selected time range (6M, 1Y, 2Y)
@@ -73,6 +73,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 function BreadthChart({
   breadthData,
   spyData,
+  benchmarkLabel = 'SPY',
   isLoading,
   error,
   timeRange = '1Y',
@@ -81,28 +82,29 @@ function BreadthChart({
   height = 400,
   fillContainer = false,
 }) {
-  // Merge breadth and SPY data by date
+  // Merge breadth and benchmark data by date
   const chartData = useMemo(() => {
     if (!breadthData || breadthData.length === 0) return [];
 
-    // Create map of SPY prices by date
-    const spyByDate = {};
+    // Create map of benchmark prices by date
+    const benchmarkByDate = {};
     if (spyData && spyData.length > 0) {
       spyData.forEach((d) => {
-        spyByDate[d.date] = d.close;
+        benchmarkByDate[d.date] = d.close;
       });
     }
 
-    // Merge data (breadth data is primary, add SPY where available)
+    // Merge data (breadth data is primary, add benchmark where available)
     return breadthData
       .map((b) => ({
         date: b.date,
         stocksUp: b.stocks_up_4pct,
         stocksDown: b.stocks_down_4pct,
-        spy: spyByDate[b.date] || null,
+        benchmark: benchmarkByDate[b.date] || null,
       }))
       .sort((a, b) => new Date(a.date) - new Date(b.date));
   }, [breadthData, spyData]);
+  const hasBenchmarkOverlay = chartData.some((row) => row.benchmark != null);
 
   if (isLoading) {
     return (
@@ -152,7 +154,7 @@ function BreadthChart({
           }}
         >
           <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: fillContainer ? '14px' : '16px' }}>
-            Market Breadth (4%+ Movers) with SPY Overlay
+            Market Breadth (4%+ Movers){hasBenchmarkOverlay ? ` with ${benchmarkLabel} Overlay` : ''}
           </Typography>
           <ToggleButtonGroup
             value={timeRange}
@@ -201,22 +203,23 @@ function BreadthChart({
               }}
             />
 
-            {/* Right Y-axis: SPY price */}
-            <YAxis
-              yAxisId="right"
-              orientation="right"
-              tick={{ fontSize: 11 }}
-              tickFormatter={(value) => `$${value}`}
-              domain={['auto', 'auto']}
-              label={{
-                value: 'SPY Price',
-                angle: 90,
-                position: 'insideRight',
-                style: { fontSize: 12 },
-              }}
-            />
+            {hasBenchmarkOverlay && (
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(value) => `$${value}`}
+                domain={['auto', 'auto']}
+                label={{
+                  value: `${benchmarkLabel} Price`,
+                  angle: 90,
+                  position: 'insideRight',
+                  style: { fontSize: 12 },
+                }}
+              />
+            )}
 
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip benchmarkLabel={benchmarkLabel} />} />
             <Legend />
 
             {/* Stocks Up 4%+ - Green Area */}
@@ -241,17 +244,18 @@ function BreadthChart({
               strokeWidth={1.5}
             />
 
-            {/* SPY Price - Blue Line */}
-            <Line
-              yAxisId="right"
-              type="monotone"
-              dataKey="spy"
-              name="SPY"
-              stroke="#2196f3"
-              strokeWidth={2}
-              dot={false}
-              connectNulls
-            />
+            {hasBenchmarkOverlay && (
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="benchmark"
+                name={benchmarkLabel}
+                stroke="#2196f3"
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+              />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
         </Box>
@@ -274,10 +278,12 @@ function BreadthChart({
             <span style={{ color: '#f44336', fontWeight: 600 }}>Red:</span>{' '}
             Stocks down 4%+ (daily count)
           </Typography>
-          <Typography variant="caption" color="text.secondary">
-            <span style={{ color: '#2196f3', fontWeight: 600 }}>Blue:</span>{' '}
-            S&P 500 (SPY) price
-          </Typography>
+          {hasBenchmarkOverlay && (
+            <Typography variant="caption" color="text.secondary">
+              <span style={{ color: '#2196f3', fontWeight: 600 }}>Blue:</span>{' '}
+              {benchmarkLabel} price
+            </Typography>
+          )}
         </Box>
       </CardContent>
     </Card>

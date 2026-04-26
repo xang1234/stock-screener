@@ -60,6 +60,7 @@ vi.mock('../api/scans', () => ({
   getScans: vi.fn().mockResolvedValue({ scans: [] }),
   cancelScan: vi.fn(),
   getFilterOptions: vi.fn(),
+  refreshScanCache: vi.fn(),
 }));
 
 beforeEach(() => {
@@ -385,5 +386,52 @@ describe('ScanPage', () => {
     expect(
       await screen.findByText('Error: US fundamentals refresh is running. Wait for it to finish before starting a scan.')
     ).toBeInTheDocument();
+  });
+
+  it('lets the user refresh stale market data from a scan failure', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:hk',
+    };
+    scanApi.createScan.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'market_data_stale',
+            message: 'Price data is stale for HK.',
+            stale_markets: [
+              {
+                market: 'HK',
+                total_symbols: 10,
+                covered_symbols: 9,
+                uncovered_symbols: 1,
+                oldest_last_cached_date: '2026-04-22',
+                expected_date: '2026-04-24',
+              },
+            ],
+          },
+        },
+      },
+      message: 'Request failed with status code 409',
+    });
+    scanApi.refreshScanCache.mockResolvedValueOnce({
+      status: 'queued',
+      task_id: 'refresh-hk',
+      message: 'Smart refresh started',
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    fireEvent.click(scanButton);
+
+    const refreshButton = await screen.findByRole('button', { name: /refresh hk data/i });
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => {
+      expect(scanApi.refreshScanCache).toHaveBeenCalledWith({ market: 'HK', mode: 'full' });
+    });
   });
 });

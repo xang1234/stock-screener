@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -9,8 +9,12 @@ import {
   Paper,
   Grid,
   Chip,
+  FormControl,
   Tab,
   Tabs,
+  InputLabel,
+  MenuItem,
+  Select,
   Table,
   TableBody,
   TableCell,
@@ -80,12 +84,65 @@ const sentimentBg = {
   neutral: { row: 'transparent', cell: 'transparent' },
 };
 
+const MARKET_LABELS = {
+  US: 'United States',
+  HK: 'Hong Kong',
+  IN: 'India',
+  JP: 'Japan',
+  TW: 'Taiwan',
+};
+
+const MARKET_BENCHMARK_SYMBOLS = {
+  US: 'SPY',
+  HK: '^HSI',
+  IN: '^NSEI',
+  JP: '^N225',
+  TW: '^TWII',
+};
+
+function normalizeMarket(market) {
+  const normalized = String(market || 'US').trim().toUpperCase();
+  return MARKET_LABELS[normalized] ? normalized : 'US';
+}
+
 function BreadthPage() {
-  const { runtimeReady, uiSnapshots } = useRuntime();
+  const {
+    runtimeReady,
+    uiSnapshots,
+    primaryMarket = 'US',
+    enabledMarkets = ['US'],
+    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'TW'],
+  } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
   const [bootstrapSettled, setBootstrapSettled] = useState(false);
+  const [selectedMarket, setSelectedMarket] = useState(() => normalizeMarket(primaryMarket));
+  const marketOptions = useMemo(() => {
+    const enabled = (enabledMarkets || [])
+      .map(normalizeMarket)
+      .filter((market, index, markets) => markets.indexOf(market) === index);
+    if (enabled.length > 0) {
+      return enabled;
+    }
+    return (supportedMarkets || ['US'])
+      .map(normalizeMarket)
+      .filter((market, index, markets) => markets.indexOf(market) === index);
+  }, [enabledMarkets, supportedMarkets]);
+  useEffect(() => {
+    if (marketOptions.length === 0) {
+      return;
+    }
+    if (!marketOptions.includes(selectedMarket)) {
+      const normalizedPrimary = normalizeMarket(primaryMarket);
+      setSelectedMarket(
+        marketOptions.includes(normalizedPrimary) ? normalizedPrimary : marketOptions[0]
+      );
+    }
+  }, [marketOptions, primaryMarket, selectedMarket]);
+  useEffect(() => {
+    setBootstrapSettled(false);
+  }, [selectedMarket]);
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.breadth);
   const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
@@ -96,10 +153,12 @@ function BreadthPage() {
   const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const spyPeriodMap = { '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y' };
   const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
+  const benchmarkSymbol = MARKET_BENCHMARK_SYMBOLS[selectedMarket] || null;
+  const liveBenchmarkSymbol = benchmarkSymbol && !benchmarkSymbol.startsWith('^') ? benchmarkSymbol : null;
 
   const breadthBootstrapQuery = useQuery({
-    queryKey: ['breadthBootstrap'],
-    queryFn: getBreadthBootstrap,
+    queryKey: ['breadthBootstrap', selectedMarket],
+    queryFn: () => getBreadthBootstrap(selectedMarket),
     enabled: snapshotEnabled && !bootstrapSettled,
     retry: false,
     staleTime: 60_000,
@@ -122,15 +181,18 @@ function BreadthPage() {
     }
 
     const payload = breadthBootstrapQuery.data?.payload ?? {};
-    queryClient.setQueryData(['breadth', 'current'], payload.current ?? null);
-    queryClient.setQueryData(['breadth', 'historical', startDate, endDate], payload.history_90d ?? []);
-    queryClient.setQueryData(['breadth', 'summary'], payload.summary ?? {});
+    queryClient.setQueryData(['breadth', 'current', selectedMarket], payload.current ?? null);
+    queryClient.setQueryData(['breadth', 'historical', selectedMarket, startDate, endDate], payload.history_90d ?? []);
+    queryClient.setQueryData(['breadth', 'summary', selectedMarket], payload.summary ?? {});
     if (payload.chart_range === '1M') {
       queryClient.setQueryData(
-        ['breadth', 'chart', defaultChartDateRange.startDate, defaultChartDateRange.endDate],
+        ['breadth', 'chart', selectedMarket, defaultChartDateRange.startDate, defaultChartDateRange.endDate],
         payload.chart_data ?? []
       );
-      queryClient.setQueryData(['spy', 'history', '1mo'], payload.spy_overlay ?? []);
+      queryClient.setQueryData(
+        ['benchmark', 'history', selectedMarket, '1mo'],
+        payload.benchmark_overlay ?? payload.spy_overlay ?? []
+      );
     }
     setBootstrapSettled(true);
   }, [
@@ -141,6 +203,7 @@ function BreadthPage() {
     defaultChartDateRange.startDate,
     endDate,
     queryClient,
+    selectedMarket,
     snapshotEnabled,
     startDate,
   ]);
@@ -151,8 +214,8 @@ function BreadthPage() {
     isLoading: isLoadingCurrent,
     error: errorCurrent,
   } = useQuery({
-    queryKey: ['breadth', 'current'],
-    queryFn: getCurrentBreadth,
+    queryKey: ['breadth', 'current', selectedMarket],
+    queryFn: () => getCurrentBreadth(selectedMarket),
     enabled: liveQueriesEnabled,
     refetchInterval: 60000, // Refetch every minute
     staleTime: 60_000,
@@ -162,16 +225,16 @@ function BreadthPage() {
   const {
     data: historicalBreadth,
   } = useQuery({
-    queryKey: ['breadth', 'historical', startDate, endDate],
-    queryFn: () => getHistoricalBreadth(startDate, endDate),
+    queryKey: ['breadth', 'historical', selectedMarket, startDate, endDate],
+    queryFn: () => getHistoricalBreadth(startDate, endDate, 365, selectedMarket),
     enabled: liveQueriesEnabled,
     staleTime: 60_000,
   });
 
   // Fetch summary statistics
   useQuery({
-    queryKey: ['breadth', 'summary'],
-    queryFn: getBreadthSummary,
+    queryKey: ['breadth', 'summary', selectedMarket],
+    queryFn: () => getBreadthSummary(selectedMarket),
     enabled: liveQueriesEnabled,
     staleTime: 60_000,
   });
@@ -182,21 +245,21 @@ function BreadthPage() {
     isLoading: isLoadingChartBreadth,
     error: errorChartBreadth,
   } = useQuery({
-    queryKey: ['breadth', 'chart', chartDateRange.startDate, chartDateRange.endDate],
-    queryFn: () => getHistoricalBreadth(chartDateRange.startDate, chartDateRange.endDate, 730),
+    queryKey: ['breadth', 'chart', selectedMarket, chartDateRange.startDate, chartDateRange.endDate],
+    queryFn: () => getHistoricalBreadth(chartDateRange.startDate, chartDateRange.endDate, 730, selectedMarket),
     enabled: liveQueriesEnabled,
     staleTime: 60_000,
   });
 
   // Fetch SPY historical data for overlay
   const {
-    data: spyData,
+    data: benchmarkData,
     isLoading: isLoadingSpy,
     error: errorSpy,
   } = useQuery({
-    queryKey: ['spy', 'history', spyPeriod],
-    queryFn: () => getPriceHistory('SPY', spyPeriod),
-    enabled: liveQueriesEnabled,
+    queryKey: ['benchmark', 'history', selectedMarket, spyPeriod],
+    queryFn: () => getPriceHistory(liveBenchmarkSymbol, spyPeriod),
+    enabled: liveQueriesEnabled && Boolean(liveBenchmarkSymbol),
     staleTime: 60_000,
   });
 
@@ -232,14 +295,33 @@ function BreadthPage() {
         </Box>
       ) : (
         <>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel id="breadth-market-label">Market</InputLabel>
+              <Select
+                labelId="breadth-market-label"
+                value={selectedMarket}
+                label="Market"
+                onChange={(event) => setSelectedMarket(event.target.value)}
+              >
+                {marketOptions.map((market) => (
+                  <MenuItem key={market} value={market}>
+                    {MARKET_LABELS[market] || market}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+
           {/* Top Section - Side by Side Layout */}
           <Grid container spacing={2} sx={{ mb: 2 }}>
             {/* Left: Chart (60%) */}
             <Grid item xs={12} lg={7} sx={{ height: 450 }}>
               <BreadthChart
                 breadthData={chartBreadthData}
-                spyData={spyData}
-                isLoading={isLoadingChartBreadth || isLoadingSpy}
+                spyData={benchmarkData || []}
+                benchmarkLabel={benchmarkSymbol || 'Benchmark'}
+                isLoading={isLoadingChartBreadth || (Boolean(liveBenchmarkSymbol) && isLoadingSpy)}
                 error={errorChartBreadth || errorSpy}
                 timeRange={chartTimeRange}
                 onTimeRangeChange={setChartTimeRange}

@@ -5,7 +5,8 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from app.main import app
 from app.services import server_auth
@@ -636,6 +637,83 @@ async def test_create_scan_returns_409_when_market_price_data_is_stale(client):
     assert payload["detail"]["stale_markets"][0]["market"] == "US"
     assert payload["detail"]["stale_markets"][0]["uncovered_symbols"] == 1
     assert payload["detail"]["stale_markets"][0]["oldest_last_cached_date"] == "2026-04-22"
+
+
+@pytest.mark.asyncio
+async def test_refresh_scan_cache_queues_market_specific_manual_refresh(client, monkeypatch):
+    from app.api.v1 import cache as cache_module
+
+    mock_lock = MagicMock()
+    mock_lock.get_current_task.return_value = None
+    monkeypatch.setattr(cache_module, "get_data_fetch_lock", lambda: mock_lock)
+
+    apply_async = MagicMock(return_value=SimpleNamespace(id="refresh-hk"))
+    monkeypatch.setattr(cache_module.smart_refresh_cache, "apply_async", apply_async)
+
+    response = await client.post(
+        "/api/v1/scans/refresh-cache",
+        json={"market": "hk", "mode": "full"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "status": "queued",
+        "task_id": "refresh-hk",
+        "message": "Smart refresh started for entire universe, force re-fetch (~2 hours)",
+    }
+    mock_lock.get_current_task.assert_called_once_with(market="HK")
+    apply_async.assert_called_once_with(
+        kwargs={"mode": "full", "market": "HK"},
+        headers={"origin": "manual"},
+        queue="data_fetch_hk",
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_scan_cache_rejects_invalid_market(client, monkeypatch):
+    from app.api.v1 import cache as cache_module
+
+    apply_async = MagicMock()
+    monkeypatch.setattr(cache_module.smart_refresh_cache, "apply_async", apply_async)
+
+    response = await client.post(
+        "/api/v1/scans/refresh-cache",
+        json={"market": "CN", "mode": "full"},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported market" in response.json()["detail"]
+    apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refresh_scan_cache_only_blocks_same_market_active_refresh(client, monkeypatch):
+    from app.api.v1 import cache as cache_module
+
+    mock_lock = MagicMock()
+    mock_lock.get_current_task.return_value = {
+        "task_id": "running-hk",
+        "task_name": "smart_refresh_cache",
+    }
+    monkeypatch.setattr(cache_module, "get_data_fetch_lock", lambda: mock_lock)
+
+    apply_async = MagicMock()
+    monkeypatch.setattr(cache_module.smart_refresh_cache, "apply_async", apply_async)
+
+    response = await client.post(
+        "/api/v1/scans/refresh-cache",
+        json={"market": "HK", "mode": "full"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "already_running",
+        "task_id": "running-hk",
+        "message": "Refresh already in progress (smart_refresh_cache)",
+    }
+    mock_lock.get_current_task.assert_called_once_with(market="HK")
+    apply_async.assert_not_called()
 
 
 @pytest.mark.parametrize(

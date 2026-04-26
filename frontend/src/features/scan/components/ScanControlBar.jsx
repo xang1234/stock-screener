@@ -17,6 +17,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import StopIcon from '@mui/icons-material/Stop';
 import ScanProgress from '../../../components/Scan/ScanProgress';
 import { formatScanDropdownLabel } from '../../../utils/scanLabel';
@@ -42,6 +43,15 @@ function stockCountLabel(universeMarket, universeScope, universeStats, statsLoad
 
 function toOptionalNumber(rawValue) {
   return rawValue === '' ? undefined : Number(rawValue);
+}
+
+function staleRefreshMarket(createScanError, fallbackMarket) {
+  const detail = createScanError?.detail;
+  if (detail?.code !== 'market_data_stale') {
+    return null;
+  }
+  const market = detail.stale_markets?.[0]?.market || detail.market || fallbackMarket;
+  return market ? String(market).toUpperCase() : null;
 }
 
 export default function ScanControlBar({
@@ -71,6 +81,9 @@ export default function ScanControlBar({
   createScanError,
   cancelScanError,
   refreshConflict = null,
+  onRefreshStaleData,
+  refreshStaleDataPending = false,
+  refreshStaleDataError = null,
 }) {
   const controlsDisabled = createScanPending || scanStatus === 'running';
   const scopeOptions = universeMarket ? UNIVERSE_SCOPES_BY_MARKET[universeMarket] ?? [] : [];
@@ -86,6 +99,10 @@ export default function ScanControlBar({
   const cancelScanErrorMessage = typeof cancelScanError === 'string'
     ? cancelScanError
     : cancelScanError?.message;
+  const refreshStaleDataErrorMessage = typeof refreshStaleDataError === 'string'
+    ? refreshStaleDataError
+    : refreshStaleDataError?.response?.data?.detail || refreshStaleDataError?.message;
+  const staleMarket = staleRefreshMarket(createScanError, universeMarket);
 
   return (
     <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
@@ -337,8 +354,27 @@ export default function ScanControlBar({
       </Collapse>
 
       {createScanErrorMessage && (
-        <Alert severity="error" sx={{ mt: 1 }}>
+        <Alert
+          severity="error"
+          sx={{ mt: 1 }}
+          action={staleMarket && onRefreshStaleData ? (
+            <Button
+              color="inherit"
+              size="small"
+              startIcon={refreshStaleDataPending ? <CircularProgress size={14} /> : <RefreshIcon />}
+              disabled={refreshStaleDataPending}
+              onClick={() => onRefreshStaleData(staleMarket)}
+            >
+              Refresh {staleMarket} data
+            </Button>
+          ) : null}
+        >
           Error: {createScanErrorMessage}
+        </Alert>
+      )}
+      {refreshStaleDataErrorMessage && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          Error: {refreshStaleDataErrorMessage}
         </Alert>
       )}
       {cancelScanErrorMessage && (
