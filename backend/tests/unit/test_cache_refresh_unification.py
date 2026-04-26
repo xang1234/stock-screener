@@ -363,6 +363,135 @@ def test_smart_refresh_cache_prefers_github_daily_bundle_and_skips_live_fetch(mo
     assert completed[0]["stage_key"] == "prices"
 
 
+def test_shared_smart_refresh_records_success_for_each_symbol_market(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    rows = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="0700.HK", market="HK"),
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value = fake_query
+    fake_query.order_by.return_value = fake_query
+    fake_query.all.return_value = rows
+    fake_db.query.return_value = fake_query
+    fake_price_cache = MagicMock()
+    records = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_data_fetch_lock",
+        lambda: SimpleNamespace(extend_lock=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_rate_limiter",
+        lambda: SimpleNamespace(wait=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_market_calendar_service",
+        lambda: SimpleNamespace(
+            last_completed_trading_day=lambda market: date(2026, 3, 24)
+        ),
+    )
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.smart_refresh_cache, "update_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            symbol: _success_result(symbol) for symbol in batch_symbols
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_record_market_refresh_success_safely",
+        lambda _db, **kwargs: records.append(kwargs),
+    )
+
+    result = module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full")
+
+    assert result["status"] == "completed"
+    assert sorted(record["market"] for record in records) == ["HK", "US"]
+
+
+def test_shared_smart_refresh_retries_failed_symbols_by_symbol_market(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    rows = [
+        SimpleNamespace(symbol="AAPL", market="US"),
+        SimpleNamespace(symbol="0700.HK", market="HK"),
+        SimpleNamespace(symbol="MSFT", market="US"),
+    ]
+    fake_query = MagicMock()
+    fake_query.filter.return_value = fake_query
+    fake_query.order_by.return_value = fake_query
+    fake_query.all.return_value = rows
+    fake_db.query.return_value = fake_query
+    fake_price_cache = MagicMock()
+    retry_calls = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_data_fetch_lock",
+        lambda: SimpleNamespace(extend_lock=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_rate_limiter",
+        lambda: SimpleNamespace(wait=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.smart_refresh_cache, "update_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            "AAPL": {"has_error": True, "error": "rate limited", "price_data": None},
+            "0700.HK": {"has_error": True, "error": "rate limited", "price_data": None},
+            "MSFT": _success_result("MSFT"),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_schedule_failed_symbol_retry",
+        lambda symbols, *, market, attempt: retry_calls.append(
+            {"symbols": symbols, "market": market, "attempt": attempt}
+        ),
+    )
+
+    result = module.smart_refresh_cache.run.__wrapped__(module.smart_refresh_cache, "full")
+
+    assert result["status"] == "partial"
+    assert sorted(retry_calls, key=lambda call: call["market"]) == [
+        {"symbols": ["0700.HK"], "market": "HK", "attempt": 1},
+        {"symbols": ["AAPL"], "market": "US", "attempt": 1},
+    ]
+
+
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 
