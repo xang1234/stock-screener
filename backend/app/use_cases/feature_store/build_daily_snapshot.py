@@ -52,6 +52,7 @@ from app.domain.scanning.ports import (
 )
 from app.services.bootstrap_cache_coverage import (
     BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+    MISSING_SYMBOL_PREVIEW_LIMIT,
     evaluate_bootstrap_cache_coverage,
 )
 from app.utils.symbol_support import split_supported_price_symbols
@@ -269,12 +270,8 @@ class BuildDailyFeatureSnapshotUseCase:
             bootstrap_gate_report: dict | None = None
             if cmd.bootstrap_cache_only_if_covered:
                 supported_symbols, unsupported_symbols = split_supported_price_symbols(symbols)
-                if not supported_symbols:
-                    raise ValidationError(
-                        "Universe resolved to zero symbols after excluding unsupported Yahoo price symbols"
-                    )
                 bootstrap_gate_report = dict(cmd.bootstrap_coverage_report or {})
-                if not bootstrap_gate_report:
+                if not bootstrap_gate_report and supported_symbols:
                     session = getattr(uow, "session", None)
                     if session is None:
                         raise RuntimeError(
@@ -287,16 +284,28 @@ class BuildDailyFeatureSnapshotUseCase:
                         symbols=supported_symbols,
                         as_of_date=cmd.as_of_date,
                     )
+                elif not bootstrap_gate_report:
+                    bootstrap_gate_report = {"eligible": False}
                 eligible = bool(bootstrap_gate_report.get("eligible"))
                 bootstrap_gate_report.update(
                     {
                         "threshold": BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
                         "mode": "cache_only" if eligible else "fallback_existing",
-                        "unsupported_skipped_count": len(unsupported_symbols),
-                        "unsupported_symbols_preview": unsupported_symbols[:20],
+                        "unsupported_skipped_count": (
+                            len(unsupported_symbols) if eligible else 0
+                        ),
+                        "unsupported_symbols_preview": (
+                            unsupported_symbols[:MISSING_SYMBOL_PREVIEW_LIMIT]
+                            if eligible
+                            else []
+                        ),
                     }
                 )
                 if eligible:
+                    if not supported_symbols:
+                        raise ValidationError(
+                            "Universe resolved to zero symbols after excluding unsupported Yahoo price symbols"
+                        )
                     cmd = replace(
                         cmd,
                         exclude_unsupported_price_symbols=True,

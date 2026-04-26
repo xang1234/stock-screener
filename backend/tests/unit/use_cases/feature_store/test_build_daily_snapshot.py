@@ -745,7 +745,7 @@ class TestBulkDataPreparation:
 
     @_PATCH_TRADING_DAY
     def test_bootstrap_gate_fail_records_report_and_preserves_live_fallback(self, _mock_td):
-        uow, _ = _make_uow(symbols=["AAPL", "MSFT"])
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT", "BAD-WT"])
 
         class EmptyProvider(FakeStockDataProvider):
             def prepare_data_bulk(
@@ -798,10 +798,59 @@ class TestBulkDataPreparation:
         )
 
         run = uow.feature_runs.get_run(result.run_id)
-        assert run.config["bootstrap_cache_only_gate"]["mode"] == "fallback_existing"
+        gate = run.config["bootstrap_cache_only_gate"]
+        assert gate["mode"] == "fallback_existing"
+        assert gate["unsupported_skipped_count"] == 0
+        assert gate["unsupported_symbols_preview"] == []
         assert result.status == RunStatus.PUBLISHED.value
         assert result.failed_symbols == 0
-        assert scanner.calls == [("AAPL", None), ("MSFT", None)]
+        assert result.skipped_symbols == 0
+        assert scanner.calls == [("AAPL", None), ("MSFT", None), ("BAD-WT", None)]
+
+    @_PATCH_TRADING_DAY
+    def test_bootstrap_gate_fail_falls_back_when_all_symbols_are_unsupported(self, _mock_td):
+        uow, _ = _make_uow(symbols=["BAD-WT", "MSFT-WS"])
+
+        class RecordingScanner:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
+                self.calls.append(symbol)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        scanner = RecordingScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_report={
+                    "eligible": False,
+                    "price_coverage_ratio": 0.0,
+                    "fundamentals_coverage_ratio": 0.0,
+                },
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        gate = uow.feature_runs.get_run(result.run_id).config[
+            "bootstrap_cache_only_gate"
+        ]
+        assert gate["mode"] == "fallback_existing"
+        assert gate["unsupported_skipped_count"] == 0
+        assert gate["unsupported_symbols_preview"] == []
+        assert result.status == RunStatus.PUBLISHED.value
+        assert result.total_symbols == 2
+        assert result.skipped_symbols == 0
+        assert scanner.calls == ["BAD-WT", "MSFT-WS"]
 
 
 # ---------------------------------------------------------------------------
