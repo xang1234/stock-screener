@@ -59,6 +59,23 @@ def _patch_calendar(last_completed_by_market):
     )
 
 
+def _patch_refresh_state(last_refreshed_by_market):
+    def _state(_session, market):
+        value = last_refreshed_by_market.get(market)
+        if value is None:
+            return None
+        return {
+            "market": market,
+            "status": "completed",
+            "last_refreshed_trading_day": value.isoformat(),
+        }
+
+    return patch(
+        "app.services.market_data_freshness.get_market_refresh_state",
+        side_effect=_state,
+    )
+
+
 def test_fresh_universe_returns_none():
     from app.services.market_data_freshness import check_symbol_freshness
 
@@ -66,7 +83,11 @@ def test_fresh_universe_returns_none():
         _Row(symbol="AAPL", market="US", last_date=date(2026, 4, 23)),
         _Row(symbol="MSFT", market="US", last_date=date(2026, 4, 23)),
     ]
-    with _patch_session(rows), _patch_calendar({"US": date(2026, 4, 23)}):
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 4, 23)}),
+        _patch_refresh_state({"US": date(2026, 4, 23)}),
+    ):
         assert check_symbol_freshness(["AAPL", "MSFT"]) is None
 
 
@@ -76,7 +97,11 @@ def test_stale_market_returns_detail():
     rows = [
         _Row(symbol="AAPL", market="US", last_date=date(2026, 4, 22)),
     ]
-    with _patch_session(rows), _patch_calendar({"US": date(2026, 4, 23)}):
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 4, 23)}),
+        _patch_refresh_state({"US": date(2026, 4, 23)}),
+    ):
         detail = check_symbol_freshness(["AAPL"])
 
     assert detail is not None
@@ -95,7 +120,11 @@ def test_unresolved_symbols_flagged_even_if_covered_symbols_are_fresh():
     rows = [
         _Row(symbol="AAPL", market="US", last_date=date(2026, 4, 23)),
     ]
-    with _patch_session(rows), _patch_calendar({"US": date(2026, 4, 23)}):
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 4, 23)}),
+        _patch_refresh_state({"US": date(2026, 4, 23)}),
+    ):
         detail = check_symbol_freshness(["AAPL", "UNKNOWN_FAKE", "MISSING"])
 
     assert detail is not None
@@ -112,7 +141,11 @@ def test_uncovered_symbols_in_known_market_flag_stale():
         _Row(symbol="AAPL", market="US", last_date=date(2026, 4, 23)),
         _Row(symbol="NEWIPO", market="US", last_date=None),  # no cached prices
     ]
-    with _patch_session(rows), _patch_calendar({"US": date(2026, 4, 23)}):
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 4, 23)}),
+        _patch_refresh_state({"US": date(2026, 4, 23)}),
+    ):
         detail = check_symbol_freshness(["AAPL", "NEWIPO"])
 
     assert detail is not None

@@ -7,9 +7,8 @@ from typing import Iterable
 
 from celery import chain
 
-from ..domain.scanning.defaults import get_default_scan_profile
 from ..database import SessionLocal
-from ..services.market_activity_service import mark_market_activity_queued
+from ..services.market_activity_service import mark_market_activity_failed
 from ..tasks.market_queues import (
     data_fetch_queue_for_market,
     market_jobs_queue_for_market,
@@ -23,27 +22,7 @@ def _bootstrap_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
 
 
-def _publish_secondary_bootstrap_queued(*, market: str, task_id: str) -> None:
-    activity_db = SessionLocal()
-    try:
-        mark_market_activity_queued(
-            activity_db,
-            market=market,
-            stage_key="universe",
-            lifecycle="bootstrap",
-            task_name="runtime_bootstrap",
-            task_id=task_id,
-            message=f"Queued bootstrap for {market}",
-        )
-    finally:
-        activity_db.close()
-
-
-def _build_market_bootstrap_signatures(
-    market: str,
-    *,
-    include_initial_scan: bool = False,
-) -> list:
+def _build_market_bootstrap_signatures(market: str) -> list:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
     from app.tasks.cache_tasks import smart_refresh_cache
@@ -55,87 +34,84 @@ def _build_market_bootstrap_signatures(
         refresh_stock_universe,
     )
 
+    market_code = str(market).upper()
     signatures = [
         (
             refresh_stock_universe.si(
-                market=market,
+                market=market_code,
                 activity_lifecycle="bootstrap",
             )
-            if market == "US"
+            if market_code == "US"
             else refresh_official_market_universe.si(
-                market=market,
+                market=market_code,
                 activity_lifecycle="bootstrap",
             )
-        ).set(queue=data_fetch_queue_for_market(market)),
+        ).set(queue=data_fetch_queue_for_market(market_code)),
     ]
-    if market == "US":
+    if market_code == "US":
         signatures.append(
             load_tracked_ibd_industry_groups.si(
-                market=market,
+                market=market_code,
                 activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market))
+            ).set(queue=market_jobs_queue_for_market(market_code))
         )
     signatures.extend([
         smart_refresh_cache.si(
             mode="full",
-            market=market,
+            market=market_code,
             activity_lifecycle="bootstrap",
-        ).set(queue=data_fetch_queue_for_market(market)),
+        ).set(queue=data_fetch_queue_for_market(market_code)),
         refresh_all_fundamentals.si(
-            market=market,
+            market=market_code,
             activity_lifecycle="bootstrap",
-        ).set(queue=data_fetch_queue_for_market(market)),
+        ).set(queue=data_fetch_queue_for_market(market_code)),
+        calculate_daily_breadth_with_gapfill.si(
+            market=market_code,
+            activity_lifecycle="bootstrap",
+        ).set(queue=market_jobs_queue_for_market(market_code)),
+        calculate_daily_group_rankings_with_gapfill.si(
+            market=market_code,
+            activity_lifecycle="bootstrap",
+        ).set(queue=market_jobs_queue_for_market(market_code)),
+        build_daily_snapshot.si(
+            market=market_code,
+            universe_name=_bootstrap_universe_name(market_code),
+            publish_pointer_key=f"latest_published_market:{market_code}",
+            activity_lifecycle="bootstrap",
+        ).set(queue=market_jobs_queue_for_market(market_code)),
     ])
-    if market == "US":
-        signatures.extend([
-            calculate_daily_breadth_with_gapfill.si(
-                market=market,
-                activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market)),
-            calculate_daily_group_rankings_with_gapfill.si(
-                market=market,
-                activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market)),
-        ])
-    else:
-        # Asian markets (HK/JP/TW/IN): no IBD CSV step (taxonomy is in-memory
-        # via MarketTaxonomyService) and no breadth (still US-only), but
-        # rankings DO compute via the per-market benchmark (HSI/N225/TAIEX/NIFTY).
-        signatures.append(
-            calculate_daily_group_rankings_with_gapfill.si(
-                market=market,
-                activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market))
-        )
-    if market == "US":
-        signatures.append(
-            build_daily_snapshot.si(
-                market=market,
-                universe_name=_bootstrap_universe_name(market),
-                publish_pointer_key=f"latest_published_market:{market}",
-                activity_lifecycle="bootstrap",
-            ).set(queue=market_jobs_queue_for_market(market))
-        )
-    elif include_initial_scan:
-        signatures.append(
-            queue_market_bootstrap_scan.si(market=market).set(queue="celery")
-        )
     return signatures
 
 
 def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Iterable[str]) -> str:
-    enabled = [str(market).upper() for market in enabled_markets]
-    task = chain(
-        *_build_market_bootstrap_signatures(primary_market, include_initial_scan=True),
+    primary = str(primary_market).upper()
+    enabled = []
+    for market in [primary, *[str(item).upper() for item in enabled_markets]]:
+        if market not in enabled:
+            enabled.append(market)
+
+    signatures = []
+    for market in enabled:
+        signatures.extend(_build_market_bootstrap_signatures(market))
+    signatures.append(
         complete_local_runtime_bootstrap.si(
-            primary_market=primary_market,
+            primary_market=primary,
             enabled_markets=enabled,
-        ).set(queue="celery"),
-    ).apply_async()
+        ).set(queue="celery")
+    )
+    workflow = chain(*signatures)
+    errback = fail_local_runtime_bootstrap.s(
+        primary_market=primary,
+        enabled_markets=enabled,
+    ).set(queue="celery")
+    try:
+        task = workflow.apply_async(link_error=errback)
+    except TypeError:
+        task = workflow.apply_async()
     logger.info(
         "Queued local runtime bootstrap",
         extra={
-            "primary_market": primary_market,
+            "primary_market": primary,
             "enabled_markets": enabled,
             "task_id": task.id,
         },
@@ -144,91 +120,89 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
 
 
 @celery_app.task(
-    name="app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan",
-    queue="celery",
-)
-def queue_market_bootstrap_scan(market: str) -> dict:
-    from ..infra.db.uow import SqlUnitOfWork
-    from ..schemas.universe import Market, UniverseDefinition, UniverseType
-    from ..use_cases.scanning.create_scan import ActiveScanConflictError, CreateScanCommand
-    from ..wiring.bootstrap import get_create_scan_use_case_without_freshness_gate
-
-    market_code = str(market).upper()
-    defaults = get_default_scan_profile()
-    universe_def = UniverseDefinition(type=UniverseType.MARKET, market=Market(market_code))
-    use_case = get_create_scan_use_case_without_freshness_gate()
-    uow = SqlUnitOfWork(SessionLocal)
-
-    try:
-        result = use_case.execute(
-            uow,
-            CreateScanCommand(
-                universe_def=universe_def,
-                universe_label=universe_def.label(),
-                universe_key=universe_def.key(),
-                universe_type=universe_def.type.value,
-                universe_market=universe_def.market.value if universe_def.market else None,
-                screeners=defaults["screeners"],
-                composite_method=defaults["composite_method"],
-                criteria=defaults["criteria"],
-                trigger_source="bootstrap",
-            ),
-        )
-    except ActiveScanConflictError as exc:
-        logger.info(
-            "Skipped bootstrap market scan for %s because another scan is active",
-            market_code,
-            extra={"active_scan_id": exc.active_scan.scan_id},
-        )
-        return {
-            "status": "skipped",
-            "reason": "scan_already_active",
-            "market": market_code,
-            "active_scan_id": exc.active_scan.scan_id,
-        }
-
-    logger.info(
-        "Queued bootstrap market scan for %s",
-        market_code,
-        extra={"scan_id": result.scan_id, "status": result.status},
-    )
-    return {
-        "status": result.status,
-        "market": market_code,
-        "scan_id": result.scan_id,
-        "total_stocks": result.total_stocks,
-    }
-
-
-@celery_app.task(
     name="app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
     queue="celery",
 )
 def complete_local_runtime_bootstrap(primary_market: str, enabled_markets: list[str]) -> dict:
-    from ..services.runtime_preferences_service import set_bootstrap_state
+    from ..services.runtime_preferences_service import (
+        _has_completed_auto_scan,
+        set_bootstrap_state,
+    )
 
     db = SessionLocal()
     try:
+        missing_markets = [
+            str(market).upper()
+            for market in enabled_markets
+            if not _has_completed_auto_scan(db, str(market).upper())
+        ]
+        if missing_markets:
+            set_bootstrap_state(db, "failed")
+            for market in missing_markets:
+                mark_market_activity_failed(
+                    db,
+                    market=market,
+                    stage_key="scan",
+                    lifecycle="bootstrap",
+                    task_name="runtime_bootstrap",
+                    task_id=None,
+                    message="Bootstrap scan did not publish",
+                )
+            raise RuntimeError(
+                "Bootstrap completed without published auto scans for: "
+                + ", ".join(missing_markets)
+            )
         set_bootstrap_state(db, "ready")
     finally:
         db.close()
 
-    secondary_markets = [market for market in enabled_markets if market != primary_market]
-    queued_secondary = []
-    for market in secondary_markets:
-        task = chain(*_build_market_bootstrap_signatures(market)).apply_async()
-        _publish_secondary_bootstrap_queued(market=market, task_id=task.id)
-        queued_secondary.append({"market": market, "task_id": task.id})
-
     logger.info(
-        "Completed primary local runtime bootstrap",
+        "Completed local runtime bootstrap",
         extra={
             "primary_market": primary_market,
-            "secondary_markets": secondary_markets,
+            "enabled_markets": enabled_markets,
         },
     )
     return {
         "primary_market": primary_market,
-        "secondary_markets": secondary_markets,
-        "queued_secondary": queued_secondary,
+        "enabled_markets": enabled_markets,
+    }
+
+
+@celery_app.task(
+    name="app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap",
+    queue="celery",
+)
+def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: list[str], **kwargs) -> dict:
+    from ..services.runtime_preferences_service import set_bootstrap_state
+
+    db = SessionLocal()
+    try:
+        set_bootstrap_state(db, "failed")
+        for market in enabled_markets:
+            mark_market_activity_failed(
+                db,
+                market=str(market).upper(),
+                stage_key="scan",
+                lifecycle="bootstrap",
+                task_name="runtime_bootstrap",
+                task_id=None,
+                message="Bootstrap failed",
+            )
+    finally:
+        db.close()
+
+    logger.warning(
+        "Marked local runtime bootstrap failed",
+        extra={
+            "primary_market": primary_market,
+            "enabled_markets": enabled_markets,
+            "args": args,
+            "kwargs": kwargs,
+        },
+    )
+    return {
+        "status": "failed",
+        "primary_market": primary_market,
+        "enabled_markets": enabled_markets,
     }

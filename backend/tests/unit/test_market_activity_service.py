@@ -82,7 +82,7 @@ def test_runtime_activity_status_reports_primary_bootstrap_progress(db_session, 
     assert payload["bootstrap"]["app_ready"] is False
     assert payload["bootstrap"]["current_stage"] == "Price Refresh"
     assert payload["bootstrap"]["progress_mode"] == "determinate"
-    assert payload["bootstrap"]["percent"] == pytest.approx(25.0)
+    assert payload["bootstrap"]["percent"] == pytest.approx(10.71)
     assert payload["summary"]["active_market_count"] == 2
     assert payload["summary"]["active_markets"] == ["US", "HK"]
     us_market = next(item for item in payload["markets"] if item["market"] == "US")
@@ -527,7 +527,7 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
     assert payload["bootstrap"]["app_ready"] is True
     assert payload["bootstrap"]["progress_mode"] == "determinate"
     assert payload["bootstrap"]["percent"] == 100.0
-    assert "continues in the background" in payload["bootstrap"]["background_warning"].lower()
+    assert "published scan" in payload["bootstrap"]["background_warning"].lower()
     assert payload["summary"]["active_market_count"] == 1
     assert payload["summary"]["active_markets"] == ["HK"]
     hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
@@ -646,6 +646,36 @@ def test_runtime_activity_status_surfaces_failed_market_stage(db_session, monkey
     assert jp_market["status"] == "failed"
     assert jp_market["stage_label"] == "Group Rankings"
     assert jp_market["message"] == "Group ranking failed"
+
+
+def test_runtime_activity_supports_scan_stage_progress(db_session, monkeypatch):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="scan",
+        lifecycle="daily_refresh",
+        task_name="build_daily_snapshot",
+        task_id="task-hk-scan",
+        current=25,
+        total=100,
+        message="Running market scan",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["HK"], primary="HK", state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
+    assert hk_market["stage_key"] == "scan"
+    assert hk_market["stage_label"] == "Scan"
+    assert hk_market["progress_mode"] == "determinate"
+    assert hk_market["percent"] == 25.0
 
 
 def test_runtime_activity_status_returns_idle_markets_without_activity(db_session, monkeypatch):

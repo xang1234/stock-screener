@@ -29,6 +29,61 @@ from app.tasks.workload_coordination import serialized_market_workload
 logger = logging.getLogger(__name__)
 
 
+class CompositeProgressSink:
+    """Fan progress events out to multiple sinks."""
+
+    def __init__(self, *sinks) -> None:
+        self._sinks = sinks
+
+    def emit(self, event) -> None:
+        for sink in self._sinks:
+            sink.emit(event)
+
+
+class MarketActivityProgressSink:
+    """Persist feature-snapshot scan progress for Operations UI."""
+
+    def __init__(
+        self,
+        *,
+        session_factory,
+        market: str,
+        stage_key: str,
+        lifecycle: str,
+        task_name: str,
+        task_id: str | None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._market = market
+        self._stage_key = stage_key
+        self._lifecycle = lifecycle
+        self._task_name = task_name
+        self._task_id = task_id
+
+    def emit(self, event) -> None:
+        from app.services.market_activity_service import mark_market_activity_progress
+
+        db = self._session_factory()
+        try:
+            percent = (event.current / event.total * 100.0) if event.total else 0.0
+            mark_market_activity_progress(
+                db,
+                market=self._market,
+                stage_key=self._stage_key,
+                lifecycle=self._lifecycle,
+                task_name=self._task_name,
+                task_id=self._task_id,
+                current=event.current,
+                total=event.total,
+                percent=round(percent, 1),
+                message="Running market scan",
+            )
+        except Exception:
+            logger.warning("Failed to emit market scan activity progress", exc_info=True)
+        finally:
+            db.close()
+
+
 def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
     """Ensure a published-run pointer references *run_id*."""
     from sqlalchemy.exc import IntegrityError
@@ -587,7 +642,7 @@ def build_daily_snapshot(
     skip_if_published: bool = True,
     static_daily_mode: bool = False,
     market: str | None = None,
-    publish_pointer_key: str = "latest_published",
+    publish_pointer_key: str | None = None,
     ignore_runtime_market_gate: bool = False,
     activity_lifecycle: str | None = None,
 ) -> dict:
@@ -610,7 +665,9 @@ def build_daily_snapshot(
     from app.infra.db.uow import SqlUnitOfWork
     from app.infra.tasks.progress_sink import CeleryProgressSink
     from app.services.runtime_preferences_service import is_market_enabled_now
+    from app.services.market_calendar_service import MarketCalendarService
     from app.services.universe_resolver import normalize_universe_definition
+    from app.tasks.market_queues import log_extra, normalize_market
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailySnapshotCommand,
@@ -634,10 +691,17 @@ def build_daily_snapshot(
         finally:
             activity_db.close()
 
-    as_of = date.fromisoformat(as_of_date_str) if as_of_date_str else date.today()
+    effective_market = normalize_market(market or "US")
+    if effective_market == "SHARED":
+        effective_market = "US"
+    as_of = (
+        date.fromisoformat(as_of_date_str)
+        if as_of_date_str
+        else MarketCalendarService().last_completed_trading_day(effective_market)
+    )
     from app.domain.scanning.defaults import get_default_scan_profile
 
-    defaults = get_default_scan_profile()
+    defaults = get_default_scan_profile(effective_market)
     screeners = defaults["screeners"] if screener_names is None else screener_names
     universe_name = defaults["universe"] if universe_name is None else universe_name
     criteria = defaults["criteria"] if criteria is None else criteria
@@ -646,25 +710,21 @@ def build_daily_snapshot(
         if composite_method is None
         else composite_method
     )
+    publish_pointer_key = publish_pointer_key or f"latest_published_market:{effective_market}"
     correlation_id = self.request.id
-    effective_market = market.upper() if isinstance(market, str) else "US"
     activity_lifecycle = activity_lifecycle or "daily_refresh"
 
-    # `market` is a routing/log label here; real per-market scoping comes
-    # from `universe_name` via universe_resolver.
-    from app.tasks.market_queues import log_extra
-    _log_extra = log_extra(market)
-    if market is not None:
-        bypass_runtime_market_gate = static_daily_mode and ignore_runtime_market_gate
-        if not bypass_runtime_market_gate and not is_market_enabled_now(market):
-            logger.info("Skipping feature snapshot for disabled market %s", market, extra=_log_extra)
-            return {
-                "status": "skipped",
-                "reason": f"market {effective_market} is disabled in local runtime preferences",
-                "market": effective_market,
-                "timestamp": datetime.now().isoformat(),
-            }
-        logger.debug("build_daily_snapshot market label=%s", market, extra=_log_extra)
+    _log_extra = log_extra(effective_market)
+    bypass_runtime_market_gate = static_daily_mode and ignore_runtime_market_gate
+    if market is not None and not bypass_runtime_market_gate and not is_market_enabled_now(effective_market):
+        logger.info("Skipping feature snapshot for disabled market %s", effective_market, extra=_log_extra)
+        return {
+            "status": "skipped",
+            "reason": f"market {effective_market} is disabled in local runtime preferences",
+            "market": effective_market,
+            "timestamp": datetime.now().isoformat(),
+        }
+    logger.debug("build_daily_snapshot market label=%s", effective_market, extra=_log_extra)
 
     logger.info(
         "┌─── build_daily_snapshot ───────────────────┐\n"
@@ -686,13 +746,14 @@ def build_daily_snapshot(
     )
 
     # ── Trading-day guard (fast exit — lock released immediately) ─
-    if not _is_market_trading_day(as_of, market=market):
+    if not _is_market_trading_day(as_of, market=effective_market):
         logger.info("Skipping build_daily_snapshot: %s is not a trading day for %s", as_of, effective_market)
         return {
             "status": "skipped",
             "reason": "not_trading_day",
             "as_of_date": str(as_of),
             "cleaned_stale_runs": cleaned_stale_runs,
+            "market": effective_market,
         }
 
     # ── Skip-if-published guard (cheap DB check) ─────────────
@@ -740,6 +801,8 @@ def build_daily_snapshot(
                     "reason": "already_published",
                     "existing_run_id": matching_run.id,
                     "as_of_date": str(as_of),
+                    "market": effective_market,
+                    "auto_scan_id": auto_scan_id,
                     "cleaned_stale_runs": cleaned_stale_runs,
                     "skipped_symbols": len(skipped_symbols),
                 }
@@ -765,22 +828,34 @@ def build_daily_snapshot(
             settings.static_snapshot_parallel_workers if static_daily_mode else 1
         ),
         publish_pointer_key=publish_pointer_key,
+        market=effective_market,
     )
 
     try:
         _publish_activity(
             mark_market_activity_started,
             market=effective_market,
-            stage_key="snapshot",
+            stage_key="scan",
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "build_daily_snapshot"),
             task_id=correlation_id,
-            message="Building feature snapshot",
+            message="Running market scan",
+        )
+        progress_sink = NullProgressSink() if static_daily_mode else CompositeProgressSink(
+            CeleryProgressSink(self),
+            MarketActivityProgressSink(
+                session_factory=SessionLocal,
+                market=effective_market,
+                stage_key="scan",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "build_daily_snapshot"),
+                task_id=correlation_id,
+            ),
         )
         result = use_case.execute(
             uow=uow,
             cmd=cmd,
-            progress=NullProgressSink() if static_daily_mode else CeleryProgressSink(self),
+            progress=progress_sink,
             cancel=NeverCancelledToken(),
         )
     except SoftTimeLimitExceeded:
@@ -793,7 +868,7 @@ def build_daily_snapshot(
         _publish_activity(
             mark_market_activity_failed,
             market=effective_market,
-            stage_key="snapshot",
+            stage_key="scan",
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "build_daily_snapshot"),
             task_id=correlation_id,
@@ -804,7 +879,7 @@ def build_daily_snapshot(
         _publish_activity(
             mark_market_activity_failed,
             market=effective_market,
-            stage_key="snapshot",
+            stage_key="scan",
             lifecycle=activity_lifecycle,
             task_name=getattr(self, "name", "build_daily_snapshot"),
             task_id=correlation_id,
@@ -849,19 +924,20 @@ def build_daily_snapshot(
     _publish_activity(
         mark_market_activity_completed,
         market=effective_market,
-        stage_key="snapshot",
+        stage_key="scan",
         lifecycle=activity_lifecycle,
         task_name=getattr(self, "name", "build_daily_snapshot"),
         task_id=correlation_id,
         current=result.processed_symbols,
         total=result.total_symbols,
-        message=f"Feature snapshot {result.status}",
+        message="Market scan ready",
     )
 
     return {
         "run_id": result.run_id,
         "status": result.status,
         "as_of_date": str(as_of),
+        "market": effective_market,
         "total_symbols": result.total_symbols,
         "processed_symbols": result.processed_symbols,
         "failed_symbols": result.failed_symbols,

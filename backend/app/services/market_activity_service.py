@@ -22,6 +22,7 @@ STAGE_SEQUENCE = (
     "breadth",
     "groups",
     "snapshot",
+    "scan",
 )
 
 STAGE_LABELS = {
@@ -31,6 +32,7 @@ STAGE_LABELS = {
     "breadth": "Breadth Calculation",
     "groups": "Group Rankings",
     "snapshot": "Feature Snapshot",
+    "scan": "Scan",
 }
 
 DEFAULT_LIFECYCLE_BY_STAGE = {
@@ -40,6 +42,7 @@ DEFAULT_LIFECYCLE_BY_STAGE = {
     "breadth": "daily_refresh",
     "groups": "daily_refresh",
     "snapshot": "daily_refresh",
+    "scan": "daily_refresh",
 }
 
 ACTIVE_STATUSES = {"queued", "running"}
@@ -534,11 +537,19 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
             if not secondary_active
             else "Primary market is ready while additional market loading continues."
         )
-    elif primary_payload is not None and primary_payload.get("progress_mode") == "determinate":
+    elif any(payload.get("progress_mode") == "determinate" for payload in market_payloads):
+        focus_payload = next(
+            (payload for payload in market_payloads if payload.get("status") in ACTIVE_STATUSES),
+            primary_payload,
+        )
         bootstrap_progress_mode = "determinate"
-        bootstrap_percent = _bootstrap_progress_percent(primary_payload)
-        bootstrap_stage = primary_payload.get("stage_label")
-        bootstrap_message = primary_payload.get("message")
+        bootstrap_percent = round(
+            sum(_bootstrap_progress_percent(payload) for payload in market_payloads)
+            / max(len(market_payloads), 1),
+            2,
+        )
+        bootstrap_stage = focus_payload.get("stage_label") if focus_payload else None
+        bootstrap_message = focus_payload.get("message") if focus_payload else "Bootstrap queued."
     else:
         bootstrap_progress_mode = "indeterminate"
         bootstrap_percent = None
@@ -554,8 +565,7 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
         bootstrap_status.bootstrap_state == "running" or bool(secondary_active)
     ):
         background_warning = (
-            "Data loading continues in the background after bootstrap. "
-            "Additional enabled markets keep syncing after the app becomes usable."
+            "Bootstrap remains active until every enabled market has a published scan."
         )
 
     return {

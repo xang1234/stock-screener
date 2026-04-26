@@ -523,7 +523,7 @@ def test_warm_price_cache_uses_batch_store(monkeypatch):
     assert price_cache.store_batch_in_cache.call_args.kwargs == {"also_store_db": True}
 
 
-def test_task_registry_lists_daily_smart_refresh_only():
+def test_task_registry_lists_daily_market_pipelines_only():
     from app.services.task_registry_service import TaskRegistryService
     from app.config import settings as app_settings
 
@@ -536,15 +536,22 @@ def test_task_registry_lists_daily_smart_refresh_only():
         f"weekly-universe-refresh-{market.lower()}"
         for market in app_settings.enabled_markets_list
     }
+    expected_pipeline_tasks = {
+        f"daily-market-pipeline-{market.lower()}"
+        for market in app_settings.enabled_markets_list
+    }
 
-    assert "daily-smart-refresh" in names
+    assert expected_pipeline_tasks.issubset(names)
     assert expected_universe_tasks.issubset(names)
     assert "weekly-universe-refresh" not in names
+    assert "daily-smart-refresh" not in names
+    assert "daily-breadth-calculation" not in names
+    assert "daily-group-ranking-calculation" not in names
     assert "daily-cache-warmup" not in names
     assert "auto-refresh-after-close" not in names
 
-    daily_task = next(task for task in tasks if task["name"] == "daily-smart-refresh")
-    assert daily_task["task_function"] == "app.tasks.cache_tasks.smart_refresh_cache"
+    daily_task = next(task for task in tasks if task["name"] == "daily-market-pipeline-us")
+    assert daily_task["task_function"] == "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
 
     for market in app_settings.enabled_markets_list:
         task = next(task for task in tasks if task["name"] == f"weekly-universe-refresh-{market.lower()}")
@@ -556,7 +563,7 @@ def test_task_registry_lists_daily_smart_refresh_only():
         assert task["task_function"] == expected_task_function
 
 
-def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
+def test_task_registry_triggers_daily_market_pipeline_with_market(monkeypatch):
     from app.services.task_registry_service import TaskRegistryService
 
     service = TaskRegistryService()
@@ -571,15 +578,15 @@ def test_task_registry_triggers_daily_smart_refresh_with_full_mode(monkeypatch):
 
     db.add.side_effect = _assign_id
 
-    result = service.trigger_task("daily-smart-refresh", db)
+    result = service.trigger_task("daily-market-pipeline-hk", db)
 
     fake_task.apply_async.assert_called_once_with(
-        kwargs={"mode": "full"},
+        kwargs={"market": "HK"},
         headers={"origin": "manual"},
-        queue="data_fetch_shared",
+        queue="market_jobs_hk",
     )
     assert result["task_id"] == "task-123"
-    assert result["task_name"] == "daily-smart-refresh"
+    assert result["task_name"] == "daily-market-pipeline-hk"
     assert result["execution_id"] == 99
 
 

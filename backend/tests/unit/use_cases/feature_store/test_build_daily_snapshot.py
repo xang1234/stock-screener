@@ -6,6 +6,7 @@ Uses in-memory fakes from conftest.py — no DB, no mocks, pure behaviour tests.
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -155,6 +156,12 @@ class TestBuildDailySnapshotCommand:
         with pytest.raises(ValueError, match="static_chunk_size"):
             _make_cmd(static_chunk_size=0)
 
+    def test_market_defaults_to_us(self):
+        assert _make_cmd().market == "US"
+
+    def test_market_normalizes_to_uppercase(self):
+        assert _make_cmd(market="hk").market == "HK"
+
 
 # ---------------------------------------------------------------------------
 # Happy path
@@ -162,6 +169,32 @@ class TestBuildDailySnapshotCommand:
 
 
 class TestHappyPath:
+    def test_execute_uses_market_calendar_for_requested_market(self, monkeypatch):
+        from app.use_cases.feature_store import build_daily_snapshot as module
+
+        calls = []
+
+        class _Calendar:
+            def is_trading_day(self, market, day):
+                calls.append((market, day))
+                return False
+
+        uow, scanner = _make_uow()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            market_calendar=_Calendar(),
+        )
+
+        with pytest.raises(ValidationError, match="HK trading day"):
+            use_case.execute(
+                uow,
+                _make_cmd(market="hk"),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
+
+        assert calls == [("HK", AS_OF)]
+
     @_PATCH_TRADING_DAY
     def test_scans_all_symbols_and_publishes(self, _mock_td):
         uow, scanner = _make_uow()
@@ -641,19 +674,18 @@ class TestBulkDataPreparation:
 class TestTradingDayValidation:
     def test_non_trading_day_raises(self):
         uow, scanner = _make_uow()
-        use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            market_calendar=SimpleNamespace(is_trading_day=lambda _market, _day: False),
+        )
 
-        with patch(
-            "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
-            return_value=False,
-        ):
-            with pytest.raises(ValidationError, match="not a US trading day"):
-                use_case.execute(
-                    uow,
-                    _make_cmd(),
-                    FakeProgressSink(),
-                    FakeCancellationToken(),
-                )
+        with pytest.raises(ValidationError, match="not a US trading day"):
+            use_case.execute(
+                uow,
+                _make_cmd(),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
 
 
 # ---------------------------------------------------------------------------

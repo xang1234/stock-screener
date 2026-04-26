@@ -817,6 +817,7 @@ def get_build_daily_snapshot_use_case() -> BuildDailyFeatureSnapshotUseCase:
     return BuildDailyFeatureSnapshotUseCase(
         scanner=get_scan_orchestrator(),
         data_provider=get_stock_data_provider(),
+        market_calendar=get_market_calendar_service(),
     )
 
 
