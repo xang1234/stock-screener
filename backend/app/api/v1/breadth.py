@@ -25,11 +25,24 @@ from ...schemas.breadth import (
     BreadthSummary
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
+from ...tasks.market_queues import SUPPORTED_MARKETS
 from ...wiring.bootstrap import get_ui_snapshot_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+SUPPORTED_BREADTH_MARKETS = set(SUPPORTED_MARKETS)
+
+
+def _normalize_market_param(market: str | None) -> str:
+    normalized = str(market or "US").strip().upper()
+    if normalized not in SUPPORTED_BREADTH_MARKETS:
+        supported = ", ".join(SUPPORTED_MARKETS)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+        )
+    return normalized
 
 
 def _require_task_controls() -> None:
@@ -41,14 +54,18 @@ def _require_task_controls() -> None:
 
 
 @router.get("/current", response_model=BreadthResponse)
-async def get_current_breadth(db: Session = Depends(get_db)):
+async def get_current_breadth(
+    market: str = Query("US", description="Market code: US, HK, IN, JP, or TW"),
+    db: Session = Depends(get_db),
+):
     """
     Get the most recent market breadth data.
 
     Returns the latest breadth snapshot from the database.
     """
+    normalized_market = _normalize_market_param(market)
     breadth = db.query(MarketBreadth).filter(
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).order_by(
         MarketBreadth.date.desc()
     ).first()
@@ -56,18 +73,25 @@ async def get_current_breadth(db: Session = Depends(get_db)):
     if not breadth:
         raise HTTPException(
             status_code=404,
-            detail="No breadth data available. Run a calculation first."
+            detail=f"No breadth data available for market {normalized_market}. Run a calculation first."
         )
 
     return breadth
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
-async def get_breadth_bootstrap(snapshot_service=Depends(get_ui_snapshot_service)):
+async def get_breadth_bootstrap(
+    market: str = Query("US", description="Market code: US, HK, IN, JP, or TW"),
+    snapshot_service=Depends(get_ui_snapshot_service),
+):
     """Return the published breadth bootstrap snapshot if available."""
-    snapshot = snapshot_service.get_breadth_bootstrap()
+    normalized_market = _normalize_market_param(market)
+    snapshot = snapshot_service.get_breadth_bootstrap(market=normalized_market)
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="No published breadth bootstrap snapshot is available")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No published breadth bootstrap snapshot is available for market {normalized_market}",
+        )
     return UISnapshotEnvelope(**snapshot.to_dict())
 
 
@@ -76,6 +100,7 @@ async def get_historical_breadth(
     start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
     limit: int = Query(365, ge=1, le=730, description="Maximum number of records"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -104,11 +129,13 @@ async def get_historical_breadth(
             detail=f"Date range cannot exceed 730 days (2 years)"
         )
 
+    normalized_market = _normalize_market_param(market)
+
     # Query breadth data
     breadth_records = db.query(MarketBreadth).filter(
         MarketBreadth.date >= start_date,
         MarketBreadth.date <= end_date,
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).order_by(
         MarketBreadth.date.desc()
     ).limit(limit).all()
@@ -116,7 +143,7 @@ async def get_historical_breadth(
     if not breadth_records:
         raise HTTPException(
             status_code=404,
-            detail=f"No breadth data found for date range {start_date} to {end_date}"
+            detail=f"No breadth data found for market {normalized_market} date range {start_date} to {end_date}"
         )
 
     return breadth_records
@@ -126,6 +153,7 @@ async def get_historical_breadth(
 async def get_indicator_trend(
     indicator: str,
     days: int = Query(30, ge=1, le=730, description="Number of days to retrieve"),
+    market: str = Query("US", description="Market code: US, HK, IN, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -156,13 +184,14 @@ async def get_indicator_trend(
         )
 
     # Get recent breadth data
+    normalized_market = _normalize_market_param(market)
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days)
 
     breadth_records = db.query(MarketBreadth).filter(
         MarketBreadth.date >= start_date,
         MarketBreadth.date <= end_date,
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).order_by(
         MarketBreadth.date.asc()
     ).all()
@@ -170,7 +199,7 @@ async def get_indicator_trend(
     if not breadth_records:
         raise HTTPException(
             status_code=404,
-            detail=f"No breadth data found for the last {days} days"
+            detail=f"No breadth data found for market {normalized_market} in the last {days} days"
         )
 
     # Extract indicator values
@@ -184,6 +213,7 @@ async def get_indicator_trend(
 
     return TrendResponse(
         indicator=indicator,
+        market=normalized_market,
         data=data_points,
         total_points=len(data_points)
     )
@@ -193,6 +223,7 @@ async def get_indicator_trend(
 async def trigger_calculation(
     request: CalculationRequest,
     background_tasks: BackgroundTasks,
+    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -208,6 +239,7 @@ async def trigger_calculation(
         Status and task information
     """
     _require_task_controls()
+    normalized_market = _normalize_market_param(market or request.market)
     calculation_date = request.calculation_date
 
     # Validate date format if provided
@@ -223,12 +255,12 @@ async def trigger_calculation(
     # Trigger background task
     from ...tasks.breadth_tasks import calculate_daily_breadth
 
-    background_tasks.add_task(calculate_daily_breadth, calculation_date)
+    background_tasks.add_task(calculate_daily_breadth, calculation_date, market=normalized_market)
 
     date_str = calculation_date or "today"
     return CalculationResponse(
         status="started",
-        message=f"Breadth calculation triggered for {date_str}",
+        message=f"Breadth calculation triggered for {normalized_market} {date_str}",
         task_id=None  # Background tasks don't return task IDs
     )
 
@@ -236,6 +268,7 @@ async def trigger_calculation(
 @router.post("/backfill", response_model=BackfillResponse)
 async def trigger_backfill(
     request: BackfillRequest,
+    market: str | None = Query(None, description="Optional market override: US, HK, IN, JP, or TW"),
     db: Session = Depends(get_db)
 ):
     """
@@ -251,6 +284,7 @@ async def trigger_backfill(
         Task information for tracking progress
     """
     _require_task_controls()
+    normalized_market = _normalize_market_param(market or request.market)
     # Validate date format
     try:
         start = datetime.strptime(request.start_date, "%Y-%m-%d").date()
@@ -283,48 +317,61 @@ async def trigger_backfill(
     # Trigger Celery task
     from ...tasks.breadth_tasks import backfill_breadth_data
 
-    task = backfill_breadth_data.delay(request.start_date, request.end_date)
+    task = backfill_breadth_data.delay(request.start_date, request.end_date, market=normalized_market)
 
-    logger.info(f"Backfill task triggered: {task.id} for {request.start_date} to {request.end_date}")
+    logger.info(
+        "Backfill task triggered: %s for %s to %s market=%s",
+        task.id,
+        request.start_date,
+        request.end_date,
+        normalized_market,
+    )
 
     return BackfillResponse(
         status="started",
-        message=f"Backfill task started for {request.start_date} to {request.end_date}",
+        message=f"Backfill task started for {normalized_market} {request.start_date} to {request.end_date}",
         task_id=task.id,
         dates_to_process=estimated_trading_days
     )
 
 
 @router.get("/summary", response_model=BreadthSummary)
-async def get_breadth_summary(db: Session = Depends(get_db)):
+async def get_breadth_summary(
+    market: str = Query("US", description="Market code: US, HK, IN, JP, or TW"),
+    db: Session = Depends(get_db),
+):
     """
     Get summary statistics for available breadth data.
 
     Returns information about the breadth data coverage,
     including date ranges and record counts.
     """
-    # Get total record count (US scope — non-US partitions have their own surfaces)
+    normalized_market = _normalize_market_param(market)
+
+    # Get total record count for the requested market partition.
     total_records = db.query(func.count(MarketBreadth.id)).filter(
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).scalar() or 0
 
     if total_records == 0:
         return BreadthSummary(
+            market=normalized_market,
             latest_date=None,
             total_records=0,
             date_range_start=None,
             date_range_end=None
         )
 
-    # Get date range (US scope)
+    # Get date range
     min_date = db.query(func.min(MarketBreadth.date)).filter(
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).scalar()
     max_date = db.query(func.max(MarketBreadth.date)).filter(
-        MarketBreadth.market == "US",
+        MarketBreadth.market == normalized_market,
     ).scalar()
 
     return BreadthSummary(
+        market=normalized_market,
         latest_date=max_date,
         total_records=total_records,
         date_range_start=min_date,

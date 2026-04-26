@@ -8,9 +8,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from typing import List, Literal, Any
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 import logging
 
+from ...schemas.cache import SmartRefreshResponse
 from ...schemas.scanning import (
     ExplainResponse,
     FilterOptionsResponse,
@@ -28,6 +29,7 @@ from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...database import SessionLocal
 from ...services.market_activity_service import get_runtime_activity_status
+from ...tasks.market_queues import SUPPORTED_MARKETS
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
@@ -55,6 +57,25 @@ SCAN_GUARD_MARKET_BY_INDEX = {
     IndexName.NIKKEI225.value: "JP",
     IndexName.TAIEX.value: "TW",
 }
+
+
+class ScanCacheRefreshRequest(BaseModel):
+    """Request payload for scan-facing cache refresh recovery."""
+
+    market: str
+    mode: Literal["auto", "full"] = "full"
+
+
+def _normalize_scan_refresh_market(market: str) -> str:
+    """Require an explicit market partition for scan recovery refreshes."""
+    normalized = str(market or "").strip().upper()
+    if normalized not in SUPPORTED_MARKETS:
+        supported = ", ".join(SUPPORTED_MARKETS)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+        )
+    return normalized
 
 
 def _get_market_refresh_conflict_detail(market: str | None) -> dict[str, object] | None:
@@ -217,6 +238,18 @@ async def create_scan(
         feature_run_id=result.feature_run_id,
         universe_def=universe_def,
     )
+
+
+@router.post("/refresh-cache", response_model=SmartRefreshResponse)
+async def refresh_scan_cache(request: ScanCacheRefreshRequest):
+    """Queue a manual market data refresh from the scan workflow."""
+    from .cache import _queue_manual_smart_refresh
+
+    try:
+        market = _normalize_scan_refresh_market(request.market)
+        return _queue_manual_smart_refresh(mode=request.mode, market=market)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def _build_universe_def(request: ScanCreateRequest):

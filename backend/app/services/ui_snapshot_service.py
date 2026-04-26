@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.database import is_corruption_error
-from app.domain.analytics.scope import AnalyticsFeature, market_scope_tag, us_only_tag
+from app.domain.analytics.scope import market_scope_tag
 from app.domain.scanning.filter_spec import PageSpec, QuerySpec, SortOrder, SortSpec
 from app.infra.db.uow import SqlUnitOfWork
 from app.models.industry import IBDGroupRank
@@ -63,6 +63,7 @@ from app.services.theme_taxonomy_service import ThemeTaxonomyService
 from app.use_cases.scanning.get_filter_options import GetFilterOptionsQuery, GetFilterOptionsUseCase
 from app.use_cases.scanning.get_scan_results import GetScanResultsQuery, GetScanResultsUseCase
 from app.wiring.bootstrap import get_stock_universe_service
+from app.tasks.market_queues import SUPPORTED_MARKETS
 
 logger = logging.getLogger(__name__)
 
@@ -145,26 +146,37 @@ class UISnapshotService:
             )
         )
 
-    def get_breadth_bootstrap(self) -> SnapshotResult | None:
+    def _normalize_breadth_market(self, market: str | None) -> str:
+        normalized = str(market or "US").strip().upper()
+        if normalized not in SUPPORTED_MARKETS:
+            raise ValueError(f"Unsupported breadth market: {market}")
+        return normalized
+
+    def _breadth_variant_key(self, market: str | None) -> str:
+        return f"market:{self._normalize_breadth_market(market).lower()}"
+
+    def get_breadth_bootstrap(self, market: str | None = "US") -> SnapshotResult | None:
         self._ensure_schema()
+        normalized_market = self._normalize_breadth_market(market)
         return self._run_with_storage_recovery(
             lambda db: self._get_snapshot(
                 db=db,
                 view_key=BREADTH_VIEW_KEY,
-                variant_key="default",
-                source_revision=self._resolve_breadth_source_revision(db),
+                variant_key=self._breadth_variant_key(normalized_market),
+                source_revision=self._resolve_breadth_source_revision(db, normalized_market),
             )
         )
 
-    def publish_breadth_bootstrap(self) -> SnapshotResult:
+    def publish_breadth_bootstrap(self, market: str | None = "US") -> SnapshotResult:
         self._ensure_schema()
+        normalized_market = self._normalize_breadth_market(market)
         return self._run_with_storage_recovery(
             lambda db: self._publish(
                 db=db,
                 view_key=BREADTH_VIEW_KEY,
-                variant_key="default",
-                source_revision=self._resolve_breadth_source_revision(db),
-                payload=self._build_breadth_payload(),
+                variant_key=self._breadth_variant_key(normalized_market),
+                source_revision=self._resolve_breadth_source_revision(db, normalized_market),
+                payload=self._build_breadth_payload(normalized_market),
             )
         )
 
@@ -213,9 +225,14 @@ class UISnapshotService:
 
     def publish_all(self) -> dict[str, dict[str, Any] | None]:
         """Rebuild all bootstrap variants."""
+        breadth_snapshots = {
+            market: self.publish_breadth_bootstrap(market=market).to_dict()
+            for market in SUPPORTED_MARKETS
+        }
         published = {
             "scan_latest": self.publish_scan_bootstrap().to_dict(),
-            "breadth": self.publish_breadth_bootstrap().to_dict(),
+            "breadth": breadth_snapshots["US"],
+            **{f"breadth_{market.lower()}": snapshot for market, snapshot in breadth_snapshots.items()},
         }
         groups_snapshot = self.publish_groups_bootstrap()
         published["groups"] = groups_snapshot.to_dict() if groups_snapshot is not None else None
@@ -401,10 +418,10 @@ class UISnapshotService:
         )
         return latest[0] if latest else "none"
 
-    def _resolve_breadth_source_revision(self, db: Session) -> str:
-        # Bootstrap snapshots are US-scoped; non-US surfaces will get their own.
+    def _resolve_breadth_source_revision(self, db: Session, market: str = "US") -> str:
+        normalized_market = self._normalize_breadth_market(market)
         latest = db.query(func.max(MarketBreadth.date)).filter(
-            MarketBreadth.market == "US",
+            MarketBreadth.market == normalized_market,
         ).scalar()
         return latest.isoformat() if latest else "none"
 
@@ -568,40 +585,41 @@ class UISnapshotService:
             ).model_dump(mode="json")
             return payload
 
-    def _build_breadth_payload(self) -> dict[str, Any]:
+    def _build_breadth_payload(self, market: str = "US") -> dict[str, Any]:
+        normalized_market = self._normalize_breadth_market(market)
         with self._session_factory() as db:
-            # Breadth bootstrap is US-scoped — non-US partitions will get their
-            # own bootstrap surface.
-            us_only = MarketBreadth.market == "US"
-            current = db.query(MarketBreadth).filter(us_only).order_by(MarketBreadth.date.desc()).first()
-            total_records = db.query(func.count(MarketBreadth.id)).filter(us_only).scalar() or 0
-            min_date = db.query(func.min(MarketBreadth.date)).filter(us_only).scalar()
-            max_date = db.query(func.max(MarketBreadth.date)).filter(us_only).scalar()
+            market_filter = MarketBreadth.market == normalized_market
+            current = db.query(MarketBreadth).filter(market_filter).order_by(MarketBreadth.date.desc()).first()
+            total_records = db.query(func.count(MarketBreadth.id)).filter(market_filter).scalar() or 0
+            min_date = db.query(func.min(MarketBreadth.date)).filter(market_filter).scalar()
+            max_date = db.query(func.max(MarketBreadth.date)).filter(market_filter).scalar()
             end_date = datetime.utcnow().date()
             history_start = end_date - timedelta(days=90)
             chart_start = end_date - timedelta(days=31)
             history = (
                 db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date, us_only)
+                .filter(MarketBreadth.date >= history_start, MarketBreadth.date <= end_date, market_filter)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
             chart = (
                 db.query(MarketBreadth)
-                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date, us_only)
+                .filter(MarketBreadth.date >= chart_start, MarketBreadth.date <= end_date, market_filter)
                 .order_by(MarketBreadth.date.desc())
                 .all()
             )
-            # Breadth is US-scoped today (see app.domain.analytics.scope);
-            # resolve the overlay symbol through the benchmark registry so
-            # this layer doesn't hard-code "SPY".
             # Local import: wiring.bootstrap imports this module, so a
             # top-level import would cycle.
             from ..wiring.bootstrap import get_benchmark_cache
-            benchmark_symbol = get_benchmark_cache().get_benchmark_symbol("US")
+            benchmark_symbol, benchmark_overlay = self._get_cached_benchmark_overlay(
+                get_benchmark_cache(),
+                normalized_market,
+                "1mo",
+            )
             return {
                 "current": market_breadth_to_dict(current),
                 "summary": {
+                    "market": normalized_market,
                     "latest_date": max_date,
                     "total_records": total_records,
                     "date_range_start": min_date,
@@ -610,12 +628,11 @@ class UISnapshotService:
                 "history_90d": [market_breadth_to_dict(row) for row in history],
                 "chart_range": DEFAULT_BREADTH_RANGE,
                 "chart_data": [market_breadth_to_dict(row) for row in chart],
-                # Key retained as ``spy_overlay`` for frontend compatibility
-                # (BreadthPage.jsx, StaticBreadthPage.jsx). When breadth is
-                # generalised to multi-market, rename to ``benchmark_overlay``
-                # alongside the scope flip in mixed_market / analytics scope.
-                "spy_overlay": self._get_cached_price_history(benchmark_symbol, "1mo"),
-                **us_only_tag(AnalyticsFeature.BREADTH_SNAPSHOT),
+                "benchmark_symbol": benchmark_symbol,
+                "benchmark_overlay": benchmark_overlay,
+                # Legacy key retained for existing static/live frontend clients.
+                "spy_overlay": benchmark_overlay,
+                **market_scope_tag(normalized_market),
             }
 
     def _publish_groups_bootstrap_with_db(self, db: Session) -> SnapshotResult:
@@ -797,6 +814,17 @@ class UISnapshotService:
     def _themes_variant_key(self, pipeline: str, theme_view: str) -> str:
         return f"{pipeline}:{theme_view}"
 
+    def _get_cached_benchmark_overlay(self, benchmark_cache, market: str, period: str) -> tuple[str, list[dict[str, Any]]]:
+        candidates = list(benchmark_cache.get_benchmark_candidates(market))
+        if not candidates:
+            candidates = [benchmark_cache.get_benchmark_symbol(market)]
+        primary_symbol = candidates[0]
+        for symbol in candidates:
+            overlay = self._get_cached_price_history(symbol, period)
+            if overlay:
+                return symbol, overlay
+        return primary_symbol, []
+
     def _get_cached_price_history(self, symbol: str, period: str) -> list[dict[str, Any]]:
         import pandas as pd
 
@@ -847,6 +875,7 @@ def market_breadth_to_dict(row: MarketBreadth | None) -> dict[str, Any] | None:
     if row is None:
         return None
     return {
+        "market": row.market,
         "date": row.date,
         "stocks_up_4pct": row.stocks_up_4pct,
         "stocks_down_4pct": row.stocks_down_4pct,
@@ -861,6 +890,7 @@ def market_breadth_to_dict(row: MarketBreadth | None) -> dict[str, Any] | None:
         "stocks_up_13pct_34days": row.stocks_up_13pct_34days,
         "stocks_down_13pct_34days": row.stocks_down_13pct_34days,
         "total_stocks_scanned": row.total_stocks_scanned,
+        "calculation_duration_seconds": row.calculation_duration_seconds,
     }
 
 
@@ -924,14 +954,16 @@ def safe_publish_scan_bootstrap(scan_id: str | None = None) -> dict[str, Any] | 
     )
 
 
-def safe_publish_breadth_bootstrap() -> dict[str, Any] | None:
+def safe_publish_breadth_bootstrap(market: str | None = "US") -> dict[str, Any] | None:
     from app.wiring.bootstrap import get_ui_snapshot_service
 
+    normalized_market = str(market or "US").strip().upper()
     return _safe_publish(
         "publish_breadth_bootstrap",
         view_key=BREADTH_VIEW_KEY,
-        variant_key="default",
-        fn=get_ui_snapshot_service().publish_breadth_bootstrap,
+        variant_key=f"market:{normalized_market.lower()}",
+        source_revision=normalized_market,
+        fn=lambda: get_ui_snapshot_service().publish_breadth_bootstrap(normalized_market),
     )
 
 

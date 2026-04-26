@@ -782,7 +782,7 @@ class StaticSiteExportService:
         serialized_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if serialized_rows is None:
-            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap().to_dict()
+            snapshot = self._ui_snapshot_service.publish_breadth_bootstrap(market=market).to_dict()
             payload = snapshot.get("payload", {})
             current_date = ((payload.get("current") or {}).get("date"))
             if current_date != expected_as_of_date.isoformat():
@@ -809,8 +809,8 @@ class StaticSiteExportService:
                 reason=f"No scan rows are available for market {market} on {expected_as_of_date.isoformat()}.",
             )
 
-        benchmark = self._get_market_benchmark_history(market, period="1y")
-        if benchmark is None or benchmark.empty:
+        benchmark_symbol, benchmark = self._get_market_benchmark_history(market, period="1y")
+        if benchmark.empty:
             raise StaticSiteSectionUnavailableError(
                 section="breadth",
                 reason=f"No cached benchmark price history is available for market {market}.",
@@ -841,8 +841,17 @@ class StaticSiteExportService:
             )
 
         ordered_dates = sorted(metrics_by_date.keys())
-        ordered_history = [metrics_by_date[item_date] for item_date in ordered_dates]
+        ordered_history = [
+            {**metrics_by_date[item_date], "market": market}
+            for item_date in ordered_dates
+        ]
         chart_data = ordered_history[-31:]
+        current = {**current, "market": market}
+        benchmark_overlay = self._serialize_history_bars(
+            benchmark,
+            period_days=31,
+            end_date=expected_as_of_date,
+        )
         return {
             "schema_version": STATIC_SITE_SCHEMA_VERSION,
             "generated_at": generated_at,
@@ -853,6 +862,7 @@ class StaticSiteExportService:
             "payload": {
                 "current": current,
                 "summary": {
+                    "market": market,
                     "latest_date": expected_as_of_date.isoformat(),
                     "total_records": len(ordered_history),
                     "date_range_start": ordered_dates[0].isoformat() if ordered_dates else None,
@@ -861,11 +871,9 @@ class StaticSiteExportService:
                 "history_90d": list(reversed(ordered_history[-STATIC_BREADTH_HISTORY_LOOKBACK_DAYS:])),
                 "chart_range": "1M",
                 "chart_data": list(reversed(chart_data)),
-                "spy_overlay": self._serialize_history_bars(
-                    benchmark,
-                    period_days=31,
-                    end_date=expected_as_of_date,
-                ),
+                "benchmark_symbol": benchmark_symbol,
+                "benchmark_overlay": benchmark_overlay,
+                "spy_overlay": benchmark_overlay,
             },
         }
 
@@ -1391,12 +1399,12 @@ class StaticSiteExportService:
             results.update(self._price_cache.get_many_cached_only(batch, period=period))
         return results
 
-    def _get_market_benchmark_history(self, market: str, *, period: str) -> pd.DataFrame | None:
+    def _get_market_benchmark_history(self, market: str, *, period: str) -> tuple[str, pd.DataFrame]:
         for candidate in self._benchmark_cache.get_benchmark_candidates(market):
             history = self._get_symbol_price_history(candidate, period=period)
             if history is not None and not history.empty:
-                return history
-        return None
+                return candidate, history
+        return self._benchmark_cache.get_benchmark_symbol(market), pd.DataFrame()
 
     def _get_symbol_price_history(self, symbol: str, *, period: str) -> pd.DataFrame | None:
         data = self._price_cache.get_cached_only(symbol.upper(), period=period)

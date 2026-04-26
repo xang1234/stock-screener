@@ -821,7 +821,7 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
     monkeypatch.setattr(
         service._ui_snapshot_service,
         "publish_breadth_bootstrap",
-        lambda: SimpleNamespace(
+        lambda market="US": SimpleNamespace(
             to_dict=lambda: {
                 "published_at": "2026-04-02T22:00:00Z",
                 "source_revision": "breadth:2026-04-02",
@@ -835,6 +835,52 @@ def test_build_breadth_payload_requires_target_date(service_and_session_factory,
             generated_at="2026-04-02T22:00:00Z",
             expected_as_of_date=date(2026, 4, 2),
         )
+
+
+def test_build_breadth_payload_serialized_rows_emit_market_benchmark_overlay(
+    service_and_session_factory,
+    monkeypatch,
+):
+    service, _session_factory = service_and_session_factory
+    idx = pd.date_range("2026-03-01", "2026-04-24", freq="D")
+
+    def history_frame(start_price: float) -> pd.DataFrame:
+        closes = [start_price + index for index in range(len(idx))]
+        return pd.DataFrame(
+            {
+                "Open": closes,
+                "High": [value + 1 for value in closes],
+                "Low": [value - 1 for value in closes],
+                "Close": closes,
+                "Volume": [1000] * len(idx),
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_get_market_benchmark_history",
+        lambda market, *, period: ("^HSI", history_frame(18000.0)),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_cached_price_histories",
+        lambda symbols, *, period: {symbol: history_frame(100.0) for symbol in symbols},
+    )
+
+    payload = service._build_breadth_payload(  # noqa: SLF001 - intentional unit coverage
+        generated_at="2026-04-24T22:00:00Z",
+        expected_as_of_date=date(2026, 4, 24),
+        market="HK",
+        serialized_rows=[{"symbol": "0700.HK"}],
+    )
+
+    breadth_payload = payload["payload"]
+    assert breadth_payload["current"]["market"] == "HK"
+    assert breadth_payload["summary"]["market"] == "HK"
+    assert breadth_payload["benchmark_symbol"] == "^HSI"
+    assert breadth_payload["benchmark_overlay"] == breadth_payload["spy_overlay"]
+    assert breadth_payload["benchmark_overlay"][-1]["date"] == "2026-04-24"
 
 
 def test_export_rejects_legacy_unscoped_run_for_market_bundle(

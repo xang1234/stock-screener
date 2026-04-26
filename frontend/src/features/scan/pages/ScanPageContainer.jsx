@@ -11,6 +11,7 @@ import {
   getScans,
   getScanStatus,
   getUniverseStats,
+  refreshScanCache,
 } from '../../../api/scans';
 import FilterPanel from '../components/FilterPanelContainer';
 import ChartViewerModal from '../../../components/Scan/ChartViewerModal';
@@ -66,6 +67,11 @@ function getMutationErrorMessage(error) {
     || error?.response?.data?.message
     || error?.message
     || 'Failed to start scan.';
+}
+
+function getMutationErrorDetail(error) {
+  const detail = error?.response?.data?.detail;
+  return detail && typeof detail === 'object' ? detail : null;
 }
 
 function ScanPage() {
@@ -309,6 +315,13 @@ function ScanPage() {
     },
   });
 
+  const refreshScanCacheMutation = useMutation({
+    mutationFn: (params) => refreshScanCache(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['runtimeActivity'] });
+    },
+  });
+
   const { data: statusData } = useQuery({
     queryKey: ['scanStatus', currentScanId],
     queryFn: () => getScanStatus(currentScanId),
@@ -373,7 +386,8 @@ function ScanPage() {
   );
   const createScanError = useMemo(() => {
     const message = getMutationErrorMessage(createScanMutation.error);
-    return message ? { message } : null;
+    const detail = getMutationErrorDetail(createScanMutation.error);
+    return message ? { message, detail } : null;
   }, [createScanMutation.error]);
 
   const handleStartScan = () => {
@@ -395,6 +409,13 @@ function ScanPage() {
       criteria,
     });
   };
+
+  const handleRefreshStaleData = useCallback((market) => {
+    if (!market) {
+      return;
+    }
+    refreshScanCacheMutation.mutate({ market, mode: 'full' });
+  }, [refreshScanCacheMutation]);
 
   const handleUniverseMarketChange = useCallback((nextMarket) => {
     if (nextMarket === universeMarket) {
@@ -578,6 +599,9 @@ function ScanPage() {
         createScanError={createScanError}
         cancelScanError={cancelScanMutation.error}
         refreshConflict={refreshConflict}
+        onRefreshStaleData={handleRefreshStaleData}
+        refreshStaleDataPending={refreshScanCacheMutation.isPending}
+        refreshStaleDataError={refreshScanCacheMutation.error}
       />
 
       {(scanStatus === 'completed' || scanStatus === 'cancelled') && (

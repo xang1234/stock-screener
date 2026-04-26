@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 class BreadthResponse(BaseModel):
     """Response model for market breadth data"""
 
+    market: str = Field("US", description="Market code for this breadth snapshot")
     date: Date = Field(..., description="Trading date for this breadth snapshot")
 
     # Daily movers (4%+ threshold)
@@ -52,6 +53,7 @@ class TrendResponse(BaseModel):
     """Response model for indicator trend data"""
 
     indicator: str = Field(..., description="Indicator name")
+    market: str = Field("US", description="Market code for this trend")
     data: List[TrendDataPoint] = Field(..., description="Time series data points")
     total_points: int = Field(..., description="Number of data points returned")
 
@@ -59,6 +61,7 @@ class TrendResponse(BaseModel):
 class CalculationRequest(BaseModel):
     """Request model for manual breadth calculation"""
 
+    market: str = Field("US", description="Market code: US, HK, IN, JP, or TW")
     calculation_date: Optional[str] = Field(
         None,
         description="Date to calculate for (YYYY-MM-DD), defaults to today"
@@ -78,6 +81,7 @@ class BackfillRequest(BaseModel):
 
     start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     end_date: str = Field(..., description="End date (YYYY-MM-DD)")
+    market: str = Field("US", description="Market code: US, HK, IN, JP, or TW")
 
 
 class BackfillResponse(BaseModel):
@@ -92,6 +96,7 @@ class BackfillResponse(BaseModel):
 class BreadthSummary(BaseModel):
     """Summary statistics for breadth data"""
 
+    market: str = Field("US", description="Market code for this summary")
     latest_date: Optional[Date] = Field(None, description="Most recent breadth date")
     total_records: int = Field(..., description="Total breadth records in database")
     date_range_start: Optional[Date] = Field(None, description="Earliest date with data")

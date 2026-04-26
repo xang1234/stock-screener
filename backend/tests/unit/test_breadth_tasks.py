@@ -126,7 +126,8 @@ def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
     _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
-    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda: None)
+    publish_breadth = MagicMock()
+    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", publish_breadth)
 
     fake_price_cache = MagicMock()
     fake_calculator = MagicMock()
@@ -160,6 +161,7 @@ def test_manual_breadth_can_force_cache_only_for_static_exports(monkeypatch):
         calculation_date=date(2026, 4, 2),
         cache_only=True,
     )
+    publish_breadth.assert_called_once_with("US")
 
 
 def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
@@ -171,7 +173,8 @@ def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
     _patch_serialized_lock(monkeypatch)
     _patch_calendar_service(monkeypatch, datetime(2026, 4, 3, 0, 30, 0))
-    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", lambda: None)
+    publish_breadth = MagicMock()
+    monkeypatch.setattr(snapshot_module, "safe_publish_breadth_bootstrap", publish_breadth)
 
     fake_calculator = MagicMock()
     fake_calculator.price_cache = MagicMock()
@@ -208,6 +211,7 @@ def test_daily_breadth_persists_non_us_record_in_market_partition(monkeypatch):
     saved_record = fake_db.add.call_args.args[0]
     assert saved_record.market == "HK"
     fake_db.commit.assert_called_once()
+    publish_breadth.assert_called_once_with("HK")
 
 
 def test_backfill_breadth_uses_service_range_with_trading_dates(monkeypatch):

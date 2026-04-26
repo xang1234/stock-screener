@@ -55,9 +55,10 @@ function StaticBreadthPage() {
     return allData.slice(-(RANGE_DAYS[timeRange] || 31));
   }, [payload.chart_data, payload.history_90d, timeRange]);
   const filteredSpyData = useMemo(() => {
-    const allSpy = payload.spy_overlay || [];
+    const allSpy = payload.benchmark_overlay ?? payload.spy_overlay ?? [];
     return allSpy.slice(-(RANGE_DAYS[timeRange] || 31));
-  }, [payload.spy_overlay, timeRange]);
+  }, [payload.benchmark_overlay, payload.spy_overlay, timeRange]);
+  const benchmarkLabel = payload.benchmark_symbol || (marketEntry.market === 'US' ? 'SPY' : 'Benchmark');
 
   if (manifestQuery.isLoading || breadthQuery.isLoading) {
     return (
@@ -105,6 +106,7 @@ function StaticBreadthPage() {
       <BreadthChart
         breadthData={filteredChartData}
         spyData={filteredSpyData}
+        benchmarkLabel={benchmarkLabel}
         isLoading={false}
         error={null}
         timeRange={timeRange}
