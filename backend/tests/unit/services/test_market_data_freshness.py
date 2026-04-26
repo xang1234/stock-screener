@@ -91,6 +91,21 @@ def test_fresh_universe_returns_none():
         assert check_symbol_freshness(["AAPL", "MSFT"]) is None
 
 
+def test_missing_refresh_state_falls_back_to_symbol_dates():
+    from app.services.market_data_freshness import check_symbol_freshness
+
+    rows = [
+        _Row(symbol="AAPL", market="US", last_date=date(2026, 4, 23)),
+        _Row(symbol="MSFT", market="US", last_date=date(2026, 4, 23)),
+    ]
+    with (
+        _patch_session(rows),
+        _patch_calendar({"US": date(2026, 4, 23)}),
+        _patch_refresh_state({}),
+    ):
+        assert check_symbol_freshness(["AAPL", "MSFT"]) is None
+
+
 def test_stale_market_returns_detail():
     from app.services.market_data_freshness import check_symbol_freshness
 

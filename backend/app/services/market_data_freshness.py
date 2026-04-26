@@ -94,7 +94,8 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
             observed_date = _parse_state_date(
                 state.get("last_refreshed_trading_day") if state else None
             )
-            if not state or state.get("status") != "completed" or observed_date is None:
+            comparison_date = expected_date
+            if state is not None and (state.get("status") != "completed" or observed_date is None):
                 stale_markets.append({
                     "market": market,
                     "total_symbols": len(market_rows),
@@ -105,7 +106,7 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
                     "reason": "refresh_state_missing",
                 })
                 continue
-            if observed_date < expected_date:
+            if observed_date is not None and observed_date < expected_date:
                 stale_markets.append({
                     "market": market,
                     "total_symbols": len(market_rows),
@@ -116,19 +117,21 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
                     "reason": "refresh_state_stale",
                 })
                 continue
+            if observed_date is not None:
+                comparison_date = observed_date
 
             uncovered = sum(1 for r in market_rows if r.last_date is None)
             covered_dates = [r.last_date for r in market_rows if r.last_date is not None]
             oldest = min(covered_dates) if covered_dates else None
 
-            if uncovered > 0 or oldest is None or oldest < observed_date:
+            if uncovered > 0 or oldest is None or oldest < comparison_date:
                 stale_markets.append({
                     "market": market,
                     "total_symbols": len(market_rows),
                     "covered_symbols": len(covered_dates),
                     "uncovered_symbols": uncovered,
                     "oldest_last_cached_date": str(oldest) if oldest is not None else None,
-                    "expected_date": str(observed_date),
+                    "expected_date": str(comparison_date),
                 })
     finally:
         session.close()
