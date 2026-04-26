@@ -93,3 +93,52 @@ def test_guard_price_refresh_fails_lock_contention_skip_result():
 
     with pytest.raises(RuntimeError, match="Daily price refresh failed for HK"):
         module.guard_price_refresh.run(result, market="HK")
+
+
+def test_guard_price_refresh_accepts_high_coverage_partial_result():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "partial",
+        "refreshed": 900,
+        "failed": 100,
+        "total": 1000,
+    }
+
+    assert module.guard_price_refresh.run(result, market="HK") == {
+        "status": "ok",
+        "market": "HK",
+        "stage": "prices",
+    }
+
+
+def test_guard_price_refresh_fails_low_coverage_partial_result():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "partial",
+        "refreshed": 899,
+        "failed": 101,
+        "total": 1000,
+    }
+
+    with pytest.raises(RuntimeError, match="Daily price refresh failed for HK"):
+        module.guard_price_refresh.run(result, market="HK")
+
+
+def test_guard_snapshot_result_accepts_already_published_scan_result():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "skipped",
+        "reason": "already_published",
+        "existing_run_id": 123,
+        "auto_scan_id": 456,
+    }
+
+    assert module.guard_snapshot_result.run(result, market="HK") == {
+        "status": "ok",
+        "market": "HK",
+        "stage": "scan",
+        "auto_scan_id": 456,
+    }

@@ -18,6 +18,8 @@ from app.tasks.market_queues import (
 
 logger = logging.getLogger(__name__)
 
+_MIN_DAILY_PRICE_REFRESH_SUCCESS_RATE = 0.90
+
 
 def _normalize_pipeline_market(market: str | None) -> str:
     normalized = normalize_market(market)
@@ -45,12 +47,34 @@ def _result_failed(result: Any) -> bool:
     }
 
 
+def _partial_price_refresh_meets_minimum(result: dict) -> bool:
+    try:
+        refreshed = float(result.get("refreshed", 0))
+        total = float(result.get("total", 0))
+    except (TypeError, ValueError):
+        return False
+    return total > 0 and refreshed / total >= _MIN_DAILY_PRICE_REFRESH_SUCCESS_RATE
+
+
+def _price_refresh_failed(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return True
+    status = str(result.get("status", "")).lower()
+    if status == "partial":
+        if result.get("error") or result.get("reason") == "not_trading_day":
+            return True
+        if result.get("skipped") is True:
+            return True
+        return not _partial_price_refresh_meets_minimum(result)
+    return _result_failed(result)
+
+
 @celery_app.task(
     name="app.tasks.daily_market_pipeline_tasks.guard_price_refresh",
     queue="celery",
 )
 def guard_price_refresh(result: dict | None = None, *, market: str) -> dict:
-    if _result_failed(result):
+    if _price_refresh_failed(result):
         raise RuntimeError(f"Daily price refresh failed for {market}: {result}")
     return {"status": "ok", "market": market, "stage": "prices"}
 
@@ -80,9 +104,14 @@ def guard_group_result(result: dict | None = None, *, market: str) -> dict:
     queue="celery",
 )
 def guard_snapshot_result(result: dict | None = None, *, market: str) -> dict:
-    if _result_failed(result) or not (isinstance(result, dict) and result.get("auto_scan_id")):
-        raise RuntimeError(f"Daily market scan did not publish for {market}: {result}")
-    return {"status": "ok", "market": market, "stage": "scan", "auto_scan_id": result["auto_scan_id"]}
+    if isinstance(result, dict) and result.get("auto_scan_id"):
+        return {
+            "status": "ok",
+            "market": market,
+            "stage": "scan",
+            "auto_scan_id": result["auto_scan_id"],
+        }
+    raise RuntimeError(f"Daily market scan did not publish for {market}: {result}")
 
 
 def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> list:
