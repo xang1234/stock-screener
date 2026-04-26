@@ -5,6 +5,7 @@ Uses in-memory fakes from conftest.py — no DB, no mocks, pure behaviour tests.
 
 from __future__ import annotations
 
+import inspect
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -161,6 +162,11 @@ class TestBuildDailySnapshotCommand:
 
     def test_market_normalizes_to_uppercase(self):
         assert _make_cmd(market="hk").market == "HK"
+
+    def test_bootstrap_coverage_threshold_is_not_publicly_overridable(self):
+        assert "bootstrap_coverage_threshold" not in inspect.signature(
+            BuildDailySnapshotCommand
+        ).parameters
 
 
 # ---------------------------------------------------------------------------

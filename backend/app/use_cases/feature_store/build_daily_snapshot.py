@@ -169,7 +169,6 @@ class BuildDailySnapshotCommand:
     static_parallel_workers: int = 1
     static_chunk_size: int | None = None
     bootstrap_cache_only_if_covered: bool = False
-    bootstrap_coverage_threshold: float = BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE
     bootstrap_coverage_report: dict | None = None
     publish_pointer_key: str = "latest_published"
     market: str = "US"
@@ -186,8 +185,6 @@ class BuildDailySnapshotCommand:
             raise ValueError("static_parallel_workers must be >= 1")
         if self.static_chunk_size is not None and self.static_chunk_size < 1:
             raise ValueError("static_chunk_size must be >= 1 when provided")
-        if not 0.0 <= self.bootstrap_coverage_threshold <= 1.0:
-            raise ValueError("bootstrap_coverage_threshold must be in [0.0, 1.0]")
 
 
 # ── Result (output) ──────────────────────────────────────────────────────
@@ -289,12 +286,11 @@ class BuildDailyFeatureSnapshotUseCase:
                         market=cmd.market,
                         symbols=supported_symbols,
                         as_of_date=cmd.as_of_date,
-                        threshold=cmd.bootstrap_coverage_threshold,
                     )
                 eligible = bool(bootstrap_gate_report.get("eligible"))
                 bootstrap_gate_report.update(
                     {
-                        "threshold": cmd.bootstrap_coverage_threshold,
+                        "threshold": BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
                         "mode": "cache_only" if eligible else "fallback_existing",
                         "unsupported_skipped_count": len(unsupported_symbols),
                         "unsupported_symbols_preview": unsupported_symbols[:20],
@@ -554,7 +550,7 @@ class BuildDailyFeatureSnapshotUseCase:
                 except Exception as exc:
                     if cmd.require_bulk_prefetch:
                         raise RuntimeError(
-                            "Static daily snapshot bulk prefetch failed; refusing per-symbol fallback"
+                            "Cache-only snapshot bulk prefetch failed; refusing per-symbol fallback"
                         ) from exc
                     logger.warning(
                         "Run %d: bulk data fetch failed for chunk; "

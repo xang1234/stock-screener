@@ -646,7 +646,6 @@ def build_daily_snapshot(
     ignore_runtime_market_gate: bool = False,
     activity_lifecycle: str | None = None,
     bootstrap_cache_only_if_covered: bool = False,
-    bootstrap_coverage_threshold: float | None = None,
     bootstrap_coverage_report: dict | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
@@ -672,6 +671,7 @@ def build_daily_snapshot(
     from app.services.universe_resolver import normalize_universe_definition
     from app.services.bootstrap_cache_coverage import (
         BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+        evaluate_bootstrap_cache_coverage,
     )
     from app.tasks.market_queues import log_extra, normalize_market
     from app.utils.parallelism import bounded_symbol_workers
@@ -720,6 +720,9 @@ def build_daily_snapshot(
     publish_pointer_key = publish_pointer_key or f"latest_published_market:{effective_market}"
     correlation_id = self.request.id
     activity_lifecycle = activity_lifecycle or "daily_refresh"
+    bootstrap_gate_requested = bool(bootstrap_cache_only_if_covered)
+    static_worker_config_requested = static_daily_mode or bootstrap_gate_requested
+    effective_bootstrap_coverage_report = bootstrap_coverage_report
 
     _log_extra = log_extra(effective_market)
     bypass_runtime_market_gate = static_daily_mode and ignore_runtime_market_gate
@@ -772,6 +775,20 @@ def build_daily_snapshot(
             skipped_symbols: list[str] = []
             if static_daily_mode:
                 symbols, skipped_symbols = split_supported_price_symbols(symbols)
+            elif bootstrap_gate_requested:
+                supported_symbols, unsupported_symbols = split_supported_price_symbols(symbols)
+                if effective_bootstrap_coverage_report is None and supported_symbols:
+                    session = getattr(uow_check, "session", None)
+                    if session is not None:
+                        effective_bootstrap_coverage_report = evaluate_bootstrap_cache_coverage(
+                            session,
+                            market=effective_market,
+                            symbols=supported_symbols,
+                            as_of_date=as_of,
+                        )
+                if bool((effective_bootstrap_coverage_report or {}).get("eligible")):
+                    symbols = supported_symbols
+                    skipped_symbols = unsupported_symbols
             signature_payload = build_scan_signature_payload(
                 universe_type=getattr(universe_def, "type", "all"),
                 screeners=screeners,
@@ -817,8 +834,6 @@ def build_daily_snapshot(
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
     uow = SqlUnitOfWork(SessionLocal)
-    bootstrap_gate_requested = bool(bootstrap_cache_only_if_covered)
-    static_worker_config_requested = static_daily_mode or bootstrap_gate_requested
     cmd = BuildDailySnapshotCommand(
         as_of_date=as_of,
         screener_names=screeners,
@@ -841,12 +856,7 @@ def build_daily_snapshot(
             else 1
         ),
         bootstrap_cache_only_if_covered=bootstrap_gate_requested,
-        bootstrap_coverage_threshold=(
-            BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE
-            if bootstrap_coverage_threshold is None
-            else bootstrap_coverage_threshold
-        ),
-        bootstrap_coverage_report=bootstrap_coverage_report,
+        bootstrap_coverage_report=effective_bootstrap_coverage_report,
         publish_pointer_key=publish_pointer_key,
         market=effective_market,
     )

@@ -46,7 +46,6 @@ def evaluate_bootstrap_cache_coverage(
     market: str,
     symbols: Sequence[str],
     as_of_date: date,
-    threshold: float = BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
 ) -> dict[str, Any]:
     """Return a JSON-ready coverage report for bootstrap cache-only eligibility."""
     normalized_market = str(market or "US").strip().upper() or "US"
@@ -119,6 +118,7 @@ def evaluate_bootstrap_cache_coverage(
     elif fundamentals_dates:
         fundamentals_coverage_date = _date_string(max(fundamentals_dates))
 
+    threshold = BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE
     eligible = price_ratio >= threshold and fundamentals_ratio >= threshold
     return {
         "market": normalized_market,

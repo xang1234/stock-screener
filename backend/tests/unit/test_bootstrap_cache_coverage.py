@@ -97,7 +97,6 @@ def test_bootstrap_cache_coverage_is_eligible_when_price_and_fundamentals_meet_t
         market="US",
         symbols=symbols,
         as_of_date=as_of,
-        threshold=0.95,
     )
 
     assert report["eligible"] is True
@@ -128,7 +127,6 @@ def test_bootstrap_cache_coverage_falls_back_when_either_side_is_below_threshold
         market="US",
         symbols=symbols,
         as_of_date=as_of,
-        threshold=0.95,
     )
 
     assert report["eligible"] is False
@@ -152,7 +150,6 @@ def test_bootstrap_cache_coverage_uses_fundamentals_updated_at_when_no_snapshot_
         market="US",
         symbols=symbols,
         as_of_date=as_of,
-        threshold=0.95,
     )
 
     assert report["eligible"] is True

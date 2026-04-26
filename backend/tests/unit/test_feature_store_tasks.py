@@ -284,6 +284,83 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     }]
 
 
+def test_build_daily_snapshot_bootstrap_skip_if_published_uses_cache_only_supported_hash():
+    lookup_calls = []
+    hash_calls = []
+
+    class _CheckUoW:
+        def __init__(self) -> None:
+            self.universe = SimpleNamespace(resolve_symbols=lambda _universe_def: ["AAPL", "BAD-WT", "MSFT"])
+            self.feature_runs = SimpleNamespace(
+                find_latest_published_exact=lambda **kwargs: (
+                    lookup_calls.append(kwargs),
+                    SimpleNamespace(
+                        id=51,
+                        as_of_date=date(2026, 3, 16),
+                    ),
+                )[1] if kwargs["universe_hash"] == "AAPL,MSFT" else None
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    fake_use_case = _FakeUseCase()
+
+    def _hash_universe(symbols):
+        hash_calls.append(list(symbols))
+        return ",".join(symbols)
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.hash_scan_signature",
+        return_value="same-input",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.hash_universe_symbols",
+        side_effect=_hash_universe,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        return_value=_CheckUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={"eligible": True},
+        )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "already_published"
+    assert result["existing_run_id"] == 51
+    assert result["skipped_symbols"] == 1
+    assert fake_use_case.received_cmd is None
+    assert hash_calls == [["AAPL", "MSFT"]]
+    assert lookup_calls == [{
+        "input_hash": "same-input",
+        "universe_hash": "AAPL,MSFT",
+        "as_of_date": date(2026, 3, 16),
+    }]
+
+
 def test_build_daily_snapshot_skip_if_published_repairs_requested_pointer():
     class _CheckUoW:
         def __init__(self) -> None:
@@ -664,7 +741,7 @@ def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_
 
     assert result["status"] == "published"
     assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
-    assert fake_use_case.received_cmd.bootstrap_coverage_threshold == 0.95
+    assert not hasattr(fake_use_case.received_cmd, "bootstrap_coverage_threshold")
     assert fake_use_case.received_cmd.bootstrap_coverage_report["eligible"] is True
     assert fake_use_case.received_cmd.static_chunk_size == settings.static_snapshot_chunk_size
     assert fake_use_case.received_cmd.static_parallel_workers == 2
@@ -714,6 +791,10 @@ def test_build_daily_snapshot_bootstrap_gate_fail_preserves_non_static_command()
     assert fake_use_case.received_cmd.batch_only_fundamentals is False
     assert fake_use_case.received_cmd.require_bulk_prefetch is False
     assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is False
+
+
+def test_build_daily_snapshot_does_not_expose_bootstrap_threshold_override():
+    assert "bootstrap_coverage_threshold" not in inspect.signature(_TASK_BODY).parameters
 
 
 def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
