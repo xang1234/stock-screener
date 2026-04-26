@@ -65,6 +65,7 @@ def test_daily_market_pipeline_orders_refresh_compute_and_scan(monkeypatch):
         "as_of_date_str": "2026-03-16",
         "universe_name": "market:HK",
         "publish_pointer_key": "latest_published_market:HK",
+        "static_daily_mode": True,
     }
 
 

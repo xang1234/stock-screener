@@ -157,6 +157,7 @@ def _build_daily_market_pipeline_signatures(market: str, trading_date: date) -> 
             as_of_date_str=as_of_date,
             universe_name=_daily_pipeline_universe_name(market_code),
             publish_pointer_key=f"latest_published_market:{market_code}",
+            static_daily_mode=True,
         ).set(queue=market_jobs_queue_for_market(market_code)),
         guard_snapshot_result.s(market=market_code).set(
             queue=market_jobs_queue_for_market(market_code)

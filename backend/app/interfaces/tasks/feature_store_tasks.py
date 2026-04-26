@@ -668,6 +668,7 @@ def build_daily_snapshot(
     from app.services.market_calendar_service import MarketCalendarService
     from app.services.universe_resolver import normalize_universe_definition
     from app.tasks.market_queues import log_extra, normalize_market
+    from app.utils.parallelism import bounded_symbol_workers
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
         BuildDailySnapshotCommand,
@@ -825,7 +826,9 @@ def build_daily_snapshot(
             settings.static_snapshot_chunk_size if static_daily_mode else None
         ),
         static_parallel_workers=(
-            settings.static_snapshot_parallel_workers if static_daily_mode else 1
+            bounded_symbol_workers(settings.static_snapshot_parallel_workers)
+            if static_daily_mode
+            else 1
         ),
         publish_pointer_key=publish_pointer_key,
         market=effective_market,

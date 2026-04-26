@@ -5,6 +5,8 @@ No DB, no Redis, no Celery — pure domain logic testing.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
+
 import pytest
 
 from app.domain.common.errors import EntityNotFoundError
@@ -388,6 +390,100 @@ class TestRunBulkScanHappyPath:
         assert data_provider.captured_bulk_kwargs[0]["batch_only_prices"] is False
         assert data_provider.captured_bulk_kwargs[0]["batch_only_fundamentals"] is False
 
+    @pytest.mark.parametrize("parallel_workers", [1, 4])
+    def test_parallel_workers_preserve_result_order_counts_and_progress(
+        self, parallel_workers
+    ):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        result_repo = FakeScanResultRepository()
+        uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
+        progress = FakeProgressSink()
+        scanner = FakeScanner(
+            results={
+                "AAPL": {
+                    "composite_score": 90,
+                    "rating": "Strong Buy",
+                    "passes_template": True,
+                },
+                "MSFT": {
+                    "composite_score": 65,
+                    "rating": "Watch",
+                    "passes_template": False,
+                },
+                "GOOG": {"error": "No data available"},
+                "AMZN": {
+                    "composite_score": 82,
+                    "rating": "Buy",
+                    "passes_template": True,
+                },
+            }
+        )
+
+        result = _make_use_case(scanner).execute(
+            uow,
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "MSFT", "GOOG", "AMZN"],
+                chunk_size=2,
+                parallel_workers=parallel_workers,
+            ),
+            progress,
+            FakeCancellationToken(),
+        )
+
+        assert result.status == ScanStatus.COMPLETED.value
+        assert result.total_scanned == 4
+        assert result.passed == 2
+        assert result.failed == 1
+        assert [
+            symbol for _scan_id, symbol, _result in result_repo._persisted_results
+        ] == ["AAPL", "MSFT", "AMZN"]
+        assert [(event.current, event.passed, event.failed) for event in progress.events] == [
+            (2, 1, 0),
+            (4, 2, 1),
+        ]
+
+    def test_parallel_workers_are_bounded_by_chunk_length(self, monkeypatch):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        observed_workers: list[int] = []
+
+        class CapturingExecutor:
+            def __init__(self, max_workers):
+                observed_workers.append(max_workers)
+                self._executor = RealThreadPoolExecutor(max_workers=max_workers)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self._executor.shutdown(wait=True)
+                return False
+
+            def submit(self, *args, **kwargs):
+                return self._executor.submit(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "app.use_cases.scanning.run_bulk_scan.ThreadPoolExecutor",
+            CapturingExecutor,
+            raising=False,
+        )
+
+        _make_use_case().execute(
+            FakeUnitOfWork(scans=scan_repo),
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "MSFT"],
+                chunk_size=2,
+                parallel_workers=10,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert observed_workers == [2]
+
     def test_scan_status_transitions(self):
         scan_repo = FakeScanRepository()
         scan_repo.scans["s1"] = _make_scan("s1")
@@ -476,6 +572,7 @@ class TestResume:
             scan_id="s1",
             symbols=["AAPL", "MSFT", "GOOG", "AMZN"],
             chunk_size=10,
+            parallel_workers=4,
         )
         result = _make_use_case(scanner).execute(
             uow, cmd, FakeProgressSink(), FakeCancellationToken()
@@ -705,3 +802,7 @@ class TestInputValidation:
     def test_chunk_size_negative_raises(self):
         with pytest.raises(ValueError, match="chunk_size must be >= 1"):
             RunBulkScanCommand(scan_id="s1", symbols=["A"], chunk_size=-5)
+
+    def test_parallel_workers_zero_raises(self):
+        with pytest.raises(ValueError, match="parallel_workers must be >= 1"):
+            RunBulkScanCommand(scan_id="s1", symbols=["A"], parallel_workers=0)
