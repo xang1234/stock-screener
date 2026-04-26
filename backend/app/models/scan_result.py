@@ -40,7 +40,7 @@ class Scan(Base):
     passed_stocks = Column(Integer)
 
     # Status
-    status = Column(String(20), default="running")  # running, completed, failed
+    status = Column(String(20), default="running", index=True)  # running, completed, failed
     task_id = Column(String(100), nullable=True)  # Celery task ID for real-time progress
 
     # Idempotency
@@ -67,6 +67,12 @@ class Scan(Base):
     completed_at = Column(DateTime(timezone=True))
 
     __table_args__ = (
+        Index(
+            "idx_scans_market_status_trigger",
+            "universe_market",
+            "status",
+            "trigger_source",
+        ),
         Index(
             "uq_scans_single_active",
             text("(CASE WHEN status IN ('queued', 'running') THEN 1 END)"),

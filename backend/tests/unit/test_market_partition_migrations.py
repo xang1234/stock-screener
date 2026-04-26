@@ -162,3 +162,47 @@ def test_market_breadth_market_downgrade_drops_sqlite_index_and_column_in_batch(
         assert "DELETE FROM market_breadth WHERE market <> 'US'" in caplog.text
 
     engine.dispose()
+
+
+def test_scan_model_declares_readiness_probe_indexes():
+    from app.models.scan_result import Scan
+
+    indexes = {
+        index.name: tuple(column.name for column in index.columns)
+        for index in Scan.__table__.indexes
+    }
+
+    assert indexes["ix_scans_status"] == ("status",)
+    assert indexes["idx_scans_market_status_trigger"] == (
+        "universe_market",
+        "status",
+        "trigger_source",
+    )
+
+
+def test_scan_readiness_index_migration_creates_and_drops_indexes():
+    engine = sa.create_engine("sqlite:///:memory:")
+    metadata = sa.MetaData()
+    sa.Table(
+        "scans",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("universe_market", sa.String(8), nullable=True),
+        sa.Column("status", sa.String(20), nullable=True),
+        sa.Column("trigger_source", sa.String(20), nullable=False),
+    )
+    metadata.create_all(engine)
+
+    migration = _load_migration("20260426_0017_add_scan_readiness_indexes.py")
+    with engine.begin() as conn:
+        _run_upgrade(migration, conn)
+        indexes = {index["name"] for index in sa.inspect(conn).get_indexes("scans")}
+        assert "ix_scans_status" in indexes
+        assert "idx_scans_market_status_trigger" in indexes
+
+        _run_downgrade(migration, conn)
+        indexes = {index["name"] for index in sa.inspect(conn).get_indexes("scans")}
+        assert "ix_scans_status" not in indexes
+        assert "idx_scans_market_status_trigger" not in indexes
+
+    engine.dispose()

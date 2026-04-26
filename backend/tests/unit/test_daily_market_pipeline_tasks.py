@@ -142,3 +142,19 @@ def test_guard_snapshot_result_accepts_already_published_scan_result():
         "stage": "scan",
         "auto_scan_id": 456,
     }
+
+
+def test_guard_group_result_accepts_no_taxonomy_market_skip():
+    from app.tasks import daily_market_pipeline_tasks as module
+
+    result = {
+        "status": "skipped",
+        "reason": "no_taxonomy_for_market",
+        "market": "JP",
+    }
+
+    assert module.guard_group_result.run(result, market="JP") == {
+        "status": "ok",
+        "market": "JP",
+        "stage": "groups",
+    }

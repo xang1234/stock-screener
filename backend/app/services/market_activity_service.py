@@ -84,6 +84,20 @@ def _load_market_activity(db: Session, market: str) -> dict[str, Any] | None:
     return payload
 
 
+def _should_preserve_existing_failed_message(
+    existing_payload: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    existing_message = str(existing_payload.get("message") or "").strip()
+    incoming_message = str(payload.get("message") or "").strip()
+    return bool(
+        existing_message
+        and incoming_message
+        and existing_message != incoming_message
+        and len(existing_message) >= len(incoming_message)
+    )
+
+
 def _save_market_activity(
     db: Session,
     market: str,
@@ -129,7 +143,8 @@ def _save_market_activity(
                     lifecycle_changed = existing_payload.get("lifecycle") != payload.get("lifecycle")
                     incoming_new_cycle = lifecycle_changed or payload_stage_index <= existing_stage_index
                 if payload_status == "failed" and same_owner:
-                    pass
+                    if _should_preserve_existing_failed_message(existing_payload, payload):
+                        return existing_payload
                 elif not incoming_new_cycle:
                     return existing_payload
     encoded = json.dumps(payload)
@@ -405,10 +420,12 @@ def mark_current_market_activity_failed(
     resolved_task_name = task_name
     resolved_task_id = task_id
     if isinstance(existing, dict) and existing.get("status") in {"queued", "running"}:
-        stage_key = existing.get("stage_key") or stage_key
-        lifecycle = lifecycle or existing.get("lifecycle")
-        resolved_task_name = resolved_task_name or existing.get("task_name")
-        resolved_task_id = resolved_task_id or existing.get("task_id")
+        existing_lifecycle = existing.get("lifecycle")
+        if lifecycle is None or lifecycle == existing_lifecycle:
+            stage_key = existing.get("stage_key") or stage_key
+            lifecycle = lifecycle or existing_lifecycle
+            resolved_task_name = resolved_task_name or existing.get("task_name")
+            resolved_task_id = resolved_task_id or existing.get("task_id")
     return mark_market_activity_failed(
         db,
         market=market,

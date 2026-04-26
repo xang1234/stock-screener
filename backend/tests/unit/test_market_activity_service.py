@@ -211,6 +211,55 @@ def test_runtime_activity_counts_without_percent_are_still_determinate(
     assert us_market["total"] == 100
 
 
+def test_failed_errback_does_not_overwrite_specific_failure_message(db_session):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_failed(
+        db_session,
+        market="HK",
+        stage_key="scan",
+        lifecycle="bootstrap",
+        task_name=None,
+        task_id=None,
+        message="Bootstrap scan did not publish",
+    )
+
+    result = module.mark_current_market_activity_failed(
+        db_session,
+        market="HK",
+        lifecycle="bootstrap",
+        message="Bootstrap failed",
+    )
+
+    assert result["message"] == "Bootstrap scan did not publish"
+
+
+def test_current_failure_does_not_inherit_owner_from_different_lifecycle(db_session):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="prices",
+        lifecycle="daily_refresh",
+        task_name="smart_refresh_cache",
+        task_id="daily-task",
+        message="Refreshing daily prices",
+    )
+
+    result = module.mark_current_market_activity_failed(
+        db_session,
+        market="HK",
+        lifecycle="bootstrap",
+        message="Bootstrap failed",
+    )
+
+    assert result["status"] == "running"
+    assert result["lifecycle"] == "daily_refresh"
+    assert result["task_id"] == "daily-task"
+    assert result["message"] == "Refreshing daily prices"
+
+
 def test_runtime_activity_prefers_persisted_progress_over_heartbeat_overlay(
     db_session,
     monkeypatch,

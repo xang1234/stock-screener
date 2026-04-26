@@ -433,6 +433,56 @@ class TestFeatureRunBinding:
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
 
+    def test_market_universe_exact_match_completes_instantly_without_dispatch(self):
+        from datetime import date
+        from app.domain.feature_store.models import RunStats, RunType
+        from app.domain.scanning.signature import (
+            build_scan_signature_payload,
+            hash_scan_signature,
+            hash_universe_symbols,
+        )
+
+        symbols = ["0700.HK"]
+        signature = build_scan_signature_payload(
+            universe_type="market",
+            screeners=["minervini"],
+            composite_method="weighted_average",
+            criteria=None,
+        )
+        feature_runs = FakeFeatureRunRepository()
+        run = feature_runs.start_run(
+            as_of_date=date(2026, 2, 18),
+            run_type=RunType.DAILY_SNAPSHOT,
+            universe_hash=hash_universe_symbols(symbols),
+            input_hash=hash_scan_signature(signature),
+        )
+        feature_runs.mark_completed(run.id, stats=RunStats(
+            total_symbols=1, processed_symbols=1,
+            failed_symbols=0, duration_seconds=1.0, passed_symbols=1,
+        ))
+        feature_runs.publish_atomically(run.id)
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _make_command(
+                universe_label="Hong Kong Market",
+                universe_key="market:HK",
+                universe_type="market",
+                universe_market="HK",
+            ),
+        )
+
+        assert result.status == "completed"
+        assert result.feature_run_id == run.id
+        assert len(dispatcher.dispatched) == 0
+
     def test_non_all_universe_stays_async_even_if_exact_run_exists(self):
         from datetime import date
         from app.domain.feature_store.models import RunStats, RunType

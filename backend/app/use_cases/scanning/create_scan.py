@@ -207,7 +207,10 @@ class CreateScanUseCase:
 
             feature_run_id = None
             instant_match = None
-            should_attempt_instant = cmd.universe_type == UniverseType.ALL.value
+            should_attempt_instant = cmd.universe_type in {
+                UniverseType.ALL.value,
+                UniverseType.MARKET.value,
+            }
             signature_payload = build_scan_signature_payload(
                 universe_type=cmd.universe_type,
                 screeners=cmd.screeners,

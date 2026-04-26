@@ -32,11 +32,20 @@ def _daily_pipeline_universe_name(market: str) -> str:
     return f"market:{market.upper()}"
 
 
+def _nonfatal_group_taxonomy_skip(result: dict) -> bool:
+    return result.get("reason") == "no_taxonomy_for_market" and (
+        result.get("skipped") is True
+        or str(result.get("status", "")).lower() == "skipped"
+    )
+
+
 def _result_failed(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
     if result.get("error") or result.get("reason") == "not_trading_day":
         return True
+    if _nonfatal_group_taxonomy_skip(result):
+        return False
     if result.get("skipped") is True:
         return True
     return str(result.get("status", "")).lower() in {
@@ -59,6 +68,8 @@ def _partial_price_refresh_meets_minimum(result: dict) -> bool:
 def _price_refresh_failed(result: Any) -> bool:
     if not isinstance(result, dict):
         return True
+    if _nonfatal_group_taxonomy_skip(result):
+        return False
     status = str(result.get("status", "")).lower()
     if status == "partial":
         if result.get("error") or result.get("reason") == "not_trading_day":
