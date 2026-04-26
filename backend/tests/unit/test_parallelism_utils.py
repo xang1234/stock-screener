@@ -27,3 +27,9 @@ def test_bounded_symbol_workers_caps_requested_workers_by_half_cpu_count(
     monkeypatch.setattr(parallelism.os, "cpu_count", lambda: cpu_count)
 
     assert parallelism.bounded_symbol_workers(requested) == expected
+
+
+@pytest.mark.parametrize("requested", [0, -1])
+def test_bounded_symbol_workers_rejects_non_positive_requests(requested):
+    with pytest.raises(ValueError, match="requested must be >= 1"):
+        parallelism.bounded_symbol_workers(requested)

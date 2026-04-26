@@ -292,8 +292,9 @@ class RunBulkScanUseCase:
                     return (sym, None, False, False)
 
             outcomes: dict[str, tuple[dict | None, bool, bool]] = {}
-            if cmd.parallel_workers > 1 and len(chunk) > 1:
-                workers = min(cmd.parallel_workers, len(chunk))
+            effective_workers = cmd.parallel_workers if cmd.cache_only else 1
+            if effective_workers > 1 and len(chunk) > 1:
+                workers = min(effective_workers, len(chunk))
                 with ThreadPoolExecutor(max_workers=workers) as executor:
                     futures = {
                         executor.submit(_scan_one, symbol): symbol

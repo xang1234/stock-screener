@@ -78,6 +78,11 @@ class _BulkAwareScanner:
         }
 
 
+class _BulkAwareFakeScanner(FakeScanner):
+    def get_merged_requirements(self, screener_names, criteria=None):
+        return {"needs": "price+fundamentals"}
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -399,7 +404,7 @@ class TestRunBulkScanHappyPath:
         result_repo = FakeScanResultRepository()
         uow = FakeUnitOfWork(scans=scan_repo, scan_results=result_repo)
         progress = FakeProgressSink()
-        scanner = FakeScanner(
+        scanner = _BulkAwareFakeScanner(
             results={
                 "AAPL": {
                     "composite_score": 90,
@@ -420,12 +425,16 @@ class TestRunBulkScanHappyPath:
             }
         )
 
-        result = _make_use_case(scanner).execute(
+        result = RunBulkScanUseCase(
+            scanner=scanner,
+            data_provider=FakeStockDataProvider(),
+        ).execute(
             uow,
             RunBulkScanCommand(
                 scan_id="s1",
                 symbols=["AAPL", "MSFT", "GOOG", "AMZN"],
                 chunk_size=2,
+                cache_only=True,
                 parallel_workers=parallel_workers,
             ),
             progress,
@@ -470,12 +479,16 @@ class TestRunBulkScanHappyPath:
             raising=False,
         )
 
-        _make_use_case().execute(
+        RunBulkScanUseCase(
+            scanner=_BulkAwareFakeScanner(),
+            data_provider=FakeStockDataProvider(),
+        ).execute(
             FakeUnitOfWork(scans=scan_repo),
             RunBulkScanCommand(
                 scan_id="s1",
                 symbols=["AAPL", "MSFT"],
                 chunk_size=2,
+                cache_only=True,
                 parallel_workers=10,
             ),
             FakeProgressSink(),
@@ -483,6 +496,49 @@ class TestRunBulkScanHappyPath:
         )
 
         assert observed_workers == [2]
+
+    def test_parallel_workers_ignored_when_cache_only_false(self, monkeypatch):
+        scan_repo = FakeScanRepository()
+        scan_repo.scans["s1"] = _make_scan("s1")
+        observed_workers: list[int] = []
+
+        class CapturingExecutor:
+            def __init__(self, max_workers):
+                observed_workers.append(max_workers)
+                self._executor = RealThreadPoolExecutor(max_workers=max_workers)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self._executor.shutdown(wait=True)
+                return False
+
+            def submit(self, *args, **kwargs):
+                return self._executor.submit(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "app.use_cases.scanning.run_bulk_scan.ThreadPoolExecutor",
+            CapturingExecutor,
+            raising=False,
+        )
+
+        scanner = FakeScanner()
+        _make_use_case(scanner).execute(
+            FakeUnitOfWork(scans=scan_repo),
+            RunBulkScanCommand(
+                scan_id="s1",
+                symbols=["AAPL", "MSFT"],
+                chunk_size=2,
+                cache_only=False,
+                parallel_workers=4,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        assert observed_workers == []
+        assert scanner.calls == ["AAPL", "MSFT"]
 
     def test_scan_status_transitions(self):
         scan_repo = FakeScanRepository()
