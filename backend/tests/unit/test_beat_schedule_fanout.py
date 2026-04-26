@@ -19,7 +19,6 @@ from app.tasks.market_queues import (
 # Beat entry name prefixes that MUST be fanned out per market onto the
 # external-fetch lane.
 EXTERNAL_FETCH_PREFIXES = (
-    "daily-smart-refresh-",
     "weekly-full-refresh-",
     "weekly-fundamental-refresh-",
     "weekly-universe-refresh-",
@@ -27,7 +26,7 @@ EXTERNAL_FETCH_PREFIXES = (
 
 # Per-market compute/write tasks run on market_jobs_<market>, not data_fetch.
 MARKET_JOB_PREFIXES = (
-    "daily-feature-snapshot-",
+    "daily-market-pipeline-",
 )
 
 
@@ -72,13 +71,15 @@ class TestBeatScheduleFanout:
                     f"Fan-out gap: got {sorted(present)}"
                 )
 
-    def test_feature_snapshots_run_on_market_job_queue(self):
+    def test_daily_market_pipelines_run_on_market_job_queue(self):
         for name, entry, expected_market in _market_entries(MARKET_JOB_PREFIXES):
             queue = (entry.get("options") or {}).get("queue")
             expected_queue = market_jobs_queue_for_market(expected_market)
             assert queue == expected_queue, (
                 f"Market job entry {name!r} routes to {queue!r}, expected {expected_queue!r}"
             )
+            assert entry["task"] == "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+            assert entry["kwargs"]["market"] == expected_market
 
     def test_weekly_universe_refresh_uses_market_appropriate_task(self):
         schedule = celery_app.conf.beat_schedule or {}
@@ -90,20 +91,12 @@ class TestBeatScheduleFanout:
                 "app.tasks.universe_tasks.refresh_official_market_universe"
             )
 
-    def test_breadth_and_group_rankings_fan_out_to_every_market(self):
-        """Breadth + industry-group rankings now run daily for every
-        SUPPORTED_MARKETS entry, each with its own market-jobs queue and the
-        correct market kwarg. Previously US-only.
-        """
+    def test_independent_daily_refresh_compute_and_snapshot_entries_are_removed(self):
         schedule = celery_app.conf.beat_schedule or {}
         for market in SUPPORTED_MARKETS:
             m_lower = market.lower()
-            breadth_key = f"daily-breadth-calculation-{m_lower}"
-            groups_key = f"daily-group-ranking-calculation-{m_lower}"
-            assert breadth_key in schedule, f"missing {breadth_key}"
-            assert groups_key in schedule, f"missing {groups_key}"
-            assert schedule[breadth_key]["kwargs"]["market"] == market
-            assert schedule[groups_key]["kwargs"]["market"] == market
-            expected_queue = market_jobs_queue_for_market(market)
-            assert schedule[breadth_key]["options"]["queue"] == expected_queue
-            assert schedule[groups_key]["options"]["queue"] == expected_queue
+            assert f"daily-smart-refresh-{m_lower}" not in schedule
+            assert f"daily-breadth-calculation-{m_lower}" not in schedule
+            assert f"daily-group-ranking-calculation-{m_lower}" not in schedule
+            assert f"daily-feature-snapshot-{m_lower}" not in schedule
+            assert f"daily-market-pipeline-{m_lower}" in schedule

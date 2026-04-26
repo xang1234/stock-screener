@@ -65,7 +65,7 @@ async def test_app_capabilities_includes_scan_defaults(client, monkeypatch):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["scan_defaults"] == get_default_scan_profile()
+    assert data["scan_defaults"] == get_default_scan_profile("US")
     assert data["ui_snapshots"] == _FakeUISnapshotService().ui_snapshot_flags()
     assert data["features"] == {"themes": True, "chatbot": True, "tasks": True}
     assert data["bootstrap_required"] is True

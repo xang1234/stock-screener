@@ -20,7 +20,7 @@ BOOTSTRAP_STATE_KEY = "runtime.bootstrap_state"
 DEFAULT_PRIMARY_MARKET = "US"
 DEFAULT_ENABLED_MARKETS = ("US",)
 DEFAULT_BOOTSTRAP_STATE = "not_started"
-VALID_BOOTSTRAP_STATES = {"not_started", "running", "ready"}
+VALID_BOOTSTRAP_STATES = {"not_started", "running", "ready", "failed"}
 
 
 @dataclass(frozen=True)
@@ -223,6 +223,26 @@ def _has_core_market_data(db: Session, market: str | None) -> bool:
     )
 
 
+def _has_completed_auto_scan(db: Session, market: str | None) -> bool:
+    from ..infra.db.models.feature_store import FeatureRun
+    from ..models.scan_result import SCAN_TRIGGER_SOURCE_AUTO, Scan
+
+    normalized_market = _normalize_supported_market(market)
+    return (
+        db.query(Scan.id)
+        .join(FeatureRun, FeatureRun.id == Scan.feature_run_id)
+        .filter(
+            Scan.universe_market == normalized_market,
+            Scan.status == "completed",
+            Scan.trigger_source == SCAN_TRIGGER_SOURCE_AUTO,
+            FeatureRun.status == "published",
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
 def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     prefs = get_runtime_preferences(db)
     empty_system = not (
@@ -230,23 +250,37 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
         or _has_price_rows(db)
         or _has_fundamental_rows(db)
     )
-    primary_ready = _has_core_market_data(db, prefs.primary_market)
+    enabled_markets = list(prefs.enabled_markets)
 
     bootstrap_state = prefs.bootstrap_state
-    if primary_ready:
+    should_check_readiness = bootstrap_state in {"running", "ready", "failed"}
+    core_ready = (
+        all(_has_core_market_data(db, market) for market in enabled_markets)
+        if should_check_readiness
+        else False
+    )
+    scan_ready = (
+        all(_has_completed_auto_scan(db, market) for market in enabled_markets)
+        if should_check_readiness
+        else False
+    )
+    all_markets_ready = core_ready and scan_ready
+    if all_markets_ready:
         bootstrap_state = "ready"
     elif empty_system and bootstrap_state == "ready":
         bootstrap_state = "not_started"
+    elif bootstrap_state == "ready" and not all_markets_ready:
+        bootstrap_state = "running"
 
     bootstrap_required = empty_system or (
-        bootstrap_state == "running" and not primary_ready
+        bootstrap_state in {"running", "failed"} and not all_markets_ready
     )
 
     return RuntimeBootstrapStatus(
         bootstrap_required=bootstrap_required,
         empty_system=empty_system,
         primary_market=prefs.primary_market,
-        enabled_markets=list(prefs.enabled_markets),
+        enabled_markets=enabled_markets,
         bootstrap_state=bootstrap_state,
         supported_markets=list(SUPPORTED_MARKETS),
     )

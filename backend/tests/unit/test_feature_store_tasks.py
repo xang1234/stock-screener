@@ -106,7 +106,8 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     assert result["row_count"] == 2
     assert result["duration_seconds"] == 12.5
     assert fake_use_case.received_cmd is not None
-    assert fake_use_case.received_cmd.universe_def.type == UniverseType.ALL
+    assert fake_use_case.received_cmd.universe_def.type == UniverseType.MARKET
+    assert fake_use_case.received_cmd.universe_def.market.value == "US"
 
 
 def test_build_daily_snapshot_never_passes_legacy_dict_shape():
@@ -140,7 +141,7 @@ def test_build_daily_snapshot_never_passes_legacy_dict_shape():
 
 def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
     fake_use_case = _FakeUseCase()
-    defaults = get_default_scan_profile()
+    defaults = get_default_scan_profile("US")
 
     with patch(
         "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
@@ -168,6 +169,49 @@ def test_build_daily_snapshot_uses_default_scan_profile_when_not_provided():
     assert fake_use_case.received_cmd.screener_names == defaults["screeners"]
     assert fake_use_case.received_cmd.criteria == defaults["criteria"]
     assert fake_use_case.received_cmd.composite_method == defaults["composite_method"]
+
+
+def test_build_daily_snapshot_defaults_to_market_profile_and_pointer():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.interfaces.tasks.feature_store_tasks._is_market_trading_day",
+        return_value=True,
+    ), patch(
+        "app.services.market_calendar_service.MarketCalendarService.last_completed_trading_day",
+        return_value=date(2026, 3, 16),
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        return_value=True,
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._upsert_feature_run_pointer",
+    ) as mock_upsert:
+        result = _TASK_BODY(_FakeTask(), market="hk")
+
+    assert result["status"] == "published"
+    assert result["as_of_date"] == "2026-03-16"
+    assert fake_use_case.received_cmd.market == "HK"
+    assert fake_use_case.received_cmd.universe_def.type == UniverseType.MARKET
+    assert fake_use_case.received_cmd.universe_def.market.value == "HK"
+    assert fake_use_case.received_cmd.publish_pointer_key == "latest_published_market:HK"
+    mock_upsert.assert_not_called()
 
 
 def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match():
@@ -228,10 +272,10 @@ def test_build_daily_snapshot_skip_if_published_requires_exact_signature_match()
     assert fake_use_case.received_cmd is None
     mock_auto_scan.assert_called_once_with(
         feature_run_id=41,
-        universe_name=get_default_scan_profile()["universe"],
-        screeners=get_default_scan_profile()["screeners"],
-        criteria=get_default_scan_profile()["criteria"],
-        composite_method=get_default_scan_profile()["composite_method"],
+        universe_name=get_default_scan_profile("US")["universe"],
+        screeners=get_default_scan_profile("US")["screeners"],
+        criteria=get_default_scan_profile("US")["criteria"],
+        composite_method=get_default_scan_profile("US")["composite_method"],
     )
     assert lookup_calls == [{
         "input_hash": "same-input",
@@ -444,10 +488,10 @@ def test_build_daily_snapshot_creates_auto_scan_after_publish():
 
     mock_auto_scan.assert_called_once_with(
         feature_run_id=11,
-        universe_name=get_default_scan_profile()["universe"],
-        screeners=get_default_scan_profile()["screeners"],
-        criteria=get_default_scan_profile()["criteria"],
-        composite_method=get_default_scan_profile()["composite_method"],
+        universe_name=get_default_scan_profile("US")["universe"],
+        screeners=get_default_scan_profile("US")["screeners"],
+        criteria=get_default_scan_profile("US")["criteria"],
+        composite_method=get_default_scan_profile("US")["composite_method"],
     )
 
 
@@ -1168,9 +1212,11 @@ def test_build_daily_snapshot_publishes_market_activity():
         result = _TASK_BODY(_FakeTask(), as_of_date_str="2026-03-16", market="US")
 
     assert result["status"] == "published"
-    assert started[0]["stage_key"] == "snapshot"
+    assert started[0]["stage_key"] == "scan"
     assert started[0]["lifecycle"] == "daily_refresh"
-    assert completed[0]["stage_key"] == "snapshot"
+    assert started[0]["message"] == "Running market scan"
+    assert completed[0]["stage_key"] == "scan"
+    assert completed[0]["message"] == "Market scan ready"
 
 
 def test_build_daily_snapshot_skips_disabled_market_by_default():

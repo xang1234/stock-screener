@@ -54,7 +54,9 @@ async def get_app_capabilities(
     return AppCapabilitiesResponse(
         features=settings.capability_flags(),
         ui_snapshots=get_ui_snapshot_service().ui_snapshot_flags(),
-        scan_defaults=ScanDefaultsResponse(**get_default_scan_profile()),
+        scan_defaults=ScanDefaultsResponse(
+            **get_default_scan_profile(bootstrap_status.primary_market)
+        ),
         bootstrap_required=bootstrap_status.bootstrap_required,
         primary_market=bootstrap_status.primary_market,
         enabled_markets=bootstrap_status.enabled_markets,

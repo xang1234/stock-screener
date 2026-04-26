@@ -44,12 +44,6 @@
       "label": "AI Infrastructure velocity spike",
       "reference": "theme_alerts:1",
       "source": "theme_alert"
-    },
-    {
-      "as_of": "2026-03-29",
-      "label": "Daily Group Rankings",
-      "reference": "scheduled_tasks:daily-group-ranking-calculation",
-      "source": "scheduled_task"
     }
   ],
   "facts": [
@@ -93,7 +87,7 @@
       "as_of": null,
       "key": "failed_scheduled_tasks",
       "source": "task_execution_history",
-      "value": 1
+      "value": 0
     }
   ],
   "freshness": {
@@ -102,13 +96,12 @@
     "sources": {
       "feature_run": "2026-03-29T21:30:00",
       "market_breadth": "2026-03-29",
-      "task_execution_history": "2026-03-29T21:40:00",
+      "task_execution_history": null,
       "theme_alerts": "2026-03-29T22:15:00"
     }
   },
   "next_actions": [
-    "Review unread theme alerts for new or accelerating themes.",
-    "Investigate failed scheduled tasks before trusting stale market state."
+    "Review unread theme alerts for new or accelerating themes."
   ],
   "runs": {
     "comparison": {
@@ -190,25 +183,52 @@
       "status": "published"
     }
   },
-  "summary": "Published feature run 2 is available for 2026-03-29. Versus run 1, the latest run added 1 symbols, removed 1, and recorded 4 movers. Breadth data is available for 2026-03-29. 1 recent unread theme alerts are in scope. 1 scheduled tasks most recently failed.",
+  "summary": "Published feature run 2 is available for 2026-03-29. Versus run 1, the latest run added 1 symbols, removed 1, and recorded 4 movers. Breadth data is available for 2026-03-29. 1 recent unread theme alerts are in scope. 0 scheduled tasks most recently failed.",
   "tasks": [
     {
-      "description": "Calculates IBD industry group rankings",
-      "display_name": "Daily Group Rankings",
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (HK)",
       "is_enabled": true,
-      "last_run": {
-        "completed_at": "2026-03-29T21:42:00",
-        "duration_seconds": 120.0,
-        "error_message": "Fixture failure for MCP tests",
-        "id": 2,
-        "started_at": "2026-03-29T21:40:00",
-        "status": "failed",
-        "task_id": "task-fail",
-        "triggered_by": "schedule"
-      },
-      "name": "daily-group-ranking-calculation",
-      "schedule_description": "17:40 ET, Mon-Fri",
-      "task_function": "app.tasks.group_rank_tasks.calculate_daily_group_rankings"
+      "last_run": null,
+      "name": "daily-market-pipeline-hk",
+      "schedule_description": "4:30 ET, Mon-Fri (HK)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (IN)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-in",
+      "schedule_description": "6:30 ET, Mon-Fri (IN)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (JP)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-jp",
+      "schedule_description": "2:30 ET, Mon-Fri (JP)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (TW)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-tw",
+      "schedule_description": "2:00 ET, Mon-Fri (TW)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
+    },
+    {
+      "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+      "display_name": "Daily Market Pipeline (US)",
+      "is_enabled": true,
+      "last_run": null,
+      "name": "daily-market-pipeline-us",
+      "schedule_description": "16:30 ET, Mon-Fri (US)",
+      "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     }
   ],
   "top_candidates": [

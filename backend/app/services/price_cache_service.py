@@ -1045,17 +1045,12 @@ class PriceCacheService:
             return get_last_trading_day(today - timedelta(days=1))
 
         if is_trading_day(today):
-            if now_et.hour >= 17 and now_et.minute >= 45:
-                # After 5:45 PM on trading day: expect today's close
-                # (scheduled refresh starts at 5:30 PM, give it 15 min to warm SPY)
-                return today
-            elif now_et.hour >= 18:
-                # After 6 PM: definitely expect today's close
+            if now_et.hour > 16 or (now_et.hour == 16 and now_et.minute >= 30):
+                # After 4:30 PM on trading day: expect today's close.
                 return today
             elif now_et.hour >= 16:
-                # Grace period 4:00-5:44 PM: yesterday's close is acceptable
-                # Data providers may not have final close until ~4:30 PM,
-                # and the scheduled refresh doesn't start until 5:30 PM
+                # Grace period 4:00-4:29 PM: yesterday's close is acceptable
+                # while data providers finalize the close.
                 return get_last_trading_day(today - timedelta(days=1))
             else:
                 # Before market open (e.g., 7 AM Monday)

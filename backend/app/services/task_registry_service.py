@@ -13,7 +13,11 @@ from sqlalchemy.orm import Session
 
 from ..models.task_execution import TaskExecutionHistory
 from ..config import settings
-from ..tasks.market_queues import SHARED_DATA_FETCH_QUEUE, SUPPORTED_MARKETS
+from ..tasks.market_queues import (
+    SHARED_DATA_FETCH_QUEUE,
+    SUPPORTED_MARKETS,
+    market_jobs_queue_for_market,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,22 @@ def _weekly_universe_task_definitions() -> Dict[str, Dict]:
     return entries
 
 
+def _daily_market_pipeline_task_definitions() -> Dict[str, Dict]:
+    entries: Dict[str, Dict] = {}
+    for market in SUPPORTED_MARKETS:
+        warm_hour, warm_minute = settings.cache_warm_schedule_for(market)
+        entries[f"daily-market-pipeline-{market.lower()}"] = {
+            "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline",
+            "display_name": f"Daily Market Pipeline ({market})",
+            "description": "Runs price refresh, breadth, group rankings, and market scan in order",
+            "schedule_description": f"{warm_hour}:{warm_minute:02d} ET, Mon-Fri ({market})",
+            "manual_dispatch_kwargs": {"market": market},
+            "manual_dispatch_headers": {"origin": "manual"},
+            "manual_dispatch_options": {"queue": market_jobs_queue_for_market(market)},
+        }
+    return entries
+
+
 # Task definitions with metadata
 SCHEDULED_TASKS = {
     # ===== SUNDAY (Off-Market Maintenance) =====
@@ -66,28 +86,7 @@ SCHEDULED_TASKS = {
         'schedule_description': f'Sunday {settings.cache_weekly_hour}:00 AM ET',
     },
     # ===== WEEKDAYS (After Market Close) =====
-    'daily-smart-refresh': {
-        'task_function': 'app.tasks.cache_tasks.smart_refresh_cache',
-        'display_name': 'Daily Smart Refresh',
-        'description': 'Runs benchmark-first full-universe batched price refresh',
-        'schedule_description': f'{settings.cache_warm_hour}:{settings.cache_warm_minute:02d} ET, Mon-Fri',
-        'history_task_names': ['daily-smart-refresh', 'daily-cache-warmup'],
-        'manual_dispatch_kwargs': {'mode': 'full'},
-        'manual_dispatch_headers': {'origin': 'manual'},
-        'manual_dispatch_options': {'queue': SHARED_DATA_FETCH_QUEUE},
-    },
-    'daily-breadth-calculation': {
-        'task_function': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-        'display_name': 'Daily Breadth Calculation',
-        'description': 'Calculates 13 market breadth indicators (with automatic gap-fill)',
-        'schedule_description': f'{settings.cache_warm_hour}:{settings.cache_warm_minute + 5:02d} ET, Mon-Fri',
-    },
-    'daily-group-ranking-calculation': {
-        'task_function': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings',
-        'display_name': 'Daily Group Rankings',
-        'description': 'Calculates IBD industry group rankings',
-        'schedule_description': f'{settings.cache_warm_hour}:{settings.cache_warm_minute + 10:02d} ET, Mon-Fri',
-    },
+    **_daily_market_pipeline_task_definitions(),
 
     # ===== FRIDAY =====
     'weekly-fundamental-refresh': {

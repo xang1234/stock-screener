@@ -2,7 +2,7 @@
 
 This use case contains the business rules for building a daily feature
 snapshot:
-  1. Validate as_of_date is a US trading day
+  1. Validate as_of_date is a trading day for the requested market
   2. Start a feature run (status=RUNNING)
   3. Resolve universe of active symbols and save snapshot
   4. Scan each symbol via StockScanner in chunks (with progress + cancellation)
@@ -24,7 +24,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Iterator, Sequence
+from typing import Iterator, Protocol, Sequence
 
 import pandas_market_calendars as mcal
 
@@ -165,11 +165,14 @@ class BuildDailySnapshotCommand:
     static_parallel_workers: int = 1
     static_chunk_size: int | None = None
     publish_pointer_key: str = "latest_published"
+    market: str = "US"
 
     # DQ thresholds (overridable per-invocation)
     dq_thresholds: DQThresholds = field(default_factory=DQThresholds)
 
     def __post_init__(self) -> None:
+        normalized_market = (self.market or "US").strip().upper()
+        object.__setattr__(self, "market", normalized_market)
         if self.chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
         if self.static_parallel_workers < 1:
@@ -206,6 +209,11 @@ class _SnapshotRunProgress:
     passed_symbols: int = 0
 
 
+class MarketCalendarPort(Protocol):
+    def is_trading_day(self, market: str, day: date | None = None) -> bool:
+        ...
+
+
 # ── Use Case ─────────────────────────────────────────────────────────────
 
 
@@ -220,9 +228,11 @@ class BuildDailyFeatureSnapshotUseCase:
         self,
         scanner: StockScanner,
         data_provider: StockDataProvider | None = None,
+        market_calendar: MarketCalendarPort | None = None,
     ) -> None:
         self._scanner = scanner
         self._data_provider = data_provider
+        self._market_calendar = market_calendar
 
     def execute(
         self,
@@ -233,9 +243,15 @@ class BuildDailyFeatureSnapshotUseCase:
     ) -> BuildDailySnapshotResult:
         """Run the full snapshot build lifecycle inside a single UoW."""
         # ── Validate trading day ────────────────────────────────
-        if not _is_us_trading_day(cmd.as_of_date):
+        if self._market_calendar is not None:
+            is_trading_day = self._market_calendar.is_trading_day(cmd.market, cmd.as_of_date)
+        elif cmd.market == "US":
+            is_trading_day = _is_us_trading_day(cmd.as_of_date)
+        else:
+            raise ValidationError(f"No market calendar configured for {cmd.market}")
+        if not is_trading_day:
             raise ValidationError(
-                f"as_of_date {cmd.as_of_date} is not a US trading day"
+                f"as_of_date {cmd.as_of_date} is not a {cmd.market} trading day"
             )
 
         with uow:
@@ -272,6 +288,7 @@ class BuildDailyFeatureSnapshotUseCase:
                 **signature_payload,
                 "signature": signature_payload,
                 "universe": _serialize_universe_definition(cmd.universe_def),
+                "market": cmd.market,
                 "publish_pointer_key": cmd.publish_pointer_key,
             }
 

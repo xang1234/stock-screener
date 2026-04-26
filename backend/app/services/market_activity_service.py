@@ -21,7 +21,7 @@ STAGE_SEQUENCE = (
     "fundamentals",
     "breadth",
     "groups",
-    "snapshot",
+    "scan",
 )
 
 STAGE_LABELS = {
@@ -31,6 +31,7 @@ STAGE_LABELS = {
     "breadth": "Breadth Calculation",
     "groups": "Group Rankings",
     "snapshot": "Feature Snapshot",
+    "scan": "Scan",
 }
 
 DEFAULT_LIFECYCLE_BY_STAGE = {
@@ -40,6 +41,7 @@ DEFAULT_LIFECYCLE_BY_STAGE = {
     "breadth": "daily_refresh",
     "groups": "daily_refresh",
     "snapshot": "daily_refresh",
+    "scan": "daily_refresh",
 }
 
 ACTIVE_STATUSES = {"queued", "running"}
@@ -82,6 +84,20 @@ def _load_market_activity(db: Session, market: str) -> dict[str, Any] | None:
     return payload
 
 
+def _should_preserve_existing_failed_message(
+    existing_payload: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    existing_message = str(existing_payload.get("message") or "").strip()
+    incoming_message = str(payload.get("message") or "").strip()
+    return bool(
+        existing_message
+        and incoming_message
+        and existing_message != incoming_message
+        and len(existing_message) >= len(incoming_message)
+    )
+
+
 def _save_market_activity(
     db: Session,
     market: str,
@@ -106,11 +122,30 @@ def _save_market_activity(
             same_owner = same_task and same_stage
 
             if existing_status == "running":
-                if payload_status == "queued" or not same_owner:
+                if payload_status == "queued" or (
+                    payload_status != "failed" and not same_owner
+                ):
                     return existing_payload
-            elif existing_status in {"completed", "failed"}:
+                if payload_status == "failed" and not same_owner:
+                    return existing_payload
+            elif existing_status == "completed":
+                if payload_status == "failed":
+                    pass
+                else:
+                    incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
+                    if not incoming_new_cycle:
+                        return existing_payload
+            elif existing_status == "failed":
                 incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
-                if not incoming_new_cycle:
+                if incoming_new_cycle:
+                    existing_stage_index = _stage_index(existing_payload.get("stage_key"))
+                    payload_stage_index = _stage_index(payload.get("stage_key"))
+                    lifecycle_changed = existing_payload.get("lifecycle") != payload.get("lifecycle")
+                    incoming_new_cycle = lifecycle_changed or payload_stage_index <= existing_stage_index
+                if payload_status == "failed" and same_owner:
+                    if _should_preserve_existing_failed_message(existing_payload, payload):
+                        return existing_payload
+                elif not incoming_new_cycle:
                     return existing_payload
     encoded = json.dumps(payload)
     if setting is None:
@@ -150,6 +185,12 @@ def _progress_mode(
     if _resolve_progress_percent(percent, current, total) is not None or status in {"completed", "idle"}:
         return "determinate"
     return "indeterminate"
+
+
+def _stage_index(stage_key: str | None) -> int:
+    if stage_key in STAGE_SEQUENCE:
+        return STAGE_SEQUENCE.index(stage_key)
+    return len(STAGE_SEQUENCE)
 
 
 def _activity_payload(
@@ -365,6 +406,37 @@ def mark_market_activity_failed(
     )
 
 
+def mark_current_market_activity_failed(
+    db: Session,
+    *,
+    market: str,
+    lifecycle: str | None = None,
+    task_name: str | None = None,
+    task_id: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    existing = _load_market_activity(db, market)
+    stage_key = "scan"
+    resolved_task_name = task_name
+    resolved_task_id = task_id
+    if isinstance(existing, dict) and existing.get("status") in {"queued", "running"}:
+        existing_lifecycle = existing.get("lifecycle")
+        if lifecycle is None or lifecycle == existing_lifecycle:
+            stage_key = existing.get("stage_key") or stage_key
+            lifecycle = lifecycle or existing_lifecycle
+            resolved_task_name = resolved_task_name or existing.get("task_name")
+            resolved_task_id = resolved_task_id or existing.get("task_id")
+    return mark_market_activity_failed(
+        db,
+        market=market,
+        stage_key=stage_key,
+        lifecycle=lifecycle,
+        task_name=resolved_task_name,
+        task_id=resolved_task_id,
+        message=message,
+    )
+
+
 def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any]:
     if record.get("status") != "running":
         return record
@@ -534,11 +606,19 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
             if not secondary_active
             else "Primary market is ready while additional market loading continues."
         )
-    elif primary_payload is not None and primary_payload.get("progress_mode") == "determinate":
+    elif any(payload.get("progress_mode") == "determinate" for payload in market_payloads):
+        focus_payload = next(
+            (payload for payload in market_payloads if payload.get("status") in ACTIVE_STATUSES),
+            primary_payload,
+        )
         bootstrap_progress_mode = "determinate"
-        bootstrap_percent = _bootstrap_progress_percent(primary_payload)
-        bootstrap_stage = primary_payload.get("stage_label")
-        bootstrap_message = primary_payload.get("message")
+        bootstrap_percent = round(
+            sum(_bootstrap_progress_percent(payload) for payload in market_payloads)
+            / max(len(market_payloads), 1),
+            2,
+        )
+        bootstrap_stage = focus_payload.get("stage_label") if focus_payload else None
+        bootstrap_message = focus_payload.get("message") if focus_payload else "Bootstrap queued."
     else:
         bootstrap_progress_mode = "indeterminate"
         bootstrap_percent = None
@@ -554,8 +634,7 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
         bootstrap_status.bootstrap_state == "running" or bool(secondary_active)
     ):
         background_warning = (
-            "Data loading continues in the background after bootstrap. "
-            "Additional enabled markets keep syncing after the app becomes usable."
+            "Bootstrap remains active until every enabled market has a published scan."
         )
 
     return {

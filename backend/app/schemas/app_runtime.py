@@ -14,6 +14,7 @@ class ScanDefaultsResponse(BaseModel):
     screeners: list[str] = Field(default_factory=list)
     composite_method: str
     criteria: dict[str, Any] = Field(default_factory=dict)
+    benchmark_symbol: str | None = None
 
 
 class AppAuthStatusResponse(BaseModel):

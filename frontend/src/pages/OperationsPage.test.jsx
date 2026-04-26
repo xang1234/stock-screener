@@ -132,13 +132,13 @@ describe('OperationsPage', () => {
           {
             market: 'US',
             lifecycle: 'daily_refresh',
-            stage_label: 'Price Refresh',
+            stage_label: 'Scan',
             status: 'running',
             percent: 42,
             current: 42,
             total: 100,
-            message: 'Refreshing prices',
-            task_name: 'smart_refresh_cache',
+            message: 'Running market scan',
+            task_name: 'build_daily_snapshot',
             updated_at: '2026-04-18T12:00:00Z',
           },
         ],
@@ -154,8 +154,8 @@ describe('OperationsPage', () => {
     expect(screen.getByText('Market activity')).toBeInTheDocument();
     expect(screen.getByText('Job console')).toBeInTheDocument();
     expect(screen.getByText('Lease status')).toBeInTheDocument();
-    expect(screen.getByText('Price Refresh')).toBeInTheDocument();
-    expect(screen.getByText(/Refreshing prices/)).toBeInTheDocument();
+    expect(screen.getByText('Scan')).toBeInTheDocument();
+    expect(screen.getByText(/Running market scan/)).toBeInTheDocument();
     expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
 
     await waitFor(() => {

@@ -23,7 +23,7 @@ class _FakeTask:
         return _FakeSignature(self.task, args=args, kwargs=kwargs)
 
 
-def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypatch):
+def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     from app.tasks import runtime_bootstrap_tasks as module
 
     monkeypatch.setattr(
@@ -54,29 +54,21 @@ def test_non_us_primary_bootstrap_uses_market_scan_not_feature_snapshot(monkeypa
         "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot",
         _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
     )
-    monkeypatch.setattr(
-        module,
-        "queue_market_bootstrap_scan",
-        _FakeTask("app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan"),
-        raising=False,
-    )
-
-    signatures = module._build_market_bootstrap_signatures("HK", include_initial_scan=True)
+    signatures = module._build_market_bootstrap_signatures("HK")
     task_names = [signature.task for signature in signatures]
 
-    assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" in task_names
-    assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" not in task_names
-    assert "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill" not in task_names
-    # Non-US markets now run the group ranking orchestrator (taxonomy is in-memory).
+    assert "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan" not in task_names
+    assert "app.interfaces.tasks.feature_store_tasks.build_daily_snapshot" in task_names
+    assert "app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill" in task_names
     assert (
         "app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill"
         in task_names
     )
-    assert [
-        signature.kwargs.get("activity_lifecycle")
-        for signature in signatures
-        if signature.task != "app.tasks.runtime_bootstrap_tasks.queue_market_bootstrap_scan"
-    ] == ["bootstrap"] * 4
+    snapshot = signatures[-1]
+    assert snapshot.kwargs["market"] == "HK"
+    assert snapshot.kwargs["universe_name"] == "market:HK"
+    assert snapshot.kwargs["publish_pointer_key"] == "latest_published_market:HK"
+    assert [signature.kwargs.get("activity_lifecycle") for signature in signatures] == ["bootstrap"] * 6
 
 
 def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
@@ -115,7 +107,7 @@ def test_us_primary_bootstrap_loads_ibd_mappings_before_prices(monkeypatch):
         _FakeTask("app.interfaces.tasks.feature_store_tasks.build_daily_snapshot"),
     )
 
-    signatures = module._build_market_bootstrap_signatures("US", include_initial_scan=True)
+    signatures = module._build_market_bootstrap_signatures("US")
     task_names = [signature.task for signature in signatures]
 
     assert task_names == [
@@ -139,32 +131,23 @@ def test_bootstrap_universe_name_uses_uppercase_market_code():
     assert module._bootstrap_universe_name("us") == "market:US"
 
 
-def test_complete_local_runtime_bootstrap_marks_secondary_markets_queued(monkeypatch):
+def test_queue_local_runtime_bootstrap_chains_all_enabled_markets_before_completion(monkeypatch):
     from app.tasks import runtime_bootstrap_tasks as module
-
-    class _FakeDb:
-        def close(self):
-            return None
-
-    fake_db = _FakeDb()
-    queued = []
 
     class _FakeAsyncResult:
         def __init__(self, task_id: str) -> None:
             self.id = task_id
+
+    captured = []
 
     class _FakeChain:
         def __init__(self, *signatures) -> None:
             self.signatures = signatures
 
         def apply_async(self):
+            captured.extend(self.signatures)
             return _FakeAsyncResult("secondary-task-123")
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(
-        "app.services.runtime_preferences_service.set_bootstrap_state",
-        lambda db, state: None,
-    )
     monkeypatch.setattr(
         module,
         "chain",
@@ -173,24 +156,53 @@ def test_complete_local_runtime_bootstrap_marks_secondary_markets_queued(monkeyp
     monkeypatch.setattr(
         module,
         "_build_market_bootstrap_signatures",
-        lambda market, include_initial_scan=False: [_FakeSignature(f"task:{market}")],
+        lambda market: [_FakeSignature(f"task:{market}")],
+    )
+
+    result = module.queue_local_runtime_bootstrap(
+        primary_market="US",
+        enabled_markets=["HK", "US", "TW"],
+    )
+
+    assert result == "secondary-task-123"
+    assert [signature.task for signature in captured] == [
+        "task:US",
+        "task:HK",
+        "task:TW",
+        "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
+    ]
+
+
+def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    calls = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda _db, _state: None,
     )
     monkeypatch.setattr(
         module,
-        "mark_market_activity_queued",
-        lambda db, **kwargs: queued.append(kwargs),
+        "mark_current_market_activity_failed",
+        lambda _db, **kwargs: calls.append(kwargs),
     )
 
-    result = module.complete_local_runtime_bootstrap("US", ["US", "HK"])
+    result = module.fail_local_runtime_bootstrap.run(
+        primary_market="US",
+        enabled_markets=["HK"],
+    )
 
-    assert result["queued_secondary"] == [{"market": "HK", "task_id": "secondary-task-123"}]
-    assert queued == [
+    assert result["status"] == "failed"
+    assert calls == [
         {
             "market": "HK",
-            "stage_key": "universe",
             "lifecycle": "bootstrap",
-            "task_name": "runtime_bootstrap",
-            "task_id": "secondary-task-123",
-            "message": "Queued bootstrap for HK",
+            "message": "Bootstrap failed",
         }
     ]

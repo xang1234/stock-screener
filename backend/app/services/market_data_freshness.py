@@ -8,6 +8,7 @@ universe, so unrelated data-quality issues on other symbols don't false-positive
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Iterable, Optional
 
 from sqlalchemy import func
@@ -15,9 +16,19 @@ from sqlalchemy import func
 from ..database import SessionLocal
 from ..models.stock import StockPrice
 from ..models.stock_universe import StockUniverse
+from ..services.market_refresh_state_service import get_market_refresh_state
 from ..wiring.bootstrap import get_market_calendar_service
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_state_date(value: object) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
@@ -45,55 +56,85 @@ def check_symbol_freshness(symbols: Iterable[str]) -> Optional[dict]:
             .group_by(StockUniverse.symbol, StockUniverse.market)
             .all()
         )
+
+        resolved_symbols = {row.symbol for row in rows}
+        unresolved_symbols = sorted(set(normalized) - resolved_symbols)
+
+        per_market: dict[str, list] = {}
+        for row in rows:
+            per_market.setdefault(row.market, []).append(row)
+
+        calendar = get_market_calendar_service()
+        stale_markets: list[dict] = []
+        for market, market_rows in sorted(per_market.items()):
+            try:
+                expected_date = calendar.last_completed_trading_day(market)
+            except Exception:
+                # Fail-closed: if we cannot verify freshness (unsupported market
+                # code, calendar backend outage, schedule lookup error), the safe
+                # default is to block the scan. Silently treating the market as
+                # fresh defeats the entire purpose of the gate.
+                logger.warning(
+                    "Could not resolve last completed trading day for market=%s; treating as stale",
+                    market,
+                    exc_info=True,
+                )
+                stale_markets.append({
+                    "market": market,
+                    "total_symbols": len(market_rows),
+                    "covered_symbols": sum(1 for r in market_rows if r.last_date is not None),
+                    "uncovered_symbols": sum(1 for r in market_rows if r.last_date is None),
+                    "oldest_last_cached_date": None,
+                    "expected_date": None,
+                    "reason": "calendar_unavailable",
+                })
+                continue
+
+            state = get_market_refresh_state(session, market)
+            observed_date = _parse_state_date(
+                state.get("last_refreshed_trading_day") if state else None
+            )
+            comparison_date = expected_date
+            if state is not None and (state.get("status") != "completed" or observed_date is None):
+                stale_markets.append({
+                    "market": market,
+                    "total_symbols": len(market_rows),
+                    "covered_symbols": sum(1 for r in market_rows if r.last_date is not None),
+                    "uncovered_symbols": sum(1 for r in market_rows if r.last_date is None),
+                    "oldest_last_cached_date": None,
+                    "expected_date": str(expected_date),
+                    "reason": "refresh_state_missing",
+                })
+                continue
+            if observed_date is not None and observed_date < expected_date:
+                stale_markets.append({
+                    "market": market,
+                    "total_symbols": len(market_rows),
+                    "covered_symbols": sum(1 for r in market_rows if r.last_date is not None),
+                    "uncovered_symbols": sum(1 for r in market_rows if r.last_date is None),
+                    "oldest_last_cached_date": str(observed_date),
+                    "expected_date": str(expected_date),
+                    "reason": "refresh_state_stale",
+                })
+                continue
+            if observed_date is not None:
+                comparison_date = observed_date
+
+            uncovered = sum(1 for r in market_rows if r.last_date is None)
+            covered_dates = [r.last_date for r in market_rows if r.last_date is not None]
+            oldest = min(covered_dates) if covered_dates else None
+
+            if uncovered > 0 or oldest is None or oldest < comparison_date:
+                stale_markets.append({
+                    "market": market,
+                    "total_symbols": len(market_rows),
+                    "covered_symbols": len(covered_dates),
+                    "uncovered_symbols": uncovered,
+                    "oldest_last_cached_date": str(oldest) if oldest is not None else None,
+                    "expected_date": str(comparison_date),
+                })
     finally:
         session.close()
-
-    resolved_symbols = {row.symbol for row in rows}
-    unresolved_symbols = sorted(set(normalized) - resolved_symbols)
-
-    per_market: dict[str, list] = {}
-    for row in rows:
-        per_market.setdefault(row.market, []).append(row)
-
-    calendar = get_market_calendar_service()
-    stale_markets: list[dict] = []
-    for market, market_rows in sorted(per_market.items()):
-        try:
-            expected_date = calendar.last_completed_trading_day(market)
-        except Exception:
-            # Fail-closed: if we cannot verify freshness (unsupported market
-            # code, calendar backend outage, schedule lookup error), the safe
-            # default is to block the scan. Silently treating the market as
-            # fresh defeats the entire purpose of the gate.
-            logger.warning(
-                "Could not resolve last completed trading day for market=%s; treating as stale",
-                market,
-                exc_info=True,
-            )
-            stale_markets.append({
-                "market": market,
-                "total_symbols": len(market_rows),
-                "covered_symbols": sum(1 for r in market_rows if r.last_date is not None),
-                "uncovered_symbols": sum(1 for r in market_rows if r.last_date is None),
-                "oldest_last_cached_date": None,
-                "expected_date": None,
-                "reason": "calendar_unavailable",
-            })
-            continue
-
-        uncovered = sum(1 for r in market_rows if r.last_date is None)
-        covered_dates = [r.last_date for r in market_rows if r.last_date is not None]
-        oldest = min(covered_dates) if covered_dates else None
-
-        if uncovered > 0 or oldest is None or oldest < expected_date:
-            stale_markets.append({
-                "market": market,
-                "total_symbols": len(market_rows),
-                "covered_symbols": len(covered_dates),
-                "uncovered_symbols": uncovered,
-                "oldest_last_cached_date": str(oldest) if oldest is not None else None,
-                "expected_date": str(expected_date),
-            })
 
     if not stale_markets and not unresolved_symbols:
         return None

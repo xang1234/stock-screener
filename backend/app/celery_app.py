@@ -21,7 +21,6 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_ready, worker_shutting_down
 from .config import settings
-from .domain.scanning.defaults import get_default_scan_profile
 
 
 def _offset_schedule(hour: int, minute: int, offset_minutes: int) -> tuple[int, int]:
@@ -47,6 +46,7 @@ celery_app = Celery(
         'app.tasks.industry_tasks',  # Tracked IBD industry reference loading
         'app.tasks.theme_discovery_tasks',  # Theme discovery pipeline tasks
         'app.tasks.universe_tasks',  # Stock universe management tasks
+        'app.tasks.daily_market_pipeline_tasks',  # Per-market daily refresh + scan pipeline
         'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
         'app.tasks.runtime_bootstrap_tasks',  # Local-default first-run bootstrap orchestration
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
@@ -68,7 +68,6 @@ celery_app.conf.update(
 )
 
 _logger = logging.getLogger(__name__)
-_default_scan_profile = get_default_scan_profile()
 _STARTUP_STALE_HEARTBEAT_SECONDS = 30 * 60
 
 
@@ -264,6 +263,7 @@ _MARKET_SCOPED_DATA_FETCH_TASKS = (
     'app.tasks.cache_tasks.warm_top_symbols',
     'app.tasks.cache_tasks.force_refresh_stale_intraday',
     'app.tasks.cache_tasks.smart_refresh_cache',
+    'app.tasks.cache_tasks.retry_failed_price_symbols',
     'app.tasks.cache_tasks.daily_cache_warmup',
     'app.tasks.cache_tasks.auto_refresh_after_close',
     'app.tasks.fundamentals_tasks.refresh_all_fundamentals',
@@ -287,6 +287,11 @@ _MARKET_JOB_TASKS = (
     'app.tasks.group_rank_tasks.backfill_group_rankings',
     'app.tasks.group_rank_tasks.backfill_group_rankings_1year',
     'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
+    'app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline',
+    'app.tasks.daily_market_pipeline_tasks.guard_price_refresh',
+    'app.tasks.daily_market_pipeline_tasks.guard_breadth_result',
+    'app.tasks.daily_market_pipeline_tasks.guard_group_result',
+    'app.tasks.daily_market_pipeline_tasks.guard_snapshot_result',
 )
 
 # Default route = shared queue. Beat entries and .apply_async() callers override
@@ -318,31 +323,16 @@ if settings.cache_warmup_enabled:
         _qname = data_fetch_queue_for_market(_market)
         _m_lower = _market.lower()
 
-        # Daily smart cache refresh after local market close.
-        beat_schedule[f'daily-smart-refresh-{_m_lower}'] = {
-            'task': 'app.tasks.cache_tasks.smart_refresh_cache',
+        # Daily refresh pipeline after local market close.
+        beat_schedule[f'daily-market-pipeline-{_m_lower}'] = {
+            'task': 'app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline',
             'schedule': crontab(
                 hour=_warm_h,
                 minute=_warm_m,
                 day_of_week='1-5'  # Monday-Friday only
             ),
-            'options': {'queue': _qname},
-            'kwargs': {'mode': 'full', 'market': _market},
-        }
-
-        # Daily feature snapshot (close +15m).
-        _fh, _fm = _offset_schedule(_warm_h, _warm_m, 15)
-        beat_schedule[f'daily-feature-snapshot-{_m_lower}'] = {
-            'task': 'app.interfaces.tasks.feature_store_tasks.build_daily_snapshot',
-            'schedule': crontab(hour=_fh, minute=_fm, day_of_week='1-5'),
             'options': {'queue': market_jobs_queue_for_market(_market)},
-            'kwargs': {
-                'screener_names': _default_scan_profile['screeners'],
-                'criteria': _default_scan_profile['criteria'],
-                'composite_method': _default_scan_profile['composite_method'],
-                'universe_name': _default_scan_profile['universe'],
-                'market': _market,
-            },
+            'kwargs': {'market': _market},
         }
 
         # Weekly full refresh (market-local, Sunday morning).
@@ -378,27 +368,6 @@ if settings.cache_warmup_enabled:
             ),
             'schedule': crontab(hour=3, minute=0, day_of_week=0),
             'options': {'queue': _qname},
-            'kwargs': {'market': _market},
-        }
-
-    # Per-market daily breadth + industry-group rankings.
-    # Schedules follow each market's cache-warm offset, so they fire after the
-    # market's price refresh has landed — not all at US 16:30 ET.
-    for _market in _enabled_markets:
-        _warm_h, _warm_m = settings.cache_warm_schedule_for(_market)
-        _m_lower = _market.lower()
-        _bh, _bm = _offset_schedule(_warm_h, _warm_m, 5)
-        beat_schedule[f'daily-breadth-calculation-{_m_lower}'] = {
-            'task': 'app.tasks.breadth_tasks.calculate_daily_breadth_with_gapfill',
-            'schedule': crontab(hour=_bh, minute=_bm, day_of_week='1-5'),
-            'options': {'queue': market_jobs_queue_for_market(_market)},
-            'kwargs': {'market': _market},
-        }
-        _gh, _gm = _offset_schedule(_warm_h, _warm_m, 10)
-        beat_schedule[f'daily-group-ranking-calculation-{_m_lower}'] = {
-            'task': 'app.tasks.group_rank_tasks.calculate_daily_group_rankings_with_gapfill',
-            'schedule': crontab(hour=_gh, minute=_gm, day_of_week='1-5'),
-            'options': {'queue': market_jobs_queue_for_market(_market)},
             'kwargs': {'market': _market},
         }
 

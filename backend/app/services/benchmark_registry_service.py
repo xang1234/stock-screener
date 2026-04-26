@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
+from ..domain.common.benchmarks import (
+    get_primary_benchmark_symbol,
+    normalize_benchmark_market,
+    supported_benchmark_markets,
+)
+
 
 @dataclass(frozen=True)
 class BenchmarkRegistryEntry:
@@ -24,7 +30,7 @@ class BenchmarkRegistryService:
     _TABLE: Dict[str, BenchmarkRegistryEntry] = {
         "US": BenchmarkRegistryEntry(
             market="US",
-            primary_symbol="SPY",
+            primary_symbol=get_primary_benchmark_symbol("US"),
             primary_kind="etf",
             fallback_symbol="IVV",
             fallback_kind="etf",
@@ -32,7 +38,7 @@ class BenchmarkRegistryService:
         ),
         "HK": BenchmarkRegistryEntry(
             market="HK",
-            primary_symbol="^HSI",
+            primary_symbol=get_primary_benchmark_symbol("HK"),
             primary_kind="index",
             fallback_symbol="2800.HK",
             fallback_kind="etf",
@@ -40,7 +46,7 @@ class BenchmarkRegistryService:
         ),
         "IN": BenchmarkRegistryEntry(
             market="IN",
-            primary_symbol="^NSEI",
+            primary_symbol=get_primary_benchmark_symbol("IN"),
             primary_kind="index",
             fallback_symbol="NIFTYBEES.NS",
             fallback_kind="etf",
@@ -48,7 +54,7 @@ class BenchmarkRegistryService:
         ),
         "JP": BenchmarkRegistryEntry(
             market="JP",
-            primary_symbol="^N225",
+            primary_symbol=get_primary_benchmark_symbol("JP"),
             primary_kind="index",
             fallback_symbol="1306.T",
             fallback_kind="etf",
@@ -56,7 +62,7 @@ class BenchmarkRegistryService:
         ),
         "TW": BenchmarkRegistryEntry(
             market="TW",
-            primary_symbol="^TWII",
+            primary_symbol=get_primary_benchmark_symbol("TW"),
             primary_kind="index",
             fallback_symbol="0050.TW",
             fallback_kind="etf",
@@ -65,10 +71,7 @@ class BenchmarkRegistryService:
     }
 
     def normalize_market(self, market: str | None) -> str:
-        normalized = (market or "US").strip().upper()
-        if normalized not in self._TABLE:
-            raise ValueError(f"Unsupported market for benchmark registry: {market}")
-        return normalized
+        return normalize_benchmark_market(market)
 
     def get_entry(self, market: str) -> BenchmarkRegistryEntry:
         return self._TABLE[self.normalize_market(market)]
@@ -84,7 +87,7 @@ class BenchmarkRegistryService:
         return candidates
 
     def supported_markets(self) -> List[str]:
-        return sorted(self._TABLE.keys())
+        return supported_benchmark_markets()
 
     def mapping_table(self) -> Dict[str, Dict[str, str | None]]:
         table: Dict[str, Dict[str, str | None]] = {}

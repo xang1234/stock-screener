@@ -73,11 +73,20 @@ def test_last_completed_trading_day_before_close_returns_previous_session():
 
 def test_last_completed_trading_day_after_close_returns_current_session():
     service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
-    now_hkt = datetime.fromisoformat("2026-04-10T17:30:00+08:00")
+    now_hkt = datetime.fromisoformat("2026-04-10T16:30:00+08:00")
 
     expected = service.last_completed_trading_day("HK", now=now_hkt)
 
     assert expected == pd.Timestamp("2026-04-10").date()
+
+
+def test_last_completed_trading_day_before_post_close_buffer_returns_previous_session():
+    service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
+    now_hkt = datetime.fromisoformat("2026-04-10T16:29:00+08:00")
+
+    expected = service.last_completed_trading_day("HK", now=now_hkt)
+
+    assert expected == pd.Timestamp("2026-04-09").date()
 
 
 def test_is_market_open_uses_calendar_open_minute():

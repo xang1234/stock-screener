@@ -9,6 +9,7 @@ Provides background tasks for:
 All data-fetching tasks use the @serialized_data_fetch decorator
 to ensure only one task fetches external data at a time.
 """
+from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
@@ -31,6 +32,7 @@ from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import (
     get_daily_price_bundle_service,
+    get_market_calendar_service,
     get_rate_limiter,
     get_stock_universe_service,
 )
@@ -927,7 +929,7 @@ def prewarm_all_active_symbols(self):
     """
     Warm cache for all active symbols after market close.
 
-    Runs at 5:30 PM ET daily, takes ~2-3 hours for 5000 stocks.
+    Runs after the configured post-close buffer, takes ~2-3 hours for 5000 stocks.
     Next day's scans will be instant (served from cache).
 
     This is the nightly cache warming job that ensures all active
@@ -1004,6 +1006,17 @@ def _is_rate_limit_error(error_str: str) -> bool:
     return any(indicator in lower for indicator in ("rate", "429", "too many", "limit", "throttl"))
 
 
+class RateLimitExhaustedError(RuntimeError):
+    """Raised when provider rate limiting persists after all backoff attempts."""
+
+    def __init__(self, symbols: List[str], market: str | None) -> None:
+        self.symbols = list(symbols)
+        self.market = market
+        super().__init__(
+            f"rate_limit_exhausted market={market or 'shared'} symbols={len(symbols)}"
+        )
+
+
 def _fetch_with_backoff(
     bulk_fetcher,
     symbols: List[str],
@@ -1071,13 +1084,13 @@ def _fetch_with_backoff(
                 else:
                     logger.error(
                         f"Rate limit persists after {max_retries} retries. "
-                        f"Skipping batch of {len(symbols)} symbols."
+                        f"Raising tagged failure for batch of {len(symbols)} symbols."
                     )
-                    return {}
+                    raise RateLimitExhaustedError(symbols, market)
             else:
                 # Re-raise non-rate-limit errors
                 raise
-    return {}
+    raise RateLimitExhaustedError(symbols, market)
 
 
 def _classify_no_data_failure(error_message: str) -> bool:
@@ -1204,6 +1217,61 @@ def _track_symbol_failures(
             db.close()
 
 
+def _record_market_refresh_success_safely(
+    db,
+    *,
+    market: str | None,
+    trading_day,
+    success_rate: float,
+) -> None:
+    if market is None:
+        return
+    try:
+        from ..services.market_refresh_state_service import record_market_refresh_success
+
+        record_market_refresh_success(
+            db,
+            market=market,
+            trading_day=trading_day,
+            success_rate=success_rate,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to record market refresh state for %s",
+            market,
+            exc_info=True,
+        )
+
+
+def _schedule_failed_symbol_retry(
+    symbols: list[str],
+    *,
+    market: str | None,
+    attempt: int = 1,
+) -> None:
+    if not symbols or market is None or attempt > 3:
+        return
+    try:
+        from .market_queues import data_fetch_queue_for_market, normalize_market
+
+        normalized_market = normalize_market(market)
+        retry_failed_price_symbols.apply_async(
+            kwargs={
+                "symbols": list(dict.fromkeys(symbols)),
+                "market": normalized_market,
+                "attempt": attempt,
+            },
+            countdown=600,
+            queue=data_fetch_queue_for_market(normalized_market),
+        )
+    except Exception:
+        logger.warning(
+            "Failed to schedule price retry for %s failed symbols",
+            len(symbols),
+            exc_info=True,
+        )
+
+
 def _filter_active_symbols(symbols: List[str]) -> List[str]:
     """Limit stale-refresh batches to active universe symbols only."""
     if not symbols:
@@ -1231,6 +1299,90 @@ def _filter_active_symbols(symbols: List[str]) -> List[str]:
         return filtered
     finally:
         db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.cache_tasks.retry_failed_price_symbols",
+    soft_time_limit=3600,
+)
+@serialized_data_fetch("retry_failed_price_symbols")
+def retry_failed_price_symbols(
+    self,
+    symbols: list[str],
+    market: str,
+    attempt: int = 1,
+) -> dict:
+    from ..services.bulk_data_fetcher import BulkDataFetcher
+    from ..wiring.bootstrap import get_price_cache
+
+    deduped_symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols if symbol))
+    if not deduped_symbols:
+        return {
+            "status": "completed",
+            "market": market,
+            "attempt": attempt,
+            "refreshed": 0,
+            "failed": 0,
+        }
+
+    price_cache = get_price_cache()
+    bulk_fetcher = BulkDataFetcher()
+    refreshed = 0
+    failed_symbols: list[str] = []
+    failure_details: dict[str, str] = {}
+    try:
+        batch_results = _fetch_with_backoff(
+            bulk_fetcher,
+            deduped_symbols,
+            period="2y",
+            market=market,
+        )
+        batch_to_store = {}
+        for symbol, data in batch_results.items():
+            if not data.get("has_error") and data.get("price_data") is not None:
+                price_df = data["price_data"]
+                if not price_df.empty:
+                    batch_to_store[symbol] = price_df
+                    refreshed += 1
+                    continue
+            failed_symbols.append(symbol)
+            failure_details[symbol] = data.get("error", "Unknown error")
+        missing = sorted(set(deduped_symbols) - set(batch_results))
+        failed_symbols.extend(missing)
+        failure_details.update({symbol: "Missing from retry result" for symbol in missing})
+        if batch_to_store:
+            price_cache.store_batch_in_cache(batch_to_store, also_store_db=True)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Failed-symbol price retry attempt %s failed for %s",
+            attempt,
+            market,
+            exc_info=True,
+        )
+        failed_symbols = deduped_symbols
+        failure_details = {symbol: str(exc) for symbol in deduped_symbols}
+
+    successes = [symbol for symbol in deduped_symbols if symbol not in set(failed_symbols)]
+    _track_symbol_failures(
+        price_cache,
+        successes,
+        failed_symbols,
+        failure_details=failure_details,
+    )
+    if failed_symbols and attempt < 3:
+        _schedule_failed_symbol_retry(failed_symbols, market=market, attempt=attempt + 1)
+    return {
+        "status": "completed" if not failed_symbols else "partial",
+        "market": market,
+        "attempt": attempt,
+        "refreshed": refreshed,
+        "failed": len(failed_symbols),
+        "failed_symbols": failed_symbols[:20],
+        "completed_at": datetime.now().isoformat(),
+    }
 
 
 def _force_refresh_stale_intraday_impl(task, symbols: Optional[List[str]] = None) -> dict:
@@ -1582,15 +1734,28 @@ def smart_refresh_cache(
         logger.info(f"[2/3] Determining symbols to refresh (mode={mode})...")
 
         # Build universe query, optionally filtered by market.
-        _uni_q = db.query(StockUniverse.symbol).filter(StockUniverse.is_active == True)
+        _uni_q = db.query(StockUniverse.symbol, StockUniverse.market).filter(
+            StockUniverse.is_active == True
+        )
         if market is not None:
             _uni_q = _uni_q.filter(StockUniverse.market == normalize_market(market))
         _uni_q = _uni_q.order_by(StockUniverse.market_cap.desc().nullslast())
-        all_symbols = [r.symbol for r in _uni_q.all()]
+        universe_rows = _uni_q.all()
+        all_symbols = [r.symbol for r in universe_rows]
+        symbol_markets = {
+            str(r.symbol).upper(): normalize_market(
+                getattr(r, "market", None) or effective_market
+            )
+            for r in universe_rows
+        }
 
-        github_sync = get_daily_price_bundle_service().sync_from_github(
-            db,
-            market=effective_market,
+        github_sync = (
+            get_daily_price_bundle_service().sync_from_github(
+                db,
+                market=effective_market,
+            )
+            if all_symbols and market is not None and activity_lifecycle == "daily_refresh"
+            else {"status": "skipped", "reason": "empty_universe"}
         )
         if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
             used_github_seed = True
@@ -1625,6 +1790,18 @@ def smart_refresh_cache(
                     current=len(all_symbols) if all_symbols else 0,
                     total=len(all_symbols) if all_symbols else 0,
                     message=message,
+                )
+                try:
+                    trading_day = datetime.fromisoformat(
+                        str(github_sync.get("as_of_date"))
+                    ).date()
+                except (TypeError, ValueError):
+                    trading_day = get_market_calendar_service().last_completed_trading_day(effective_market)
+                _record_market_refresh_success_safely(
+                    db,
+                    market=effective_market,
+                    trading_day=trading_day,
+                    success_rate=1.0,
                 )
                 return {
                     "status": "completed",
@@ -1689,9 +1866,17 @@ def smart_refresh_cache(
             }
 
         total = len(symbols)
+        symbol_market_totals = Counter(
+            symbol_markets.get(str(symbol).upper(), effective_market) for symbol in symbols
+        )
+        refreshed_by_market: Counter[str] = Counter()
+        failed_by_market: Counter[str] = Counter()
         batch_size = 100
         total_batches = (total + batch_size - 1) // batch_size if total > 0 else 0
         bulk_fetcher = BulkDataFetcher()
+
+        def _market_for_symbol(symbol: str) -> str:
+            return symbol_markets.get(str(symbol).upper(), effective_market)
 
         # Write initial heartbeat before batch loop to prevent false "stuck" detection.
         # Without this, the health endpoint sees lock held + no heartbeat = stuck.
@@ -1734,15 +1919,18 @@ def smart_refresh_cache(
                         if not price_df.empty:
                             batch_to_store[symbol] = price_df
                             refreshed += 1
+                            refreshed_by_market[_market_for_symbol(symbol)] += 1
                             batch_successes.append(symbol)
                         else:
                             failed += 1
                             failed_symbols.append(symbol)
+                            failed_by_market[_market_for_symbol(symbol)] += 1
                             batch_failures.append(symbol)
                             failure_details[symbol] = "Empty data returned"
                     else:
                         failed += 1
                         failed_symbols.append(symbol)
+                        failed_by_market[_market_for_symbol(symbol)] += 1
                         batch_failures.append(symbol)
                         failure_details[symbol] = data.get('error', 'Unknown error')
 
@@ -1756,6 +1944,7 @@ def smart_refresh_cache(
                 logger.error(f"Batch {batch_num} error: {e}")
                 failed += len(batch_symbols)
                 failed_symbols.extend(batch_symbols)
+                failed_by_market.update(_market_for_symbol(symbol) for symbol in batch_symbols)
                 batch_failures.extend(batch_symbols)
                 failure_details.update({symbol: str(e) for symbol in batch_symbols})
 
@@ -1821,6 +2010,24 @@ def smart_refresh_cache(
         status = "completed" if success_rate >= 0.95 else "partial"
         price_cache.save_warmup_metadata(status, refreshed, total, market=market)
         price_cache.complete_warmup_heartbeat("completed", market=market)
+        for refresh_market, market_total in symbol_market_totals.items():
+            market_success_rate = (
+                refreshed_by_market[refresh_market] / market_total if market_total > 0 else 0
+            )
+            if market_success_rate < 0.95:
+                continue
+            _record_market_refresh_success_safely(
+                db,
+                market=refresh_market,
+                trading_day=get_market_calendar_service().last_completed_trading_day(refresh_market),
+                success_rate=market_success_rate,
+            )
+        if failed_symbols:
+            failed_symbols_by_market: dict[str, list[str]] = {}
+            for symbol in failed_symbols:
+                failed_symbols_by_market.setdefault(_market_for_symbol(symbol), []).append(symbol)
+            for retry_market, retry_symbols in failed_symbols_by_market.items():
+                _schedule_failed_symbol_retry(retry_symbols, market=retry_market, attempt=1)
 
         logger.info("=" * 80)
         logger.info(f"✓ Smart refresh completed ({mode} mode):")

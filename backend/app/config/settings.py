@@ -283,17 +283,16 @@ class Settings(BaseSettings):
     cache_weekly_hour: int = 2  # 2 AM ET
 
     # Per-market cache warmup schedule (all in the celery_timezone, default ET).
-    # HK close 16:00 HKT -> 04:00 ET; JP close 15:00 JST -> 02:00 ET;
-    # TW close 13:30 CST -> 00:30 ET. +30-60min buffer after close.
-    cache_warm_hour_us: int = 17
+    # Defaults are at or after close + 30m in the market calendar service.
+    cache_warm_hour_us: int = 16
     cache_warm_minute_us: int = 30
     cache_warm_hour_hk: int = 4
     cache_warm_minute_hk: int = 30
-    cache_warm_hour_in: int = 7
+    cache_warm_hour_in: int = 6
     cache_warm_minute_in: int = 30
     cache_warm_hour_jp: int = 2
     cache_warm_minute_jp: int = 30
-    cache_warm_hour_tw: int = 1
+    cache_warm_hour_tw: int = 2
     cache_warm_minute_tw: int = 0
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
