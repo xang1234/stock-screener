@@ -81,6 +81,7 @@ def _build_market_bootstrap_signatures(market: str) -> list:
             universe_name=_bootstrap_universe_name(market_code),
             publish_pointer_key=f"latest_published_market:{market_code}",
             activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
         ).set(queue=market_jobs_queue_for_market(market_code)),
     ])
     return signatures

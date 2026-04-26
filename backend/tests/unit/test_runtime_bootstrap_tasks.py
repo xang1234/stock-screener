@@ -68,6 +68,7 @@ def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     assert snapshot.kwargs["market"] == "HK"
     assert snapshot.kwargs["universe_name"] == "market:HK"
     assert snapshot.kwargs["publish_pointer_key"] == "latest_published_market:HK"
+    assert snapshot.kwargs["bootstrap_cache_only_if_covered"] is True
     assert [signature.kwargs.get("activity_lifecycle") for signature in signatures] == ["bootstrap"] * 6
 
 

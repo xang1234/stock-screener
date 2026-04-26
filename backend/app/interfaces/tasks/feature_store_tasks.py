@@ -645,6 +645,9 @@ def build_daily_snapshot(
     publish_pointer_key: str | None = None,
     ignore_runtime_market_gate: bool = False,
     activity_lifecycle: str | None = None,
+    bootstrap_cache_only_if_covered: bool = False,
+    bootstrap_coverage_threshold: float | None = None,
+    bootstrap_coverage_report: dict | None = None,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -667,6 +670,9 @@ def build_daily_snapshot(
     from app.services.runtime_preferences_service import is_market_enabled_now
     from app.services.market_calendar_service import MarketCalendarService
     from app.services.universe_resolver import normalize_universe_definition
+    from app.services.bootstrap_cache_coverage import (
+        BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
+    )
     from app.tasks.market_queues import log_extra, normalize_market
     from app.utils.parallelism import bounded_symbol_workers
     from app.utils.symbol_support import split_supported_price_symbols
@@ -811,6 +817,8 @@ def build_daily_snapshot(
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
     uow = SqlUnitOfWork(SessionLocal)
+    bootstrap_gate_requested = bool(bootstrap_cache_only_if_covered)
+    static_worker_config_requested = static_daily_mode or bootstrap_gate_requested
     cmd = BuildDailySnapshotCommand(
         as_of_date=as_of,
         screener_names=screeners,
@@ -823,13 +831,22 @@ def build_daily_snapshot(
         batch_only_fundamentals=static_daily_mode,
         require_bulk_prefetch=static_daily_mode,
         static_chunk_size=(
-            settings.static_snapshot_chunk_size if static_daily_mode else None
+            settings.static_snapshot_chunk_size
+            if static_worker_config_requested
+            else None
         ),
         static_parallel_workers=(
             bounded_symbol_workers(settings.static_snapshot_parallel_workers)
-            if static_daily_mode
+            if static_worker_config_requested
             else 1
         ),
+        bootstrap_cache_only_if_covered=bootstrap_gate_requested,
+        bootstrap_coverage_threshold=(
+            BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE
+            if bootstrap_coverage_threshold is None
+            else bootstrap_coverage_threshold
+        ),
+        bootstrap_coverage_report=bootstrap_coverage_report,
         publish_pointer_key=publish_pointer_key,
         market=effective_market,
     )

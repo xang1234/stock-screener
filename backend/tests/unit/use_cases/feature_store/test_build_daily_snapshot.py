@@ -665,6 +665,138 @@ class TestBulkDataPreparation:
         assert result.status == RunStatus.PUBLISHED.value
         assert provider.bulk_calls == [["AAPL", "MSFT", "GOOGL", "NVDA"]]
 
+    @_PATCH_TRADING_DAY
+    def test_bootstrap_gate_pass_records_coverage_and_skips_live_fallback_for_missing_bulk_symbol(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT", "BAD-WT"])
+
+        class PartialProvider(FakeStockDataProvider):
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
+            ) -> dict[str, object]:
+                assert batch_only_prices is True
+                assert batch_only_fundamentals is True
+                return {
+                    symbol: self._make_stock_data(symbol)
+                    for symbol in symbols
+                    if symbol == "AAPL"
+                }
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol: str, **_kwargs) -> dict:
+                self.calls.append(symbol)
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=PartialProvider(),
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_report={
+                    "eligible": True,
+                    "price_coverage_date": "2026-02-17",
+                    "fundamentals_coverage_date": "2026-02-14",
+                    "price_coverage_ratio": 1.0,
+                    "fundamentals_coverage_ratio": 1.0,
+                },
+                static_chunk_size=10,
+                static_parallel_workers=2,
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        run = uow.feature_runs.get_run(result.run_id)
+        gate = run.config["bootstrap_cache_only_gate"]
+        assert gate["mode"] == "cache_only"
+        assert gate["unsupported_skipped_count"] == 1
+        assert result.total_symbols == 2
+        assert result.skipped_symbols == 1
+        assert result.failed_symbols == 1
+        assert scanner.calls == ["AAPL"]
+        assert uow.feature_store._universe[result.run_id] == ["AAPL", "MSFT"]
+
+    @_PATCH_TRADING_DAY
+    def test_bootstrap_gate_fail_records_report_and_preserves_live_fallback(self, _mock_td):
+        uow, _ = _make_uow(symbols=["AAPL", "MSFT"])
+
+        class EmptyProvider(FakeStockDataProvider):
+            def prepare_data_bulk(
+                self,
+                symbols: list[str],
+                requirements: object,
+                *,
+                allow_partial: bool = True,
+                batch_only_prices: bool = False,
+                batch_only_fundamentals: bool = False,
+            ) -> dict[str, object]:
+                assert batch_only_prices is False
+                assert batch_only_fundamentals is False
+                return {}
+
+        class BulkAwareScanner:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, object | None]] = []
+
+            def get_merged_requirements(self, screener_names, criteria=None):
+                return {"needs": "price+fundamentals"}
+
+            def scan_stock_multi(self, symbol: str, **kwargs) -> dict:
+                self.calls.append((symbol, kwargs.get("pre_fetched_data")))
+                return {
+                    "composite_score": 75.0,
+                    "rating": "Buy",
+                    "passes_template": True,
+                    "current_price": 100.0,
+                }
+
+        scanner = BulkAwareScanner()
+        use_case = BuildDailyFeatureSnapshotUseCase(
+            scanner=scanner,
+            data_provider=EmptyProvider(),
+        )
+
+        result = use_case.execute(
+            uow,
+            _make_cmd(
+                bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_report={
+                    "eligible": False,
+                    "price_coverage_ratio": 0.9,
+                    "fundamentals_coverage_ratio": 1.0,
+                },
+            ),
+            FakeProgressSink(),
+            FakeCancellationToken(),
+        )
+
+        run = uow.feature_runs.get_run(result.run_id)
+        assert run.config["bootstrap_cache_only_gate"]["mode"] == "fallback_existing"
+        assert result.status == RunStatus.PUBLISHED.value
+        assert result.failed_symbols == 0
+        assert scanner.calls == [("AAPL", None), ("MSFT", None)]
+
 
 # ---------------------------------------------------------------------------
 # Non-trading day

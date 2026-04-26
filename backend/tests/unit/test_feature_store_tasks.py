@@ -619,6 +619,103 @@ def test_build_daily_snapshot_static_daily_mode_uses_null_progress_sink():
     mock_null_progress.assert_called_once_with()
 
 
+def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_progress():
+    fake_use_case = _FakeUseCase()
+    celery_progress = object()
+
+    with patch(
+        "app.utils.parallelism.os.cpu_count",
+        return_value=4,
+    ), patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=celery_progress,
+    ) as mock_celery_progress, patch(
+        "app.domain.scanning.ports.NullProgressSink",
+        side_effect=AssertionError("bootstrap gate must keep normal progress"),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        result = _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={
+                "eligible": True,
+                "price_coverage_ratio": 1.0,
+                "fundamentals_coverage_ratio": 1.0,
+            },
+        )
+
+    assert result["status"] == "published"
+    assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
+    assert fake_use_case.received_cmd.bootstrap_coverage_threshold == 0.95
+    assert fake_use_case.received_cmd.bootstrap_coverage_report["eligible"] is True
+    assert fake_use_case.received_cmd.static_chunk_size == settings.static_snapshot_chunk_size
+    assert fake_use_case.received_cmd.static_parallel_workers == 2
+    assert fake_use_case.received_cmd.batch_only_prices is False
+    assert fake_use_case.received_cmd.require_bulk_prefetch is False
+    mock_celery_progress.assert_called_once()
+
+
+def test_build_daily_snapshot_bootstrap_gate_fail_preserves_non_static_command():
+    fake_use_case = _FakeUseCase()
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
+        return_value="auto-scan-001",
+    ):
+        _TASK_BODY(
+            _FakeTask(),
+            as_of_date_str="2026-03-16",
+            activity_lifecycle="bootstrap",
+            bootstrap_cache_only_if_covered=True,
+            bootstrap_coverage_report={
+                "eligible": False,
+                "price_coverage_ratio": 0.9,
+                "fundamentals_coverage_ratio": 1.0,
+            },
+        )
+
+    assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
+    assert fake_use_case.received_cmd.batch_only_prices is False
+    assert fake_use_case.received_cmd.batch_only_fundamentals is False
+    assert fake_use_case.received_cmd.require_bulk_prefetch is False
+    assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is False
+
+
 def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
