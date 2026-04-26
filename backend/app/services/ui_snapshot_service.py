@@ -225,9 +225,14 @@ class UISnapshotService:
 
     def publish_all(self) -> dict[str, dict[str, Any] | None]:
         """Rebuild all bootstrap variants."""
+        breadth_snapshots = {
+            market: self.publish_breadth_bootstrap(market=market).to_dict()
+            for market in SUPPORTED_MARKETS
+        }
         published = {
             "scan_latest": self.publish_scan_bootstrap().to_dict(),
-            "breadth": self.publish_breadth_bootstrap().to_dict(),
+            "breadth": breadth_snapshots["US"],
+            **{f"breadth_{market.lower()}": snapshot for market, snapshot in breadth_snapshots.items()},
         }
         groups_snapshot = self.publish_groups_bootstrap()
         published["groups"] = groups_snapshot.to_dict() if groups_snapshot is not None else None

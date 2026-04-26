@@ -237,7 +237,12 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
             return fake_snapshot
 
     monkeypatch.setattr(service, "publish_scan_bootstrap", lambda scan_id=None: _FakeSnapshot())
-    monkeypatch.setattr(service, "publish_breadth_bootstrap", lambda: _FakeSnapshot())
+    published_breadth_markets = []
+    monkeypatch.setattr(
+        service,
+        "publish_breadth_bootstrap",
+        lambda market="US": published_breadth_markets.append(market) or _FakeSnapshot(),
+    )
     monkeypatch.setattr(service, "publish_groups_bootstrap", lambda: None)
     monkeypatch.setattr(service, "publish_themes_bootstrap", lambda pipeline, theme_view: _FakeSnapshot())
     monkeypatch.setattr("app.services.ui_snapshot_service.settings.feature_themes", False)
@@ -246,6 +251,10 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
 
     assert published["scan_latest"] == fake_snapshot
     assert published["breadth"] == fake_snapshot
+    assert published["breadth_us"] == fake_snapshot
+    assert published["breadth_hk"] == fake_snapshot
+    assert published["breadth_in"] == fake_snapshot
+    assert published_breadth_markets == ["US", "HK", "IN", "JP", "TW"]
     assert published["groups"] is None
 
 

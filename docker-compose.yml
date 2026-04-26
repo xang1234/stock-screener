@@ -164,7 +164,7 @@ services:
 
   celery-datafetch:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_jp,data_fetch_tw -n datafetch-global@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_tw -n datafetch-global@%h
 
   celery-marketjobs-us:
     <<: *worker-common
@@ -173,6 +173,10 @@ services:
   celery-marketjobs-hk:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_hk -n marketjobs-hk@%h
+
+  celery-marketjobs-in:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_in -n marketjobs-in@%h
 
   celery-marketjobs-jp:
     <<: *worker-common
@@ -193,6 +197,10 @@ services:
   celery-userscans-hk:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_hk -n userscans-hk@%h
+
+  celery-userscans-in:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_in -n userscans-in@%h
 
   celery-userscans-jp:
     <<: *worker-common

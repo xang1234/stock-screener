@@ -113,4 +113,28 @@ describe('BreadthPage', () => {
       );
     });
   });
+
+  it('keeps the market selector available when the selected market has no breadth rows', async () => {
+    const user = userEvent.setup();
+    breadthApi.getCurrentBreadth.mockImplementation((market = 'US') => (
+      market === 'HK'
+        ? Promise.reject(new Error('No breadth data available for market HK.'))
+        : Promise.resolve(breadthRow(market))
+    ));
+
+    renderWithProviders(<BreadthPage />);
+
+    expect(
+      await screen.findByText('Error loading HK breadth data: No breadth data available for market HK.')
+    ).toBeInTheDocument();
+
+    const marketSelect = screen.getByRole('combobox', { name: /market/i });
+    fireEvent.mouseDown(marketSelect);
+    await user.click(await screen.findByRole('option', { name: /United States/i }));
+
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('US');
+    });
+    expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
+  });
 });

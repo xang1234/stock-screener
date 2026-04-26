@@ -267,6 +267,26 @@ function BreadthPage() {
     setSelectedTab(newValue);
   };
 
+  const marketSelector = (
+    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+      <FormControl size="small" sx={{ minWidth: 180 }}>
+        <InputLabel id="breadth-market-label">Market</InputLabel>
+        <Select
+          labelId="breadth-market-label"
+          value={selectedMarket}
+          label="Market"
+          onChange={(event) => setSelectedMarket(event.target.value)}
+        >
+          {marketOptions.map((market) => (
+            <MenuItem key={market} value={market}>
+              {MARKET_LABELS[market] || market}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+    </Box>
+  );
+
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -279,9 +299,10 @@ function BreadthPage() {
 
   if (errorCurrent) {
     return (
-      <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+      <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
+        {marketSelector}
         <Alert severity="error">
-          Error loading breadth data: {errorCurrent.message}
+          Error loading {selectedMarket} breadth data: {errorCurrent.message}
         </Alert>
       </Container>
     );
@@ -295,23 +316,7 @@ function BreadthPage() {
         </Box>
       ) : (
         <>
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-            <FormControl size="small" sx={{ minWidth: 180 }}>
-              <InputLabel id="breadth-market-label">Market</InputLabel>
-              <Select
-                labelId="breadth-market-label"
-                value={selectedMarket}
-                label="Market"
-                onChange={(event) => setSelectedMarket(event.target.value)}
-              >
-                {marketOptions.map((market) => (
-                  <MenuItem key={market} value={market}>
-                    {MARKET_LABELS[market] || market}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
+          {marketSelector}
 
           {/* Top Section - Side by Side Layout */}
           <Grid container spacing={2} sx={{ mb: 2 }}>
