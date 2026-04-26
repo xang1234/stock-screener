@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -92,12 +92,12 @@ const MARKET_LABELS = {
   TW: 'Taiwan',
 };
 
-const MARKET_BENCHMARK_SYMBOLS = {
+const MARKET_LIVE_BENCHMARK_SYMBOLS = {
   US: 'SPY',
-  HK: '^HSI',
-  IN: '^NSEI',
-  JP: '^N225',
-  TW: '^TWII',
+  HK: '2800.HK',
+  IN: 'NIFTYBEES.NS',
+  JP: '1306.T',
+  TW: '0050.TW',
 };
 
 function normalizeMarket(market) {
@@ -118,6 +118,8 @@ function BreadthPage() {
   const [chartTimeRange, setChartTimeRange] = useState('1M');
   const [bootstrapSettled, setBootstrapSettled] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState(() => normalizeMarket(primaryMarket));
+  const userSelectedMarketRef = useRef(false);
+  const previousPrimaryMarketRef = useRef(normalizeMarket(primaryMarket));
   const marketOptions = useMemo(() => {
     const enabled = (enabledMarkets || [])
       .map(normalizeMarket)
@@ -133,13 +135,28 @@ function BreadthPage() {
     if (marketOptions.length === 0) {
       return;
     }
-    if (!marketOptions.includes(selectedMarket)) {
-      const normalizedPrimary = normalizeMarket(primaryMarket);
-      setSelectedMarket(
-        marketOptions.includes(normalizedPrimary) ? normalizedPrimary : marketOptions[0]
-      );
-    }
-  }, [marketOptions, primaryMarket, selectedMarket]);
+    const normalizedPrimary = normalizeMarket(primaryMarket);
+    const fallbackMarket = marketOptions.includes(normalizedPrimary)
+      ? normalizedPrimary
+      : marketOptions[0];
+    const primaryChanged = previousPrimaryMarketRef.current !== normalizedPrimary;
+
+    setSelectedMarket((currentMarket) => {
+      if (!marketOptions.includes(currentMarket)) {
+        userSelectedMarketRef.current = false;
+        return fallbackMarket;
+      }
+      if (
+        primaryChanged
+        && !userSelectedMarketRef.current
+        && currentMarket !== fallbackMarket
+      ) {
+        return fallbackMarket;
+      }
+      return currentMarket;
+    });
+    previousPrimaryMarketRef.current = normalizedPrimary;
+  }, [marketOptions, primaryMarket]);
   useEffect(() => {
     setBootstrapSettled(false);
   }, [selectedMarket]);
@@ -153,7 +170,7 @@ function BreadthPage() {
   const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const spyPeriodMap = { '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y' };
   const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
-  const benchmarkSymbol = MARKET_BENCHMARK_SYMBOLS[selectedMarket] || null;
+  const benchmarkSymbol = MARKET_LIVE_BENCHMARK_SYMBOLS[selectedMarket] || null;
 
   const breadthBootstrapQuery = useQuery({
     queryKey: ['breadthBootstrap', selectedMarket],
@@ -188,13 +205,17 @@ function BreadthPage() {
         ['breadth', 'chart', selectedMarket, defaultChartDateRange.startDate, defaultChartDateRange.endDate],
         payload.chart_data ?? []
       );
-      queryClient.setQueryData(
-        ['benchmark', 'history', selectedMarket, '1mo'],
-        payload.benchmark_overlay ?? payload.spy_overlay ?? []
-      );
+      const snapshotBenchmarkSymbol = payload.benchmark_symbol || benchmarkSymbol;
+      if (snapshotBenchmarkSymbol) {
+        queryClient.setQueryData(
+          ['benchmark', 'history', selectedMarket, snapshotBenchmarkSymbol, '1mo'],
+          payload.benchmark_overlay ?? payload.spy_overlay ?? []
+        );
+      }
     }
     setBootstrapSettled(true);
   }, [
+    benchmarkSymbol,
     breadthBootstrapQuery.data,
     breadthBootstrapQuery.isError,
     breadthBootstrapQuery.isSuccess,
@@ -250,13 +271,11 @@ function BreadthPage() {
     staleTime: 60_000,
   });
 
-  // Fetch SPY historical data for overlay
+  // Fetch optional benchmark history for the overlay
   const {
     data: benchmarkData,
-    isLoading: isLoadingSpy,
-    error: errorSpy,
   } = useQuery({
-    queryKey: ['benchmark', 'history', selectedMarket, spyPeriod],
+    queryKey: ['benchmark', 'history', selectedMarket, benchmarkSymbol, spyPeriod],
     queryFn: () => getPriceHistory(benchmarkSymbol, spyPeriod),
     enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
@@ -274,7 +293,10 @@ function BreadthPage() {
           labelId="breadth-market-label"
           value={selectedMarket}
           label="Market"
-          onChange={(event) => setSelectedMarket(event.target.value)}
+          onChange={(event) => {
+            userSelectedMarketRef.current = true;
+            setSelectedMarket(event.target.value);
+          }}
         >
           {marketOptions.map((market) => (
             <MenuItem key={market} value={market}>
@@ -325,8 +347,8 @@ function BreadthPage() {
                 breadthData={chartBreadthData}
                 spyData={benchmarkData || []}
                 benchmarkLabel={benchmarkSymbol || 'Benchmark'}
-                isLoading={isLoadingChartBreadth || (Boolean(benchmarkSymbol) && isLoadingSpy)}
-                error={errorChartBreadth || errorSpy}
+                isLoading={isLoadingChartBreadth}
+                error={errorChartBreadth}
                 timeRange={chartTimeRange}
                 onTimeRangeChange={setChartTimeRange}
                 fillContainer

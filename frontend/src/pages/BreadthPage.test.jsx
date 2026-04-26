@@ -20,8 +20,8 @@ vi.mock('../contexts/RuntimeContext', () => ({
 }));
 
 vi.mock('../components/Charts/BreadthChart', () => ({
-  default: ({ breadthData, benchmarkLabel }) => (
-    <div data-testid="breadth-chart">
+  default: ({ breadthData, benchmarkLabel, error }) => (
+    <div data-testid="breadth-chart" data-error={error?.message || ''}>
       {benchmarkLabel}:{breadthData?.length ?? 0}
     </div>
   ),
@@ -91,8 +91,39 @@ describe('BreadthPage', () => {
     await waitFor(() => {
       expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
       expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('HK');
-      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('^HSI', '1mo');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('2800.HK', '1mo');
     });
+  });
+
+  it('resyncs the default market when runtime primary market data loads late', async () => {
+    runtimeState.primaryMarket = 'US';
+    runtimeState.enabledMarkets = ['US'];
+
+    const { rerender } = renderWithProviders(<BreadthPage />);
+
+    expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('US');
+    });
+
+    runtimeState.primaryMarket = 'HK';
+    runtimeState.enabledMarkets = ['US', 'HK'];
+    rerender(<BreadthPage />);
+
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('2800.HK', '1mo');
+    });
+  });
+
+  it('renders breadth data when the optional benchmark overlay request fails', async () => {
+    stocksApi.getPriceHistory.mockRejectedValue(new Error('benchmark unavailable'));
+
+    renderWithProviders(<BreadthPage />);
+
+    const chart = await screen.findByTestId('breadth-chart');
+    expect(chart).toHaveTextContent('2800.HK:1');
+    expect(chart).toHaveAttribute('data-error', '');
   });
 
   it('refetches breadth data when the selected market changes', async () => {
