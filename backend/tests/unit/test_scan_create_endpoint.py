@@ -687,6 +687,24 @@ async def test_refresh_scan_cache_rejects_invalid_market(client, monkeypatch):
     apply_async.assert_not_called()
 
 
+@pytest.mark.parametrize("market", ["", "  ", "SHARED", "shared"])
+@pytest.mark.asyncio
+async def test_refresh_scan_cache_rejects_non_explicit_market_scope(client, monkeypatch, market):
+    from app.api.v1 import cache as cache_module
+
+    apply_async = MagicMock()
+    monkeypatch.setattr(cache_module.smart_refresh_cache, "apply_async", apply_async)
+
+    response = await client.post(
+        "/api/v1/scans/refresh-cache",
+        json={"market": market, "mode": "full"},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported market" in response.json()["detail"]
+    apply_async.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_refresh_scan_cache_only_blocks_same_market_active_refresh(client, monkeypatch):
     from app.api.v1 import cache as cache_module

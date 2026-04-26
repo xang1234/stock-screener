@@ -147,6 +147,13 @@ function BreadthPage() {
         return fallbackMarket;
       }
       if (
+        !userSelectedMarketRef.current
+        && marketOptions.includes(normalizedPrimary)
+        && currentMarket !== normalizedPrimary
+      ) {
+        return normalizedPrimary;
+      }
+      if (
         primaryChanged
         && !userSelectedMarketRef.current
         && currentMarket !== fallbackMarket
@@ -205,10 +212,9 @@ function BreadthPage() {
         ['breadth', 'chart', selectedMarket, defaultChartDateRange.startDate, defaultChartDateRange.endDate],
         payload.chart_data ?? []
       );
-      const snapshotBenchmarkSymbol = payload.benchmark_symbol || benchmarkSymbol;
-      if (snapshotBenchmarkSymbol) {
+      if (benchmarkSymbol) {
         queryClient.setQueryData(
-          ['benchmark', 'history', selectedMarket, snapshotBenchmarkSymbol, '1mo'],
+          ['benchmark', 'history', selectedMarket, benchmarkSymbol, '1mo'],
           payload.benchmark_overlay ?? payload.spy_overlay ?? []
         );
       }

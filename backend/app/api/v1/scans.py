@@ -29,6 +29,7 @@ from ...schemas.universe import IndexName
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...database import SessionLocal
 from ...services.market_activity_service import get_runtime_activity_status
+from ...tasks.market_queues import SUPPORTED_MARKETS
 from ...wiring.bootstrap import (
     get_uow,
     get_create_scan_use_case,
@@ -63,6 +64,18 @@ class ScanCacheRefreshRequest(BaseModel):
 
     market: str
     mode: Literal["auto", "full"] = "full"
+
+
+def _normalize_scan_refresh_market(market: str) -> str:
+    """Require an explicit market partition for scan recovery refreshes."""
+    normalized = str(market or "").strip().upper()
+    if normalized not in SUPPORTED_MARKETS:
+        supported = ", ".join(SUPPORTED_MARKETS)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+        )
+    return normalized
 
 
 def _get_market_refresh_conflict_detail(market: str | None) -> dict[str, object] | None:
@@ -233,7 +246,8 @@ async def refresh_scan_cache(request: ScanCacheRefreshRequest):
     from .cache import _queue_manual_smart_refresh
 
     try:
-        return _queue_manual_smart_refresh(mode=request.mode, market=request.market)
+        market = _normalize_scan_refresh_market(request.market)
+        return _queue_manual_smart_refresh(mode=request.mode, market=market)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

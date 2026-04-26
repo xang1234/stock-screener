@@ -20,9 +20,9 @@ vi.mock('../contexts/RuntimeContext', () => ({
 }));
 
 vi.mock('../components/Charts/BreadthChart', () => ({
-  default: ({ breadthData, benchmarkLabel, error }) => (
+  default: ({ breadthData, benchmarkLabel, spyData, error }) => (
     <div data-testid="breadth-chart" data-error={error?.message || ''}>
-      {benchmarkLabel}:{breadthData?.length ?? 0}
+      {benchmarkLabel}:{breadthData?.length ?? 0}:{spyData?.length ?? 0}
     </div>
   ),
 }));
@@ -114,6 +114,50 @@ describe('BreadthPage', () => {
       expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
       expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('2800.HK', '1mo');
     });
+  });
+
+  it('resyncs to the runtime primary market when market options load late', async () => {
+    runtimeState.primaryMarket = 'HK';
+    runtimeState.enabledMarkets = ['US'];
+
+    const { rerender } = renderWithProviders(<BreadthPage />);
+
+    expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('US');
+    });
+
+    runtimeState.enabledMarkets = ['US', 'HK'];
+    rerender(<BreadthPage />);
+
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('2800.HK', '1mo');
+    });
+  });
+
+  it('seeds bootstrap benchmark overlay under the live benchmark query key', async () => {
+    runtimeState.uiSnapshots = { breadth: true };
+    breadthApi.getBreadthBootstrap.mockResolvedValue({
+      is_stale: false,
+      payload: {
+        current: breadthRow('HK'),
+        history_90d: [breadthRow('HK')],
+        summary: { market: 'HK', total_records: 1 },
+        chart_range: '1M',
+        chart_data: [breadthRow('HK')],
+        benchmark_symbol: '^HSI',
+        benchmark_overlay: [{ date: '2026-04-24', close: 18400 }],
+      },
+    });
+
+    renderWithProviders(<BreadthPage />);
+
+    const chart = await screen.findByTestId('breadth-chart');
+    await waitFor(() => {
+      expect(chart).toHaveTextContent('2800.HK:1:1');
+    });
+    expect(stocksApi.getPriceHistory).not.toHaveBeenCalledWith('^HSI', '1mo');
   });
 
   it('renders breadth data when the optional benchmark overlay request fails', async () => {
