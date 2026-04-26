@@ -13,18 +13,12 @@ def test_default_scan_profile_remains_backward_compatible() -> None:
 
 
 def test_market_default_scan_profiles_scope_universe_and_benchmark() -> None:
-    expected_benchmarks = {
-        "US": "SPY",
-        "HK": "^HSI",
-        "IN": "^NSEI",
-        "JP": "^N225",
-        "TW": "^TWII",
-    }
+    from app.services.benchmark_registry_service import benchmark_registry
 
-    for market, benchmark_symbol in expected_benchmarks.items():
+    for market in benchmark_registry.supported_markets():
+        benchmark_symbol = benchmark_registry.get_primary_symbol(market)
         profile = get_default_scan_profile(market)
 
         assert profile["universe"] == f"market:{market}"
         assert profile["benchmark_symbol"] == benchmark_symbol
         assert profile["criteria"]["benchmark_symbol"] == benchmark_symbol
-

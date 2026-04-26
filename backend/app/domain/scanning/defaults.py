@@ -5,15 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from app.domain.common.benchmarks import get_primary_benchmark_symbol, supported_benchmark_markets
 
 DEFAULT_SCAN_UNIVERSE = "all"
-DEFAULT_SCAN_BENCHMARKS_BY_MARKET = {
-    "US": "SPY",
-    "HK": "^HSI",
-    "IN": "^NSEI",
-    "JP": "^N225",
-    "TW": "^TWII",
-}
 DEFAULT_SCAN_SCREENERS = [
     "minervini",
     "canslim",
@@ -58,9 +52,9 @@ def get_default_scan_profile(market: str | None = None) -> dict[str, Any]:
 
     normalized_market = str(market or "US").strip().upper()
     try:
-        benchmark_symbol = DEFAULT_SCAN_BENCHMARKS_BY_MARKET[normalized_market]
-    except KeyError as exc:
-        supported = ", ".join(sorted(DEFAULT_SCAN_BENCHMARKS_BY_MARKET))
+        benchmark_symbol = get_primary_benchmark_symbol(normalized_market)
+    except ValueError as exc:
+        supported = ", ".join(supported_benchmark_markets())
         raise ValueError(f"Unsupported market for default scan profile: {market}. Supported: {supported}") from exc
     profile["universe"] = f"market:{normalized_market}"
     profile["benchmark_symbol"] = benchmark_symbol

@@ -21,7 +21,6 @@ STAGE_SEQUENCE = (
     "fundamentals",
     "breadth",
     "groups",
-    "snapshot",
     "scan",
 )
 
@@ -109,11 +108,29 @@ def _save_market_activity(
             same_owner = same_task and same_stage
 
             if existing_status == "running":
-                if payload_status == "queued" or not same_owner:
+                if payload_status == "queued" or (
+                    payload_status != "failed" and not same_owner
+                ):
                     return existing_payload
-            elif existing_status in {"completed", "failed"}:
+                if payload_status == "failed" and not same_owner:
+                    return existing_payload
+            elif existing_status == "completed":
+                if payload_status == "failed":
+                    pass
+                else:
+                    incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
+                    if not incoming_new_cycle:
+                        return existing_payload
+            elif existing_status == "failed":
                 incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
-                if not incoming_new_cycle:
+                if incoming_new_cycle:
+                    existing_stage_index = _stage_index(existing_payload.get("stage_key"))
+                    payload_stage_index = _stage_index(payload.get("stage_key"))
+                    lifecycle_changed = existing_payload.get("lifecycle") != payload.get("lifecycle")
+                    incoming_new_cycle = lifecycle_changed or payload_stage_index <= existing_stage_index
+                if payload_status == "failed" and same_owner:
+                    pass
+                elif not incoming_new_cycle:
                     return existing_payload
     encoded = json.dumps(payload)
     if setting is None:
@@ -153,6 +170,12 @@ def _progress_mode(
     if _resolve_progress_percent(percent, current, total) is not None or status in {"completed", "idle"}:
         return "determinate"
     return "indeterminate"
+
+
+def _stage_index(stage_key: str | None) -> int:
+    if stage_key in STAGE_SEQUENCE:
+        return STAGE_SEQUENCE.index(stage_key)
+    return len(STAGE_SEQUENCE)
 
 
 def _activity_payload(
@@ -365,6 +388,35 @@ def mark_market_activity_failed(
             message=message,
         ),
         preserve_existing_statuses={"running", "completed", "failed"},
+    )
+
+
+def mark_current_market_activity_failed(
+    db: Session,
+    *,
+    market: str,
+    lifecycle: str | None = None,
+    task_name: str | None = None,
+    task_id: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    existing = _load_market_activity(db, market)
+    stage_key = "scan"
+    resolved_task_name = task_name
+    resolved_task_id = task_id
+    if isinstance(existing, dict) and existing.get("status") in {"queued", "running"}:
+        stage_key = existing.get("stage_key") or stage_key
+        lifecycle = lifecycle or existing.get("lifecycle")
+        resolved_task_name = resolved_task_name or existing.get("task_name")
+        resolved_task_id = resolved_task_id or existing.get("task_id")
+    return mark_market_activity_failed(
+        db,
+        market=market,
+        stage_key=stage_key,
+        lifecycle=lifecycle,
+        task_name=resolved_task_name,
+        task_id=resolved_task_id,
+        message=message,
     )
 
 

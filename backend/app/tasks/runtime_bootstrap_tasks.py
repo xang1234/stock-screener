@@ -8,7 +8,10 @@ from typing import Iterable
 from celery import chain
 
 from ..database import SessionLocal
-from ..services.market_activity_service import mark_market_activity_failed
+from ..services.market_activity_service import (
+    mark_current_market_activity_failed,
+    mark_market_activity_failed,
+)
 from ..tasks.market_queues import (
     data_fetch_queue_for_market,
     market_jobs_queue_for_market,
@@ -180,13 +183,11 @@ def fail_local_runtime_bootstrap(*args, primary_market: str, enabled_markets: li
     try:
         set_bootstrap_state(db, "failed")
         for market in enabled_markets:
-            mark_market_activity_failed(
+            mark_current_market_activity_failed(
                 db,
                 market=str(market).upper(),
-                stage_key="scan",
                 lifecycle="bootstrap",
                 task_name="runtime_bootstrap",
-                task_id=None,
                 message="Bootstrap failed",
             )
     finally:

@@ -191,7 +191,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-hk",
-      "schedule_description": "4:30 ET, Mon-Fri (HK)",
+      "schedule_description": "5:45 ET, Mon-Fri (HK)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
@@ -200,7 +200,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-in",
-      "schedule_description": "7:30 ET, Mon-Fri (IN)",
+      "schedule_description": "7:45 ET, Mon-Fri (IN)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
@@ -209,7 +209,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-jp",
-      "schedule_description": "2:30 ET, Mon-Fri (JP)",
+      "schedule_description": "3:45 ET, Mon-Fri (JP)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
@@ -218,7 +218,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-tw",
-      "schedule_description": "1:00 ET, Mon-Fri (TW)",
+      "schedule_description": "3:15 ET, Mon-Fri (TW)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     },
     {
@@ -227,7 +227,7 @@
       "is_enabled": true,
       "last_run": null,
       "name": "daily-market-pipeline-us",
-      "schedule_description": "17:30 ET, Mon-Fri (US)",
+      "schedule_description": "17:45 ET, Mon-Fri (US)",
       "task_function": "app.tasks.daily_market_pipeline_tasks.queue_daily_market_pipeline"
     }
   ],

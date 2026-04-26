@@ -253,7 +253,7 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
     enabled_markets = list(prefs.enabled_markets)
 
     bootstrap_state = prefs.bootstrap_state
-    should_check_readiness = bootstrap_state in {"running", "ready"}
+    should_check_readiness = bootstrap_state in {"running", "ready", "failed"}
     core_ready = (
         all(_has_core_market_data(db, market) for market in enabled_markets)
         if should_check_readiness
@@ -273,7 +273,7 @@ def get_runtime_bootstrap_status(db: Session) -> RuntimeBootstrapStatus:
         bootstrap_state = "running"
 
     bootstrap_required = empty_system or (
-        bootstrap_state == "running" and not all_markets_ready
+        bootstrap_state in {"running", "failed"} and not all_markets_ready
     )
 
     return RuntimeBootstrapStatus(

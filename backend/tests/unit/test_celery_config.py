@@ -120,6 +120,20 @@ class TestSettingsValidators:
         with pytest.raises(ValidationError, match="per-market cache_warm_minute must be 0-59"):
             self._make_settings(cache_warm_minute_in=60)
 
+    def test_default_per_market_cache_warm_schedules_follow_close_buffer(self):
+        settings = self._make_settings()
+
+        assert {
+            market: settings.cache_warm_schedule_for(market)
+            for market in ("US", "HK", "IN", "JP", "TW")
+        } == {
+            "US": (17, 45),
+            "HK": (5, 45),
+            "IN": (7, 45),
+            "JP": (3, 45),
+            "TW": (3, 15),
+        }
+
     @pytest.mark.parametrize(
         ("field_name", "value"),
         [
