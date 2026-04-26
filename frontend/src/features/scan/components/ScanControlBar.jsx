@@ -99,9 +99,13 @@ export default function ScanControlBar({
   const cancelScanErrorMessage = typeof cancelScanError === 'string'
     ? cancelScanError
     : cancelScanError?.message;
+  const refreshStaleDataErrorDetail = refreshStaleDataError?.response?.data?.detail;
   const refreshStaleDataErrorMessage = typeof refreshStaleDataError === 'string'
     ? refreshStaleDataError
-    : refreshStaleDataError?.response?.data?.detail || refreshStaleDataError?.message;
+    : (typeof refreshStaleDataErrorDetail === 'string'
+        ? refreshStaleDataErrorDetail
+        : refreshStaleDataErrorDetail?.message)
+      || refreshStaleDataError?.message;
   const staleMarket = staleRefreshMarket(createScanError, universeMarket);
 
   return (

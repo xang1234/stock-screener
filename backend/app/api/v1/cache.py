@@ -474,7 +474,7 @@ async def smart_refresh(request: SmartRefreshRequest):
     try:
         return _queue_manual_smart_refresh(mode=request.mode, market=request.market)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     except Exception as e:
         raise HTTPException(

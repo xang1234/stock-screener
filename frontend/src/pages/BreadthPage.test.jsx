@@ -91,6 +91,7 @@ describe('BreadthPage', () => {
     await waitFor(() => {
       expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
       expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('HK');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('^HSI', '1mo');
     });
   });
 
@@ -111,6 +112,7 @@ describe('BreadthPage', () => {
         730,
         'US',
       );
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('SPY', '1mo');
     });
   });
 

@@ -434,4 +434,47 @@ describe('ScanPage', () => {
       expect(scanApi.refreshScanCache).toHaveBeenCalledWith({ market: 'HK', mode: 'full' });
     });
   });
+
+  it('renders structured refresh failure details without crashing', async () => {
+    runtimeState.runtimeReady = true;
+    runtimeState.scanDefaults = {
+      ...DEFAULT_SCAN_DEFAULTS,
+      universe: 'market:hk',
+    };
+    scanApi.createScan.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'market_data_stale',
+            message: 'Price data is stale for HK.',
+            stale_markets: [{ market: 'HK' }],
+          },
+        },
+      },
+      message: 'Request failed with status code 409',
+    });
+    scanApi.refreshScanCache.mockRejectedValueOnce({
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            code: 'refresh_rejected',
+            message: 'Refresh blocked for HK.',
+          },
+        },
+      },
+      message: 'Request failed with status code 400',
+    });
+
+    renderWithProviders(<ScanPage />);
+
+    const scanButton = await screen.findByRole('button', { name: 'Scan' });
+    fireEvent.click(scanButton);
+
+    const refreshButton = await screen.findByRole('button', { name: /refresh hk data/i });
+    fireEvent.click(refreshButton);
+
+    expect(await screen.findByText('Error: Refresh blocked for HK.')).toBeInTheDocument();
+  });
 });

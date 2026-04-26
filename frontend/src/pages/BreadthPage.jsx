@@ -154,7 +154,6 @@ function BreadthPage() {
   const spyPeriodMap = { '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y' };
   const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
   const benchmarkSymbol = MARKET_BENCHMARK_SYMBOLS[selectedMarket] || null;
-  const liveBenchmarkSymbol = benchmarkSymbol && !benchmarkSymbol.startsWith('^') ? benchmarkSymbol : null;
 
   const breadthBootstrapQuery = useQuery({
     queryKey: ['breadthBootstrap', selectedMarket],
@@ -258,8 +257,8 @@ function BreadthPage() {
     error: errorSpy,
   } = useQuery({
     queryKey: ['benchmark', 'history', selectedMarket, spyPeriod],
-    queryFn: () => getPriceHistory(liveBenchmarkSymbol, spyPeriod),
-    enabled: liveQueriesEnabled && Boolean(liveBenchmarkSymbol),
+    queryFn: () => getPriceHistory(benchmarkSymbol, spyPeriod),
+    enabled: liveQueriesEnabled && Boolean(benchmarkSymbol),
     staleTime: 60_000,
   });
 
@@ -326,7 +325,7 @@ function BreadthPage() {
                 breadthData={chartBreadthData}
                 spyData={benchmarkData || []}
                 benchmarkLabel={benchmarkSymbol || 'Benchmark'}
-                isLoading={isLoadingChartBreadth || (Boolean(liveBenchmarkSymbol) && isLoadingSpy)}
+                isLoading={isLoadingChartBreadth || (Boolean(benchmarkSymbol) && isLoadingSpy)}
                 error={errorChartBreadth || errorSpy}
                 timeRange={chartTimeRange}
                 onTimeRangeChange={setChartTimeRange}
