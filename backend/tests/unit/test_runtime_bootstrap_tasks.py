@@ -132,21 +132,33 @@ def test_bootstrap_universe_name_uses_uppercase_market_code():
     assert module._bootstrap_universe_name("us") == "market:US"
 
 
-def test_queue_local_runtime_bootstrap_chains_all_enabled_markets_before_completion(monkeypatch):
+def test_queue_local_runtime_bootstrap_runs_market_chains_in_chord(monkeypatch):
     from app.tasks import runtime_bootstrap_tasks as module
 
     class _FakeAsyncResult:
         def __init__(self, task_id: str) -> None:
             self.id = task_id
 
-    captured = []
+    market_chains = []
+    captured_header = None
+    captured_body = None
 
     class _FakeChain:
         def __init__(self, *signatures) -> None:
             self.signatures = signatures
+            market_chains.append([signature.task for signature in signatures])
 
-        def apply_async(self):
-            captured.extend(self.signatures)
+    class _FakeGroup:
+        def __init__(self, chains) -> None:
+            self.chains = list(chains)
+
+    class _FakeChord:
+        def __init__(self, header, body) -> None:
+            nonlocal captured_header, captured_body
+            captured_header = header
+            captured_body = body
+
+        def apply_async(self, **_kwargs):
             return _FakeAsyncResult("secondary-task-123")
 
     monkeypatch.setattr(
@@ -154,6 +166,8 @@ def test_queue_local_runtime_bootstrap_chains_all_enabled_markets_before_complet
         "chain",
         lambda *signatures: _FakeChain(*signatures),
     )
+    monkeypatch.setattr(module, "group", lambda chains: _FakeGroup(chains))
+    monkeypatch.setattr(module, "chord", lambda header, body: _FakeChord(header, body))
     monkeypatch.setattr(
         module,
         "_build_market_bootstrap_signatures",
@@ -166,12 +180,14 @@ def test_queue_local_runtime_bootstrap_chains_all_enabled_markets_before_complet
     )
 
     assert result == "secondary-task-123"
-    assert [signature.task for signature in captured] == [
-        "task:US",
-        "task:HK",
-        "task:TW",
-        "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap",
-    ]
+    assert market_chains == [["task:US"], ["task:HK"], ["task:TW"]]
+    assert captured_header is not None
+    assert len(captured_header.chains) == 3
+    assert captured_body.task == "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap"
+    assert captured_body.kwargs == {
+        "primary_market": "US",
+        "enabled_markets": ["US", "HK", "TW"],
+    }
 
 
 def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):

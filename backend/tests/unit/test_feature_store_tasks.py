@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
 import pytest
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
@@ -750,8 +750,22 @@ def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_
     mock_celery_progress.assert_called_once()
 
 
-def test_build_daily_snapshot_bootstrap_gate_fail_preserves_non_static_command():
+def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback():
     fake_use_case = _FakeUseCase()
+    retry_calls = []
+
+    class _RetryTask:
+        request = SimpleNamespace(id="task-123", retries=2)
+
+        def retry(self, *, exc=None, countdown=None, max_retries=None):
+            retry_calls.append(
+                {
+                    "exc": exc,
+                    "countdown": countdown,
+                    "max_retries": max_retries,
+                }
+            )
+            raise Retry(message=str(exc))
 
     with patch(
         "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
@@ -772,25 +786,77 @@ def test_build_daily_snapshot_bootstrap_gate_fail_preserves_non_static_command()
         return_value=object(),
     ), patch(
         "app.interfaces.tasks.feature_store_tasks._create_auto_scan_for_published_run",
-        return_value="auto-scan-001",
+        side_effect=AssertionError("auto scan must not publish while waiting for coverage"),
     ):
-        _TASK_BODY(
-            _FakeTask(),
-            as_of_date_str="2026-03-16",
-            activity_lifecycle="bootstrap",
-            bootstrap_cache_only_if_covered=True,
-            bootstrap_coverage_report={
-                "eligible": False,
-                "price_coverage_ratio": 0.9,
-                "fundamentals_coverage_ratio": 1.0,
-            },
-        )
+        with pytest.raises(Retry):
+            _TASK_BODY(
+                _RetryTask(),
+                as_of_date_str="2026-03-16",
+                activity_lifecycle="bootstrap",
+                bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_report={
+                    "eligible": False,
+                    "price_coverage_ratio": 0.9,
+                    "fundamentals_coverage_ratio": 1.0,
+                    "price_missing_symbols": 1,
+                    "fundamentals_missing_symbols": 0,
+                },
+            )
 
-    assert fake_use_case.received_cmd.bootstrap_cache_only_if_covered is True
-    assert fake_use_case.received_cmd.batch_only_prices is False
-    assert fake_use_case.received_cmd.batch_only_fundamentals is False
-    assert fake_use_case.received_cmd.require_bulk_prefetch is False
-    assert fake_use_case.received_cmd.exclude_unsupported_price_symbols is False
+    assert fake_use_case.received_cmd is None
+    assert retry_calls == [
+        {
+            "exc": ANY,
+            "countdown": 30,
+            "max_retries": 120,
+        }
+    ]
+    assert "waiting_for_bootstrap_cache_coverage:US" in str(retry_calls[0]["exc"])
+
+
+def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_report():
+    fake_use_case = _FakeUseCase()
+
+    class _RetryExhaustedTask:
+        request = SimpleNamespace(id="task-123", retries=120)
+
+        def retry(self, **_kwargs):
+            raise AssertionError("retry must not be called after retry budget is exhausted")
+
+    with patch(
+        "app.use_cases.feature_store.build_daily_snapshot._is_us_trading_day",
+        return_value=True,
+    ), patch(
+        "app.wiring.bootstrap.get_build_daily_snapshot_use_case",
+        return_value=fake_use_case,
+    ), patch(
+        "app.database.SessionLocal"
+    ), patch(
+        "app.infra.db.uow.SqlUnitOfWork",
+        side_effect=lambda *_args, **_kwargs: _NonSkippingUoW(),
+    ), patch(
+        "app.infra.tasks.progress_sink.CeleryProgressSink",
+        return_value=object(),
+    ), patch(
+        "app.domain.scanning.ports.NeverCancelledToken",
+        return_value=object(),
+    ):
+        with pytest.raises(RuntimeError, match="bootstrap cache coverage exhausted"):
+            _TASK_BODY(
+                _RetryExhaustedTask(),
+                as_of_date_str="2026-03-16",
+                activity_lifecycle="bootstrap",
+                bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_report={
+                    "eligible": False,
+                    "price_coverage_ratio": 0.9,
+                    "fundamentals_coverage_ratio": 1.0,
+                    "price_missing_symbols": 1,
+                    "fundamentals_missing_symbols": 0,
+                },
+            )
+
+    assert fake_use_case.received_cmd is None
 
 
 def test_build_daily_snapshot_does_not_expose_bootstrap_threshold_override():

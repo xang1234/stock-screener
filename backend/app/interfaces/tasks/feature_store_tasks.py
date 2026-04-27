@@ -22,11 +22,15 @@ from app.domain.scanning.signature import (
 from app.services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from app.tasks.workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
+
+BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS = 30
+BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES = 120
 
 
 class CompositeProgressSink:
@@ -82,6 +86,28 @@ class MarketActivityProgressSink:
             logger.warning("Failed to emit market scan activity progress", exc_info=True)
         finally:
             db.close()
+
+
+def _bootstrap_coverage_wait_message(market: str, report: dict | None) -> str:
+    report = report or {}
+    price_ratio = float(report.get("price_coverage_ratio") or 0.0)
+    fundamentals_ratio = float(report.get("fundamentals_coverage_ratio") or 0.0)
+    price_missing = int(report.get("price_missing_symbols") or 0)
+    fundamentals_missing = int(report.get("fundamentals_missing_symbols") or 0)
+    return (
+        f"waiting_for_bootstrap_cache_coverage:{market} "
+        f"(price={price_ratio:.3f}, fundamentals={fundamentals_ratio:.3f}, "
+        f"price_missing={price_missing}, fundamentals_missing={fundamentals_missing})"
+    )
+
+
+def _bootstrap_coverage_total(report: dict | None) -> int:
+    report = report or {}
+    return int(
+        report.get("price_total_symbols")
+        or report.get("fundamentals_total_symbols")
+        or 0
+    )
 
 
 def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
@@ -843,6 +869,59 @@ def build_daily_snapshot(
                     "cleaned_stale_runs": cleaned_stale_runs,
                     "skipped_symbols": len(skipped_symbols),
                 }
+
+    if bootstrap_gate_requested and effective_bootstrap_coverage_report is None:
+        uow_check = SqlUnitOfWork(SessionLocal)
+        with uow_check:
+            universe_def = normalize_universe_definition(universe_name)
+            symbols = uow_check.universe.resolve_symbols(universe_def)
+            supported_symbols, _unsupported_symbols = split_supported_price_symbols(symbols)
+            if supported_symbols:
+                session = getattr(uow_check, "session", None)
+                if session is not None:
+                    effective_bootstrap_coverage_report = evaluate_bootstrap_cache_coverage(
+                        session,
+                        market=effective_market,
+                        symbols=supported_symbols,
+                        as_of_date=as_of,
+                    )
+
+    if bootstrap_gate_requested and not bool(
+        (effective_bootstrap_coverage_report or {}).get("eligible")
+    ):
+        message = _bootstrap_coverage_wait_message(
+            effective_market,
+            effective_bootstrap_coverage_report,
+        )
+        total_for_activity = _bootstrap_coverage_total(
+            effective_bootstrap_coverage_report
+        )
+        _publish_activity(
+            mark_market_activity_progress,
+            market=effective_market,
+            stage_key="scan",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "build_daily_snapshot"),
+            task_id=correlation_id,
+            current=0,
+            total=total_for_activity,
+            percent=0,
+            message=message,
+        )
+        current_retries = int(
+            getattr(getattr(self, "request", None), "retries", 0) or 0
+        )
+        if current_retries >= BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES:
+            raise RuntimeError(
+                "bootstrap cache coverage exhausted for "
+                f"{effective_market}: {message}; "
+                f"report={effective_bootstrap_coverage_report}"
+            )
+        raise self.retry(
+            exc=RuntimeError(message),
+            countdown=BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS,
+            max_retries=BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
+        )
 
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
