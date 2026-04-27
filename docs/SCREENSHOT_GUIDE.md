@@ -26,17 +26,43 @@ This guide provides detailed instructions for capturing screenshots and GIFs for
 ### 1. scan-results.png
 **Location**: `/scan` page
 **What to capture**: Full scan results table showing:
-- Screener selection chips at top (Min, CAN, IPO, etc.)
-- Results table with 15-20 rows of data
-- Visible columns: Ticker, Name, Composite Score, RS Rating, Stage, Price, screener scores
-- RS sparklines and price change sparklines visible
+- Screener selection chips at top (Min, CAN, IPO, Cust, VolB, Setup)
+- Results table with 10-15 rows of data
+- Visible columns: Symbol (with market badge), RS Trend sparkline, Price sparkline, **Sector** (GICS), **IBD Industry**, **Themes** (chip cluster with `+N` overflow), **Grp** (IBD group rank), Composite, individual screener scores
 - Sort by Composite Score descending
 
 **Setup**:
-1. Run a scan with all screeners enabled on "All Stocks" universe
+1. Pick any market from the Market dropdown and run a scan
 2. Wait for completion
-3. Ensure table shows good variety (high scores, Stage 2 stocks)
-4. Capture the main results area
+3. Ensure at least the top rows have populated industry/theme/group data so the new classification columns are demonstrably useful
+4. Capture the viewport (table area + control bar context)
+
+---
+
+### 1a. market-selector.jpg
+**Location**: `/scan` page → Market dropdown opened
+**What to capture**: The Market combobox in the scan control bar with the dropdown menu open, listing all five supported markets:
+- United States
+- Hong Kong
+- India
+- Japan
+- Taiwan
+
+**Setup**:
+1. Land on `/scan`
+2. Click the Market dropdown
+3. Capture the viewport (the open listbox plus surrounding control bar)
+4. Format: JPEG (matches existing asset) — quality 90 is sufficient for a UI dropdown
+
+---
+
+### 1b. market-badges.png
+**Location**: `/scan` page after a multi-market scan, **or** any view that surfaces tickers from more than one market
+**What to capture**: A few result rows showing the per-market badge in the Symbol cell — e.g., HK / IN / JP / TW / US. Each badge is a small color-coded chip next to the ticker.
+
+**Setup**:
+1. Either run a cross-market scan (requires all relevant universes hydrated), or pull badges from the Watchlists view if the dev stack only has a single market seeded
+2. Capture a tight crop of 4-6 rows so the badges are the visual focus
 
 ---
 
@@ -187,14 +213,18 @@ After capturing, verify you have:
 ```
 docs/
 ├── screenshots/
-│   ├── scan-results.png      ← Multi-screener results table
+│   ├── scan-results.png      ← Multi-screener results table with Sector/IBD Industry/Themes/Grp columns
+│   ├── market-selector.jpg   ← Market dropdown showing US / HK / IN / JP / TW
+│   ├── market-badges.png     ← Per-row market badges in mixed-universe scans
 │   ├── scan-filters.png      ← Filter panel expanded
 │   ├── watchlist-table.png   ← Watchlist with sparklines
 │   ├── breadth-chart.png     ← Breadth chart with SPY overlay
 │   ├── group-rankings.png    ← IBD group rankings page
 │   ├── group-detail.png      ← Group detail modal
 │   ├── chatbot.png           ← AI chatbot interface
-│   └── themes.png            ← Theme discovery page
+│   ├── themes.png            ← Theme discovery page
+│   ├── bootstrap-setup.jpg   ← First-run primary-market picker
+│   └── bootstrap-progress.jpg ← First-run staged pipeline progress
 └── gifs/
     └── scan-workflow.gif     ← Hero GIF of scan process
 ```
