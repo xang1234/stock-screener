@@ -1,6 +1,6 @@
-# Stock Scanner v1.1.0
+# Stock Scanner v1.1.1
 
-Stock Scanner v1.1.0 expands the platform from four markets to five with full India support, harmonizes the per-market scan and refresh lifecycle, and adds richer per-row classification across sector, industry, themes, and group rank. Hero visuals and the screenshot guide have been refreshed to match the current UI.
+Stock Scanner v1.1.1 is a bootstrap hotfix release for users deploying the v1.1 series. It includes the v1.1.0 India and multi-market feature set plus fixes for first-run bootstrap coordination and group-ranking memory pressure that could crash fresh deployments during the initial market hydration pipeline.
 
 ## Highlights
 
@@ -23,6 +23,12 @@ Stock Scanner v1.1.0 expands the platform from four markets to five with full In
 - Company names now render under the ticker in the Symbol cell.
 - Compact theme rendering keeps the wrap view from clipping when a stock carries multiple market themes.
 
+### Bootstrap and performance hotfixes
+
+- Coordination waits during bootstrap now keep retrying with an explicit high retry budget instead of exhausting Celery's default retry limit and marking bootstrap failed during expected contention.
+- Group-ranking gap-fill and cache-only price reads now process symbols in smaller chunks to reduce worker memory spikes during fresh database bootstrap.
+- Breadth refreshes bypass nested market-workload leases where the outer bootstrap stage already owns the workload coordination.
+
 ### Performance
 
 - Parallel cache-warm scans across markets cut the bootstrap warm-up window.
@@ -38,12 +44,12 @@ Stock Scanner v1.1.0 expands the platform from four markets to five with full In
 
 ## Deployment
 
-Release images are published to GHCR under the `v1.1.0` tag:
+Release images are published to GHCR under the `v1.1.1` tag:
 
-- `ghcr.io/<owner>/stockscreenclaude-backend:v1.1.0`
-- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.1.0`
+- `ghcr.io/<owner>/stockscreenclaude-backend:v1.1.1`
+- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.1.1`
 
-Deploy by setting `APP_IMAGE_TAG=v1.1.0` in `.env.docker`, then `docker-compose ... pull` and `up -d --no-build`. To roll back, set `APP_IMAGE_TAG=v1.0.0` and redeploy.
+Deploy by setting `APP_IMAGE_TAG=v1.1.1` in `.env.docker`, then `docker-compose ... pull` and `up -d --no-build`. To roll back, set `APP_IMAGE_TAG=v1.1.0` or `APP_IMAGE_TAG=v1.0.0` and redeploy, but prefer v1.1.1 over v1.1.0 for fresh bootstrap installs.
 
 ## Upgrade notes
 

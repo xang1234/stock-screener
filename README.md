@@ -73,7 +73,7 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.1.0
+#   APP_IMAGE_TAG=v1.1.1
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   GROQ_API_KEY=...
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
@@ -81,7 +81,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 # Open http://localhost
 ```
 
-This path deploys the tagged `v1.1.0` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+This path deploys the tagged `v1.1.1` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
 
 For local development or contributor laptops, use the default local compose stack instead:
 
