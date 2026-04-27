@@ -393,3 +393,33 @@ def test_breadth_gapfill_runs_for_non_us_market(monkeypatch):
     assert result.get("status") != "skipped"
     # The calculator was constructed with market='HK' so it queries the right universe
     assert captured_init_kwargs.get("market") == "HK"
+
+
+def test_breadth_orchestrator_bypasses_lease_for_inner_daily_call(monkeypatch):
+    """Nested daily breadth runs must not re-acquire the lease held by gap-fill."""
+    import app.tasks.breadth_tasks as module
+    import app.tasks.workload_coordination as wc
+
+    seen_disabled_state: list[bool] = []
+
+    real_task = MagicMock()
+    real_task.__module__ = "app.tasks.breadth_tasks"
+    real_task.request = MagicMock()
+
+    def fake_run(market=None):
+        seen_disabled_state.append(wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get())
+        return {"date": "2026-03-20", "market": market}
+
+    real_task.run = fake_run
+    monkeypatch.setattr(module, "calculate_daily_breadth", real_task)
+
+    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False
+    result = module._calculate_daily_breadth_in_process(market="US")
+
+    assert result == {"date": "2026-03-20", "market": "US"}
+    assert seen_disabled_state == [True], (
+        "The lease bypass ContextVar must be set to True while the inner task runs"
+    )
+    assert wc._SERIALIZED_MARKET_WORKLOAD_DISABLED.get() is False, (
+        "The bypass must be reset on context exit"
+    )
