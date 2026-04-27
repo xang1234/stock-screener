@@ -1412,52 +1412,63 @@ class IBDGroupRankService:
             prefetch,
             market=normalized_market,
         )
-        rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, dates_to_process)
+        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
+        logger.info(
+            "Processing optimized group-ranking backfill in RS chunks of %d date(s)",
+            chunk_size,
+        )
 
         # 4. Process each date using cached data
-        for calc_date in dates_to_process:
-            try:
-                # Calculate RS for each group from cache
-                group_metrics = []
-                rs_by_symbol = rs_by_date.get(calc_date, {})
-                for group_name in all_groups:
-                    metrics = self._calculate_group_metrics_from_rs(
-                        group_name,
-                        symbols_by_group.get(group_name, []),
-                        rs_by_symbol,
-                        prefetch.market_caps,
-                        calc_date,
-                    )
-                    if metrics:
-                        group_metrics.append(metrics)
+        for chunk_start in range(0, len(dates_to_process), chunk_size):
+            date_chunk = dates_to_process[chunk_start:chunk_start + chunk_size]
+            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
 
-                if group_metrics:
-                    # Sort and rank
-                    group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                    for rank, metrics in enumerate(group_metrics, start=1):
-                        metrics['rank'] = rank
-
-                    # Store
-                    self._store_rankings(
-                        db,
-                        calc_date,
-                        group_metrics,
-                        market=normalized_market,
-                    )
-                    processed += 1
-
-                    if processed % 10 == 0:
-                        logger.info(
-                            f"Progress: {processed}/{len(dates_to_process)} dates "
-                            f"({len(group_metrics)} groups for {calc_date})"
+            for calc_date in date_chunk:
+                try:
+                    # Calculate RS for each group from cache
+                    group_metrics = []
+                    rs_by_symbol = rs_by_date.get(calc_date, {})
+                    for group_name in all_groups:
+                        metrics = self._calculate_group_metrics_from_rs(
+                            group_name,
+                            symbols_by_group.get(group_name, []),
+                            rs_by_symbol,
+                            prefetch.market_caps,
+                            calc_date,
                         )
-                else:
-                    errors += 1
-                    logger.warning(f"No valid groups for {calc_date}")
+                        if metrics:
+                            group_metrics.append(metrics)
 
-            except Exception as e:
-                errors += 1
-                logger.error(f"Error processing {calc_date}: {e}")
+                    if group_metrics:
+                        # Sort and rank
+                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
+                        for rank, metrics in enumerate(group_metrics, start=1):
+                            metrics['rank'] = rank
+
+                        # Store
+                        self._store_rankings(
+                            db,
+                            calc_date,
+                            group_metrics,
+                            market=normalized_market,
+                        )
+                        processed += 1
+
+                        if processed % 10 == 0:
+                            logger.info(
+                                f"Progress: {processed}/{len(dates_to_process)} dates "
+                                f"({len(group_metrics)} groups for {calc_date})"
+                            )
+                    else:
+                        errors += 1
+                        logger.warning(f"No valid groups for {calc_date}")
+
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"Error processing {calc_date}: {e}")
+
+            rs_by_date.clear()
+            gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(

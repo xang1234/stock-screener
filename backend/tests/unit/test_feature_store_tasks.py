@@ -9,7 +9,7 @@ from unittest.mock import ANY, patch
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -869,6 +869,88 @@ def test_enrich_feature_run_with_ibd_metadata_updates_details_json():
     assert msft.details_json["ibd_group_rank"] is None
 
     engine.dispose()
+
+
+def test_enrich_feature_run_with_ibd_metadata_batches_feature_rows():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            FeatureRun.__table__,
+            StockFeatureDaily.__table__,
+            IBDIndustryGroup.__table__,
+            IBDGroupRank.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+    with session_factory() as db:
+        db.add(
+            FeatureRun(
+                id=24,
+                as_of_date=date(2026, 4, 2),
+                run_type="daily_snapshot",
+                status="published",
+            )
+        )
+        feature_rows = [
+            StockFeatureDaily(
+                run_id=24,
+                symbol=f"SYM{index:03d}",
+                as_of_date=date(2026, 4, 2),
+                composite_score=95.0,
+                overall_rating=5,
+                passes_count=4,
+                details_json={"symbol": f"SYM{index:03d}"},
+            )
+            for index in range(501)
+        ]
+        db.add_all(feature_rows)
+        db.add_all(
+            IBDIndustryGroup(symbol=row.symbol, industry_group="Software")
+            for row in feature_rows
+        )
+        db.add(
+            IBDGroupRank(
+                industry_group="Software",
+                date=date(2026, 4, 2),
+                rank=3,
+                avg_rs_rating=90.0,
+            )
+        )
+        db.commit()
+
+    statements: list[str] = []
+
+    def collect_sql(conn, cursor, statement, parameters, context, executemany):  # noqa: ARG001
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", collect_sql)
+    try:
+        stats = _enrich_feature_run_with_ibd_metadata(
+            feature_run_id=24,
+            ranking_date=date(2026, 4, 2),
+            session_factory=session_factory,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", collect_sql)
+
+    feature_row_selects = [
+        statement
+        for statement in statements
+        if statement.lstrip().lower().startswith("select")
+        and "stock_feature_daily" in statement.lower()
+        and "join" not in statement.lower()
+        and "count(" not in statement.lower()
+    ]
+
+    assert stats["total_rows"] == 501
+    assert stats["updated_rows"] == 501
+    assert len(feature_row_selects) >= 2, "\n---\n".join(statements)
+    assert all("LIMIT" in statement.upper() for statement in feature_row_selects)
+
+    engine.dispose()
+
 
 def test_enrich_feature_run_with_ibd_metadata_uses_market_taxonomy_for_non_us_runs():
     engine = create_engine("sqlite:///:memory:")
