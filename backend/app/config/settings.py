@@ -253,6 +253,7 @@ class Settings(BaseSettings):
     static_snapshot_parallel_workers: int = 8  # Bounded symbol-level parallelism for static batch processing
     feature_snapshot_soft_time_limit_seconds: int = 10800  # 3h budget for full ALL-universe daily snapshot in Docker/Postgres
     feature_snapshot_stale_after_minutes: int = 240  # Running feature runs older than this are treated as stale and failed
+    feature_metadata_repair_batch_size: int = 500  # Rows per batch when repairing published feature-run metadata
 
     # Cache Configuration
     cache_redis_db: int = 2  # Separate DB for cache data
@@ -331,6 +332,7 @@ class Settings(BaseSettings):
     # Redis Bulk Pipeline Configuration (for large multi-symbol fetches)
     redis_bulk_socket_timeout: int = 30  # Timeout for bulk pipeline operations (seconds)
     redis_pipeline_chunk_size: int = 500  # Symbols per Redis pipeline chunk
+    price_cache_db_chunk_size: int = 250  # Symbols per bulk StockPrice database query
 
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()

@@ -10,7 +10,9 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+import gc
 import logging
+import sys
 from typing import Optional
 from datetime import datetime, date, timedelta
 import time
@@ -104,6 +106,21 @@ def _group_rank_result_error(result) -> str | None:
     if error:
         return str(error)
     return None
+
+
+def _release_group_rank_gapfill_memory() -> None:
+    """Return freed pandas/SQLAlchemy heap pages before the same worker ranks today."""
+    collected = gc.collect()
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL("libc.so.6"), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim(0)
+        except Exception:
+            logger.debug("malloc_trim unavailable after group-ranking gap-fill", exc_info=True)
+    logger.debug("Collected %d objects after group-ranking gap-fill", collected)
 
 
 def _validate_same_day_cache_only_group_rankings(
@@ -621,6 +638,7 @@ def calculate_daily_group_rankings_with_gapfill(
                     "✓ Gap-fill complete: %s processed, %s errors",
                     gap_stats.get('processed', 0), gap_stats.get('errors', 0),
                 )
+                _release_group_rank_gapfill_memory()
             else:
                 logger.info("No missing ranking dates found - data is complete")
                 result['gap_fill'] = {

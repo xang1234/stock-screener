@@ -696,6 +696,58 @@ def test_orchestrator_gapfills_then_runs_today_on_trading_day(monkeypatch):
     )
 
 
+def test_orchestrator_releases_gapfill_memory_before_today(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+    from datetime import date as date_cls
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 3, 20, 17, 40, 0),
+        is_trading_day=True,
+    )
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["Software", "Banks"]),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = [date_cls(2026, 3, 19)]
+    fake_service.fill_gaps_optimized.return_value = {
+        "total_dates": 1,
+        "processed": 1,
+        "errors": 0,
+    }
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+
+    events: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "_release_group_rank_gapfill_memory",
+        lambda: events.append("released"),
+        raising=False,
+    )
+
+    def fake_daily(**kw):
+        assert events == ["released"]
+        events.append("daily")
+        return {"date": "2026-03-20", "groups_ranked": 2}
+
+    monkeypatch.setattr(module, "_calculate_daily_group_rankings_in_process", fake_daily)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(market="US")
+
+    assert result["today"]["groups_ranked"] == 2
+    assert events == ["released", "daily"]
+
+
 def test_orchestrator_gapfills_but_skips_today_on_non_trading_day(monkeypatch):
     """On a non-trading day, orchestrator still gap-fills but skips the daily call."""
     import app.tasks.group_rank_tasks as module

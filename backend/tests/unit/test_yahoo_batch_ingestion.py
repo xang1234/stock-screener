@@ -6,9 +6,10 @@ from datetime import date, datetime, timedelta
 import sqlite3
 from unittest.mock import MagicMock
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.database import Base
 from app.models.stock import StockPrice
 from app.models.stock_universe import (
@@ -436,6 +437,48 @@ def test_get_many_cached_only_fresh_filters_stale_database_rows(monkeypatch):
     assert result["AAPL"] is fresh_df
     assert result["MSFT"] is None
     assert result["NVDA"] is None
+
+
+def test_get_many_from_database_chunks_large_symbol_sets(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    symbols = [f"SYM{i}" for i in range(5)]
+    end_day = date.today()
+
+    db = TestingSessionLocal()
+    for symbol in symbols:
+        for offset in range(60):
+            day = end_day - timedelta(days=59 - offset)
+            db.add(
+                StockPrice(
+                    symbol=symbol,
+                    date=day,
+                    open=10.0,
+                    high=11.0,
+                    low=9.0,
+                    close=10.5,
+                    volume=1000,
+                    adj_close=10.5,
+                )
+            )
+    db.commit()
+    db.close()
+
+    select_statements: list[str] = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _capture_selects(conn, cursor, statement, parameters, context, executemany):
+        if "FROM stock_prices" in statement:
+            select_statements.append(statement)
+
+    monkeypatch.setattr(settings, "price_cache_db_chunk_size", 2)
+
+    result = service._get_many_from_database(symbols, "2y")
+
+    assert [symbol for symbol, (df, _) in result.items() if df is not None] == symbols
+    assert len(select_statements) == 3
 
 
 def test_track_symbol_failures_skips_corrupt_symbol_updates_and_commits_others(monkeypatch):

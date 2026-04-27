@@ -367,47 +367,71 @@ class PriceCacheService:
             days = period_days_map.get(period, 730)
             start_date = end_date - timedelta(days=days)
 
-            # Query all symbols at once using IN clause
+            chunk_size = max(1, int(getattr(settings, "price_cache_db_chunk_size", 250) or 250))
+            total_chunks = (len(symbols) + chunk_size - 1) // chunk_size
+
+            # Query symbols in bounded chunks. A full US cache-only group ranking
+            # can touch thousands of symbols and millions of price rows; loading
+            # that as ORM entities in one query can spike worker RSS enough for
+            # the container OOM killer to terminate the Celery child.
             from sqlalchemy import and_
-            all_prices = db.query(StockPrice).filter(
-                and_(
-                    StockPrice.symbol.in_(symbols),
-                    StockPrice.date >= start_date,
-                    StockPrice.date <= end_date
+
+            for chunk_idx in range(0, len(symbols), chunk_size):
+                chunk_symbols = symbols[chunk_idx:chunk_idx + chunk_size]
+                chunk_num = (chunk_idx // chunk_size) + 1
+                rows = db.query(
+                    StockPrice.symbol,
+                    StockPrice.date,
+                    StockPrice.open,
+                    StockPrice.high,
+                    StockPrice.low,
+                    StockPrice.close,
+                    StockPrice.volume,
+                ).filter(
+                    and_(
+                        StockPrice.symbol.in_(chunk_symbols),
+                        StockPrice.date >= start_date,
+                        StockPrice.date <= end_date
+                    )
+                ).order_by(StockPrice.symbol, StockPrice.date.asc()).all()
+
+                # Group by symbol within this bounded result set.
+                symbol_prices = {}
+                for row in rows:
+                    if row.symbol not in symbol_prices:
+                        symbol_prices[row.symbol] = []
+                    symbol_prices[row.symbol].append(row)
+
+                for symbol in chunk_symbols:
+                    prices = symbol_prices.get(symbol, [])
+
+                    if not prices or len(prices) < 50:
+                        results[symbol] = (None, None)
+                        continue
+
+                    data = {
+                        'Date': [p.date for p in prices],
+                        'Open': [p.open for p in prices],
+                        'High': [p.high for p in prices],
+                        'Low': [p.low for p in prices],
+                        'Close': [p.close for p in prices],
+                        'Volume': [p.volume for p in prices],
+                    }
+
+                    df = pd.DataFrame(data)
+                    df['Date'] = pd.to_datetime(df['Date'])
+                    df.set_index('Date', inplace=True)
+
+                    last_date = prices[-1].date
+                    results[symbol] = (df, last_date)
+
+                logger.debug(
+                    "Bulk DB query chunk %d/%d: %d symbols, %d rows",
+                    chunk_num,
+                    total_chunks,
+                    len(chunk_symbols),
+                    len(rows),
                 )
-            ).order_by(StockPrice.symbol, StockPrice.date.asc()).all()
-
-            # Group by symbol
-            symbol_prices = {}
-            for price in all_prices:
-                if price.symbol not in symbol_prices:
-                    symbol_prices[price.symbol] = []
-                symbol_prices[price.symbol].append(price)
-
-            # Convert each symbol's prices to DataFrame
-            for symbol in symbols:
-                prices = symbol_prices.get(symbol, [])
-
-                if not prices or len(prices) < 50:
-                    results[symbol] = (None, None)
-                    continue
-
-                # Convert to DataFrame
-                data = {
-                    'Date': [p.date for p in prices],
-                    'Open': [p.open for p in prices],
-                    'High': [p.high for p in prices],
-                    'Low': [p.low for p in prices],
-                    'Close': [p.close for p in prices],
-                    'Volume': [p.volume for p in prices],
-                }
-
-                df = pd.DataFrame(data)
-                df['Date'] = pd.to_datetime(df['Date'])
-                df.set_index('Date', inplace=True)
-
-                last_date = prices[-1].date
-                results[symbol] = (df, last_date)
 
             logger.debug(f"Bulk DB query: {len([r for r in results.values() if r[0] is not None])} hits, "
                         f"{len([r for r in results.values() if r[0] is None])} misses")
