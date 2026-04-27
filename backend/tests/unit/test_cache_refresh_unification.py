@@ -644,6 +644,45 @@ def test_bootstrap_smart_refresh_uses_short_failed_symbol_retry_delay(monkeypatc
     ]
 
 
+def test_failed_price_retry_preserves_bootstrap_retry_delay(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_price_cache = MagicMock()
+    retry_calls = []
+
+    monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
+    monkeypatch.setattr("app.services.bulk_data_fetcher.BulkDataFetcher", lambda: MagicMock())
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_with_backoff",
+        lambda _fetcher, batch_symbols, **kwargs: {
+            symbol: {"has_error": True, "error": "rate limited", "price_data": None}
+            for symbol in batch_symbols
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_schedule_failed_symbol_retry",
+        lambda symbols, *, market, attempt, countdown=600: retry_calls.append(
+            {"symbols": symbols, "market": market, "attempt": attempt, "countdown": countdown}
+        ),
+    )
+
+    result = module.retry_failed_price_symbols.run.__wrapped__(
+        module.retry_failed_price_symbols,
+        symbols=["AAPL"],
+        market="US",
+        attempt=2,
+        retry_countdown=30,
+    )
+
+    assert result["status"] == "partial"
+    assert retry_calls == [
+        {"symbols": ["AAPL"], "market": "US", "attempt": 3, "countdown": 30}
+    ]
+
+
 def test_smart_refresh_cache_rolls_back_before_failure_reporting(monkeypatch):
     import app.tasks.cache_tasks as module
 

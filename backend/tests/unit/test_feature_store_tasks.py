@@ -816,6 +816,7 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
 
 def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_report():
     fake_use_case = _FakeUseCase()
+    failed_activity = []
 
     class _RetryExhaustedTask:
         request = SimpleNamespace(id="task-123", retries=120)
@@ -840,6 +841,9 @@ def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_repo
     ), patch(
         "app.domain.scanning.ports.NeverCancelledToken",
         return_value=object(),
+    ), patch(
+        "app.interfaces.tasks.feature_store_tasks.mark_market_activity_failed",
+        lambda _db, **kwargs: failed_activity.append(kwargs),
     ):
         with pytest.raises(RuntimeError, match="bootstrap cache coverage exhausted"):
             _TASK_BODY(
@@ -857,6 +861,11 @@ def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_repo
             )
 
     assert fake_use_case.received_cmd is None
+    assert failed_activity
+    assert failed_activity[0]["stage_key"] == "scan"
+    assert failed_activity[0]["lifecycle"] == "bootstrap"
+    assert "waiting_for_bootstrap_cache_coverage:US" in failed_activity[0]["message"]
+    assert "price_missing=1" in failed_activity[0]["message"]
 
 
 def test_build_daily_snapshot_does_not_expose_bootstrap_threshold_override():

@@ -207,6 +207,22 @@ class BuildDailySnapshotResult:
     duration_seconds: float
 
 
+class BootstrapCacheCoverageInsufficient(RuntimeError):
+    """Raised when bootstrap scan must wait for cache coverage before scanning."""
+
+    def __init__(self, market: str, coverage_report: dict) -> None:
+        self.market = market
+        self.coverage_report = dict(coverage_report)
+        price_ratio = float(self.coverage_report.get("price_coverage_ratio") or 0.0)
+        fundamentals_ratio = float(
+            self.coverage_report.get("fundamentals_coverage_ratio") or 0.0
+        )
+        super().__init__(
+            "bootstrap cache coverage insufficient for "
+            f"{market}: price={price_ratio:.3f}, fundamentals={fundamentals_ratio:.3f}"
+        )
+
+
 @dataclass
 class _SnapshotRunProgress:
     """Mutable counters shared with best-effort failure handling."""
@@ -290,7 +306,11 @@ class BuildDailyFeatureSnapshotUseCase:
                 bootstrap_gate_report.update(
                     {
                         "threshold": BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE,
-                        "mode": "cache_only" if eligible else "fallback_existing",
+                        "mode": (
+                            "cache_only"
+                            if eligible
+                            else "waiting_for_cache_coverage"
+                        ),
                         "unsupported_skipped_count": (
                             len(unsupported_symbols) if eligible else 0
                         ),
@@ -321,8 +341,9 @@ class BuildDailyFeatureSnapshotUseCase:
                             f"{len(skipped_symbols)}"
                         )
                 else:
-                    run_warnings.append(
-                        "Bootstrap cache-only coverage below threshold; using existing fallback snapshot mode"
+                    raise BootstrapCacheCoverageInsufficient(
+                        cmd.market,
+                        bootstrap_gate_report,
                     )
             elif cmd.exclude_unsupported_price_symbols:
                 symbols, skipped_symbols = split_supported_price_symbols(symbols)
@@ -740,6 +761,7 @@ class BuildDailyFeatureSnapshotUseCase:
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "BootstrapCacheCoverageInsufficient",
     "BuildDailyFeatureSnapshotUseCase",
     "BuildDailySnapshotCommand",
     "BuildDailySnapshotResult",

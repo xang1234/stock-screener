@@ -716,6 +716,7 @@ def build_daily_snapshot(
     from app.utils.parallelism import bounded_symbol_workers
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
+        BootstrapCacheCoverageInsufficient,
         BuildDailySnapshotCommand,
     )
     from app.wiring.bootstrap import get_build_daily_snapshot_use_case
@@ -886,15 +887,13 @@ def build_daily_snapshot(
                         as_of_date=as_of,
                     )
 
-    if bootstrap_gate_requested and not bool(
-        (effective_bootstrap_coverage_report or {}).get("eligible")
-    ):
+    def _retry_or_fail_bootstrap_coverage(report: dict | None) -> None:
         message = _bootstrap_coverage_wait_message(
             effective_market,
-            effective_bootstrap_coverage_report,
+            report,
         )
         total_for_activity = _bootstrap_coverage_total(
-            effective_bootstrap_coverage_report
+            report
         )
         _publish_activity(
             mark_market_activity_progress,
@@ -912,16 +911,33 @@ def build_daily_snapshot(
             getattr(getattr(self, "request", None), "retries", 0) or 0
         )
         if current_retries >= BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES:
-            raise RuntimeError(
+            failure_message = (
                 "bootstrap cache coverage exhausted for "
                 f"{effective_market}: {message}; "
-                f"report={effective_bootstrap_coverage_report}"
+                f"report={report}"
             )
+            _publish_activity(
+                mark_market_activity_failed,
+                market=effective_market,
+                stage_key="scan",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "build_daily_snapshot"),
+                task_id=correlation_id,
+                current=0,
+                total=total_for_activity,
+                message=failure_message,
+            )
+            raise RuntimeError(failure_message)
         raise self.retry(
             exc=RuntimeError(message),
             countdown=BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS,
             max_retries=BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
         )
+
+    if bootstrap_gate_requested and not bool(
+        (effective_bootstrap_coverage_report or {}).get("eligible")
+    ):
+        _retry_or_fail_bootstrap_coverage(effective_bootstrap_coverage_report)
 
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
@@ -997,6 +1013,8 @@ def build_daily_snapshot(
             message="Soft time limit exceeded",
         )
         raise
+    except BootstrapCacheCoverageInsufficient as exc:
+        _retry_or_fail_bootstrap_coverage(exc.coverage_report)
     except Exception as exc:
         _publish_activity(
             mark_market_activity_failed,

@@ -1261,6 +1261,7 @@ def _schedule_failed_symbol_retry(
                 "symbols": list(dict.fromkeys(symbols)),
                 "market": normalized_market,
                 "attempt": attempt,
+                "retry_countdown": countdown,
             },
             countdown=countdown,
             queue=data_fetch_queue_for_market(normalized_market),
@@ -1313,6 +1314,7 @@ def retry_failed_price_symbols(
     symbols: list[str],
     market: str,
     attempt: int = 1,
+    retry_countdown: int = 600,
 ) -> dict:
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..wiring.bootstrap import get_price_cache
@@ -1374,7 +1376,12 @@ def retry_failed_price_symbols(
         failure_details=failure_details,
     )
     if failed_symbols and attempt < 3:
-        _schedule_failed_symbol_retry(failed_symbols, market=market, attempt=attempt + 1)
+        _schedule_failed_symbol_retry(
+            failed_symbols,
+            market=market,
+            attempt=attempt + 1,
+            countdown=retry_countdown,
+        )
     return {
         "status": "completed" if not failed_symbols else "partial",
         "market": market,
