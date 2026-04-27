@@ -4,8 +4,10 @@ Tests for data_fetch_lock.py — lock mechanism, decorator, and _impl functions.
 All tests mock Redis (no live Redis needed) and mock CacheManager/PriceCacheService
 (no external API calls).
 """
+import logging
 import pytest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 
@@ -251,6 +253,115 @@ class TestSerializedDataFetchDecorator:
             my_func()
 
         mock_lock.release.assert_called_once()
+
+    @patch("app.wiring.bootstrap.get_workload_coordination")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    def test_busy_market_workload_retries_with_coordination_retry_budget(
+        self,
+        mock_get_lock,
+        mock_get_coordination,
+    ):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_get_lock.return_value = mock_lock
+
+        mock_coordination = MagicMock()
+        mock_coordination.acquire_market_workload.return_value = (False, False)
+        mock_coordination.get_market_workload_holder.return_value = {
+            "task_name": "calculate_daily_group_rankings_with_gapfill",
+            "task_id": "other-task",
+        }
+        mock_get_coordination.return_value = mock_coordination
+
+        retry_calls = []
+
+        def _retry(*, exc=None, countdown=None, max_retries=None):
+            retry_calls.append(
+                {
+                    "exc": exc,
+                    "countdown": countdown,
+                    "max_retries": max_retries,
+                }
+            )
+            raise Retry(message=str(exc))
+
+        task = SimpleNamespace(
+            request=SimpleNamespace(id="task-123", retries=1),
+            retry=_retry,
+        )
+
+        @serialized_data_fetch("refresh_stock_universe")
+        def my_func(self, market=None):
+            return "ok"
+
+        with pytest.raises(Retry):
+            my_func(task, market="US")
+
+        assert retry_calls[0]["countdown"] == 30
+        assert retry_calls[0]["max_retries"] == 10_000
+        assert "waiting_for_market_workload:US" in str(retry_calls[0]["exc"])
+        mock_lock.release.assert_called_once_with("task-123", market="US")
+        mock_coordination.release_market_workload.assert_not_called()
+        mock_coordination.acquire_external_fetch.assert_not_called()
+
+    @patch("app.wiring.bootstrap.get_workload_coordination")
+    @patch("app.wiring.bootstrap.get_data_fetch_lock")
+    def test_busy_external_fetch_retries_with_coordination_retry_budget_and_no_error_log(
+        self,
+        mock_get_lock,
+        mock_get_coordination,
+        caplog,
+    ):
+        mock_lock = MagicMock()
+        mock_lock.acquire.return_value = (True, False)
+        mock_get_lock.return_value = mock_lock
+
+        mock_coordination = MagicMock()
+        mock_coordination.acquire_market_workload.return_value = (True, False)
+        mock_coordination.acquire_external_fetch.return_value = (False, False)
+        mock_coordination.get_external_fetch_holder.return_value = {
+            "task_name": "refresh_all_fundamentals",
+            "task_id": "other-task",
+        }
+        mock_get_coordination.return_value = mock_coordination
+
+        retry_calls = []
+
+        def _retry(*, exc=None, countdown=None, max_retries=None):
+            retry_calls.append(
+                {
+                    "exc": exc,
+                    "countdown": countdown,
+                    "max_retries": max_retries,
+                }
+            )
+            raise Retry(message=str(exc))
+
+        task = SimpleNamespace(
+            request=SimpleNamespace(id="task-123", retries=0),
+            retry=_retry,
+        )
+
+        @serialized_data_fetch("smart_refresh_cache")
+        def my_func(self, market=None):
+            return "ok"
+
+        caplog.set_level(logging.ERROR)
+        with pytest.raises(Retry):
+            my_func(task, market="US")
+
+        assert retry_calls[0]["countdown"] == 15
+        assert retry_calls[0]["max_retries"] == 10_000
+        assert "waiting_for_external_fetch_global" in str(retry_calls[0]["exc"])
+        mock_coordination.release_market_workload.assert_called_once_with(
+            "task-123",
+            market="US",
+        )
+        mock_lock.release.assert_called_once_with("task-123", market="US")
+        assert not any(
+            "Error in data fetch task smart_refresh_cache" in record.message
+            for record in caplog.records
+        )
 
     @patch("app.wiring.bootstrap.get_data_fetch_lock")
     @patch("app.tasks.data_fetch_lock.settings")

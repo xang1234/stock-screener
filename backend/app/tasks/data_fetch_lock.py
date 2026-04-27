@@ -11,6 +11,8 @@ from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+from celery.exceptions import Retry
+
 try:
     import redis  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
@@ -18,6 +20,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in desktop packaging
 
 from ..config import settings
 from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
+from .workload_coordination import _coordination_retry
 
 logger = logging.getLogger(__name__)
 
@@ -468,13 +471,7 @@ def serialized_data_fetch(task_name: str):
                         f"({current.get('task_name', 'unknown')})"
                     )
                     if task_instance is not None and hasattr(task_instance, "retry"):
-                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
-                        countdown = min(15 * (2 ** retries), 300)
-                        raise task_instance.retry(
-                            exc=RuntimeError(message),
-                            countdown=countdown,
-                            max_retries=None,
-                        )
+                        _coordination_retry(task_instance, message)
                     return {
                         "status": "waiting",
                         "wait_reason": f"waiting_for_market_workload:{normalize_market(market_value)}",
@@ -493,13 +490,7 @@ def serialized_data_fetch(task_name: str):
                         f"({current.get('task_name', 'unknown')})"
                     )
                     if task_instance is not None and hasattr(task_instance, "retry"):
-                        retries = getattr(getattr(task_instance, "request", None), "retries", 0) or 0
-                        countdown = min(15 * (2 ** retries), 300)
-                        raise task_instance.retry(
-                            exc=RuntimeError(message),
-                            countdown=countdown,
-                            max_retries=None,
-                        )
+                        _coordination_retry(task_instance, message)
                     return {
                         "status": "waiting",
                         "wait_reason": "waiting_for_external_fetch_global",
@@ -521,6 +512,12 @@ def serialized_data_fetch(task_name: str):
                     task_name, duration, market_label,
                 )
                 return result
+            except Retry as e:
+                logger.info(
+                    "Data fetch task %s deferred by Celery retry (market=%s): %s",
+                    task_name, market_label, e,
+                )
+                raise
             except Exception as e:
                 logger.error(
                     "Error in data fetch task %s (market=%s): %s",
