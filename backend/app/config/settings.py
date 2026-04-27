@@ -331,6 +331,7 @@ class Settings(BaseSettings):
     # Redis Bulk Pipeline Configuration (for large multi-symbol fetches)
     redis_bulk_socket_timeout: int = 30  # Timeout for bulk pipeline operations (seconds)
     redis_pipeline_chunk_size: int = 500  # Symbols per Redis pipeline chunk
+    price_cache_db_chunk_size: int = 250  # Symbols per bulk StockPrice database query
 
     # Price Cache Batch Fetching Configuration
     price_cache_yfinance_batch_size: int = 50  # Symbols per yfinance batch in get_many()
