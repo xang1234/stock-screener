@@ -119,9 +119,11 @@ class TestCompilePathHappyPath:
         feature_store = FakeFeatureStoreRepository()
         symbols = ["AAPL", "MSFT", "GOOGL"]
         rows = [
-            _row("AAPL", custom_score=85, current_price=150),
-            _row("MSFT", custom_score=72, current_price=300),
-            _row("GOOGL", custom_score=55, current_price=120),  # below min_score
+            # Both per-field thresholds (price>=20, ma_alignment=True) pass.
+            _row("AAPL", custom_score=85, current_price=150, ma_alignment=True),
+            _row("MSFT", custom_score=72, current_price=300, ma_alignment=True),
+            # MA misaligned — must fail the boolean filter and be excluded.
+            _row("GOOGL", custom_score=85, current_price=120, ma_alignment=False),
         ]
         run_id = _publish_run(
             feature_runs, feature_store, symbols=symbols, rows=rows
@@ -139,7 +141,8 @@ class TestCompilePathHappyPath:
 
         assert result.status == "completed"
         assert result.total_stocks == 3
-        # GOOGL filtered out by min_score; AAPL + MSFT persisted.
+        # Per-field threshold pass test (no stale-criteria custom_score gate):
+        # GOOGL excluded because ma_alignment=False; AAPL + MSFT persisted.
         assert len(dispatcher.dispatched) == 0
         persisted = uow.scan_results._persisted_results
         persisted_symbols = sorted(sym for _, sym, _ in persisted)
@@ -150,6 +153,52 @@ class TestCompilePathHappyPath:
         # feature_run_id is intentionally None — read path uses scan_results.
         assert scan.feature_run_id is None
         assert run_id is not None
+
+    def test_compile_path_does_not_apply_stale_custom_score_gate(self):
+        """A covering run reached this path because its (input_hash) differs
+        from the request, so its stored custom_score was computed under a
+        different criteria set. The compile path must not use it as a pass
+        gate — only per-field thresholds gate passing.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        # custom_score=10 was computed under different criteria; the user's
+        # actual per-field thresholds (price>=20, ma_alignment=True) all
+        # pass, so the row must be persisted regardless of the stored score.
+        rows = [
+            _row(
+                "AAPL", custom_score=10, current_price=150, ma_alignment=True
+            ),
+        ]
+        _publish_run(
+            feature_runs, feature_store, symbols=symbols, rows=rows
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "completed"
+        assert len(dispatcher.dispatched) == 0
+        persisted = sorted(
+            sym for _, sym, _ in uow.scan_results._persisted_results
+        )
+        assert persisted == ["AAPL"]
 
     def test_compile_path_applies_price_range(self):
         feature_runs = FakeFeatureRunRepository()
@@ -288,6 +337,92 @@ class TestCompilePathFallsBack:
         result = uc.execute(
             uow,
             _custom_command(screeners=["custom", "minervini"]),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_index_universe_dispatches_async(self):
+        """INDEX universes pass universe_market=None even when symbols are
+        single-market, which would mismatch async unit semantics. Defer.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL", "MSFT"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[
+                _row("AAPL", custom_score=85),
+                _row("MSFT", custom_score=85),
+            ],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            CreateScanCommand(
+                universe_def="index:SP500",
+                universe_label="S&P 500",
+                universe_key="index:SP500",
+                universe_type="index",
+                universe_index="SP500",
+                screeners=["custom"],
+                criteria={
+                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_custom_universe_dispatches_async(self):
+        """Symbol-list (CUSTOM) universes also defer to async — same reason."""
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL", "MSFT"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[
+                _row("AAPL", custom_score=85),
+                _row("MSFT", custom_score=85),
+            ],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            CreateScanCommand(
+                universe_def="custom",
+                universe_label="My Symbols",
+                universe_key="custom",
+                universe_type="custom",
+                universe_symbols=symbols,
+                screeners=["custom"],
+                criteria={
+                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "min_score": 70,
+                },
+            ),
         )
 
         assert result.status == "queued"

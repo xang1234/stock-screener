@@ -171,6 +171,24 @@ class CreateScanUseCase:
 
         Failures are logged but never raised so a misconfigured feature
         store can never block scan creation.
+
+        Correctness note — score gate. By definition this path runs only
+        when the exact-signature lookup missed, so the covering run was
+        produced under different custom-screener criteria. ``custom_score``
+        in the stored details was computed against *that* run's filters,
+        not the user's, so reusing it as a pass gate would yield results
+        that disagree with async (a different filter set produces a
+        different normalised score). We therefore don't apply
+        ``custom_score >= min_score`` here. The per-field thresholds the
+        user supplied (price, volume, RS, MA alignment, …) compile into
+        ``filter_spec`` and serve as the pass test: a row survives iff it
+        meets every user-specified threshold.
+
+        That makes the compile path strictly stricter than async (which
+        accepts partial-credit scoring against ``min_score``); a stock
+        scoring 75 with a missing filter would pass async at
+        ``min_score=70`` but is excluded here. We accept that strictness
+        as the price of avoiding a stale-criteria score.
         """
         try:
             compiled: CompiledCustomCriteria = compile_custom_criteria(
@@ -191,16 +209,17 @@ class CreateScanUseCase:
                 len(compiled.unrepresentable_keys),
             )
             return None
-        if compiled.score_field is None or compiled.min_score is None:
-            # Compile path is currently scoped to single-screener custom
-            # scans, where ``custom_score`` is the unambiguous pass field.
-            # Multi-screener composites would need extra logic to pick the
-            # right gate; defer those to the async path.
+        if compiled.score_field is None:
+            # ``score_field`` is set only for ``screeners == ["custom"]``.
+            # Multi-screener composites would need extra logic to derive
+            # a consistent pass test; defer those to the async path.
             return None
-        if not compiled.has_constraints:
-            # No filters and no score gate: the result would be the entire
-            # run universe with no semantic guarantee. Defer to async so
-            # the scanner produces real per-symbol scores.
+        if not compiled.filter_spec.range_filters \
+                and not compiled.filter_spec.categorical_filters \
+                and not compiled.filter_spec.boolean_filters:
+            # Without per-field thresholds the compile path would return
+            # the entire covering universe — meaningless as a "scan".
+            # Defer to async so the scanner produces real scores.
             return None
 
         try:
@@ -222,19 +241,10 @@ class CreateScanUseCase:
             )
             return None
 
-        # Apply the score gate (e.g. custom_score >= min_score) at the SQL
-        # layer so we only persist passing rows. This keeps the scan focused
-        # on matches and lets ``passed_stocks`` equal the persisted count.
-        filter_spec = compiled.filter_spec
-        if compiled.score_field is not None and compiled.min_score is not None:
-            filter_spec.add_range(
-                compiled.score_field, min_value=compiled.min_score
-            )
-
         try:
             results = uow.feature_store.query_run_details(
                 run.id,
-                filter_spec,
+                compiled.filter_spec,
                 symbols=symbols,
             )
         except Exception:
@@ -340,7 +350,17 @@ class CreateScanUseCase:
             # but the criteria compile cleanly into queryable fields, serve
             # the scan from a published feature run as a single SQL query
             # instead of dispatching async chunked compute.
-            if instant_match is None:
+            #
+            # Restricted to ALL / MARKET universes so the mixed-market vs
+            # single-market policy that drives volume/market-cap unit
+            # semantics is unambiguous: ALL is mixed-market, MARKET pins a
+            # single market explicitly. INDEX / CUSTOM / TEST universes
+            # have ``universe_market = None`` even when their resolved
+            # symbols all live in one market, so the compiler would treat
+            # them as mixed-market (USD columns) while async derives the
+            # mode from resolved symbols and may use native units. Defer
+            # those to async to avoid silent unit mismatches.
+            if instant_match is None and should_attempt_instant:
                 compile_outcome = self._attempt_compile_path(uow, cmd, symbols)
 
             # ── Create scan record ───────────────────────────────────
