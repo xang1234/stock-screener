@@ -14,7 +14,7 @@ import KeyboardIcon from '@mui/icons-material/Keyboard';
 import PeopleIcon from '@mui/icons-material/People';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAllFilteredSymbols, getSetupDetails, getSingleResult } from '../../api/scans';
-import { fetchPriceHistory, priceHistoryKeys } from '../../api/priceHistory';
+import { prefetchPriceHistoryBatch } from '../../api/priceHistory';
 import { getStockFundamentals } from '../../api/stocks';
 import { getGroupDetail } from '../../api/groups';
 import { useChartNavigation } from '../../hooks/useChartNavigation';
@@ -252,23 +252,27 @@ function ChartViewerModal({
     setSetupDrawerOpen(false);
   }, [currentSymbol]);
 
-  // Prefetch adjacent stocks for smooth navigation with staggered timing
+  // Prefetch adjacent stocks (next 5 / prev 5) for smooth navigation.
+  // Price history fetches in a single batch; fundamentals + scan result still
+  // go individually (no batch endpoints for those yet).
   useEffect(() => {
     if (!open || !currentSymbol || !navigationSymbols) return;
 
-    const prefetchSymbol = (symbol) => {
-      // Prefetch price history
-      queryClient.prefetchQuery({
-        queryKey: priceHistoryKeys.symbol(symbol, '6mo'),
-        queryFn: () => fetchPriceHistory(symbol, '6mo'),
-      });
-      // Prefetch fundamentals
+    const nextSymbols = navigationSymbols.slice(currentIndex + 1, currentIndex + 6);
+    const prevSymbols = navigationSymbols.slice(Math.max(0, currentIndex - 5), currentIndex);
+    const adjacent = [...nextSymbols, ...prevSymbols].filter(Boolean);
+    if (adjacent.length === 0) return;
+
+    let cancelled = false;
+    prefetchPriceHistoryBatch(queryClient, adjacent, '6mo');
+
+    adjacent.forEach((symbol) => {
+      if (cancelled) return;
       queryClient.prefetchQuery({
         queryKey: ['fundamentals', symbol],
         queryFn: () => getStockFundamentals(symbol),
         staleTime: 300000,
       });
-      // Prefetch stock result
       if (scanId) {
         queryClient.prefetchQuery({
           queryKey: ['stockResult', scanId, symbol],
@@ -276,34 +280,10 @@ function ChartViewerModal({
           staleTime: 300000,
         });
       }
-    };
-
-    // Clear any pending timeouts from previous renders
-    const timeouts = [];
-
-    // Get next 5 and previous 5 stocks
-    const nextSymbols = navigationSymbols.slice(currentIndex + 1, currentIndex + 6);
-    const prevSymbols = navigationSymbols.slice(Math.max(0, currentIndex - 5), currentIndex).reverse();
-
-    // High priority: Immediate next/prev (fetch now)
-    if (nextSymbols[0]) prefetchSymbol(nextSymbols[0]);
-    if (prevSymbols[0]) prefetchSymbol(prevSymbols[0]);
-
-    // Medium priority: Next 2-5 stocks (staggered 100ms apart)
-    nextSymbols.slice(1).forEach((symbol, idx) => {
-      const timeout = setTimeout(() => prefetchSymbol(symbol), (idx + 1) * 100);
-      timeouts.push(timeout);
     });
 
-    // Low priority: Previous 2-5 stocks (staggered after next, starting at 500ms)
-    prevSymbols.slice(1).forEach((symbol, idx) => {
-      const timeout = setTimeout(() => prefetchSymbol(symbol), 500 + (idx + 1) * 100);
-      timeouts.push(timeout);
-    });
-
-    // Cleanup timeouts on unmount or dependency change
     return () => {
-      timeouts.forEach(clearTimeout);
+      cancelled = true;
     };
   }, [open, currentSymbol, currentIndex, navigationSymbols, queryClient, scanId]);
 
