@@ -18,6 +18,7 @@ from .market_queues import SUPPORTED_MARKETS, market_suffix, normalize_market
 
 EXTERNAL_FETCH_GLOBAL_KEY = "external_fetch_global"
 MARKET_WORKLOAD_PREFIX = "market_workload"
+COORDINATION_WAIT_MAX_RETRIES = 10_000
 _SERIALIZED_MARKET_WORKLOAD_DISABLED: ContextVar[bool] = ContextVar(
     "serialized_market_workload_disabled",
     default=False,
@@ -140,7 +141,7 @@ def _coordination_retry(task: Any, message: str) -> None:
     raise task.retry(
         exc=RuntimeError(message),
         countdown=countdown,
-        max_retries=None,
+        max_retries=COORDINATION_WAIT_MAX_RETRIES,
     )
 
 

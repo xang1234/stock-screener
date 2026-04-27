@@ -85,6 +85,53 @@ def test_disable_serialized_market_workload_bypasses_coordination():
 
 
 @patch("app.wiring.bootstrap.get_workload_coordination")
+def test_serialized_market_workload_retries_with_coordination_retry_budget(
+    mock_get_coordination,
+):
+    from app.tasks.workload_coordination import serialized_market_workload
+
+    mock_coordination = MagicMock()
+    mock_coordination.acquire_market_workload.return_value = (False, False)
+    mock_coordination.get_market_workload_holder.return_value = {
+        "task_name": "calculate_daily_group_rankings_with_gapfill",
+        "task_id": "other-task",
+    }
+    mock_get_coordination.return_value = mock_coordination
+
+    retry_calls = []
+
+    def _retry(*, exc=None, countdown=None, max_retries=None):
+        retry_calls.append(
+            {
+                "exc": exc,
+                "countdown": countdown,
+                "max_retries": max_retries,
+            }
+        )
+        raise Retry(message=str(exc))
+
+    task = SimpleNamespace(
+        request=SimpleNamespace(id="task-123", retries=1),
+        retry=_retry,
+    )
+    body_called = False
+
+    @serialized_market_workload("build_daily_snapshot")
+    def my_func(self, market=None):
+        nonlocal body_called
+        body_called = True
+        return {"status": "ok"}
+
+    with pytest.raises(Retry):
+        my_func(task, market="US")
+
+    assert body_called is False
+    assert retry_calls[0]["countdown"] == 30
+    assert retry_calls[0]["max_retries"] == 10_000
+    assert "waiting_for_market_workload:US" in str(retry_calls[0]["exc"])
+
+
+@patch("app.wiring.bootstrap.get_workload_coordination")
 @patch("app.wiring.bootstrap.get_data_fetch_lock")
 def test_serialized_data_fetch_retries_when_external_fetch_lease_is_busy(
     mock_get_lock,
