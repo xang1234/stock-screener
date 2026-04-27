@@ -595,6 +595,48 @@ class SqlFeatureStoreRepository(FeatureStoreRepository):
         symbols = tuple(symbol for (symbol,) in rows)
         return symbols, total
 
+    def query_run_details(
+        self,
+        run_id: int,
+        filters: FilterSpec | None = None,
+        *,
+        symbols: Sequence[str] | None = None,
+    ) -> list[tuple[str, dict]]:
+        run = self._session.get(FeatureRun, run_id)
+        if run is None:
+            raise EntityNotFoundError("FeatureRun", run_id)
+
+        # We only need symbol + details_json. The StockUniverse +
+        # StockFundamental joins must still be present so any filter or
+        # sort field that lives on those tables (market_cap_usd, adv_usd…)
+        # resolves at SQL time — same convention as the bridge methods.
+        q = (
+            self._session.query(
+                StockFeatureDaily.symbol,
+                StockFeatureDaily.details_json,
+            )
+            .outerjoin(StockUniverse, StockFeatureDaily.symbol == StockUniverse.symbol)
+            .outerjoin(StockFundamental, StockFeatureDaily.symbol == StockFundamental.symbol)
+            .filter(StockFeatureDaily.run_id == run_id)
+        )
+
+        if symbols is not None:
+            normalized = sorted({
+                str(s).strip().upper() for s in symbols if str(s).strip()
+            })
+            if not normalized:
+                return []
+            q = q.filter(StockFeatureDaily.symbol.in_(normalized))
+
+        if filters is not None:
+            q = apply_filters(q, filters)
+
+        rows = q.all()
+        return [
+            (symbol, details if isinstance(details, dict) else {})
+            for symbol, details in rows
+        ]
+
     def get_setup_payload_for_run(self, run_id: int, symbol: str) -> dict | None:
         run = self._session.get(FeatureRun, run_id)
         if run is None:

@@ -600,6 +600,55 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         )
         return matches[0]
 
+    def set_run_universe(self, run_id: int, symbols: Sequence[str]) -> None:
+        """Test helper: register the universe a published run covers.
+
+        The real repo reads ``feature_run_universe_symbols``; this fake
+        keeps a parallel mapping so ``find_latest_published_covering``
+        can answer coverage questions without an actual DB.
+        """
+        if not hasattr(self, "_run_universes"):
+            self._run_universes: dict[int, set[str]] = {}
+        self._run_universes[run_id] = {
+            str(s).strip().upper() for s in symbols if str(s).strip()
+        }
+
+    def find_latest_published_covering(
+        self,
+        *,
+        symbols,
+        market: str | None = None,
+    ) -> FeatureRunDomain | None:
+        normalized = sorted({
+            str(s).strip().upper() for s in symbols if str(s).strip()
+        })
+        if not normalized:
+            return None
+
+        universes = getattr(self, "_run_universes", {})
+        published = [
+            run for run in self._runs.values()
+            if run.status == RunStatus.PUBLISHED
+        ]
+        if not published:
+            return None
+
+        # Newest published first — mirrors pointer-based selection in the
+        # real repo (the pointer always points at the most recent publish).
+        published.sort(
+            key=lambda run: (run.published_at or datetime.min, run.id or 0),
+            reverse=True,
+        )
+
+        for run in published:
+            covered = universes.get(run.id)
+            if covered is None:
+                continue
+            if all(symbol in covered for symbol in normalized):
+                return run
+
+        return None
+
     def get_run(self, run_id) -> FeatureRunDomain:
         return self._get_or_raise(run_id)
 
@@ -835,6 +884,95 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
         if page is not None:
             symbols = symbols[page.offset : page.offset + page.limit]
         return symbols, len(self._rows[run_id])
+
+    def query_run_details(
+        self,
+        run_id,
+        filters=None,
+        *,
+        symbols=None,
+    ):
+        """Bridge method: return ``(symbol, details_json)`` pairs from a run.
+
+        The real repo applies ``FilterSpec`` constraints in SQL; this fake
+        applies a small subset (range filters on either ``composite_score``
+        or JSON fields, plus categorical/boolean) in Python so use case
+        tests can exercise the compile path end-to-end without a DB.
+        """
+        if run_id not in self._rows:
+            raise EntityNotFoundError("FeatureRun", run_id)
+
+        rows = list(self._rows[run_id])
+
+        if symbols is not None:
+            allow = {
+                str(s).strip().upper() for s in symbols if str(s).strip()
+            }
+            rows = [r for r in rows if r.symbol.upper() in allow]
+
+        def _value(row, field: str):
+            if field == "composite_score":
+                return row.composite_score
+            if field == "overall_rating":
+                return row.overall_rating
+            if field == "passes_count":
+                return row.passes_count
+            if field == "symbol":
+                return row.symbol
+            details = row.details or {}
+            return details.get(field) if isinstance(details, dict) else None
+
+        if filters is not None:
+            from app.domain.common.query import FilterMode
+
+            filtered: list = []
+            for row in rows:
+                ok = True
+                for rf in filters.range_filters:
+                    val = _value(row, rf.field)
+                    if val is None:
+                        ok = False
+                        break
+                    try:
+                        numeric = float(val)
+                    except (TypeError, ValueError):
+                        ok = False
+                        break
+                    if rf.min_value is not None and numeric < float(rf.min_value):
+                        ok = False
+                        break
+                    if rf.max_value is not None and numeric > float(rf.max_value):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                for cf in filters.categorical_filters:
+                    val = _value(row, cf.field)
+                    in_values = val in cf.values
+                    if cf.mode == FilterMode.EXCLUDE:
+                        if in_values:
+                            ok = False
+                            break
+                    else:
+                        if not in_values:
+                            ok = False
+                            break
+                if not ok:
+                    continue
+                for bf in filters.boolean_filters:
+                    val = _value(row, bf.field)
+                    if val is None or bool(val) != bf.value:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                filtered.append(row)
+            rows = filtered
+
+        return [
+            (row.symbol, dict(row.details) if isinstance(row.details, dict) else {})
+            for row in rows
+        ]
 
     def get_setup_payload_for_run(self, run_id, symbol):
         self.last_get_setup_payload_for_run_args = {

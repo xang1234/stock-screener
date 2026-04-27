@@ -130,6 +130,28 @@ class FeatureRunRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def find_latest_published_covering(
+        self,
+        *,
+        symbols: Sequence[str],
+        market: str | None = None,
+    ) -> FeatureRunDomain | None:
+        """Return the newest published run whose universe covers all *symbols*.
+
+        Used by the feature-store-first custom scan path: when the criteria
+        compile cleanly into queryable fields we don't need an exact
+        signature match — we just need a published run that already covers
+        every symbol the scan would otherwise process.
+
+        If *market* is provided the implementation tries the
+        ``latest_published_market:{market}`` pointer first (matching the
+        per-market publish convention) and falls back to the global
+        ``latest_published`` pointer. Returns ``None`` when no covering run
+        exists.
+        """
+        ...
+
+    @abc.abstractmethod
     def get_run(self, run_id: int) -> FeatureRunDomain:
         """Return a run by PK.
 
@@ -350,6 +372,35 @@ class FeatureStoreRepository(abc.ABC):
         symbol: str,
     ) -> dict | None:
         """Return setup-engine explain payload for a symbol in a feature run."""
+        ...
+
+    @abc.abstractmethod
+    def query_run_details(
+        self,
+        run_id: int,
+        filters: FilterSpec | None = None,
+        *,
+        symbols: Sequence[str] | None = None,
+    ) -> list[tuple[str, dict]]:
+        """Return ``(symbol, details_json)`` pairs from a feature run.
+
+        Used by the feature-store-first custom scan path: the use case
+        compiles user criteria into a ``FilterSpec`` and asks for the raw
+        per-symbol details so it can persist them as scan results without
+        recomputing scores. ``details_json`` matches the orchestrator's
+        output shape, so the result is directly usable by
+        ``ScanResultRepository.persist_orchestrator_results``.
+
+        Args:
+            run_id: Feature run ID (caller validates existence).
+            filters: Optional feature-store filter spec to apply (range,
+                categorical, boolean filters on indexed columns or JSON
+                paths).
+            symbols: Optional symbol allow-list to intersect with the run's
+                rows. Useful when the scan's universe is narrower than the
+                run's published universe (e.g., index/custom scoped scans
+                served from an all-market run).
+        """
         ...
 
 
