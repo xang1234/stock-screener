@@ -753,16 +753,29 @@ def test_build_daily_snapshot_bootstrap_gate_pass_wires_cache_only_without_null_
 def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback():
     fake_use_case = _FakeUseCase()
     retry_calls = []
+    retry_kwargs = {
+        "as_of_date_str": "2026-03-16",
+        "activity_lifecycle": "bootstrap",
+        "bootstrap_cache_only_if_covered": True,
+        "bootstrap_coverage_report": {
+            "eligible": False,
+            "price_coverage_ratio": 0.9,
+            "fundamentals_coverage_ratio": 1.0,
+            "price_missing_symbols": 1,
+            "fundamentals_missing_symbols": 0,
+        },
+    }
 
     class _RetryTask:
-        request = SimpleNamespace(id="task-123", retries=2)
+        request = SimpleNamespace(id="task-123", retries=2, kwargs=retry_kwargs)
 
-        def retry(self, *, exc=None, countdown=None, max_retries=None):
+        def retry(self, *, exc=None, countdown=None, max_retries=None, kwargs=None):
             retry_calls.append(
                 {
                     "exc": exc,
                     "countdown": countdown,
                     "max_retries": max_retries,
+                    "kwargs": kwargs,
                 }
             )
             raise Retry(message=str(exc))
@@ -791,16 +804,7 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
         with pytest.raises(Retry):
             _TASK_BODY(
                 _RetryTask(),
-                as_of_date_str="2026-03-16",
-                activity_lifecycle="bootstrap",
-                bootstrap_cache_only_if_covered=True,
-                bootstrap_coverage_report={
-                    "eligible": False,
-                    "price_coverage_ratio": 0.9,
-                    "fundamentals_coverage_ratio": 1.0,
-                    "price_missing_symbols": 1,
-                    "fundamentals_missing_symbols": 0,
-                },
+                **retry_kwargs,
             )
 
     assert fake_use_case.received_cmd is None
@@ -809,6 +813,10 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
             "exc": ANY,
             "countdown": 30,
             "max_retries": 120,
+            "kwargs": {
+                **retry_kwargs,
+                "bootstrap_coverage_report": None,
+            },
         }
     ]
     assert "waiting_for_bootstrap_cache_coverage:US" in str(retry_calls[0]["exc"])

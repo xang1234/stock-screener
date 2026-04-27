@@ -928,10 +928,15 @@ def build_daily_snapshot(
                 message=failure_message,
             )
             raise RuntimeError(failure_message)
+        request_kwargs = dict(
+            getattr(getattr(self, "request", None), "kwargs", {}) or {}
+        )
+        request_kwargs["bootstrap_coverage_report"] = None
         raise self.retry(
             exc=RuntimeError(message),
             countdown=BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS,
             max_retries=BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
+            kwargs=request_kwargs,
         )
 
     if bootstrap_gate_requested and not bool(
