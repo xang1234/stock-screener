@@ -3,6 +3,7 @@ Service for calculating and managing IBD Industry Group Rankings.
 
 Calculates daily rankings based on average RS rating of constituent stocks.
 """
+import gc
 import logging
 import math
 import statistics
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from ..config import settings
 from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
 from ..models.scan_result import Scan, ScanResult
@@ -1728,46 +1730,56 @@ class IBDGroupRankService:
             prefetch,
             market=normalized_market,
         )
-        rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, missing_dates)
+        chunk_size = max(1, int(settings.group_rank_gapfill_chunk_size or 30))
+        logger.info(
+            "Processing group-ranking gap-fill in RS chunks of %d date(s)",
+            chunk_size,
+        )
+        for chunk_start in range(0, len(missing_dates), chunk_size):
+            date_chunk = missing_dates[chunk_start:chunk_start + chunk_size]
+            rs_by_date = self._calculate_rs_by_symbol_for_dates(prefetch, date_chunk)
 
-        for calc_date in missing_dates:
-            try:
-                # Calculate RS for each group from cache
-                group_metrics = []
-                rs_by_symbol = rs_by_date.get(calc_date, {})
-                for group_name in all_groups:
-                    metrics = self._calculate_group_metrics_from_rs(
-                        group_name,
-                        symbols_by_group.get(group_name, []),
-                        rs_by_symbol,
-                        prefetch.market_caps,
-                        calc_date,
-                    )
-                    if metrics:
-                        group_metrics.append(metrics)
+            for calc_date in date_chunk:
+                try:
+                    # Calculate RS for each group from cache
+                    group_metrics = []
+                    rs_by_symbol = rs_by_date.get(calc_date, {})
+                    for group_name in all_groups:
+                        metrics = self._calculate_group_metrics_from_rs(
+                            group_name,
+                            symbols_by_group.get(group_name, []),
+                            rs_by_symbol,
+                            prefetch.market_caps,
+                            calc_date,
+                        )
+                        if metrics:
+                            group_metrics.append(metrics)
 
-                if group_metrics:
-                    # Sort and rank
-                    group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
-                    for rank, metrics in enumerate(group_metrics, start=1):
-                        metrics['rank'] = rank
+                    if group_metrics:
+                        # Sort and rank
+                        group_metrics.sort(key=lambda x: x['avg_rs_rating'], reverse=True)
+                        for rank, metrics in enumerate(group_metrics, start=1):
+                            metrics['rank'] = rank
 
-                    # Store
-                    self._store_rankings(
-                        db,
-                        calc_date,
-                        group_metrics,
-                        market=normalized_market,
-                    )
-                    stats['processed'] += 1
-                    logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
-                else:
+                        # Store
+                        self._store_rankings(
+                            db,
+                            calc_date,
+                            group_metrics,
+                            market=normalized_market,
+                        )
+                        stats['processed'] += 1
+                        logger.debug(f"Filled gap for {calc_date}: {len(group_metrics)} groups")
+                    else:
+                        stats['errors'] += 1
+                        logger.warning(f"No results for {calc_date}")
+
+                except Exception as e:
                     stats['errors'] += 1
-                    logger.warning(f"No results for {calc_date}")
+                    logger.error(f"Error filling gap for {calc_date}: {e}")
 
-            except Exception as e:
-                stats['errors'] += 1
-                logger.error(f"Error filling gap for {calc_date}: {e}")
+            rs_by_date.clear()
+            gc.collect()
 
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(

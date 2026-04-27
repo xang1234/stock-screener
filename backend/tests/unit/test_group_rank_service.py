@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
@@ -815,6 +816,50 @@ def test_fill_gaps_optimized_uses_prefetched_group_symbols_without_inner_lookup(
     assert row.rank == 1
     assert row.num_stocks == 3
     assert row.avg_rs_rating == 50.0
+
+
+def test_fill_gaps_optimized_chunks_rs_date_calculation(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+    symbols = ["AAA", "BBB", "CCC"]
+    prefetch = group_rank_module.GroupRankPrefetchData(
+        benchmark_prices=price_data,
+        prices_by_symbol={symbol: price_data for symbol in symbols},
+        active_symbols=set(symbols),
+        market_caps={symbol: 1_000_000_000 for symbol in symbols},
+        stats={
+            "target_symbols": 3,
+            "symbols_with_prices": 3,
+            "cache_miss_symbols": 0,
+            "spy_cached": True,
+            "skipped_unsupported_symbols": 0,
+        },
+        symbols_by_group={"Software": symbols},
+    )
+    missing_dates = [date(2026, 1, day) for day in range(1, 8)]
+    chunked_dates: list[list[date]] = []
+
+    monkeypatch.setattr(settings, "group_rank_gapfill_chunk_size", 3)
+    monkeypatch.setattr(service, "_prefetch_all_data", lambda db, **kw: prefetch)
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["Software"],
+    )
+
+    def fake_rs_for_dates(prefetch_arg, dates):
+        chunked_dates.append(list(dates))
+        return {
+            calc_date: {symbol: 50.0 for symbol in symbols}
+            for calc_date in dates
+        }
+
+    monkeypatch.setattr(service, "_calculate_rs_by_symbol_for_dates", fake_rs_for_dates)
+
+    stats = service.fill_gaps_optimized(db_session, missing_dates, market="US")
+
+    assert [len(chunk) for chunk in chunked_dates] == [3, 3, 1]
+    assert stats["processed"] == 7
+    assert db_session.query(IBDGroupRank).count() == 7
 
 
 def test_vectorized_group_rs_matches_legacy_cache_path_and_excludes_short_history(
