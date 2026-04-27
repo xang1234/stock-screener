@@ -43,13 +43,25 @@ fix(chatbot): handle empty response from LLM provider
 refactor(api): consolidate stock data fetching logic
 ```
 
+## Branching Model
+
+The repo uses a two-branch flow:
+
+- **`develop`** — long-lived integration branch. Feature branches branch off `develop`, get merged back into `develop` via PR after CI passes.
+- **`main`** — production source of truth. Only `develop` (or hotfix branches) get merged into `main`. Production-grade workflows fire off `main` only: GHCR `latest` images, semver `v*` release tags, the static site (GitHub Pages), and the weekly reference data refresh.
+
+PRs into either `develop` or `main` run the full CI quality gate suite. Image publishing is gated to direct pushes on `main` and `v*` tags only — it never fires from develop or from PRs.
+
+GitHub branch protection should require PRs (no direct pushes) and passing CI on both `main` and `develop`.
+
 ## Pull Requests
 
-1. Create a feature branch from `main`
+1. Create a feature branch from `develop`
 2. Make your changes with clear, conventional commit messages
 3. Ensure all quality gates pass locally (`make all`)
-4. Open a PR against `main` with a description of what changed and why
+4. Open a PR against `develop` with a description of what changed and why
 5. CI runs automatically on all PRs
+6. Once accumulated work in `develop` is validated, open a `develop` → `main` PR to ship a release-ready slice
 
 ## Testing
 
