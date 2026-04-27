@@ -361,12 +361,15 @@ def calculate_daily_breadth(
 
 def _calculate_daily_breadth_in_process(*, market: str | None = None):
     """Run breadth logic without reacquiring the market workload lease."""
+    from .workload_coordination import disable_serialized_market_workload
+
     task = calculate_daily_breadth
     if str(getattr(task, "__module__", "")).startswith("unittest.mock"):
         return task(market=market)
-    if hasattr(task, "request") and callable(getattr(task, "run", None)):
-        return task.run(market=market)
-    return task(market=market)
+    with disable_serialized_market_workload():
+        if hasattr(task, "request") and callable(getattr(task, "run", None)):
+            return task.run(market=market)
+        return task(market=market)
 
 
 @celery_app.task(bind=True, name='app.tasks.breadth_tasks.backfill_breadth_data')
