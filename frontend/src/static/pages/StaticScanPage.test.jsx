@@ -271,10 +271,8 @@ describe('StaticScanPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(resultsTableSpy).toHaveBeenCalled();
+      expect(resultsTableSpy.mock.calls.at(-1)?.[0]?.results?.[0]?.company_name).toBe('NVIDIA Corporation');
     });
-
-    expect(resultsTableSpy.mock.calls.at(-1)?.[0]?.results?.[0]?.company_name).toBe('NVIDIA Corporation');
 
     await act(async () => {
       chunkRequest.resolve({
