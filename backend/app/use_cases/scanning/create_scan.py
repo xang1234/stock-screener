@@ -38,6 +38,56 @@ FreshnessChecker = Callable[[Iterable[str]], Optional[dict]]
 logger = logging.getLogger(__name__)
 
 
+# Score / pass fields that the daily snapshot computed under whatever
+# criteria the snapshot itself used. By the time we reach the compile path
+# the exact-signature lookup has missed, so those values reflect *some
+# other* criteria set — sorting and ranking by them would mislead users.
+# We replace them with values that describe what the compile path actually
+# guarantees: every persisted row passed every user-specified per-field
+# filter at the SQL gate (so the row is a "perfect match" for the user's
+# enabled filter set, not for whatever the snapshot was scoring).
+_COMPILE_PATH_OVERRIDES: dict[str, object] = {
+    "custom_score": 100.0,
+    "composite_score": 100.0,
+    "rating": "Strong Buy",
+    "passes_template": True,
+    "screeners_run": ["custom"],
+    "screeners_passed": 1,
+    "screeners_total": 1,
+    "composite_method": "weighted_average",
+}
+
+# Per-screener scores belonging to screeners the user didn't request.
+# The covering snapshot may have computed them, but they have no meaning
+# in this scan's context and would clutter result columns / sort options.
+_COMPILE_PATH_DROP_KEYS: tuple[str, ...] = (
+    "minervini_score",
+    "canslim_score",
+    "ipo_score",
+    "volume_breakthrough_score",
+    "composite_reason",
+)
+
+
+def _normalize_compile_details(details: dict) -> dict:
+    """Strip stale-criteria score fields from a compile-path row's details.
+
+    Called per row before passing through ``persist_orchestrator_results``.
+    Per-symbol *facts* (price, RS rating, MA alignment, sector, growth,
+    sparklines, setup-engine outputs) are left untouched — they're inputs
+    to the user's filter, not derived from custom criteria — so users keep
+    seeing the snapshot's factual columns; only the score / rating /
+    pass-template metadata gets normalised.
+    """
+    if not isinstance(details, dict):
+        return dict(_COMPILE_PATH_OVERRIDES)
+    normalized = dict(details)
+    for key in _COMPILE_PATH_DROP_KEYS:
+        normalized.pop(key, None)
+    normalized.update(_COMPILE_PATH_OVERRIDES)
+    return normalized
+
+
 # ── Command (input) ──────────────────────────────────────────────────────
 
 
@@ -413,13 +463,24 @@ class CreateScanUseCase:
 
             if compile_outcome is not None:
                 source_run, results = compile_outcome
-                if results:
-                    uow.scan_results.persist_orchestrator_results(scan_id, results)
+                # Normalise stale-criteria score / rating / pass fields
+                # before persisting — the covering run was produced under
+                # different criteria, so its custom_score / composite_score
+                # / rating would mislead users sorting by them. See
+                # ``_normalize_compile_details`` for the rationale.
+                normalized_results = [
+                    (symbol, _normalize_compile_details(details))
+                    for symbol, details in results
+                ]
+                if normalized_results:
+                    uow.scan_results.persist_orchestrator_results(
+                        scan_id, normalized_results
+                    )
                 uow.scans.update_status(
                     scan_id,
                     "completed",
                     total_stocks=len(symbols),
-                    passed_stocks=len(results),
+                    passed_stocks=len(normalized_results),
                 )
                 uow.commit()
                 logger.info(

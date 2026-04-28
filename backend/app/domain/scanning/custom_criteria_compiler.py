@@ -28,13 +28,18 @@ from dataclasses import dataclass
 from app.domain.common.query import FilterMode, FilterSpec
 
 
-# Markets where the feature store's USD-normalised columns (adv_usd,
-# market_cap_usd) match the unit a user is most likely to type into the
-# custom volume/market-cap filters. For other single-market universes
-# (e.g. HK with HKD-denominated thresholds) the units would mismatch, so
-# we treat those filters as unrepresentable and fall back to async — where
-# CustomScanner applies the correct mixed-market policy per symbol.
-_USD_COMPATIBLE_SINGLE_MARKETS: frozenset[str] = frozenset({"US"})
+# Markets where the feature store's USD-normalised ``market_cap_usd``
+# column matches the unit a user is most likely to type into the custom
+# market-cap filter. ``CustomScanner._check_market_cap`` reads native
+# market_cap in single-market mode and ``market_cap_usd`` in mixed-market
+# mode (see ``app.domain.scanning.mixed_market_policy.resolve_cap_for_filter``);
+# for US the native column already holds USD so the values agree, but
+# every other single-market universe (HK, JP, TW…) holds native currency
+# and would silently disagree with our USD column. Volume has no
+# analogous mapping — single-market mode evaluates ``volume_min`` against
+# share count, which has no column in ``stock_feature_daily``, so volume
+# is *only* representable in mixed-market mode regardless of currency.
+_USD_MARKET_CAP_COMPATIBLE_SINGLE_MARKETS: frozenset[str] = frozenset({"US"})
 
 
 @dataclass(frozen=True)
@@ -77,16 +82,28 @@ def _flatten_filters(criteria: dict | None) -> dict:
     return base
 
 
-def _is_usd_unit_compatible(universe_market: str | None) -> bool:
-    """Whether the universe's market matches the feature store's USD columns.
+def _is_mixed_market(universe_market: str | None) -> bool:
+    """Whether the universe runs in mixed-market mode (no single-market pin).
 
-    ``None`` (mixed-market) and explicit USD markets compile; other single
-    markets (HK, JP, TW…) do not, because the user's threshold is most
-    likely in native currency while the column is USD-normalised.
+    ``CustomScanner`` derives mixed-vs-single from the resolved StockData
+    flag, but at scan-creation time we only have the universe metadata;
+    ``universe_type ∈ {ALL, MARKET}`` (gated upstream) plus
+    ``universe_market is None`` is the unambiguous mixed-market signal.
     """
-    if universe_market is None:
+    return universe_market is None
+
+
+def _is_market_cap_usd_compatible(universe_market: str | None) -> bool:
+    """Whether the user's market-cap threshold can be evaluated against
+    ``market_cap_usd`` without a unit mismatch — true for mixed-market and
+    explicit USD markets only.
+    """
+    if _is_mixed_market(universe_market):
         return True
-    return str(universe_market).strip().upper() in _USD_COMPATIBLE_SINGLE_MARKETS
+    return (
+        str(universe_market).strip().upper()
+        in _USD_MARKET_CAP_COMPATIBLE_SINGLE_MARKETS
+    )
 
 
 def compile_custom_criteria(
@@ -117,7 +134,8 @@ def compile_custom_criteria(
     representable: list[str] = []
     unrepresentable: list[str] = []
 
-    usd_compatible = _is_usd_unit_compatible(universe_market)
+    mixed_market = _is_mixed_market(universe_market)
+    market_cap_compatible = _is_market_cap_usd_compatible(universe_market)
 
     # Price range -> JSON current_price
     p_min = flat.get("price_min")
@@ -129,20 +147,25 @@ def compile_custom_criteria(
         if p_max is not None:
             representable.append("price_max")
 
-    # Volume -> StockFundamental.adv_usd (USD-normalised)
+    # Volume -> StockFundamental.adv_usd (USD notional). Only correct in
+    # mixed-market mode; single-market mode evaluates ``volume_min`` as a
+    # *share* threshold against price-data volume which has no column in
+    # ``stock_feature_daily``.
     v_min = flat.get("volume_min")
     if v_min is not None and v_min > 0:
-        if usd_compatible:
+        if mixed_market:
             spec.add_range("adv_usd", min_value=v_min)
             representable.append("volume_min")
         else:
             unrepresentable.append("volume_min")
 
-    # Market cap -> StockFundamental.market_cap_usd (USD-normalised)
+    # Market cap -> StockFundamental.market_cap_usd. Mixed-market and US
+    # single-market resolve to USD; other single-markets hold native
+    # currency and would silently disagree with the column.
     mc_min = flat.get("market_cap_min")
     mc_max = flat.get("market_cap_max")
     if mc_min is not None or mc_max is not None:
-        if usd_compatible:
+        if market_cap_compatible:
             spec.add_range("market_cap_usd", min_value=mc_min, max_value=mc_max)
             if mc_min is not None:
                 representable.append("market_cap_min")

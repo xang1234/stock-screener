@@ -200,6 +200,87 @@ class TestCompilePathHappyPath:
         )
         assert persisted == ["AAPL"]
 
+    def test_compile_path_normalises_stale_score_fields(self):
+        """Stored custom_score/composite_score/rating/passes_template come
+        from a different criteria set (otherwise the exact-match path would
+        have caught it). They must not leak into the persisted scan_result
+        row; sorting by score in the UI would otherwise misrank matches.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        # Stored row carries stale-criteria metadata that must not survive,
+        # plus factual snapshot fields that must.
+        stale_row = FeatureRowWrite(
+            symbol="AAPL",
+            as_of_date=date(2026, 4, 24),
+            composite_score=32.0,
+            overall_rating=2,
+            passes_count=0,
+            details={
+                "custom_score": 32.0,
+                "current_price": 150.0,
+                "ma_alignment": True,
+                "rating": "Watch",
+                "passes_template": False,
+                "minervini_score": 88.0,
+                "canslim_score": 70.0,
+                "screeners_run": ["custom", "minervini", "canslim"],
+                "screeners_passed": 2,
+                "screeners_total": 3,
+                "rs_rating": 91,
+                "gics_sector": "Technology",
+            },
+        )
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[stale_row],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "completed"
+        assert len(uow.scan_results._persisted_results) == 1
+        _, _, persisted = uow.scan_results._persisted_results[0]
+
+        # Stale score/rating/pass fields are normalised to compile-path
+        # semantics ("the row passed every user-specified filter").
+        assert persisted["custom_score"] == 100.0
+        assert persisted["composite_score"] == 100.0
+        assert persisted["rating"] == "Strong Buy"
+        assert persisted["passes_template"] is True
+        assert persisted["screeners_run"] == ["custom"]
+        assert persisted["screeners_passed"] == 1
+        assert persisted["screeners_total"] == 1
+
+        # Other-screener scores from the snapshot are dropped — the user's
+        # scan was custom-only, so they have no meaning in this context.
+        assert "minervini_score" not in persisted
+        assert "canslim_score" not in persisted
+
+        # Per-symbol facts (not derived from custom criteria) survive.
+        assert persisted["current_price"] == 150.0
+        assert persisted["rs_rating"] == 91
+        assert persisted["gics_sector"] == "Technology"
+
     def test_compile_path_applies_price_range(self):
         feature_runs = FakeFeatureRunRepository()
         feature_store = FakeFeatureStoreRepository()

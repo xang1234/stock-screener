@@ -113,15 +113,20 @@ class TestUsdUnitCompatibility:
         assert "volume_min" in result.representable_keys
         assert "volume_min" not in result.unrepresentable_keys
 
-    def test_volume_min_compiles_for_us_market(self):
+    def test_volume_min_unrepresentable_for_us_single_market(self):
+        """Single-market mode (any market) evaluates volume_min in *shares*,
+        not USD; the feature store has no per-row share-volume column, so
+        the only safe behaviour is to defer to async.
+        """
         result = compile_custom_criteria(
             {"custom_filters": {"volume_min": 1_000_000}},
             screeners=["custom"],
             universe_market="US",
         )
 
-        rf = _range(result.filter_spec, "adv_usd")
-        assert rf is not None
+        assert _range(result.filter_spec, "adv_usd") is None
+        assert "volume_min" in result.unrepresentable_keys
+        assert not result.is_fully_representable
 
     def test_volume_min_unrepresentable_for_hk_market(self):
         result = compile_custom_criteria(
@@ -144,6 +149,21 @@ class TestUsdUnitCompatibility:
 
         assert "volume_min" not in result.unrepresentable_keys
         assert _range(result.filter_spec, "adv_usd") is None
+
+    def test_market_cap_compiles_for_us_single_market(self):
+        """US native market_cap is already USD, so the column matches —
+        unlike volume which always uses shares in single-market mode.
+        """
+        result = compile_custom_criteria(
+            {"custom_filters": {"market_cap_min": 1e9}},
+            screeners=["custom"],
+            universe_market="US",
+        )
+
+        rf = _range(result.filter_spec, "market_cap_usd")
+        assert rf is not None
+        assert rf.min_value == 1e9
+        assert "market_cap_min" in result.representable_keys
 
     def test_market_cap_unrepresentable_for_non_usd_market(self):
         result = compile_custom_criteria(
