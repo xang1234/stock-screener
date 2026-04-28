@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS = 30
 BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES = 120
+FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES = 3
+# Celery has one retry counter for manual coverage waits and autoretry_for.
+FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES = (
+    BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES + FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES
+)
 
 
 class CompositeProgressSink:
@@ -103,11 +108,13 @@ def _bootstrap_coverage_wait_message(market: str, report: dict | None) -> str:
 
 def _bootstrap_coverage_total(report: dict | None) -> int:
     report = report or {}
-    return int(
-        report.get("price_total_symbols")
-        or report.get("fundamentals_total_symbols")
-        or 0
-    )
+    price_total = report.get("price_total_symbols")
+    if price_total is not None:
+        return int(price_total)
+    fundamentals_total = report.get("fundamentals_total_symbols")
+    if fundamentals_total is not None:
+        return int(fundamentals_total)
+    return 0
 
 
 def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
@@ -667,7 +674,7 @@ def _is_market_trading_day(as_of: date, *, market: str | None) -> bool:
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=60,
     retry_backoff_max=600,
-    max_retries=3,
+    max_retries=FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
     soft_time_limit=settings.feature_snapshot_soft_time_limit_seconds,
 )
 @serialized_market_workload("build_daily_snapshot")
@@ -686,6 +693,7 @@ def build_daily_snapshot(
     activity_lifecycle: str | None = None,
     bootstrap_cache_only_if_covered: bool = False,
     bootstrap_coverage_report: dict | None = None,
+    bootstrap_coverage_retry_count: int = 0,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -907,9 +915,7 @@ def build_daily_snapshot(
             percent=0,
             message=message,
         )
-        current_retries = int(
-            getattr(getattr(self, "request", None), "retries", 0) or 0
-        )
+        current_retries = int(bootstrap_coverage_retry_count or 0)
         if current_retries >= BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES:
             failure_message = (
                 "bootstrap cache coverage exhausted for "
@@ -932,10 +938,11 @@ def build_daily_snapshot(
             getattr(getattr(self, "request", None), "kwargs", {}) or {}
         )
         request_kwargs["bootstrap_coverage_report"] = None
+        request_kwargs["bootstrap_coverage_retry_count"] = current_retries + 1
         raise self.retry(
             exc=RuntimeError(message),
             countdown=BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS,
-            max_retries=BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
+            max_retries=FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
             kwargs=request_kwargs,
         )
 

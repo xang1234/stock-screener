@@ -16,6 +16,10 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.config import settings
 from app.interfaces.tasks.feature_store_tasks import (
+    BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
+    FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES,
+    FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
+    _bootstrap_coverage_total,
     _create_auto_scan_for_published_run,
     _enrich_feature_run_with_ibd_metadata,
     _fail_stale_feature_runs,
@@ -108,6 +112,24 @@ def test_build_daily_snapshot_normalizes_default_active_universe():
     assert fake_use_case.received_cmd is not None
     assert fake_use_case.received_cmd.universe_def.type == UniverseType.MARKET
     assert fake_use_case.received_cmd.universe_def.market.value == "US"
+
+
+def test_bootstrap_coverage_total_preserves_zero_price_total():
+    assert _bootstrap_coverage_total(
+        {"price_total_symbols": 0, "fundamentals_total_symbols": 7}
+    ) == 0
+    assert _bootstrap_coverage_total(
+        {"price_total_symbols": None, "fundamentals_total_symbols": 7}
+    ) == 7
+
+
+def test_build_daily_snapshot_autoretry_budget_covers_bootstrap_polling():
+    assert (
+        FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES
+        == BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES
+        + FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES
+    )
+    assert build_daily_snapshot.max_retries == FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES
 
 
 def test_build_daily_snapshot_never_passes_legacy_dict_shape():
@@ -757,6 +779,7 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
         "as_of_date_str": "2026-03-16",
         "activity_lifecycle": "bootstrap",
         "bootstrap_cache_only_if_covered": True,
+        "bootstrap_coverage_retry_count": 2,
         "bootstrap_coverage_report": {
             "eligible": False,
             "price_coverage_ratio": 0.9,
@@ -812,10 +835,11 @@ def test_build_daily_snapshot_bootstrap_gate_fail_retries_without_live_fallback(
         {
             "exc": ANY,
             "countdown": 30,
-            "max_retries": 120,
+            "max_retries": FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
             "kwargs": {
                 **retry_kwargs,
                 "bootstrap_coverage_report": None,
+                "bootstrap_coverage_retry_count": 3,
             },
         }
     ]
@@ -859,6 +883,7 @@ def test_build_daily_snapshot_bootstrap_gate_exhaustion_fails_with_coverage_repo
                 as_of_date_str="2026-03-16",
                 activity_lifecycle="bootstrap",
                 bootstrap_cache_only_if_covered=True,
+                bootstrap_coverage_retry_count=BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES,
                 bootstrap_coverage_report={
                     "eligible": False,
                     "price_coverage_ratio": 0.9,
