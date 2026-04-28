@@ -37,6 +37,7 @@ def _custom_command(
     universe_market: str | None = None,
     criteria: dict | None = None,
     screeners: list[str] | None = None,
+    composite_method: str = "weighted_average",
 ) -> CreateScanCommand:
     return CreateScanCommand(
         universe_def="all",
@@ -45,7 +46,7 @@ def _custom_command(
         universe_type="all",
         universe_market=universe_market,
         screeners=screeners or ["custom"],
-        composite_method="weighted_average",
+        composite_method=composite_method,
         criteria=criteria or {
             # Use only filters the compiler can express today: price_min
             # maps to an indexed JSON field and is hard-gate equivalent to
@@ -263,6 +264,7 @@ class TestCompilePathHappyPath:
         result = uc.execute(
             uow,
             _custom_command(
+                composite_method="maximum",
                 criteria={
                     "custom_filters": {"price_min": 20},
                     "min_score": 70,
@@ -283,6 +285,7 @@ class TestCompilePathHappyPath:
         assert persisted["screeners_run"] == ["custom"]
         assert persisted["screeners_passed"] == 1
         assert persisted["screeners_total"] == 1
+        assert persisted["composite_method"] == "maximum"
 
         # Other-screener scores from the snapshot are dropped — the user's
         # scan was custom-only, so they have no meaning in this context.

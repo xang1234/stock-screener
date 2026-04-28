@@ -50,7 +50,11 @@ _COMPILE_PATH_DROP_KEYS: tuple[str, ...] = (
 )
 
 
-def _normalize_compile_details(details: dict) -> dict:
+def _normalize_compile_details(
+    details: dict,
+    *,
+    composite_method: str = "weighted_average",
+) -> dict:
     """Strip stale-criteria score fields from a compile-path row's details.
 
     Called per row before passing through ``persist_orchestrator_results``.
@@ -87,7 +91,7 @@ def _normalize_compile_details(details: dict) -> dict:
         "screeners_run": ["custom"],
         "screeners_passed": 1,
         "screeners_total": 1,
-        "composite_method": "weighted_average",
+        "composite_method": composite_method,
     })
     return normalized
 
@@ -469,7 +473,13 @@ class CreateScanUseCase:
                 # / rating would mislead users sorting by them. See
                 # ``_normalize_compile_details`` for the rationale.
                 normalized_results = [
-                    (symbol, _normalize_compile_details(details))
+                    (
+                        symbol,
+                        _normalize_compile_details(
+                            details,
+                            composite_method=cmd.composite_method,
+                        ),
+                    )
                     for symbol, details in results
                 ]
                 if normalized_results:
