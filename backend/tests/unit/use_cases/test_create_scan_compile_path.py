@@ -419,6 +419,81 @@ class TestCompilePathHappyPath:
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
 
+    def test_non_positive_volume_min_with_hard_gate_dispatches_async(self):
+        """``volume_min<=0`` contributes full async points without adding a
+        SQL predicate. With ``min_score=50``, a row can fail price but pass via
+        the volume filter, so strict SQL price filtering would false-negative.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, current_price=10)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"price_min": 20, "volume_min": 0},
+                    "min_score": 50,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_empty_exclude_industries_with_hard_gate_dispatches_async(self):
+        """``exclude_industries=[]`` contributes full async points without a
+        SQL predicate. With ``min_score=50``, a row can fail price but pass via
+        the empty exclusion filter, so compile path must defer.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, current_price=10)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {
+                        "price_min": 20,
+                        "exclude_industries": [],
+                    },
+                    "min_score": 50,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
 
 class TestCompilePathFallsBack:
     """Non-applicable scans must defer to the async path."""

@@ -135,7 +135,9 @@ def compile_custom_criteria(
     representable: list[str] = []
     unrepresentable: list[str] = []
     hard_gate_filters: list[str] = []
-    has_partial_score_filter = False
+    # Any enabled CustomScanner filter whose scoring cannot be reduced to a
+    # single SQL hard gate makes compile-path pass semantics unsafe.
+    has_non_hard_gate_score_filter = False
 
     mixed_market = _is_mixed_market(universe_market)
     market_cap_compatible = _is_market_cap_usd_compatible(universe_market)
@@ -156,13 +158,19 @@ def compile_custom_criteria(
     # *share* threshold against price-data volume which has no column in
     # ``stock_feature_daily``.
     v_min = flat.get("volume_min")
-    if v_min is not None and v_min > 0:
-        if mixed_market:
-            spec.add_range("adv_usd", min_value=v_min)
-            representable.append("volume_min")
-            has_partial_score_filter = True
+    if v_min is not None:
+        if v_min > 0:
+            if mixed_market:
+                spec.add_range("adv_usd", min_value=v_min)
+                representable.append("volume_min")
+                has_non_hard_gate_score_filter = True
+            else:
+                unrepresentable.append("volume_min")
         else:
-            unrepresentable.append("volume_min")
+            # CustomScanner still enables the filter and awards full points.
+            # That adds scoring weight without a SQL predicate, so strict hard
+            # gates are not equivalent at lower min_score values.
+            has_non_hard_gate_score_filter = True
 
     # Market cap -> StockFundamental.market_cap_usd. Mixed-market and US
     # single-market resolve to USD; other single-markets hold native
@@ -188,21 +196,21 @@ def compile_custom_criteria(
     if rs_min is not None:
         spec.add_range("rs_rating", min_value=rs_min)
         representable.append("rs_rating_min")
-        has_partial_score_filter = True
+        has_non_hard_gate_score_filter = True
 
     # Quarterly EPS growth -> JSON eps_growth_qq
     eps_min = flat.get("eps_growth_min")
     if eps_min is not None:
         spec.add_range("eps_growth_qq", min_value=eps_min)
         representable.append("eps_growth_min")
-        has_partial_score_filter = True
+        has_non_hard_gate_score_filter = True
 
     # Quarterly sales growth -> JSON sales_growth_qq
     sales_min = flat.get("sales_growth_min")
     if sales_min is not None:
         spec.add_range("sales_growth_qq", min_value=sales_min)
         representable.append("sales_growth_min")
-        has_partial_score_filter = True
+        has_non_hard_gate_score_filter = True
 
     # MA alignment cannot be safely served from the stored snapshot.
     # ``stock_feature_daily.details_json["ma_alignment"]`` is populated by
@@ -223,7 +231,7 @@ def compile_custom_criteria(
     if near_high is not None:
         spec.add_range("week_52_high_distance", max_value=near_high)
         representable.append("near_52w_high")
-        has_partial_score_filter = True
+        has_non_hard_gate_score_filter = True
 
     # Sector inclusion -> JSON gics_sector. ``CustomScanner`` treats
     # ``sectors`` as enabled whenever the key is present (``is not None``);
@@ -243,17 +251,20 @@ def compile_custom_criteria(
         else:
             unrepresentable.append("sectors")
 
-    # Industry exclusion -> JSON gics_industry. An empty exclude list is a
-    # no-op in async (every symbol passes), and dropping it here produces
-    # the same pass set, so silent drop is safe — only non-empty lists add
-    # a NOT IN filter.
-    excluded = flat.get("exclude_industries")
-    if excluded:
-        spec.add_categorical(
-            "gics_industry", tuple(excluded), mode=FilterMode.EXCLUDE
-        )
-        hard_gate_filters.append("exclude_industries")
-        representable.append("exclude_industries")
+    # Industry exclusion -> JSON gics_industry. An empty exclude list adds no
+    # SQL predicate, but CustomScanner still enables the filter and awards full
+    # points. That extra scoring weight can let rows pass async despite failing
+    # another hard gate, so it is not hard-gate equivalent.
+    if "exclude_industries" in flat and flat["exclude_industries"] is not None:
+        excluded = flat["exclude_industries"]
+        if excluded:
+            spec.add_categorical(
+                "gics_industry", tuple(excluded), mode=FilterMode.EXCLUDE
+            )
+            hard_gate_filters.append("exclude_industries")
+            representable.append("exclude_industries")
+        else:
+            has_non_hard_gate_score_filter = True
 
     # Filters that have no feature-store representation today.
     if flat.get("debt_to_equity_max") is not None:
@@ -297,7 +308,7 @@ def compile_custom_criteria(
 
     hard_gate_equivalent = (
         not unrepresentable
-        and not has_partial_score_filter
+        and not has_non_hard_gate_score_filter
         and len(hard_gate_filters) == 1
         and min_score_val is not None
         and 0.0 < min_score_val <= 100.0

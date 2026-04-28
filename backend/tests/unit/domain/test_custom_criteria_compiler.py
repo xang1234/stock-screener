@@ -145,16 +145,25 @@ class TestUsdUnitCompatibility:
         assert "volume_min" in result.unrepresentable_keys
         assert not result.is_fully_representable
 
-    def test_volume_min_zero_is_noop(self):
-        """CustomScanner treats volume_min<=0 as a disabled filter."""
+    @pytest.mark.parametrize("volume_min", [0, -1])
+    def test_non_positive_volume_min_is_not_hard_gate_equivalent(self, volume_min):
+        """CustomScanner still enables ``volume_min<=0`` and awards full
+        points. It adds no SQL predicate, but it can change weighted scoring
+        when combined with a hard gate, so the compile path must defer.
+        """
         result = compile_custom_criteria(
-            {"custom_filters": {"volume_min": 0}},
+            {
+                "custom_filters": {"price_min": 20, "volume_min": volume_min},
+                "min_score": 50,
+            },
             screeners=["custom"],
             universe_market="HK",  # would otherwise be unrepresentable
         )
 
         assert "volume_min" not in result.unrepresentable_keys
         assert _range(result.filter_spec, "adv_usd") is None
+        assert _range(result.filter_spec, "current_price") is not None
+        assert result.hard_gate_equivalent is False
 
     def test_market_cap_compiles_for_us_single_market(self):
         """US native market_cap is already USD, so the column matches —
@@ -275,18 +284,27 @@ class TestBooleanAndCategorical:
         assert result.is_fully_representable
         assert result.hard_gate_equivalent is False
 
-    def test_empty_exclude_industries_silently_dropped(self):
-        """Empty exclude list is a no-op in async (every symbol passes the
-        exclusion); silent drop here produces the same pass set, so
-        deferring to async would be wasted work.
+    def test_empty_exclude_industries_not_hard_gate_equivalent(self):
+        """Empty exclude list adds no SQL predicate, but CustomScanner still
+        enables the filter and awards full points. With another hard gate and
+        a low min_score, async can pass rows that fail the hard gate, so the
+        compile path must defer.
         """
         result = compile_custom_criteria(
-            {"custom_filters": {"price_min": 10, "exclude_industries": []}},
+            {
+                "custom_filters": {
+                    "price_min": 20,
+                    "exclude_industries": [],
+                },
+                "min_score": 50,
+            },
             screeners=["custom"],
         )
 
         assert _categorical(result.filter_spec, "gics_industry") is None
         assert "exclude_industries" not in result.unrepresentable_keys
+        assert _range(result.filter_spec, "current_price") is not None
+        assert result.hard_gate_equivalent is False
 
 
 class TestUnrepresentable:
