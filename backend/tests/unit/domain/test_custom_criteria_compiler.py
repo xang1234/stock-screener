@@ -286,7 +286,7 @@ class TestBooleanAndCategorical:
         assert cf is not None
         assert cf.values == ("Tobacco", "Gambling")
         assert cf.mode == FilterMode.EXCLUDE
-        assert result.hard_gate_equivalent is True
+        assert result.hard_gate_equivalent is False
 
     def test_string_exclude_industries_marked_unrepresentable(self):
         """A plain string must not become per-character exclusion values."""

@@ -263,10 +263,13 @@ def compile_custom_criteria(
         else:
             unrepresentable.append("sectors")
 
-    # Industry exclusion -> JSON gics_industry. An empty exclude list adds no
-    # SQL predicate, but CustomScanner still enables the filter and awards full
-    # points. That extra scoring weight can let rows pass async despite failing
-    # another hard gate, so it is not hard-gate equivalent.
+    # Industry exclusion -> JSON gics_industry. EXCLUDE SQL must keep NULL
+    # industries to match ``CustomScanner._check_industry_exclusion`` when
+    # fundamentals exist but omit an industry. However, when fundamentals are
+    # absent entirely, CustomScanner skips this filter and an exclude-only scan
+    # has no active filters. The snapshot field cannot distinguish those cases,
+    # so this filter is expressible but cannot be hard-gate equivalent for the
+    # instant custom-scan path.
     if "exclude_industries" in flat and flat["exclude_industries"] is not None:
         excluded = flat["exclude_industries"]
         if _is_non_empty_str_sequence(excluded):
@@ -275,6 +278,7 @@ def compile_custom_criteria(
             )
             hard_gate_filters.append("exclude_industries")
             representable.append("exclude_industries")
+            has_non_hard_gate_score_filter = True
         elif _is_empty_sequence(excluded):
             has_non_hard_gate_score_filter = True
         else:

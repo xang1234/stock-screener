@@ -498,6 +498,47 @@ class TestCompilePathHappyPath:
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
 
+    def test_exclude_only_with_missing_industry_dispatches_async(self):
+        """An exclude-only scan cannot be hard-gate equivalent.
+
+        The SQL exclude predicate keeps NULL industries, but CustomScanner only
+        runs the industry-exclusion filter when fundamentals are present. A row
+        with no fundamental industry metadata would therefore pass compile-path
+        SQL while async execution has no active filters and returns non-passing.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, gics_industry=None)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {
+                        "exclude_industries": ["Tobacco"],
+                    },
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
 
 class TestCompilePathFallsBack:
     """Non-applicable scans must defer to the async path."""
