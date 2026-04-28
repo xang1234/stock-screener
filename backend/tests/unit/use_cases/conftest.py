@@ -486,9 +486,17 @@ class FakeFeatureRunRepository(FeatureRunRepository):
     def __init__(self, *, row_counter=None) -> None:
         self._runs: dict[int, FeatureRunDomain] = {}
         self._next_id = 1
-        self._pointer_run_id: int | None = None
+        # Map of pointer_key -> run_id, mirroring ``feature_run_pointers``
+        # in the real repo. Populated by ``publish_atomically``; queried by
+        # ``get_latest_published`` and ``find_latest_published_covering``.
+        self._pointers: dict[str, int] = {}
         # Optional callback: (run_id) -> int for list_runs_with_counts
         self._row_counter = row_counter
+
+    @property
+    def _pointer_run_id(self) -> int | None:
+        """Backward-compat alias for tests reading the global pointer."""
+        return self._pointers.get("latest_published")
 
     def start_run(self, as_of_date, run_type, code_version=None,
                   universe_hash=None, input_hash=None,
@@ -557,7 +565,9 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         self._runs[run_id] = updated
         return updated
 
-    def publish_atomically(self, run_id) -> FeatureRunDomain:
+    def publish_atomically(
+        self, run_id, pointer_key: str = "latest_published"
+    ) -> FeatureRunDomain:
         run = self._get_or_raise(run_id)
         validate_transition(run.status, RunStatus.PUBLISHED)
         updated = FeatureRunDomain(
@@ -570,13 +580,16 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             stats=run.stats, warnings=run.warnings,
         )
         self._runs[run_id] = updated
-        self._pointer_run_id = run_id
+        self._pointers[pointer_key] = run_id
         return updated
 
-    def get_latest_published(self) -> FeatureRunDomain | None:
-        if self._pointer_run_id is None:
+    def get_latest_published(
+        self, pointer_key: str = "latest_published"
+    ) -> FeatureRunDomain | None:
+        run_id = self._pointers.get(pointer_key)
+        if run_id is None:
             return None
-        return self._runs.get(self._pointer_run_id)
+        return self._runs.get(run_id)
 
     def find_latest_published_exact(
         self,
@@ -626,22 +639,27 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             return None
 
         universes = getattr(self, "_run_universes", {})
-        published = [
-            run for run in self._runs.values()
-            if run.status == RunStatus.PUBLISHED
-        ]
-        if not published:
-            return None
 
-        # Newest published first — mirrors pointer-based selection in the
-        # real repo (the pointer always points at the most recent publish).
-        published.sort(
-            key=lambda run: (run.published_at or datetime.min, run.id or 0),
-            reverse=True,
-        )
+        # Honour the same pointer ordering as the real repo: market-specific
+        # pointer first, then the global pointer. Without this the fake
+        # would silently pick any covering published run regardless of
+        # which market it was published for, and a regression that selects
+        # the wrong run for a market-scoped scan could pass tests.
+        candidate_keys: list[str] = []
+        if market:
+            candidate_keys.append(
+                f"latest_published_market:{str(market).strip().upper()}"
+            )
+        candidate_keys.append("latest_published")
 
-        for run in published:
-            covered = universes.get(run.id)
+        for key in candidate_keys:
+            run_id = self._pointers.get(key)
+            if run_id is None:
+                continue
+            run = self._runs.get(run_id)
+            if run is None or run.status != RunStatus.PUBLISHED:
+                continue
+            covered = universes.get(run_id)
             if covered is None:
                 continue
             if all(symbol in covered for symbol in normalized):

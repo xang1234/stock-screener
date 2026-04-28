@@ -195,11 +195,18 @@ def compile_custom_criteria(
         spec.add_range("sales_growth_qq", min_value=sales_min)
         representable.append("sales_growth_min")
 
-    # MA alignment -> JSON ma_alignment (boolean)
-    ma_aligned = flat.get("ma_alignment")
-    if ma_aligned is True:
-        spec.add_boolean("ma_alignment", True)
-        representable.append("ma_alignment")
+    # MA alignment cannot be safely served from the stored snapshot.
+    # ``stock_feature_daily.details_json["ma_alignment"]`` is populated by
+    # ``MinerviniScanner`` from ``ma_analysis["meets_all_criteria"]``, which
+    # requires perfect alignment AND a rising 200-day MA AND the
+    # Minervini-specific ``ma_50_pos`` predicate
+    # (``app/scanners/criteria/moving_averages.py``::comprehensive_ma_analysis).
+    # ``CustomScanner._check_ma_alignment`` only requires
+    # ``price > MA50 > MA150 > MA200``, so the stored field is strictly
+    # stricter and would silently produce false negatives. The only
+    # correct behaviour is to defer to async.
+    if flat.get("ma_alignment") is True:
+        unrepresentable.append("ma_alignment")
     # ma_alignment == False is the no-op default; nothing to do.
 
     # 52-week high proximity -> JSON week_52_high_distance (% from high)
@@ -208,15 +215,27 @@ def compile_custom_criteria(
         spec.add_range("week_52_high_distance", max_value=near_high)
         representable.append("near_52w_high")
 
-    # Sector inclusion -> JSON gics_sector
-    sectors = flat.get("sectors")
-    if sectors:
-        spec.add_categorical(
-            "gics_sector", tuple(sectors), mode=FilterMode.INCLUDE
-        )
-        representable.append("sectors")
+    # Sector inclusion -> JSON gics_sector. ``CustomScanner`` treats
+    # ``sectors`` as enabled whenever the key is present (``is not None``);
+    # an explicit empty list causes every symbol to fail the filter. We
+    # can't express "match nothing" in the filter spec without contorting
+    # the query, so an empty list defers to async — otherwise the compile
+    # path would silently drop the constraint and return matches the
+    # async path would reject.
+    if "sectors" in flat and flat["sectors"] is not None:
+        sectors = flat["sectors"]
+        if sectors:
+            spec.add_categorical(
+                "gics_sector", tuple(sectors), mode=FilterMode.INCLUDE
+            )
+            representable.append("sectors")
+        else:
+            unrepresentable.append("sectors")
 
-    # Industry exclusion -> JSON gics_industry
+    # Industry exclusion -> JSON gics_industry. An empty exclude list is a
+    # no-op in async (every symbol passes), and dropping it here produces
+    # the same pass set, so silent drop is safe — only non-empty lists add
+    # a NOT IN filter.
     excluded = flat.get("exclude_industries")
     if excluded:
         spec.add_categorical(

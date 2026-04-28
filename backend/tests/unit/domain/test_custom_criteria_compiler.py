@@ -178,15 +178,21 @@ class TestUsdUnitCompatibility:
 
 
 class TestBooleanAndCategorical:
-    def test_ma_alignment_true_adds_boolean_filter(self):
+    def test_ma_alignment_true_marks_unrepresentable(self):
+        """Stored ``ma_alignment`` is set by Minervini's stricter
+        ``meets_all_criteria`` predicate (alignment + rising 200MA + ma_50
+        position), not CustomScanner's ``price > 50 > 150 > 200``. Filtering
+        on the JSON field would silently produce false negatives, so the
+        compiler must treat it as unrepresentable and defer to async.
+        """
         result = compile_custom_criteria(
             {"custom_filters": {"ma_alignment": True}},
             screeners=["custom"],
         )
 
-        bf = _boolean(result.filter_spec, "ma_alignment")
-        assert bf is not None
-        assert bf.value is True
+        assert _boolean(result.filter_spec, "ma_alignment") is None
+        assert "ma_alignment" in result.unrepresentable_keys
+        assert not result.is_fully_representable
 
     def test_ma_alignment_false_is_noop(self):
         result = compile_custom_criteria(
@@ -208,6 +214,31 @@ class TestBooleanAndCategorical:
         assert cf.values == ("Technology", "Healthcare")
         assert cf.mode == FilterMode.INCLUDE
 
+    def test_empty_sectors_marks_unrepresentable(self):
+        """``CustomScanner`` treats ``sectors=[]`` as "filter enabled with no
+        allowed sectors" — every symbol fails. We can't express that as a
+        SQL filter, so the compiler defers to async; otherwise the compile
+        path would silently drop the constraint and disagree with async.
+        """
+        result = compile_custom_criteria(
+            {"custom_filters": {"price_min": 10, "sectors": []}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_sector") is None
+        assert "sectors" in result.unrepresentable_keys
+        assert not result.is_fully_representable
+
+    def test_explicit_sectors_none_is_noop(self):
+        """``sectors=None`` matches CustomScanner's "filter not enabled"."""
+        result = compile_custom_criteria(
+            {"custom_filters": {"price_min": 10, "sectors": None}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_sector") is None
+        assert "sectors" not in result.unrepresentable_keys
+
     def test_exclude_industries_compile_to_categorical_exclude(self):
         result = compile_custom_criteria(
             {"custom_filters": {"exclude_industries": ["Tobacco", "Gambling"]}},
@@ -218,6 +249,19 @@ class TestBooleanAndCategorical:
         assert cf is not None
         assert cf.values == ("Tobacco", "Gambling")
         assert cf.mode == FilterMode.EXCLUDE
+
+    def test_empty_exclude_industries_silently_dropped(self):
+        """Empty exclude list is a no-op in async (every symbol passes the
+        exclusion); silent drop here produces the same pass set, so
+        deferring to async would be wasted work.
+        """
+        result = compile_custom_criteria(
+            {"custom_filters": {"price_min": 10, "exclude_industries": []}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_industry") is None
+        assert "exclude_industries" not in result.unrepresentable_keys
 
 
 class TestUnrepresentable:

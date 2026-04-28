@@ -47,7 +47,11 @@ def _custom_command(
         screeners=screeners or ["custom"],
         composite_method="weighted_average",
         criteria=criteria or {
-            "custom_filters": {"price_min": 20, "ma_alignment": True},
+            # Use only filters the compiler can express today: price_min
+            # and rs_rating_min both map to indexed JSON fields. Avoid
+            # ma_alignment in the default — the stored field has stricter
+            # Minervini semantics so the compiler marks it unrepresentable.
+            "custom_filters": {"price_min": 20, "rs_rating_min": 70},
             "min_score": 70,
         },
     )
@@ -60,6 +64,7 @@ def _publish_run(
     symbols: list[str],
     rows: list[FeatureRowWrite],
     as_of: date | None = None,
+    pointer_key: str = "latest_published",
 ) -> int:
     """Create + populate + publish a feature run on the fake repos."""
     run = feature_runs.start_run(
@@ -79,7 +84,7 @@ def _publish_run(
             passed_symbols=len([r for r in rows if r.composite_score and r.composite_score >= 70]),
         ),
     )
-    feature_runs.publish_atomically(run.id)
+    feature_runs.publish_atomically(run.id, pointer_key=pointer_key)
     feature_store.save_run_universe_symbols(run.id, symbols)
     feature_store.upsert_snapshot_rows(run.id, rows)
     return run.id
@@ -119,11 +124,11 @@ class TestCompilePathHappyPath:
         feature_store = FakeFeatureStoreRepository()
         symbols = ["AAPL", "MSFT", "GOOGL"]
         rows = [
-            # Both per-field thresholds (price>=20, ma_alignment=True) pass.
-            _row("AAPL", custom_score=85, current_price=150, ma_alignment=True),
-            _row("MSFT", custom_score=72, current_price=300, ma_alignment=True),
-            # MA misaligned — must fail the boolean filter and be excluded.
-            _row("GOOGL", custom_score=85, current_price=120, ma_alignment=False),
+            # Both per-field thresholds (price>=20, rs_rating>=70) pass.
+            _row("AAPL", custom_score=85, current_price=150, rs_rating=85),
+            _row("MSFT", custom_score=72, current_price=300, rs_rating=78),
+            # rs_rating below threshold — must be excluded.
+            _row("GOOGL", custom_score=85, current_price=120, rs_rating=40),
         ]
         run_id = _publish_run(
             feature_runs, feature_store, symbols=symbols, rows=rows
@@ -142,7 +147,7 @@ class TestCompilePathHappyPath:
         assert result.status == "completed"
         assert result.total_stocks == 3
         # Per-field threshold pass test (no stale-criteria custom_score gate):
-        # GOOGL excluded because ma_alignment=False; AAPL + MSFT persisted.
+        # GOOGL excluded because rs_rating=40 < 70; AAPL + MSFT persisted.
         assert len(dispatcher.dispatched) == 0
         persisted = uow.scan_results._persisted_results
         persisted_symbols = sorted(sym for _, sym, _ in persisted)
@@ -164,11 +169,11 @@ class TestCompilePathHappyPath:
         feature_store = FakeFeatureStoreRepository()
         symbols = ["AAPL"]
         # custom_score=10 was computed under different criteria; the user's
-        # actual per-field thresholds (price>=20, ma_alignment=True) all
-        # pass, so the row must be persisted regardless of the stored score.
+        # actual per-field thresholds (price>=20, rs_rating>=70) all pass,
+        # so the row must be persisted regardless of the stored score.
         rows = [
             _row(
-                "AAPL", custom_score=10, current_price=150, ma_alignment=True
+                "AAPL", custom_score=10, current_price=150, rs_rating=85
             ),
         ]
         _publish_run(
@@ -187,7 +192,7 @@ class TestCompilePathHappyPath:
             uow,
             _custom_command(
                 criteria={
-                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
                     "min_score": 70,
                 },
             ),
@@ -251,7 +256,7 @@ class TestCompilePathHappyPath:
             uow,
             _custom_command(
                 criteria={
-                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
                     "min_score": 70,
                 },
             ),
@@ -316,6 +321,76 @@ class TestCompilePathHappyPath:
 
 class TestCompilePathFallsBack:
     """Non-applicable scans must defer to the async path."""
+
+    def test_ma_alignment_filter_dispatches_async(self):
+        """Stored ``ma_alignment`` has Minervini's stricter semantics, so
+        the compiler marks it unrepresentable and the scan goes async.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_empty_sectors_filter_dispatches_async(self):
+        """``sectors=[]`` makes every async stock fail; we can't express
+        "match nothing" cleanly in SQL, so defer to async.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"price_min": 20, "sectors": []},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
 
     def test_unrepresentable_criteria_dispatches_async(self):
         feature_runs = FakeFeatureRunRepository()
@@ -458,7 +533,7 @@ class TestCompilePathFallsBack:
                 universe_index="SP500",
                 screeners=["custom"],
                 criteria={
-                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
                     "min_score": 70,
                 },
             ),
@@ -500,7 +575,7 @@ class TestCompilePathFallsBack:
                 universe_symbols=symbols,
                 screeners=["custom"],
                 criteria={
-                    "custom_filters": {"price_min": 20, "ma_alignment": True},
+                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
                     "min_score": 70,
                 },
             ),
@@ -603,6 +678,74 @@ class TestCompilePathErrorHandling:
         assert len(dispatcher.dispatched) == 1
 
 
+class TestMarketAwareCoveringRunSelection:
+    """The fake mirrors the production market-pointer fallback so a
+    regression that picks the wrong run for a market-scoped scan would
+    still be caught here.
+    """
+
+    def test_market_pointer_takes_precedence_over_global(self):
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+
+        # Older global run + newer US-specific run; both cover the symbol.
+        global_run_id = _publish_run(
+            feature_runs, feature_store, symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, current_price=100, rs_rating=80)],
+            as_of=date(2026, 4, 23),
+            pointer_key="latest_published",
+        )
+        us_run_id = _publish_run(
+            feature_runs, feature_store, symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, current_price=200, rs_rating=80)],
+            as_of=date(2026, 4, 24),
+            pointer_key="latest_published_market:US",
+        )
+        assert us_run_id != global_run_id
+
+        run = feature_runs.find_latest_published_covering(
+            symbols=symbols, market="US"
+        )
+
+        assert run is not None
+        assert run.id == us_run_id
+
+    def test_falls_back_to_global_when_market_pointer_missing(self):
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        global_run_id = _publish_run(
+            feature_runs, feature_store, symbols=symbols,
+            rows=[_row("AAPL", custom_score=85)],
+            pointer_key="latest_published",
+        )
+
+        run = feature_runs.find_latest_published_covering(
+            symbols=symbols, market="HK"
+        )
+
+        assert run is not None
+        assert run.id == global_run_id
+
+    def test_returns_none_when_no_covering_pointer(self):
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        # Run published only under HK pointer, but query asks for US — and
+        # no global pointer exists either.
+        _publish_run(
+            feature_runs, feature_store, symbols=["0700.HK"],
+            rows=[_row("0700.HK", custom_score=85)],
+            pointer_key="latest_published_market:HK",
+        )
+
+        run = feature_runs.find_latest_published_covering(
+            symbols=["0700.HK"], market="US"
+        )
+
+        assert run is None
+
+
 class TestCompilePathCoexistsWithExactMatch:
     """The exact-signature path should still take precedence when applicable."""
 
@@ -615,7 +758,7 @@ class TestCompilePathCoexistsWithExactMatch:
 
         symbols = ["AAPL"]
         criteria = {
-            "custom_filters": {"price_min": 20, "ma_alignment": True},
+            "custom_filters": {"price_min": 20, "rs_rating_min": 70},
             "min_score": 70,
         }
         signature = build_scan_signature_payload(
