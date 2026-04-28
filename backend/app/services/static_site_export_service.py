@@ -973,6 +973,12 @@ class StaticSiteExportService:
             for run in history_runs
         }
         self._apply_group_rank_changes(rankings, market_runs, historical_rankings)
+        self._apply_group_rank_changes_from_table(
+            db,
+            rankings,
+            market=market,
+            calculation_date=expected_as_of_date,
+        )
         group_details = self._build_group_details(
             rankings=rankings,
             serialized_rows=serialized_rows,
@@ -1285,6 +1291,56 @@ class StaticSiteExportService:
                     if historical is not None
                     else None
                 )
+
+    def _apply_group_rank_changes_from_table(
+        self,
+        db: Session,
+        rankings: list[dict[str, Any]],
+        *,
+        market: str,
+        calculation_date: date,
+    ) -> None:
+        """Backfill rank-change deltas from the ``IBDGroupRank`` history table.
+
+        Runs after the FeatureRun-based path so it only fills periods that the
+        historical-FeatureRun lookup couldn't supply (typical in CI, where
+        Postgres is ephemeral and only one FeatureRun per market exists).
+        Existing non-null deltas are preserved.
+        """
+        if not rankings:
+            return
+        period_days = {
+            period: offset for period, offset in STATIC_GROUP_CHANGE_OFFSETS.items()
+        }
+        group_names = [ranking["industry_group"] for ranking in rankings]
+        normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
+        try:
+            historical = get_group_rank_service().get_historical_ranks_batch(
+                db,
+                group_names,
+                calculation_date,
+                period_days,
+                market=normalized_market,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load IBDGroupRank history for market %s on %s",
+                normalized_market,
+                calculation_date,
+                exc_info=True,
+            )
+            return
+        if not historical:
+            return
+        for ranking in rankings:
+            for period in period_days:
+                key = f"rank_change_{period}"
+                if ranking.get(key) is not None:
+                    continue
+                historical_rank = historical.get((ranking["industry_group"], period))
+                if historical_rank is None:
+                    continue
+                ranking[key] = historical_rank - ranking["rank"]
 
     def _build_group_details(
         self,
