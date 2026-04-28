@@ -26,6 +26,7 @@ from app.database import Base
 from app.domain.common.query import (
     BooleanFilter,
     CategoricalFilter,
+    FilterMode,
     FilterSpec,
     QuerySpec,
     RangeFilter,
@@ -38,7 +39,7 @@ from app.infra.db.repositories.scan_result_repo import (
     SqlScanResultRepository,
     _map_orchestrator_result,
 )
-from app.models.scan_result import Scan
+from app.models.scan_result import Scan, ScanResult
 from app.models.stock_universe import StockUniverse
 from app.scanners.base_screener import ScreenerResult, StockData
 from app.scanners.scan_orchestrator import ScanOrchestrator
@@ -464,6 +465,41 @@ class TestScanResultSEQueryIntegration:
         symbols = {item.symbol for item in page.items}
         assert symbols == {"AAPL", "NVDA"}
 
+    def test_exclude_filter_gics_industry_keeps_nulls(self, seeded_scan_session):
+        """EXCLUDE filters should keep NULLs like the feature-store path."""
+        industries = {
+            "AAPL": "Software",
+            "MSFT": "Tobacco",
+            "GOOGL": None,
+            "TSLA": None,
+            "NVDA": "Semiconductors",
+        }
+        for symbol, industry in industries.items():
+            row = (
+                seeded_scan_session.query(ScanResult)
+                .filter(ScanResult.scan_id == SCAN_ID, ScanResult.symbol == symbol)
+                .one()
+            )
+            row.gics_industry = industry
+        seeded_scan_session.commit()
+
+        repo = SqlScanResultRepository(seeded_scan_session)
+        spec = QuerySpec(
+            filters=FilterSpec(
+                categorical_filters=[
+                    CategoricalFilter(
+                        field="gics_industry",
+                        values=("Tobacco",),
+                        mode=FilterMode.EXCLUDE,
+                    )
+                ]
+            )
+        )
+
+        page = repo.query(SCAN_ID, spec)
+        symbols = {item.symbol for item in page.items}
+        assert symbols == {"AAPL", "GOOGL", "TSLA", "NVDA"}
+
     # -- Sort tests ---------------------------------------------------------
 
     def test_sort_se_setup_score_desc(self, seeded_scan_session):
@@ -597,6 +633,46 @@ class TestFeatureStoreSEQueryIntegration:
         page = repo.query_run_as_scan_results(1, spec)
         symbols = {item.symbol for item in page.items}
         assert symbols == {"AAPL", "NVDA"}
+
+    def test_exclude_filter_gics_industry_keeps_nulls(self, seeded_feature_session):
+        """Feature-store EXCLUDE filters keep NULL industry metadata."""
+        industries = {
+            "AAPL": "Software",
+            "MSFT": "Tobacco",
+            "GOOGL": None,
+            "TSLA": None,
+            "NVDA": "Semiconductors",
+        }
+        for symbol, industry in industries.items():
+            row = (
+                seeded_feature_session.query(StockFeatureDaily)
+                .filter(StockFeatureDaily.run_id == 1, StockFeatureDaily.symbol == symbol)
+                .one()
+            )
+            details = dict(row.details_json or {})
+            if industry is None:
+                details.pop("gics_industry", None)
+            else:
+                details["gics_industry"] = industry
+            row.details_json = details
+        seeded_feature_session.commit()
+
+        repo = SqlFeatureStoreRepository(seeded_feature_session)
+        spec = QuerySpec(
+            filters=FilterSpec(
+                categorical_filters=[
+                    CategoricalFilter(
+                        field="gics_industry",
+                        values=("Tobacco",),
+                        mode=FilterMode.EXCLUDE,
+                    )
+                ]
+            )
+        )
+
+        page = repo.query_run_as_scan_results(1, spec)
+        symbols = {item.symbol for item in page.items}
+        assert symbols == {"AAPL", "GOOGL", "TSLA", "NVDA"}
 
     # -- Sort tests ---------------------------------------------------------
 

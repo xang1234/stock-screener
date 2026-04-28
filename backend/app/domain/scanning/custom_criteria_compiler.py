@@ -245,13 +245,12 @@ def compile_custom_criteria(
         representable.append("near_52w_high")
         has_non_hard_gate_score_filter = True
 
-    # Sector inclusion -> JSON gics_sector. ``CustomScanner`` treats
-    # ``sectors`` as enabled whenever the key is present (``is not None``);
-    # an explicit empty list causes every symbol to fail the filter. We
-    # can't express "match nothing" in the filter spec without contorting
-    # the query, so an empty list defers to async — otherwise the compile
-    # path would silently drop the constraint and return matches the
-    # async path would reject.
+    # Sector inclusion -> JSON gics_sector. This field is expressible as an
+    # INCLUDE predicate, but it cannot be hard-gate equivalent for instant
+    # custom scans: CustomScanner evaluates sectors only when fundamentals are
+    # present, while snapshots can carry taxonomy-derived gics_sector even when
+    # fundamentals are missing. An explicit empty list causes every symbol to
+    # fail in CustomScanner and cannot be expressed directly, so it defers.
     if "sectors" in flat and flat["sectors"] is not None:
         sectors = flat["sectors"]
         if _is_non_empty_str_sequence(sectors):
@@ -260,6 +259,7 @@ def compile_custom_criteria(
             )
             hard_gate_filters.append("sectors")
             representable.append("sectors")
+            has_non_hard_gate_score_filter = True
         else:
             unrepresentable.append("sectors")
 

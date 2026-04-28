@@ -539,6 +539,46 @@ class TestCompilePathHappyPath:
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
 
+    def test_sector_only_with_snapshot_taxonomy_dispatches_async(self):
+        """A sector-only scan cannot be hard-gate equivalent.
+
+        Snapshot taxonomy can populate ``gics_sector`` even when async custom
+        scanning has no fundamentals. SQL would keep the row, while
+        CustomScanner would skip the sector filter and return non-passing.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, gics_sector="Technology")],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {
+                        "sectors": ["Technology"],
+                    },
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
 
 class TestCompilePathFallsBack:
     """Non-applicable scans must defer to the async path."""

@@ -228,7 +228,7 @@ class TestBooleanAndCategorical:
         assert cf is not None
         assert cf.values == ("Technology", "Healthcare")
         assert cf.mode == FilterMode.INCLUDE
-        assert result.hard_gate_equivalent is True
+        assert result.hard_gate_equivalent is False
 
     def test_string_sectors_marked_unrepresentable(self):
         """A plain string is iterable, but it is not a category list."""
