@@ -107,6 +107,18 @@ def _is_market_cap_usd_compatible(universe_market: str | None) -> bool:
     )
 
 
+def _is_non_empty_str_sequence(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and bool(value)
+        and all(isinstance(item, str) for item in value)
+    )
+
+
+def _is_empty_sequence(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and len(value) == 0
+
+
 def compile_custom_criteria(
     criteria: dict | None,
     *,
@@ -242,7 +254,7 @@ def compile_custom_criteria(
     # async path would reject.
     if "sectors" in flat and flat["sectors"] is not None:
         sectors = flat["sectors"]
-        if sectors:
+        if _is_non_empty_str_sequence(sectors):
             spec.add_categorical(
                 "gics_sector", tuple(sectors), mode=FilterMode.INCLUDE
             )
@@ -257,14 +269,16 @@ def compile_custom_criteria(
     # another hard gate, so it is not hard-gate equivalent.
     if "exclude_industries" in flat and flat["exclude_industries"] is not None:
         excluded = flat["exclude_industries"]
-        if excluded:
+        if _is_non_empty_str_sequence(excluded):
             spec.add_categorical(
                 "gics_industry", tuple(excluded), mode=FilterMode.EXCLUDE
             )
             hard_gate_filters.append("exclude_industries")
             representable.append("exclude_industries")
-        else:
+        elif _is_empty_sequence(excluded):
             has_non_hard_gate_score_filter = True
+        else:
+            unrepresentable.append("exclude_industries")
 
     # Filters that have no feature-store representation today.
     if flat.get("debt_to_equity_max") is not None:

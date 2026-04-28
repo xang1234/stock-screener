@@ -242,6 +242,8 @@ class TestCompilePathHappyPath:
                 "screeners_run": ["custom", "minervini", "canslim"],
                 "screeners_passed": 2,
                 "screeners_total": 3,
+                "ipo_score": 62.0,
+                "ipo_bonus": 8.0,
                 "rs_rating": 91,
                 "gics_sector": "Technology",
             },
@@ -291,6 +293,8 @@ class TestCompilePathHappyPath:
         # scan was custom-only, so they have no meaning in this context.
         assert "minervini_score" not in persisted
         assert "canslim_score" not in persisted
+        assert "ipo_score" not in persisted
+        assert "ipo_bonus" not in persisted
 
         # Per-symbol facts (not derived from custom criteria) survive.
         assert persisted["current_price"] == 150.0

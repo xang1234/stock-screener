@@ -45,6 +45,7 @@ _COMPILE_PATH_DROP_KEYS: tuple[str, ...] = (
     "minervini_score",
     "canslim_score",
     "ipo_score",
+    "ipo_bonus",
     "volume_breakthrough_score",
     "composite_reason",
 )

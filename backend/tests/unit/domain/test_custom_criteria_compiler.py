@@ -230,6 +230,27 @@ class TestBooleanAndCategorical:
         assert cf.mode == FilterMode.INCLUDE
         assert result.hard_gate_equivalent is True
 
+    def test_string_sectors_marked_unrepresentable(self):
+        """A plain string is iterable, but it is not a category list."""
+        result = compile_custom_criteria(
+            {"custom_filters": {"sectors": "Technology"}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_sector") is None
+        assert "sectors" in result.unrepresentable_keys
+        assert not result.is_fully_representable
+
+    def test_non_string_sector_values_marked_unrepresentable(self):
+        result = compile_custom_criteria(
+            {"custom_filters": {"sectors": ["Technology", 123]}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_sector") is None
+        assert "sectors" in result.unrepresentable_keys
+        assert not result.is_fully_representable
+
     def test_empty_sectors_marks_unrepresentable(self):
         """``CustomScanner`` treats ``sectors=[]`` as "filter enabled with no
         allowed sectors" — every symbol fails. We can't express that as a
@@ -266,6 +287,27 @@ class TestBooleanAndCategorical:
         assert cf.values == ("Tobacco", "Gambling")
         assert cf.mode == FilterMode.EXCLUDE
         assert result.hard_gate_equivalent is True
+
+    def test_string_exclude_industries_marked_unrepresentable(self):
+        """A plain string must not become per-character exclusion values."""
+        result = compile_custom_criteria(
+            {"custom_filters": {"exclude_industries": "Tobacco"}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_industry") is None
+        assert "exclude_industries" in result.unrepresentable_keys
+        assert not result.is_fully_representable
+
+    def test_non_string_exclude_industries_marked_unrepresentable(self):
+        result = compile_custom_criteria(
+            {"custom_filters": {"exclude_industries": ["Tobacco", 123]}},
+            screeners=["custom"],
+        )
+
+        assert _categorical(result.filter_spec, "gics_industry") is None
+        assert "exclude_industries" in result.unrepresentable_keys
+        assert not result.is_fully_representable
 
     def test_multiple_binary_filters_are_not_hard_gate_equivalent(self):
         result = compile_custom_criteria(
