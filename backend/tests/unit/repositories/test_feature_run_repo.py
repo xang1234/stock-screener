@@ -382,6 +382,159 @@ class TestFindLatestPublishedExact:
         assert repo.find_latest_published_exact(input_hash="i1", universe_hash="x") is None
 
 
+class TestFindLatestPublishedCovering:
+    def _publish(
+        self,
+        repo: SqlFeatureRunRepository,
+        session: Session,
+        *,
+        symbols: list[str],
+        as_of: date,
+        pointer_key: str = "latest_published",
+        feature_row_symbols: list[str] | None = None,
+    ) -> FeatureRunDomain:
+        """Publish a run.
+
+        ``symbols`` is the run's universe (rows in
+        ``feature_run_universe_symbols``). ``feature_row_symbols`` is the
+        subset that actually has rows in ``stock_feature_daily``; defaults
+        to ``symbols`` (full coverage). Pass a strict subset to model a
+        partial-publish run.
+        """
+        actual_rows = feature_row_symbols if feature_row_symbols is not None else symbols
+        run = repo.start_run(as_of, RunType.DAILY_SNAPSHOT)
+        repo.mark_completed(run.id, _make_stats())
+        for symbol in symbols:
+            session.add(FeatureRunUniverseSymbol(run_id=run.id, symbol=symbol))
+        for symbol in actual_rows:
+            session.add(StockFeatureDaily(
+                run_id=run.id,
+                symbol=symbol,
+                as_of_date=as_of,
+                composite_score=80.0,
+                overall_rating=3,
+                passes_count=1,
+                details_json={},
+            ))
+        session.flush()
+        repo.publish_atomically(run.id, pointer_key=pointer_key)
+        return run
+
+    def test_returns_run_when_universe_covers_symbols(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        self._publish(
+            repo, session,
+            symbols=["AAPL", "MSFT", "GOOGL"],
+            as_of=date(2026, 2, 17),
+        )
+
+        result = repo.find_latest_published_covering(symbols=["AAPL", "MSFT"])
+
+        assert result is not None
+        assert result.status == RunStatus.PUBLISHED
+
+    def test_returns_none_when_some_symbols_missing_feature_rows(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        """Universe lists AAPL + MSFT, but only AAPL was scanned to a row.
+        Default DQ thresholds permit publishing such a partial run, so we
+        must check actual ``stock_feature_daily`` rows; otherwise the
+        compile path silently omits MSFT instead of falling back to async.
+        """
+        self._publish(
+            repo, session,
+            symbols=["AAPL", "MSFT"],
+            as_of=date(2026, 2, 17),
+            feature_row_symbols=["AAPL"],
+        )
+
+        result = repo.find_latest_published_covering(symbols=["AAPL", "MSFT"])
+
+        assert result is None
+
+    def test_returns_none_when_universe_misses_a_symbol(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        self._publish(
+            repo, session,
+            symbols=["AAPL", "MSFT"],
+            as_of=date(2026, 2, 17),
+        )
+
+        result = repo.find_latest_published_covering(
+            symbols=["AAPL", "GOOGL"],
+        )
+
+        assert result is None
+
+    def test_returns_none_when_no_pointer(
+        self, repo: SqlFeatureRunRepository
+    ):
+        result = repo.find_latest_published_covering(symbols=["AAPL"])
+        assert result is None
+
+    def test_normalizes_input_case_and_whitespace(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        self._publish(
+            repo, session,
+            symbols=["AAPL"],
+            as_of=date(2026, 2, 17),
+        )
+
+        # Lower-case, whitespace, and dupes get normalised before lookup.
+        result = repo.find_latest_published_covering(
+            symbols=["  aapl ", "AAPL"],
+        )
+        assert result is not None
+
+    def test_market_pointer_takes_precedence(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        # A market-specific run published under latest_published_market:US
+        market_run = self._publish(
+            repo, session,
+            symbols=["AAPL"],
+            as_of=date(2026, 2, 17),
+            pointer_key="latest_published_market:US",
+        )
+        # Plus a separate run under the global pointer
+        global_run = self._publish(
+            repo, session,
+            symbols=["AAPL"],
+            as_of=date(2026, 2, 16),
+            pointer_key="latest_published",
+        )
+
+        result = repo.find_latest_published_covering(
+            symbols=["AAPL"], market="US"
+        )
+
+        # Market pointer wins.
+        assert result is not None
+        assert result.id == market_run.id
+        assert global_run.id != market_run.id  # sanity
+
+    def test_falls_back_to_global_pointer_when_market_missing(
+        self, repo: SqlFeatureRunRepository, session: Session
+    ):
+        global_run = self._publish(
+            repo, session,
+            symbols=["AAPL"],
+            as_of=date(2026, 2, 17),
+            pointer_key="latest_published",
+        )
+
+        result = repo.find_latest_published_covering(
+            symbols=["AAPL"], market="HK"
+        )
+
+        # No market-specific pointer for HK → fall back to global.
+        assert result is not None
+        assert result.id == global_run.id
+
+
 class TestGetRun:
     def test_returns_domain_object(self, repo: SqlFeatureRunRepository):
         run = repo.start_run(date(2026, 2, 17), RunType.DAILY_SNAPSHOT)

@@ -486,9 +486,17 @@ class FakeFeatureRunRepository(FeatureRunRepository):
     def __init__(self, *, row_counter=None) -> None:
         self._runs: dict[int, FeatureRunDomain] = {}
         self._next_id = 1
-        self._pointer_run_id: int | None = None
+        # Map of pointer_key -> run_id, mirroring ``feature_run_pointers``
+        # in the real repo. Populated by ``publish_atomically``; queried by
+        # ``get_latest_published`` and ``find_latest_published_covering``.
+        self._pointers: dict[str, int] = {}
         # Optional callback: (run_id) -> int for list_runs_with_counts
         self._row_counter = row_counter
+
+    @property
+    def _pointer_run_id(self) -> int | None:
+        """Backward-compat alias for tests reading the global pointer."""
+        return self._pointers.get("latest_published")
 
     def start_run(self, as_of_date, run_type, code_version=None,
                   universe_hash=None, input_hash=None,
@@ -557,7 +565,9 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         self._runs[run_id] = updated
         return updated
 
-    def publish_atomically(self, run_id) -> FeatureRunDomain:
+    def publish_atomically(
+        self, run_id, pointer_key: str = "latest_published"
+    ) -> FeatureRunDomain:
         run = self._get_or_raise(run_id)
         validate_transition(run.status, RunStatus.PUBLISHED)
         updated = FeatureRunDomain(
@@ -570,13 +580,16 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             stats=run.stats, warnings=run.warnings,
         )
         self._runs[run_id] = updated
-        self._pointer_run_id = run_id
+        self._pointers[pointer_key] = run_id
         return updated
 
-    def get_latest_published(self) -> FeatureRunDomain | None:
-        if self._pointer_run_id is None:
+    def get_latest_published(
+        self, pointer_key: str = "latest_published"
+    ) -> FeatureRunDomain | None:
+        run_id = self._pointers.get(pointer_key)
+        if run_id is None:
             return None
-        return self._runs.get(self._pointer_run_id)
+        return self._runs.get(run_id)
 
     def find_latest_published_exact(
         self,
@@ -599,6 +612,66 @@ class FakeFeatureRunRepository(FeatureRunRepository):
             reverse=True,
         )
         return matches[0]
+
+    def set_run_covered_symbols(self, run_id: int, symbols: Sequence[str]) -> None:
+        """Test helper: register the symbols that have a feature row in the run.
+
+        The real repo counts rows in ``stock_feature_daily``; this fake
+        keeps a parallel mapping so ``find_latest_published_covering``
+        can answer coverage questions without an actual DB.
+
+        Note: matching production semantics, this is the set of symbols
+        with *persisted feature rows* — not the symbols listed in the
+        universe table. Default DQ thresholds permit publishing a run
+        with up to 10% of universe symbols missing rows, so the two sets
+        can legitimately differ.
+        """
+        if not hasattr(self, "_run_universes"):
+            self._run_universes: dict[int, set[str]] = {}
+        self._run_universes[run_id] = {
+            str(s).strip().upper() for s in symbols if str(s).strip()
+        }
+
+    def find_latest_published_covering(
+        self,
+        *,
+        symbols,
+        market: str | None = None,
+    ) -> FeatureRunDomain | None:
+        normalized = sorted({
+            str(s).strip().upper() for s in symbols if str(s).strip()
+        })
+        if not normalized:
+            return None
+
+        universes = getattr(self, "_run_universes", {})
+
+        # Honour the same pointer ordering as the real repo: market-specific
+        # pointer first, then the global pointer. Without this the fake
+        # would silently pick any covering published run regardless of
+        # which market it was published for, and a regression that selects
+        # the wrong run for a market-scoped scan could pass tests.
+        candidate_keys: list[str] = []
+        if market:
+            candidate_keys.append(
+                f"latest_published_market:{str(market).strip().upper()}"
+            )
+        candidate_keys.append("latest_published")
+
+        for key in candidate_keys:
+            run_id = self._pointers.get(key)
+            if run_id is None:
+                continue
+            run = self._runs.get(run_id)
+            if run is None or run.status != RunStatus.PUBLISHED:
+                continue
+            covered = universes.get(run_id)
+            if covered is None:
+                continue
+            if all(symbol in covered for symbol in normalized):
+                return run
+
+        return None
 
     def get_run(self, run_id) -> FeatureRunDomain:
         return self._get_or_raise(run_id)
@@ -835,6 +908,95 @@ class FakeFeatureStoreRepository(FeatureStoreRepository):
         if page is not None:
             symbols = symbols[page.offset : page.offset + page.limit]
         return symbols, len(self._rows[run_id])
+
+    def query_run_details(
+        self,
+        run_id,
+        filters=None,
+        *,
+        symbols=None,
+    ):
+        """Bridge method: return ``(symbol, details_json)`` pairs from a run.
+
+        The real repo applies ``FilterSpec`` constraints in SQL; this fake
+        applies a small subset (range filters on either ``composite_score``
+        or JSON fields, plus categorical/boolean) in Python so use case
+        tests can exercise the compile path end-to-end without a DB.
+        """
+        if run_id not in self._rows:
+            raise EntityNotFoundError("FeatureRun", run_id)
+
+        rows = list(self._rows[run_id])
+
+        if symbols is not None:
+            allow = {
+                str(s).strip().upper() for s in symbols if str(s).strip()
+            }
+            rows = [r for r in rows if r.symbol.upper() in allow]
+
+        def _value(row, field: str):
+            if field == "composite_score":
+                return row.composite_score
+            if field == "overall_rating":
+                return row.overall_rating
+            if field == "passes_count":
+                return row.passes_count
+            if field == "symbol":
+                return row.symbol
+            details = row.details or {}
+            return details.get(field) if isinstance(details, dict) else None
+
+        if filters is not None:
+            from app.domain.common.query import FilterMode
+
+            filtered: list = []
+            for row in rows:
+                ok = True
+                for rf in filters.range_filters:
+                    val = _value(row, rf.field)
+                    if val is None:
+                        ok = False
+                        break
+                    try:
+                        numeric = float(val)
+                    except (TypeError, ValueError):
+                        ok = False
+                        break
+                    if rf.min_value is not None and numeric < float(rf.min_value):
+                        ok = False
+                        break
+                    if rf.max_value is not None and numeric > float(rf.max_value):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                for cf in filters.categorical_filters:
+                    val = _value(row, cf.field)
+                    in_values = val in cf.values
+                    if cf.mode == FilterMode.EXCLUDE:
+                        if in_values:
+                            ok = False
+                            break
+                    else:
+                        if not in_values:
+                            ok = False
+                            break
+                if not ok:
+                    continue
+                for bf in filters.boolean_filters:
+                    val = _value(row, bf.field)
+                    if val is None or bool(val) != bf.value:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                filtered.append(row)
+            rows = filtered
+
+        return [
+            (row.symbol, dict(row.details) if isinstance(row.details, dict) else {})
+            for row in rows
+        ]
 
     def get_setup_payload_for_run(self, run_id, symbol):
         self.last_get_setup_payload_for_run_args = {

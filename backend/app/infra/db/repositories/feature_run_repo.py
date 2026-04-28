@@ -17,9 +17,12 @@ from app.domain.feature_store.models import (
     validate_transition,
 )
 from app.domain.feature_store.ports import FeatureRunRepository
-from app.infra.db.models.feature_store import StockFeatureDaily
+from app.infra.db.models.feature_store import (
+    FeatureRun,
+    FeatureRunPointer,
+    StockFeatureDaily,
+)
 from app.domain.feature_store.quality import DQResult
-from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.infra.serialization import convert_numpy_types
 
 
@@ -182,6 +185,72 @@ class SqlFeatureRunRepository(FeatureRunRepository):
         if row is None:
             return None
         return self._to_domain(row)
+
+    def find_latest_published_covering(
+        self,
+        *,
+        symbols,
+        market: str | None = None,
+    ) -> FeatureRunDomain | None:
+        normalized = sorted({
+            str(symbol).strip().upper()
+            for symbol in symbols
+            if str(symbol).strip()
+        })
+        if not normalized:
+            return None
+
+        # Try market-specific pointer first, then fall back to the global
+        # one — matches the convention in
+        # ``api.v1.stocks._get_latest_feature_run_for_symbol``.
+        candidate_keys: list[str] = []
+        if market:
+            candidate_keys.append(f"latest_published_market:{market.strip().upper()}")
+        candidate_keys.append("latest_published")
+
+        for key in candidate_keys:
+            pointer = (
+                self._session.query(FeatureRunPointer)
+                .filter(FeatureRunPointer.key == key)
+                .first()
+            )
+            if pointer is None:
+                continue
+            row = self._session.get(FeatureRun, pointer.run_id)
+            if row is None or row.status != RunStatus.PUBLISHED.value:
+                continue
+            if self._run_has_feature_rows_for(pointer.run_id, normalized):
+                return self._to_domain(row)
+
+        return None
+
+    def _run_has_feature_rows_for(self, run_id: int, symbols: list[str]) -> bool:
+        """Return True iff every symbol has a row in ``stock_feature_daily``.
+
+        Counting ``feature_run_universe_symbols`` would not be enough:
+        ``BuildDailyFeatureSnapshotUseCase`` saves the universe symbols
+        before scanning, and the default DQ thresholds permit publishing
+        a run with up to 10% of universe symbols missing rows
+        (``DQThresholds.row_count_threshold = 0.9`` /
+        ``symbol_coverage_threshold = 0.9``). A coverage test based on
+        the universe table would happily pick such a partial run, after
+        which ``query_run_details`` would silently omit the
+        symbols-without-rows from the scan output. Counting actual rows
+        ensures the compile path either serves every requested symbol
+        from the snapshot or defers to async.
+        """
+        if not symbols:
+            return True
+        present = (
+            self._session.query(func.count(StockFeatureDaily.symbol))
+            .filter(
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.symbol.in_(symbols),
+            )
+            .scalar()
+            or 0
+        )
+        return int(present) == len(symbols)
 
     def get_run(self, run_id) -> FeatureRunDomain:
         row = self._get_or_raise(run_id)
