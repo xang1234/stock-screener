@@ -66,20 +66,28 @@ def _publish_run(
     as_of: date | None = None,
     pointer_key: str = "latest_published",
 ) -> int:
-    """Create + populate + publish a feature run on the fake repos."""
+    """Create + populate + publish a feature run on the fake repos.
+
+    Coverage in the fake is keyed off the symbols actually persisted as
+    rows (``[r.symbol for r in rows]``), not the requested universe — this
+    matches the production coverage check, which counts
+    ``stock_feature_daily`` rows so partial-publish runs are correctly
+    rejected. Pass a ``rows`` list shorter than ``symbols`` to model a
+    partial run.
+    """
     run = feature_runs.start_run(
         as_of_date=as_of or date(2026, 4, 24),
         run_type=RunType.DAILY_SNAPSHOT,
         universe_hash="universe-hash-irrelevant",
         input_hash="input-hash-irrelevant",
     )
-    feature_runs.set_run_universe(run.id, symbols)
+    feature_runs.set_run_covered_symbols(run.id, [r.symbol for r in rows])
     feature_runs.mark_completed(
         run.id,
         stats=RunStats(
             total_symbols=len(symbols),
-            processed_symbols=len(symbols),
-            failed_symbols=0,
+            processed_symbols=len(rows),
+            failed_symbols=max(0, len(symbols) - len(rows)),
             duration_seconds=1.0,
             passed_symbols=len([r for r in rows if r.composite_score and r.composite_score >= 70]),
         ),
@@ -457,6 +465,35 @@ class TestCompilePathFallsBack:
         assert result.status == "queued"
         assert len(dispatcher.dispatched) == 1
 
+    def test_partial_publish_run_dispatches_async(self):
+        """Default DQ thresholds permit publishing a run with up to 10% of
+        universe symbols missing feature rows. The compile path must check
+        actual ``stock_feature_daily`` rows, not just universe membership,
+        otherwise it would silently omit those symbols from results.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        # Universe lists AAPL + MSFT, but only AAPL has a row (partial run).
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=["AAPL", "MSFT"],
+            rows=[_row("AAPL", custom_score=85)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(["AAPL", "MSFT"]),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(uow, _custom_command())
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
     def test_no_published_run_dispatches_async(self):
         """No feature run has been published yet."""
         uow = FakeUnitOfWork(
@@ -776,7 +813,7 @@ class TestCompilePathCoexistsWithExactMatch:
             universe_hash=hash_universe_symbols(symbols),
             input_hash=hash_scan_signature(signature),
         )
-        feature_runs.set_run_universe(run.id, symbols)
+        feature_runs.set_run_covered_symbols(run.id, symbols)
         feature_runs.mark_completed(
             run.id,
             stats=RunStats(

@@ -38,25 +38,6 @@ FreshnessChecker = Callable[[Iterable[str]], Optional[dict]]
 logger = logging.getLogger(__name__)
 
 
-# Score / pass fields that the daily snapshot computed under whatever
-# criteria the snapshot itself used. By the time we reach the compile path
-# the exact-signature lookup has missed, so those values reflect *some
-# other* criteria set — sorting and ranking by them would mislead users.
-# We replace them with values that describe what the compile path actually
-# guarantees: every persisted row passed every user-specified per-field
-# filter at the SQL gate (so the row is a "perfect match" for the user's
-# enabled filter set, not for whatever the snapshot was scoring).
-_COMPILE_PATH_OVERRIDES: dict[str, object] = {
-    "custom_score": 100.0,
-    "composite_score": 100.0,
-    "rating": "Strong Buy",
-    "passes_template": True,
-    "screeners_run": ["custom"],
-    "screeners_passed": 1,
-    "screeners_total": 1,
-    "composite_method": "weighted_average",
-}
-
 # Per-screener scores belonging to screeners the user didn't request.
 # The covering snapshot may have computed them, but they have no meaning
 # in this scan's context and would clutter result columns / sort options.
@@ -73,18 +54,41 @@ def _normalize_compile_details(details: dict) -> dict:
     """Strip stale-criteria score fields from a compile-path row's details.
 
     Called per row before passing through ``persist_orchestrator_results``.
+    The compile path is reached only when the exact-signature lookup
+    missed, so ``custom_score`` / ``composite_score`` / ``rating`` /
+    ``passes_template`` from the covering snapshot reflect *some other*
+    criteria set; persisting them as-is would misrank matches in the UI.
+    Replace those fields with values that describe what the compile path
+    actually guarantees: every persisted row passed every user-specified
+    per-field filter at the SQL gate.
+
     Per-symbol *facts* (price, RS rating, MA alignment, sector, growth,
     sparklines, setup-engine outputs) are left untouched — they're inputs
     to the user's filter, not derived from custom criteria — so users keep
     seeing the snapshot's factual columns; only the score / rating /
     pass-template metadata gets normalised.
+
+    The override dict is constructed fresh inside this function so that
+    mutable values (notably ``screeners_run``'s list) are not shared by
+    reference across rows.
     """
-    if not isinstance(details, dict):
-        return dict(_COMPILE_PATH_OVERRIDES)
-    normalized = dict(details)
+    if isinstance(details, dict):
+        normalized = dict(details)
+    else:
+        normalized = {}
     for key in _COMPILE_PATH_DROP_KEYS:
         normalized.pop(key, None)
-    normalized.update(_COMPILE_PATH_OVERRIDES)
+    normalized.update({
+        "custom_score": 100.0,
+        "composite_score": 100.0,
+        "rating": "Strong Buy",
+        "passes_template": True,
+        # Fresh list per call — never shared between rows or invocations.
+        "screeners_run": ["custom"],
+        "screeners_passed": 1,
+        "screeners_total": 1,
+        "composite_method": "weighted_average",
+    })
     return normalized
 
 

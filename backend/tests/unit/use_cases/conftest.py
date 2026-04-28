@@ -613,12 +613,18 @@ class FakeFeatureRunRepository(FeatureRunRepository):
         )
         return matches[0]
 
-    def set_run_universe(self, run_id: int, symbols: Sequence[str]) -> None:
-        """Test helper: register the universe a published run covers.
+    def set_run_covered_symbols(self, run_id: int, symbols: Sequence[str]) -> None:
+        """Test helper: register the symbols that have a feature row in the run.
 
-        The real repo reads ``feature_run_universe_symbols``; this fake
+        The real repo counts rows in ``stock_feature_daily``; this fake
         keeps a parallel mapping so ``find_latest_published_covering``
         can answer coverage questions without an actual DB.
+
+        Note: matching production semantics, this is the set of symbols
+        with *persisted feature rows* — not the symbols listed in the
+        universe table. Default DQ thresholds permit publishing a run
+        with up to 10% of universe symbols missing rows, so the two sets
+        can legitimately differ.
         """
         if not hasattr(self, "_run_universes"):
             self._run_universes: dict[int, set[str]] = {}

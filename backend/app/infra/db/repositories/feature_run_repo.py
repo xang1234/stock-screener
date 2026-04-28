@@ -20,7 +20,6 @@ from app.domain.feature_store.ports import FeatureRunRepository
 from app.infra.db.models.feature_store import (
     FeatureRun,
     FeatureRunPointer,
-    FeatureRunUniverseSymbol,
     StockFeatureDaily,
 )
 from app.domain.feature_store.quality import DQResult
@@ -220,20 +219,33 @@ class SqlFeatureRunRepository(FeatureRunRepository):
             row = self._session.get(FeatureRun, pointer.run_id)
             if row is None or row.status != RunStatus.PUBLISHED.value:
                 continue
-            if self._run_universe_covers(pointer.run_id, normalized):
+            if self._run_has_feature_rows_for(pointer.run_id, normalized):
                 return self._to_domain(row)
 
         return None
 
-    def _run_universe_covers(self, run_id: int, symbols: list[str]) -> bool:
-        """Return True iff every symbol is in the run's universe."""
+    def _run_has_feature_rows_for(self, run_id: int, symbols: list[str]) -> bool:
+        """Return True iff every symbol has a row in ``stock_feature_daily``.
+
+        Counting ``feature_run_universe_symbols`` would not be enough:
+        ``BuildDailyFeatureSnapshotUseCase`` saves the universe symbols
+        before scanning, and the default DQ thresholds permit publishing
+        a run with up to 10% of universe symbols missing rows
+        (``DQThresholds.row_count_threshold = 0.9`` /
+        ``symbol_coverage_threshold = 0.9``). A coverage test based on
+        the universe table would happily pick such a partial run, after
+        which ``query_run_details`` would silently omit the
+        symbols-without-rows from the scan output. Counting actual rows
+        ensures the compile path either serves every requested symbol
+        from the snapshot or defers to async.
+        """
         if not symbols:
             return True
         present = (
-            self._session.query(func.count(FeatureRunUniverseSymbol.symbol))
+            self._session.query(func.count(StockFeatureDaily.symbol))
             .filter(
-                FeatureRunUniverseSymbol.run_id == run_id,
-                FeatureRunUniverseSymbol.symbol.in_(symbols),
+                StockFeatureDaily.run_id == run_id,
+                StockFeatureDaily.symbol.in_(symbols),
             )
             .scalar()
             or 0
