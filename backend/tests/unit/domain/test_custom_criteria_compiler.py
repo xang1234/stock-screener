@@ -35,6 +35,7 @@ class TestEmptyCriteria:
         assert result.score_field == "custom_score"
         assert result.min_score == 70.0
         assert result.has_constraints
+        assert result.hard_gate_equivalent is False
         assert result.filter_spec.range_filters == []
         assert result.unrepresentable_keys == ()
 
@@ -65,6 +66,7 @@ class TestRangeFilters:
         assert rf.max_value == 500
         assert "price_min" in result.representable_keys
         assert "price_max" in result.representable_keys
+        assert result.hard_gate_equivalent is True
 
     def test_rs_rating_min_compiles_to_rs_rating(self):
         result = compile_custom_criteria(
@@ -76,6 +78,7 @@ class TestRangeFilters:
         assert rf is not None
         assert rf.min_value == 80
         assert rf.max_value is None
+        assert result.hard_gate_equivalent is False
 
     def test_eps_growth_compiles_to_eps_growth_qq(self):
         result = compile_custom_criteria(
@@ -86,6 +89,7 @@ class TestRangeFilters:
         rf = _range(result.filter_spec, "eps_growth_qq")
         assert rf is not None
         assert rf.min_value == 25
+        assert result.hard_gate_equivalent is False
 
     def test_near_52w_high_compiles_to_distance_max(self):
         result = compile_custom_criteria(
@@ -97,6 +101,7 @@ class TestRangeFilters:
         assert rf is not None
         assert rf.max_value == 15
         assert rf.min_value is None
+        assert result.hard_gate_equivalent is False
 
 
 class TestUsdUnitCompatibility:
@@ -112,6 +117,7 @@ class TestUsdUnitCompatibility:
         assert rf.min_value == 1_000_000
         assert "volume_min" in result.representable_keys
         assert "volume_min" not in result.unrepresentable_keys
+        assert result.hard_gate_equivalent is False
 
     def test_volume_min_unrepresentable_for_us_single_market(self):
         """Single-market mode (any market) evaluates volume_min in *shares*,
@@ -213,6 +219,7 @@ class TestBooleanAndCategorical:
         assert cf is not None
         assert cf.values == ("Technology", "Healthcare")
         assert cf.mode == FilterMode.INCLUDE
+        assert result.hard_gate_equivalent is True
 
     def test_empty_sectors_marks_unrepresentable(self):
         """``CustomScanner`` treats ``sectors=[]`` as "filter enabled with no
@@ -249,6 +256,24 @@ class TestBooleanAndCategorical:
         assert cf is not None
         assert cf.values == ("Tobacco", "Gambling")
         assert cf.mode == FilterMode.EXCLUDE
+        assert result.hard_gate_equivalent is True
+
+    def test_multiple_binary_filters_are_not_hard_gate_equivalent(self):
+        result = compile_custom_criteria(
+            {
+                "custom_filters": {
+                    "price_min": 20,
+                    "market_cap_min": 1_000_000_000,
+                    "sectors": ["Technology"],
+                    "exclude_industries": ["Tobacco"],
+                },
+            },
+            screeners=["custom"],
+            universe_market=None,
+        )
+
+        assert result.is_fully_representable
+        assert result.hard_gate_equivalent is False
 
     def test_empty_exclude_industries_silently_dropped(self):
         """Empty exclude list is a no-op in async (every symbol passes the

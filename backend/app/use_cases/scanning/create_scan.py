@@ -231,18 +231,9 @@ class CreateScanUseCase:
         produced under different custom-screener criteria. ``custom_score``
         in the stored details was computed against *that* run's filters,
         not the user's, so reusing it as a pass gate would yield results
-        that disagree with async (a different filter set produces a
-        different normalised score). We therefore don't apply
-        ``custom_score >= min_score`` here. The per-field thresholds the
-        user supplied (price, volume, RS, MA alignment, …) compile into
-        ``filter_spec`` and serve as the pass test: a row survives iff it
-        meets every user-specified threshold.
-
-        That makes the compile path strictly stricter than async (which
-        accepts partial-credit scoring against ``min_score``); a stock
-        scoring 75 with a missing filter would pass async at
-        ``min_score=70`` but is excluded here. We accept that strictness
-        as the price of avoiding a stale-criteria score.
+        that disagree with async. We therefore only use the compile path
+        when the compiler can prove the SQL hard gate is equivalent to
+        CustomScanner's weighted ``min_score`` pass semantics.
         """
         try:
             compiled: CompiledCustomCriteria = compile_custom_criteria(
@@ -267,6 +258,11 @@ class CreateScanUseCase:
             # ``score_field`` is set only for ``screeners == ["custom"]``.
             # Multi-screener composites would need extra logic to derive
             # a consistent pass test; defer those to the async path.
+            return None
+        if not compiled.hard_gate_equivalent:
+            logger.debug(
+                "Compile path skipped: criteria are not hard-gate equivalent",
+            )
             return None
         if not compiled.filter_spec.range_filters \
                 and not compiled.filter_spec.categorical_filters \

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.common.errors import EntityNotFoundError
 from app.domain.common.query import (
+    FilterMode,
     FilterSpec,
     PageSpec,
     QuerySpec,
@@ -818,6 +819,41 @@ class TestQueryRunDetails:
         repo.upsert_snapshot_rows(run_id, [self._row("AAPL", 85.0)])
 
         assert repo.query_run_details(run_id, symbols=[]) == []
+
+    def test_exclude_filter_keeps_null_json_values(
+        self, repo: SqlFeatureStoreRepository, session: Session
+    ):
+        """CustomScanner passes missing industry values for exclusions."""
+        run_id = _create_run(session)
+        repo.upsert_snapshot_rows(
+            run_id,
+            [
+                self._row(
+                    "AAPL",
+                    85.0,
+                    {"custom_score": 85.0, "gics_industry": None},
+                ),
+                self._row(
+                    "MSFT",
+                    90.0,
+                    {"custom_score": 90.0, "gics_industry": "Software"},
+                ),
+                self._row(
+                    "MO",
+                    75.0,
+                    {"custom_score": 75.0, "gics_industry": "Tobacco"},
+                ),
+            ],
+        )
+
+        spec = FilterSpec().add_categorical(
+            "gics_industry",
+            ("Tobacco",),
+            mode=FilterMode.EXCLUDE,
+        )
+        result = repo.query_run_details(run_id, spec)
+
+        assert sorted(symbol for symbol, _ in result) == ["AAPL", "MSFT"]
 
     def test_raises_for_unknown_run(self, repo: SqlFeatureStoreRepository):
         with pytest.raises(EntityNotFoundError):

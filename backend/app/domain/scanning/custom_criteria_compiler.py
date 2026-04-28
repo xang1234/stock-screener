@@ -51,6 +51,7 @@ class CompiledCustomCriteria:
     min_score: float | None
     unrepresentable_keys: tuple[str, ...]
     representable_keys: tuple[str, ...]
+    hard_gate_equivalent: bool = False
 
     @property
     def is_fully_representable(self) -> bool:
@@ -133,6 +134,8 @@ def compile_custom_criteria(
     spec = FilterSpec()
     representable: list[str] = []
     unrepresentable: list[str] = []
+    hard_gate_filters: list[str] = []
+    has_partial_score_filter = False
 
     mixed_market = _is_mixed_market(universe_market)
     market_cap_compatible = _is_market_cap_usd_compatible(universe_market)
@@ -142,6 +145,7 @@ def compile_custom_criteria(
     p_max = flat.get("price_max")
     if p_min is not None or p_max is not None:
         spec.add_range("current_price", min_value=p_min, max_value=p_max)
+        hard_gate_filters.append("price_range")
         if p_min is not None:
             representable.append("price_min")
         if p_max is not None:
@@ -156,6 +160,7 @@ def compile_custom_criteria(
         if mixed_market:
             spec.add_range("adv_usd", min_value=v_min)
             representable.append("volume_min")
+            has_partial_score_filter = True
         else:
             unrepresentable.append("volume_min")
 
@@ -167,6 +172,7 @@ def compile_custom_criteria(
     if mc_min is not None or mc_max is not None:
         if market_cap_compatible:
             spec.add_range("market_cap_usd", min_value=mc_min, max_value=mc_max)
+            hard_gate_filters.append("market_cap")
             if mc_min is not None:
                 representable.append("market_cap_min")
             if mc_max is not None:
@@ -182,18 +188,21 @@ def compile_custom_criteria(
     if rs_min is not None:
         spec.add_range("rs_rating", min_value=rs_min)
         representable.append("rs_rating_min")
+        has_partial_score_filter = True
 
     # Quarterly EPS growth -> JSON eps_growth_qq
     eps_min = flat.get("eps_growth_min")
     if eps_min is not None:
         spec.add_range("eps_growth_qq", min_value=eps_min)
         representable.append("eps_growth_min")
+        has_partial_score_filter = True
 
     # Quarterly sales growth -> JSON sales_growth_qq
     sales_min = flat.get("sales_growth_min")
     if sales_min is not None:
         spec.add_range("sales_growth_qq", min_value=sales_min)
         representable.append("sales_growth_min")
+        has_partial_score_filter = True
 
     # MA alignment cannot be safely served from the stored snapshot.
     # ``stock_feature_daily.details_json["ma_alignment"]`` is populated by
@@ -214,6 +223,7 @@ def compile_custom_criteria(
     if near_high is not None:
         spec.add_range("week_52_high_distance", max_value=near_high)
         representable.append("near_52w_high")
+        has_partial_score_filter = True
 
     # Sector inclusion -> JSON gics_sector. ``CustomScanner`` treats
     # ``sectors`` as enabled whenever the key is present (``is not None``);
@@ -228,6 +238,7 @@ def compile_custom_criteria(
             spec.add_categorical(
                 "gics_sector", tuple(sectors), mode=FilterMode.INCLUDE
             )
+            hard_gate_filters.append("sectors")
             representable.append("sectors")
         else:
             unrepresentable.append("sectors")
@@ -241,6 +252,7 @@ def compile_custom_criteria(
         spec.add_categorical(
             "gics_industry", tuple(excluded), mode=FilterMode.EXCLUDE
         )
+        hard_gate_filters.append("exclude_industries")
         representable.append("exclude_industries")
 
     # Filters that have no feature-store representation today.
@@ -283,12 +295,21 @@ def compile_custom_criteria(
     else:
         min_score_val = None
 
+    hard_gate_equivalent = (
+        not unrepresentable
+        and not has_partial_score_filter
+        and len(hard_gate_filters) == 1
+        and min_score_val is not None
+        and 0.0 < min_score_val <= 100.0
+    )
+
     return CompiledCustomCriteria(
         filter_spec=spec,
         score_field=score_field,
         min_score=min_score_val,
         unrepresentable_keys=tuple(unrepresentable),
         representable_keys=tuple(representable),
+        hard_gate_equivalent=hard_gate_equivalent,
     )
 
 

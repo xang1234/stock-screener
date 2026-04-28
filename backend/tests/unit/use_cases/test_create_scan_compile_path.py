@@ -48,10 +48,11 @@ def _custom_command(
         composite_method="weighted_average",
         criteria=criteria or {
             # Use only filters the compiler can express today: price_min
-            # and rs_rating_min both map to indexed JSON fields. Avoid
+            # maps to an indexed JSON field and is hard-gate equivalent to
+            # CustomScanner when it is the only active filter. Avoid
             # ma_alignment in the default — the stored field has stricter
             # Minervini semantics so the compiler marks it unrepresentable.
-            "custom_filters": {"price_min": 20, "rs_rating_min": 70},
+            "custom_filters": {"price_min": 20},
             "min_score": 70,
         },
     )
@@ -132,11 +133,10 @@ class TestCompilePathHappyPath:
         feature_store = FakeFeatureStoreRepository()
         symbols = ["AAPL", "MSFT", "GOOGL"]
         rows = [
-            # Both per-field thresholds (price>=20, rs_rating>=70) pass.
-            _row("AAPL", custom_score=85, current_price=150, rs_rating=85),
-            _row("MSFT", custom_score=72, current_price=300, rs_rating=78),
-            # rs_rating below threshold — must be excluded.
-            _row("GOOGL", custom_score=85, current_price=120, rs_rating=40),
+            _row("AAPL", custom_score=85, current_price=150),
+            _row("MSFT", custom_score=72, current_price=300),
+            # price below threshold — must be excluded.
+            _row("GOOGL", custom_score=85, current_price=10),
         ]
         run_id = _publish_run(
             feature_runs, feature_store, symbols=symbols, rows=rows
@@ -155,7 +155,7 @@ class TestCompilePathHappyPath:
         assert result.status == "completed"
         assert result.total_stocks == 3
         # Per-field threshold pass test (no stale-criteria custom_score gate):
-        # GOOGL excluded because rs_rating=40 < 70; AAPL + MSFT persisted.
+        # GOOGL excluded because current_price=10 < 20; AAPL + MSFT persisted.
         assert len(dispatcher.dispatched) == 0
         persisted = uow.scan_results._persisted_results
         persisted_symbols = sorted(sym for _, sym, _ in persisted)
@@ -177,8 +177,8 @@ class TestCompilePathHappyPath:
         feature_store = FakeFeatureStoreRepository()
         symbols = ["AAPL"]
         # custom_score=10 was computed under different criteria; the user's
-        # actual per-field thresholds (price>=20, rs_rating>=70) all pass,
-        # so the row must be persisted regardless of the stored score.
+        # hard-gate-equivalent price threshold passes, so the row must be
+        # persisted regardless of the stored score.
         rows = [
             _row(
                 "AAPL", custom_score=10, current_price=150, rs_rating=85
@@ -200,7 +200,7 @@ class TestCompilePathHappyPath:
             uow,
             _custom_command(
                 criteria={
-                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
+                    "custom_filters": {"price_min": 20},
                     "min_score": 70,
                 },
             ),
@@ -264,7 +264,7 @@ class TestCompilePathHappyPath:
             uow,
             _custom_command(
                 criteria={
-                    "custom_filters": {"price_min": 20, "rs_rating_min": 70},
+                    "custom_filters": {"price_min": 20},
                     "min_score": 70,
                 },
             ),
@@ -325,6 +325,96 @@ class TestCompilePathHappyPath:
         assert result.status == "completed"
         persisted = sorted(sym for _, sym, _ in uow.scan_results._persisted_results)
         assert persisted == ["B"]
+
+    def test_multi_filter_partial_score_case_dispatches_async(self):
+        """Four binary filters are not equivalent to SQL hard gates.
+
+        CustomScanner would give this row 30/40 points because it passes
+        price, market cap, and sector, but fails industry exclusion. At the
+        default min_score=70, 75 points passes async. A SQL WHERE chain would
+        drop it, so the compile path must defer.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[
+                _row(
+                    "AAPL",
+                    custom_score=85,
+                    current_price=150,
+                    market_cap_usd=2_000_000_000,
+                    gics_sector="Technology",
+                    gics_industry="Tobacco",
+                )
+            ],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {
+                        "price_min": 20,
+                        "market_cap_min": 1_000_000_000,
+                        "sectors": ["Technology"],
+                        "exclude_industries": ["Tobacco"],
+                    },
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
+
+    def test_scaled_score_filter_dispatches_async(self):
+        """RS rating threshold has partial score semantics in CustomScanner.
+
+        A row exactly at rs_rating_min satisfies the hard SQL gate, but gets
+        10/15 points in CustomScanner and fails the default min_score=70.
+        """
+        feature_runs = FakeFeatureRunRepository()
+        feature_store = FakeFeatureStoreRepository()
+        symbols = ["AAPL"]
+        _publish_run(
+            feature_runs,
+            feature_store,
+            symbols=symbols,
+            rows=[_row("AAPL", custom_score=85, rs_rating=80)],
+        )
+
+        uow = FakeUnitOfWork(
+            universe=FakeUniverseRepository(symbols),
+            feature_runs=feature_runs,
+            feature_store=feature_store,
+        )
+        dispatcher = FakeTaskDispatcher()
+        uc = CreateScanUseCase(dispatcher=dispatcher)
+
+        result = uc.execute(
+            uow,
+            _custom_command(
+                criteria={
+                    "custom_filters": {"rs_rating_min": 80},
+                    "min_score": 70,
+                },
+            ),
+        )
+
+        assert result.status == "queued"
+        assert len(dispatcher.dispatched) == 1
 
 
 class TestCompilePathFallsBack:

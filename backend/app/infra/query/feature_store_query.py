@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, asc, desc, func
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Query
 
 from app.domain.common.query import (
@@ -270,14 +270,14 @@ def _apply_categorical_filter(query: Query, cf: CategoricalFilter) -> Query:
     col = _COLUMN_MAP.get(cf.field)
     if col is not None:
         if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(~col.in_(cf.values))
+            query = query.filter(or_(col.is_(None), ~col.in_(cf.values)))
         else:
             query = query.filter(col.in_(cf.values))
     elif cf.field in _JSON_FIELD_MAP:
         json_path = _JSON_FIELD_MAP[cf.field]
         json_val = json_text(StockFeatureDaily.details_json, json_path, bind_or_session=query)
         if cf.mode == FilterMode.EXCLUDE:
-            query = query.filter(~json_val.in_(cf.values))
+            query = query.filter(or_(json_val.is_(None), ~json_val.in_(cf.values)))
         else:
             query = query.filter(json_val.in_(cf.values))
     return query
