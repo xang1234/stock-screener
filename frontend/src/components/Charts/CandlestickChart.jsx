@@ -247,13 +247,6 @@ const aggregateToWeekly = (dailyData) => {
  * Transform API data to TradingView Lightweight Charts format
  */
 const transformToCandlestickData = (apiData, timeframe = 'daily') => {
-  console.log('transformToCandlestickData called with:', {
-    dataLength: apiData?.length,
-    timeframe,
-    firstItem: apiData?.[0],
-    lastItem: apiData?.[apiData?.length - 1]
-  });
-
   if (!apiData || apiData.length === 0) {
     return { candlesticks: [], volume: [], ema10: [], ema20: [], ema50: [] };
   }
@@ -286,14 +279,6 @@ const transformToCandlestickData = (apiData, timeframe = 'daily') => {
   const ema10 = calculateEMA(processedData, 10);
   const ema20 = calculateEMA(processedData, 20);
   const ema50 = calculateEMA(processedData, 50);
-
-  console.log('Transformed data:', {
-    candlesticks: candlesticks.length,
-    volume: volume.length,
-    ema10: ema10.length,
-    ema20: ema20.length,
-    ema50: ema50.length
-  });
 
   return { candlesticks, volume, ema10, ema20, ema50 };
 };
@@ -394,28 +379,16 @@ function CandlestickChart({
 
   // Initialize chart on mount using useLayoutEffect for synchronous DOM access
   useLayoutEffect(() => {
-    console.log('CandlestickChart: useLayoutEffect running', { symbol });
-
     if (!chartContainerRef.current) {
-      console.log('CandlestickChart: Container ref not ready');
       return;
     }
 
     const containerWidth = chartContainerRef.current.clientWidth;
     const containerHeight = chartContainerRef.current.clientHeight;
 
-    console.log('CandlestickChart: Container dimensions', {
-      containerWidth,
-      containerHeight,
-      height: height,
-      symbol: symbol
-    });
-
     // Use provided height if container doesn't have dimensions yet
     const chartWidth = containerWidth > 0 ? containerWidth : 800;
     const chartHeight = containerHeight > 0 ? containerHeight : height;
-
-    console.log('CandlestickChart: Creating chart...');
 
     const chart = createChart(chartContainerRef.current, {
       width: chartWidth,
@@ -443,7 +416,6 @@ function CandlestickChart({
     });
 
     chartRef.current = chart;
-    console.log('CandlestickChart: Chart created successfully');
 
     // Create volume series (at bottom)
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -501,8 +473,6 @@ function CandlestickChart({
     });
     ema50SeriesRef.current = ema50Series;
 
-    console.log('CandlestickChart: All series added');
-
     // Subscribe to crosshair move for OHLC legend (skip in compact mode — legend is hidden)
     if (!compact) chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData || !candlestickSeriesRef.current) {
@@ -545,7 +515,6 @@ function CandlestickChart({
 
     // Cleanup on unmount
     return () => {
-      console.log('CandlestickChart: Cleaning up chart');
       resizeObserver.disconnect();
       if (chartRef.current) {
         chartRef.current.remove();
@@ -594,22 +563,8 @@ function CandlestickChart({
   // Update chart data when data changes
   useEffect(() => {
     if (!chartData || !chartRef.current) {
-      console.log('CandlestickChart: No data or chart ref', {
-        hasData: !!chartData,
-        hasChart: !!chartRef.current
-      });
       return;
     }
-
-    console.log('CandlestickChart: Updating chart data', {
-      candlesticks: chartData.candlesticks.length,
-      volume: chartData.volume.length,
-      ema10: chartData.ema10.length,
-      ema20: chartData.ema20.length,
-      ema50: chartData.ema50.length,
-      firstCandle: chartData.candlesticks[0],
-      lastCandle: chartData.candlesticks[chartData.candlesticks.length - 1]
-    });
 
     // Update volume data
     if (volumeSeriesRef.current && chartData.volume.length > 0) {
@@ -667,8 +622,6 @@ function CandlestickChart({
       shouldRestoreRangeRef.current = false; // Clear the flag
 
       if (visibleRange && visibleRange.from && visibleRange.to) {
-        // Restore the saved zoom level
-        console.log('CandlestickChart: Restoring visible range after symbol change', visibleRange);
         // Use setTimeout to ensure data is fully rendered before setting range
         setTimeout(() => {
           if (chartRef.current) {

@@ -16,7 +16,12 @@ import {
 import FilterPanel from '../components/FilterPanelContainer';
 import ChartViewerModal from '../../../components/Scan/ChartViewerModal';
 import { buildFilterParams, getStableFilterKey } from '../../../utils/filterUtils';
-import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../../api/priceHistory';
+import {
+  fetchPriceHistory,
+  prefetchPriceHistoryBatch,
+  priceHistoryKeys,
+  PRICE_HISTORY_STALE_TIME,
+} from '../../../api/priceHistory';
 import { useFilterPresets } from '../../../hooks/useFilterPresets';
 import { useRuntimeActivity } from '../../../hooks/useRuntimeActivity';
 import { useRuntime } from '../../../contexts/RuntimeContext';
@@ -514,40 +519,32 @@ function ScanPage() {
       return;
     }
 
-    const prioritySymbols = resultsData.results.slice(0, 5);
-    prioritySymbols.forEach((result, index) => {
-      setTimeout(() => {
-        queryClient.prefetchQuery({
-          queryKey: priceHistoryKeys.symbol(result.symbol, '6mo'),
-          queryFn: () => fetchPriceHistory(result.symbol, '6mo'),
-          staleTime: PRICE_HISTORY_STALE_TIME,
-          retry: false,
-        });
-      }, index * 200);
-    });
-
-    const remainingSymbols = resultsData.results.slice(5, 20);
-    if (remainingSymbols.length === 0) {
+    const visibleSymbols = resultsData.results
+      .slice(0, 20)
+      .map((result) => result.symbol)
+      .filter(Boolean);
+    if (visibleSymbols.length === 0) {
       return;
     }
-    const prefetchRemaining = () => {
-      remainingSymbols.forEach((result, index) => {
-        setTimeout(() => {
-          queryClient.prefetchQuery({
-            queryKey: priceHistoryKeys.symbol(result.symbol, '6mo'),
-            queryFn: () => fetchPriceHistory(result.symbol, '6mo'),
-            staleTime: PRICE_HISTORY_STALE_TIME,
-            retry: false,
-          });
-        }, index * 300);
-      });
+
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      prefetchPriceHistoryBatch(queryClient, visibleSymbols, '6mo');
     };
 
     if ('requestIdleCallback' in window) {
-      requestIdleCallback(prefetchRemaining);
-    } else {
-      setTimeout(prefetchRemaining, 2000);
+      const handle = window.requestIdleCallback(run, { timeout: 1000 });
+      return () => {
+        cancelled = true;
+        if (window.cancelIdleCallback) window.cancelIdleCallback(handle);
+      };
     }
+    const timer = setTimeout(run, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [
     bootstrappedScanId,
     currentScanId,

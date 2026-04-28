@@ -524,6 +524,10 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
       return jsonResponse(route, []);
     }
 
+    if (path === '/v1/stocks/history/batch' && method === 'POST') {
+      return jsonResponse(route, { data: {}, missing: [] });
+    }
+
     throw new Error(`Unhandled smoke mock for ${method} ${path}`);
   });
 
