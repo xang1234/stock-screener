@@ -22,11 +22,20 @@ from app.domain.scanning.signature import (
 from app.services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from app.tasks.workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
+
+BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS = 30
+BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES = 120
+FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES = 3
+# Celery has one retry counter for manual coverage waits and autoretry_for.
+FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES = (
+    BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES + FEATURE_SNAPSHOT_TRANSIENT_MAX_RETRIES
+)
 
 
 class CompositeProgressSink:
@@ -82,6 +91,30 @@ class MarketActivityProgressSink:
             logger.warning("Failed to emit market scan activity progress", exc_info=True)
         finally:
             db.close()
+
+
+def _bootstrap_coverage_wait_message(market: str, report: dict | None) -> str:
+    report = report or {}
+    price_ratio = float(report.get("price_coverage_ratio") or 0.0)
+    fundamentals_ratio = float(report.get("fundamentals_coverage_ratio") or 0.0)
+    price_missing = int(report.get("price_missing_symbols") or 0)
+    fundamentals_missing = int(report.get("fundamentals_missing_symbols") or 0)
+    return (
+        f"waiting_for_bootstrap_cache_coverage:{market} "
+        f"(price={price_ratio:.3f}, fundamentals={fundamentals_ratio:.3f}, "
+        f"price_missing={price_missing}, fundamentals_missing={fundamentals_missing})"
+    )
+
+
+def _bootstrap_coverage_total(report: dict | None) -> int:
+    report = report or {}
+    price_total = report.get("price_total_symbols")
+    if price_total is not None:
+        return int(price_total)
+    fundamentals_total = report.get("fundamentals_total_symbols")
+    if fundamentals_total is not None:
+        return int(fundamentals_total)
+    return 0
 
 
 def _upsert_feature_run_pointer(*, session_factory, pointer_key: str, run_id: int) -> None:
@@ -641,7 +674,7 @@ def _is_market_trading_day(as_of: date, *, market: str | None) -> bool:
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=60,
     retry_backoff_max=600,
-    max_retries=3,
+    max_retries=FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
     soft_time_limit=settings.feature_snapshot_soft_time_limit_seconds,
 )
 @serialized_market_workload("build_daily_snapshot")
@@ -660,6 +693,7 @@ def build_daily_snapshot(
     activity_lifecycle: str | None = None,
     bootstrap_cache_only_if_covered: bool = False,
     bootstrap_coverage_report: dict | None = None,
+    bootstrap_coverage_retry_count: int = 0,
 ) -> dict:
     """Build a full feature snapshot for a trading day.
 
@@ -690,6 +724,7 @@ def build_daily_snapshot(
     from app.utils.parallelism import bounded_symbol_workers
     from app.utils.symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
+        BootstrapCacheCoverageInsufficient,
         BuildDailySnapshotCommand,
     )
     from app.wiring.bootstrap import get_build_daily_snapshot_use_case
@@ -844,6 +879,78 @@ def build_daily_snapshot(
                     "skipped_symbols": len(skipped_symbols),
                 }
 
+    if bootstrap_gate_requested and effective_bootstrap_coverage_report is None:
+        uow_check = SqlUnitOfWork(SessionLocal)
+        with uow_check:
+            universe_def = normalize_universe_definition(universe_name)
+            symbols = uow_check.universe.resolve_symbols(universe_def)
+            supported_symbols, _unsupported_symbols = split_supported_price_symbols(symbols)
+            if supported_symbols:
+                session = getattr(uow_check, "session", None)
+                if session is not None:
+                    effective_bootstrap_coverage_report = evaluate_bootstrap_cache_coverage(
+                        session,
+                        market=effective_market,
+                        symbols=supported_symbols,
+                        as_of_date=as_of,
+                    )
+
+    def _retry_or_fail_bootstrap_coverage(report: dict | None) -> None:
+        message = _bootstrap_coverage_wait_message(
+            effective_market,
+            report,
+        )
+        total_for_activity = _bootstrap_coverage_total(
+            report
+        )
+        _publish_activity(
+            mark_market_activity_progress,
+            market=effective_market,
+            stage_key="scan",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", "build_daily_snapshot"),
+            task_id=correlation_id,
+            current=0,
+            total=total_for_activity,
+            percent=0,
+            message=message,
+        )
+        current_retries = int(bootstrap_coverage_retry_count or 0)
+        if current_retries >= BOOTSTRAP_SCAN_COVERAGE_MAX_RETRIES:
+            failure_message = (
+                "bootstrap cache coverage exhausted for "
+                f"{effective_market}: {message}; "
+                f"report={report}"
+            )
+            _publish_activity(
+                mark_market_activity_failed,
+                market=effective_market,
+                stage_key="scan",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", "build_daily_snapshot"),
+                task_id=correlation_id,
+                current=0,
+                total=total_for_activity,
+                message=failure_message,
+            )
+            raise RuntimeError(failure_message)
+        request_kwargs = dict(
+            getattr(getattr(self, "request", None), "kwargs", {}) or {}
+        )
+        request_kwargs["bootstrap_coverage_report"] = None
+        request_kwargs["bootstrap_coverage_retry_count"] = current_retries + 1
+        raise self.retry(
+            exc=RuntimeError(message),
+            countdown=BOOTSTRAP_SCAN_COVERAGE_RETRY_COUNTDOWN_SECONDS,
+            max_retries=FEATURE_SNAPSHOT_TOTAL_MAX_RETRIES,
+            kwargs=request_kwargs,
+        )
+
+    if bootstrap_gate_requested and not bool(
+        (effective_bootstrap_coverage_report or {}).get("eligible")
+    ):
+        _retry_or_fail_bootstrap_coverage(effective_bootstrap_coverage_report)
+
     # ── Execute use case ─────────────────────────────────────
     use_case = get_build_daily_snapshot_use_case()
     uow = SqlUnitOfWork(SessionLocal)
@@ -918,6 +1025,8 @@ def build_daily_snapshot(
             message="Soft time limit exceeded",
         )
         raise
+    except BootstrapCacheCoverageInsufficient as exc:
+        _retry_or_fail_bootstrap_coverage(exc.coverage_report)
     except Exception as exc:
         _publish_activity(
             mark_market_activity_failed,

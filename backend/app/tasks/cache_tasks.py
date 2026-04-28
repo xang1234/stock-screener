@@ -1248,6 +1248,7 @@ def _schedule_failed_symbol_retry(
     *,
     market: str | None,
     attempt: int = 1,
+    countdown: int = 600,
 ) -> None:
     if not symbols or market is None or attempt > 3:
         return
@@ -1260,8 +1261,9 @@ def _schedule_failed_symbol_retry(
                 "symbols": list(dict.fromkeys(symbols)),
                 "market": normalized_market,
                 "attempt": attempt,
+                "retry_countdown": countdown,
             },
-            countdown=600,
+            countdown=countdown,
             queue=data_fetch_queue_for_market(normalized_market),
         )
     except Exception:
@@ -1312,6 +1314,7 @@ def retry_failed_price_symbols(
     symbols: list[str],
     market: str,
     attempt: int = 1,
+    retry_countdown: int = 600,
 ) -> dict:
     from ..services.bulk_data_fetcher import BulkDataFetcher
     from ..wiring.bootstrap import get_price_cache
@@ -1373,7 +1376,12 @@ def retry_failed_price_symbols(
         failure_details=failure_details,
     )
     if failed_symbols and attempt < 3:
-        _schedule_failed_symbol_retry(failed_symbols, market=market, attempt=attempt + 1)
+        _schedule_failed_symbol_retry(
+            failed_symbols,
+            market=market,
+            attempt=attempt + 1,
+            countdown=retry_countdown,
+        )
     return {
         "status": "completed" if not failed_symbols else "partial",
         "market": market,
@@ -1749,12 +1757,17 @@ def smart_refresh_cache(
             for r in universe_rows
         }
 
+        github_seed_allowed = (
+            all_symbols
+            and market is not None
+            and activity_lifecycle in {"daily_refresh", "bootstrap"}
+        )
         github_sync = (
             get_daily_price_bundle_service().sync_from_github(
                 db,
                 market=effective_market,
             )
-            if all_symbols and market is not None and activity_lifecycle == "daily_refresh"
+            if github_seed_allowed
             else {"status": "skipped", "reason": "empty_universe"}
         )
         if github_sync.get("status") in _GITHUB_SYNC_SUCCESS_STATUSES:
@@ -2027,7 +2040,19 @@ def smart_refresh_cache(
             for symbol in failed_symbols:
                 failed_symbols_by_market.setdefault(_market_for_symbol(symbol), []).append(symbol)
             for retry_market, retry_symbols in failed_symbols_by_market.items():
-                _schedule_failed_symbol_retry(retry_symbols, market=retry_market, attempt=1)
+                if activity_lifecycle == "bootstrap":
+                    _schedule_failed_symbol_retry(
+                        retry_symbols,
+                        market=retry_market,
+                        attempt=1,
+                        countdown=30,
+                    )
+                else:
+                    _schedule_failed_symbol_retry(
+                        retry_symbols,
+                        market=retry_market,
+                        attempt=1,
+                    )
 
         logger.info("=" * 80)
         logger.info(f"✓ Smart refresh completed ({mode} mode):")

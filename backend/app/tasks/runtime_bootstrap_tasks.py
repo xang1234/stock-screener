@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
-from celery import chain
+from celery import chain, chord, group
 
 from ..database import SessionLocal
 from ..services.market_activity_service import (
@@ -94,16 +94,14 @@ def queue_local_runtime_bootstrap(*, primary_market: str, enabled_markets: Itera
         if market not in enabled:
             enabled.append(market)
 
-    signatures = []
+    market_workflows = []
     for market in enabled:
-        signatures.extend(_build_market_bootstrap_signatures(market))
-    signatures.append(
-        complete_local_runtime_bootstrap.si(
-            primary_market=primary,
-            enabled_markets=enabled,
-        ).set(queue="celery")
-    )
-    workflow = chain(*signatures)
+        market_workflows.append(chain(*_build_market_bootstrap_signatures(market)))
+    completion = complete_local_runtime_bootstrap.si(
+        primary_market=primary,
+        enabled_markets=enabled,
+    ).set(queue="celery")
+    workflow = chord(group(market_workflows), completion)
     errback = fail_local_runtime_bootstrap.s(
         primary_market=primary,
         enabled_markets=enabled,

@@ -15,6 +15,7 @@ import pytest
 from app.domain.common.errors import ValidationError
 from app.domain.feature_store.models import RunStatus
 from app.use_cases.feature_store.build_daily_snapshot import (
+    BootstrapCacheCoverageInsufficient,
     BuildDailyFeatureSnapshotUseCase,
     BuildDailySnapshotCommand,
     _map_orchestrator_to_feature_row,
@@ -744,7 +745,7 @@ class TestBulkDataPreparation:
         assert uow.feature_store._universe[result.run_id] == ["AAPL", "MSFT"]
 
     @_PATCH_TRADING_DAY
-    def test_bootstrap_gate_fail_records_report_and_preserves_live_fallback(self, _mock_td):
+    def test_bootstrap_gate_fail_raises_before_live_fallback(self, _mock_td):
         uow, _ = _make_uow(symbols=["AAPL", "MSFT", "BAD-WT"])
 
         class EmptyProvider(FakeStockDataProvider):
@@ -783,32 +784,29 @@ class TestBulkDataPreparation:
             data_provider=EmptyProvider(),
         )
 
-        result = use_case.execute(
-            uow,
-            _make_cmd(
-                bootstrap_cache_only_if_covered=True,
-                bootstrap_coverage_report={
-                    "eligible": False,
-                    "price_coverage_ratio": 0.9,
-                    "fundamentals_coverage_ratio": 1.0,
-                },
-            ),
-            FakeProgressSink(),
-            FakeCancellationToken(),
-        )
+        with pytest.raises(BootstrapCacheCoverageInsufficient) as exc_info:
+            use_case.execute(
+                uow,
+                _make_cmd(
+                    bootstrap_cache_only_if_covered=True,
+                    bootstrap_coverage_report={
+                        "eligible": False,
+                        "price_coverage_ratio": 0.9,
+                        "fundamentals_coverage_ratio": 1.0,
+                    },
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
 
-        run = uow.feature_runs.get_run(result.run_id)
-        gate = run.config["bootstrap_cache_only_gate"]
-        assert gate["mode"] == "fallback_existing"
-        assert gate["unsupported_skipped_count"] == 0
-        assert gate["unsupported_symbols_preview"] == []
-        assert result.status == RunStatus.PUBLISHED.value
-        assert result.failed_symbols == 0
-        assert result.skipped_symbols == 0
-        assert scanner.calls == [("AAPL", None), ("MSFT", None), ("BAD-WT", None)]
+        assert exc_info.value.coverage_report["mode"] == "waiting_for_cache_coverage"
+        assert exc_info.value.coverage_report["unsupported_skipped_count"] == 0
+        assert exc_info.value.coverage_report["unsupported_symbols_preview"] == []
+        assert uow.feature_runs._runs == {}
+        assert scanner.calls == []
 
     @_PATCH_TRADING_DAY
-    def test_bootstrap_gate_fail_falls_back_when_all_symbols_are_unsupported(self, _mock_td):
+    def test_bootstrap_gate_fail_raises_when_all_symbols_are_unsupported(self, _mock_td):
         uow, _ = _make_uow(symbols=["BAD-WT", "MSFT-WS"])
 
         class RecordingScanner:
@@ -827,30 +825,24 @@ class TestBulkDataPreparation:
         scanner = RecordingScanner()
         use_case = BuildDailyFeatureSnapshotUseCase(scanner=scanner)
 
-        result = use_case.execute(
-            uow,
-            _make_cmd(
-                bootstrap_cache_only_if_covered=True,
-                bootstrap_coverage_report={
-                    "eligible": False,
-                    "price_coverage_ratio": 0.0,
-                    "fundamentals_coverage_ratio": 0.0,
-                },
-            ),
-            FakeProgressSink(),
-            FakeCancellationToken(),
-        )
+        with pytest.raises(BootstrapCacheCoverageInsufficient) as exc_info:
+            use_case.execute(
+                uow,
+                _make_cmd(
+                    bootstrap_cache_only_if_covered=True,
+                    bootstrap_coverage_report={
+                        "eligible": False,
+                        "price_coverage_ratio": 0.0,
+                        "fundamentals_coverage_ratio": 0.0,
+                    },
+                ),
+                FakeProgressSink(),
+                FakeCancellationToken(),
+            )
 
-        gate = uow.feature_runs.get_run(result.run_id).config[
-            "bootstrap_cache_only_gate"
-        ]
-        assert gate["mode"] == "fallback_existing"
-        assert gate["unsupported_skipped_count"] == 0
-        assert gate["unsupported_symbols_preview"] == []
-        assert result.status == RunStatus.PUBLISHED.value
-        assert result.total_symbols == 2
-        assert result.skipped_symbols == 0
-        assert scanner.calls == ["BAD-WT", "MSFT-WS"]
+        assert exc_info.value.coverage_report["mode"] == "waiting_for_cache_coverage"
+        assert uow.feature_runs._runs == {}
+        assert scanner.calls == []
 
 
 # ---------------------------------------------------------------------------
