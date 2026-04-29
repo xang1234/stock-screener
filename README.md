@@ -1,4 +1,4 @@
-# Stock Screener 🇺🇸 🇯🇵 🇭🇰 🇹🇼 🇮🇳
+# Stock Screener 🇺🇸 🇯🇵 🇭🇰 🇰🇷 🇹🇼 🇮🇳
 
 A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, and Taiwan** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
