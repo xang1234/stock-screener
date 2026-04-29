@@ -290,21 +290,29 @@ class OfficialMarketUniverseSourceService:
     def _enrich_kr_rows_with_taxonomy(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Attach committed KR taxonomy fields where the KRX listing row is sparse."""
         try:
-            from .market_taxonomy_service import get_market_taxonomy_service
+            from .market_taxonomy_service import TaxonomyLoadError, get_market_taxonomy_service
+        except ImportError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+            return rows
 
+        try:
             taxonomy = get_market_taxonomy_service()
-        except Exception as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+        except TaxonomyLoadError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
             logger.warning("KR taxonomy enrichment unavailable: %s", exc)
             return rows
 
         enriched_rows: list[dict[str, Any]] = []
         for row in rows:
             enriched = dict(row)
-            entry = taxonomy.get(
-                enriched.get("symbol") or enriched.get("local_code"),
-                market="KR",
-                exchange=enriched.get("exchange"),
-            )
+            try:
+                entry = taxonomy.get(
+                    enriched.get("symbol") or enriched.get("local_code"),
+                    market="KR",
+                    exchange=enriched.get("exchange"),
+                )
+            except TaxonomyLoadError as exc:
+                logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+                return rows
             if entry is not None:
                 if not str(enriched.get("sector") or "").strip() and entry.sector:
                     enriched["sector"] = entry.sector

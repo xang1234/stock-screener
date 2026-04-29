@@ -79,7 +79,7 @@ def test_opendart_maps_statement_rows_to_existing_fundamental_fields() -> None:
     assert fields["gross_margin"] == 20.0
     assert fields["roe"] == 5.0
     assert fields["roa"] == 3.0
-    assert fields["debt_to_equity"] == 66.66666666666666
+    assert fields["debt_to_equity"] == 0.6666666666666666
     assert fields["current_ratio"] == 2.0
     assert fields["recent_quarter_date"] == "2025-FY"
     assert session.calls[1][1]["corp_code"] == "00126380"

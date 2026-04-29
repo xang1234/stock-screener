@@ -244,6 +244,32 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
     )
 
 
+def test_enrich_kr_rows_returns_raw_rows_when_taxonomy_lazy_load_fails(monkeypatch):
+    import app.services.market_taxonomy_service as taxonomy_module
+    from app.services.market_taxonomy_service import TaxonomyLoadError
+
+    rows = [
+        {
+            "symbol": "005930.KS",
+            "local_code": "005930",
+            "name": "Samsung Electronics",
+            "exchange": "KOSPI",
+            "sector": "",
+        }
+    ]
+
+    class BrokenTaxonomy:
+        @staticmethod
+        def get(*args, **kwargs):
+            raise TaxonomyLoadError("malformed korea-deep.csv")
+
+    monkeypatch.setattr(taxonomy_module, "get_market_taxonomy_service", lambda: BrokenTaxonomy())
+
+    enriched = OfficialMarketUniverseSourceService._enrich_kr_rows_with_taxonomy(rows)
+
+    assert enriched == rows
+
+
 def test_fetch_kr_snapshot_fails_when_live_counts_are_below_validated_baseline():
     class LowCountKrxProvider:
         def listing_rows(self, *, boards, as_of=None):

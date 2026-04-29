@@ -186,7 +186,10 @@ class KRUniverseIngestionAdapter:
             multiplier = 1e3
             raw = raw[:-1]
 
-        return float(raw) * multiplier
+        try:
+            return float(raw) * multiplier
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _hash_payload(payload: Mapping[str, Any]) -> str:

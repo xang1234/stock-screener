@@ -72,6 +72,25 @@ def test_kr_adapter_deduplicates_deterministically():
     assert result.canonical_rows[0].name == "Samsung Electronics"
 
 
+def test_kr_adapter_keeps_row_when_market_cap_is_unparseable():
+    result = kr_universe_ingestion_adapter.canonicalize_rows(
+        [
+            {
+                "symbol": "005930",
+                "name": "Samsung Electronics",
+                "exchange": "KOSPI",
+                "market_cap": "TBD",
+            },
+        ],
+        source_name="krx_official",
+        snapshot_id="krx-2026-04-29",
+    )
+
+    assert result.rejected_rows == ()
+    assert result.canonical_rows[0].symbol == "005930.KS"
+    assert result.canonical_rows[0].market_cap is None
+
+
 def test_kr_adapter_requires_approved_sources():
     with pytest.raises(ValueError, match="Unapproved KR source"):
         kr_universe_ingestion_adapter.canonicalize_rows(

@@ -435,7 +435,7 @@ class OpenDartFundamentalsService:
         if net_income is not None and assets:
             fields["roa"] = cls._ratio_pct(net_income, assets)
         if liabilities is not None and equity:
-            fields["debt_to_equity"] = cls._ratio_pct(liabilities, equity)
+            fields["debt_to_equity"] = liabilities / equity
         if current_assets is not None and current_liabilities:
             fields["current_ratio"] = current_assets / current_liabilities
 

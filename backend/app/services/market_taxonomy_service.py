@@ -403,6 +403,8 @@ class MarketTaxonomyService:
                 candidates.append(canonical)
             if "." not in normalized:
                 raw_exchange = str(exchange or "").strip().upper()
+                if raw_exchange in {"KRX", "XKRX", "STK"}:
+                    raw_exchange = ""
                 if raw_exchange not in {"KOSDAQ", "KSQ"}:
                     kospi_variant = self._canonicalize_kr_symbol(normalized, exchange="KOSPI")
                     if kospi_variant:

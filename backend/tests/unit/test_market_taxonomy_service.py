@@ -103,6 +103,10 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert kr_kosdaq.symbol == "091990.KQ"
     assert kr_kosdaq.industry_group == "Biotechnology"
     assert kr_kosdaq.sub_industry == "Biopharmaceuticals"
+
+    kr_kosdaq_umbrella = service.get("091990", market="KR", exchange="XKRX")
+    assert kr_kosdaq_umbrella is not None
+    assert kr_kosdaq_umbrella.symbol == "091990.KQ"
     assert service.entry_count_for_market("KR") == 2
 
 
