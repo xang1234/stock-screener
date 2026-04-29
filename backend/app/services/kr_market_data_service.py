@@ -8,8 +8,8 @@ import io
 import logging
 from typing import Any, Iterable
 import zipfile
-from xml.etree import ElementTree
 
+from defusedxml import ElementTree
 import pandas as pd
 import requests
 
@@ -89,6 +89,8 @@ class KrxMarketDataService:
 
     def __init__(self, *, stock_module: Any | None = None) -> None:
         self._stock_module = stock_module
+        self._market_cap_frames: dict[tuple[str, str], pd.DataFrame | None] = {}
+        self._market_fundamental_frames: dict[tuple[str, str], pd.DataFrame | None] = {}
 
     @property
     def _stock(self):
@@ -112,12 +114,8 @@ class KrxMarketDataService:
             if normalized_board not in {"KOSPI", "KOSDAQ"}:
                 continue
             tickers = stock.get_market_ticker_list(as_of_token, market=normalized_board)
-            market_cap_frame = self._safe_frame(
-                lambda: stock.get_market_cap(as_of_token, market=normalized_board)
-            )
-            fundamental_frame = self._safe_frame(
-                lambda: stock.get_market_fundamental(as_of_token, market=normalized_board)
-            )
+            market_cap_frame = self._market_cap_frame(as_of_token, normalized_board)
+            fundamental_frame = self._market_fundamental_frame(as_of_token, normalized_board)
 
             for ticker in tickers:
                 name = stock.get_market_ticker_name(ticker)
@@ -233,20 +231,17 @@ class KrxMarketDataService:
         as_of: date | str | None = None,
     ) -> dict[str, Any]:
         """Return latest KRX valuation fields for one local ticker."""
-        stock = self._stock
         as_of_token = _as_yyyymmdd(as_of)
         board = "ALL"
         fields: dict[str, Any] = {}
 
-        cap_frame = self._safe_frame(lambda: stock.get_market_cap(as_of_token, market=board))
+        cap_frame = self._market_cap_frame(as_of_token, board)
         if cap_frame is not None and local_code in cap_frame.index:
             cap_row = cap_frame.loc[local_code]
             fields["market_cap"] = _normalize_float(cap_row.get("시가총액"))
             fields["shares_outstanding"] = _normalize_float(cap_row.get("상장주식수"))
 
-        fundamental_frame = self._safe_frame(
-            lambda: stock.get_market_fundamental(as_of_token, market=board)
-        )
+        fundamental_frame = self._market_fundamental_frame(as_of_token, board)
         if fundamental_frame is not None and local_code in fundamental_frame.index:
             f_row = fundamental_frame.loc[local_code]
             fields.update(
@@ -260,6 +255,22 @@ class KrxMarketDataService:
             )
 
         return {key: value for key, value in fields.items() if value is not None}
+
+    def _market_cap_frame(self, as_of_token: str, market: str) -> pd.DataFrame | None:
+        key = (as_of_token, market)
+        if key not in self._market_cap_frames:
+            self._market_cap_frames[key] = self._safe_frame(
+                lambda: self._stock.get_market_cap(as_of_token, market=market)
+            )
+        return self._market_cap_frames[key]
+
+    def _market_fundamental_frame(self, as_of_token: str, market: str) -> pd.DataFrame | None:
+        key = (as_of_token, market)
+        if key not in self._market_fundamental_frames:
+            self._market_fundamental_frames[key] = self._safe_frame(
+                lambda: self._stock.get_market_fundamental(as_of_token, market=market)
+            )
+        return self._market_fundamental_frames[key]
 
     @staticmethod
     def _safe_frame(fetcher) -> pd.DataFrame | None:

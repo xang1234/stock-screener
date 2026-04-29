@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 import re
 from unittest.mock import MagicMock
@@ -174,7 +175,7 @@ def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):
     assert snapshot.source_metadata["overlap_isin_count"] == 1
 
 
-def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata():
+def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(monkeypatch):
     class FakeKrxProvider:
         def listing_rows(self, *, boards, as_of=None):
             assert boards == ("KOSPI", "KOSDAQ")
@@ -215,13 +216,19 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
             )
             return [*kospi_rows, *kosdaq_rows]
 
+    monkeypatch.setattr(
+        OfficialMarketUniverseSourceService,
+        "_seoul_today",
+        staticmethod(lambda: date(2026, 4, 30)),
+    )
     service = OfficialMarketUniverseSourceService(kr_provider=FakeKrxProvider())
 
     snapshot = service.fetch_kr_snapshot()
 
     assert snapshot.market == "KR"
     assert snapshot.source_name == "krx_official"
-    assert snapshot.snapshot_id.startswith("krx-listings-")
+    assert snapshot.snapshot_id == "krx-listings-2026-04-30"
+    assert snapshot.snapshot_as_of == "2026-04-30"
     assert len(snapshot.rows) == 2658
     rows_by_symbol = {row["symbol"]: row for row in snapshot.rows}
     assert rows_by_symbol["005930.KS"]["sector"] == "Information Technology"
@@ -558,6 +565,9 @@ def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     emitted = []
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: emitted.append((market, prior)))
+    no_github_sync = MagicMock()
+    no_github_sync.sync_weekly_reference_from_github.return_value = {"status": "missing"}
+    monkeypatch.setattr(module, "get_provider_snapshot_service", lambda: no_github_sync)
     monkeypatch.setattr(
         "app.services.official_market_universe_source_service.OfficialMarketUniverseSourceService.fetch_market_snapshot",
         lambda self, market: snapshot,
@@ -624,6 +634,9 @@ def test_refresh_official_market_universe_does_not_ingest_on_fetch_failure(monke
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: None)
+    no_github_sync = MagicMock()
+    no_github_sync.sync_weekly_reference_from_github.return_value = {"status": "missing"}
+    monkeypatch.setattr(module, "get_provider_snapshot_service", lambda: no_github_sync)
     monkeypatch.setattr(
         "app.services.official_market_universe_source_service.OfficialMarketUniverseSourceService.fetch_market_snapshot",
         MagicMock(side_effect=RuntimeError("upstream unavailable")),

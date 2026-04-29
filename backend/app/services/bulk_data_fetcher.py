@@ -702,7 +702,18 @@ class BulkDataFetcher:
             market=market,
         )
         merged = dict(krx_results)
-        merged.update(fallback_results)
+        for symbol, fallback_payload in fallback_results.items():
+            primary_payload = krx_results.get(symbol, {})
+            enriched_payload = dict(fallback_payload)
+            enriched_payload.setdefault("provider", "yfinance")
+            enriched_payload["fallback_from"] = "krx"
+            enriched_payload["primary_provider_failed"] = bool(
+                primary_payload.get("has_error") or primary_payload.get("price_data") is None
+            )
+            primary_error = primary_payload.get("error")
+            if primary_error:
+                enriched_payload["primary_provider_error"] = primary_error
+            merged[symbol] = enriched_payload
         return merged
 
     def _fetch_price_batch_with_retries(

@@ -31,6 +31,7 @@ def _make_service(
     *,
     krx_fundamentals_service=None,
     opendart_fundamentals_service=None,
+    enable_fallback=True,
 ) -> DataSourceService:
     """Build a DataSourceService with fully mocked provider dependencies."""
     finviz = MagicMock()
@@ -54,6 +55,7 @@ def _make_service(
         opendart_fundamentals_service=opendart_fundamentals_service,
         rate_limiter=rate_limiter,
         prefer_finviz=True,
+        enable_fallback=enable_fallback,
     )
 
 
@@ -90,6 +92,21 @@ class TestGetFundamentalsPolicyGate:
         assert result["data_source"] == "krx+opendart+yfinance"
         assert result["market"] == "KR"
         assert result["currency"] == "KRW"
+
+    def test_korea_market_respects_disabled_yfinance_fallback(self):
+        krx = MagicMock()
+        krx.core_fundamentals.return_value = {"market_cap": 1_000, "pe_ratio": 9.5}
+        opendart = _FakeOpenDart({"revenue_current": 10_000})
+        svc = _make_service(
+            krx_fundamentals_service=krx,
+            opendart_fundamentals_service=opendart,
+            enable_fallback=False,
+        )
+
+        result = svc.get_fundamentals("005930.KS", market="KR")
+
+        svc.yfinance_service.get_fundamentals.assert_not_called()
+        assert result["data_source"] == "krx+opendart"
 
     def test_us_market_still_prefers_finviz(self):
         svc = _make_service(finviz_return={"market_cap": 2_000})

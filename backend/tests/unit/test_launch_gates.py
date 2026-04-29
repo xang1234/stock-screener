@@ -242,6 +242,21 @@ class TestDbBackedGateResilience:
         assert g2.status == GateStatus.MISSING_EVIDENCE
         assert g2.metrics["missing_markets"] == ["US"]
 
+    def test_g2_unknown_market_rows_do_not_satisfy_enabled_markets(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("US", "HK"))
+        rows = [
+            SimpleNamespace(market=None, recorded_at=_NOW, payload={"prior_size": 1000, "delta": 1}),
+        ]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDb(rows))
+
+        assert g2.status == GateStatus.MISSING_EVIDENCE
+        assert g2.metrics["missing_markets"] == ["HK", "US"]
+
     def test_g2_fails_when_kr_taxonomy_coverage_is_below_launch_threshold(self, monkeypatch):
         fake_models = ModuleType("app.models.market_telemetry")
         fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
@@ -261,6 +276,26 @@ class TestDbBackedGateResilience:
         assert g2.status == GateStatus.FAIL
         assert "KR taxonomy coverage below launch thresholds" in g2.detail
         assert g2.metrics["sector_industry_group_coverage"] == 0.5
+
+    def test_g2_reports_missing_evidence_until_full_kr_taxonomy_source_exists(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("KR",))
+        telemetry_rows = [
+            SimpleNamespace(market="KR", recorded_at=_NOW, payload={"prior_size": 2658, "delta": 0}),
+        ]
+        active_kr_rows = [
+            (f"{index:06d}.KS", "KOSPI")
+            for index in range(1, 2659)
+        ]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDbSequence(telemetry_rows, active_kr_rows))
+
+        assert g2.status == GateStatus.MISSING_EVIDENCE
+        assert "committed taxonomy source has" in g2.detail
+        assert g2.metrics["taxonomy_source_rows"] < g2.metrics["active_symbols"] * 0.95
 
     def test_g4_scopes_to_enabled_markets_and_checks_transparency(self, monkeypatch):
         fake_models = ModuleType("app.models.market_telemetry")

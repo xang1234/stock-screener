@@ -157,9 +157,10 @@ def _latest_rows_by_market(rows: List[object], markets: tuple[str, ...]) -> Dict
 
 
 def _missing_enabled_markets(latest_rows: Dict[str, object], enabled_markets: tuple[str, ...]) -> list[str]:
-    if not enabled_markets or "__unknown__" in latest_rows:
+    if not enabled_markets:
         return []
-    return sorted(set(enabled_markets).difference(latest_rows.keys()))
+    markets_with_evidence = set(latest_rows.keys()).difference({"__unknown__"})
+    return sorted(set(enabled_markets).difference(markets_with_evidence))
 
 
 def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
@@ -183,6 +184,7 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
             )
 
         taxonomy = get_market_taxonomy_service()
+        taxonomy_source_rows = taxonomy.entry_count_for_market("KR")
         sector_group_count = 0
         sub_industry_count = 0
         missing_symbols: list[str] = []
@@ -208,10 +210,22 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
             "sub_industry_coverage": round(sub_industry_ratio, 4),
             "sector_industry_group_threshold": 0.95,
             "sub_industry_threshold": 0.85,
+            "taxonomy_source_rows": taxonomy_source_rows,
             "missing_symbols_sample": missing_symbols[:25],
             "missing_symbols_truncated": len(missing_symbols) > 25,
         }
         if sector_group_ratio < 0.95 or sub_industry_ratio < 0.85:
+            if taxonomy_source_rows < total * 0.95:
+                return GateResult(
+                    gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+                    status=GateStatus.MISSING_EVIDENCE,
+                    detail=(
+                        "KR taxonomy coverage cannot be evaluated against launch thresholds "
+                        f"because the committed taxonomy source has {taxonomy_source_rows} rows "
+                        f"for {total} active KR symbols."
+                    ),
+                    metrics=metrics,
+                )
             return GateResult(
                 gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                 status=GateStatus.FAIL,

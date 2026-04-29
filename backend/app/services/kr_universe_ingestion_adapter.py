@@ -93,9 +93,7 @@ class KRUniverseIngestionAdapter:
     @classmethod
     def is_approved_source(cls, source_name: str) -> bool:
         normalized = cls.normalize_source_name(source_name)
-        if normalized in _APPROVED_KR_SOURCES:
-            return True
-        return normalized.startswith("krx_")
+        return normalized in _APPROVED_KR_SOURCES
 
     @staticmethod
     def _normalize_source_symbol(raw_symbol: Any) -> str:
@@ -118,7 +116,12 @@ class KRUniverseIngestionAdapter:
         exchange = str(raw_exchange or "").strip().upper()
         if not exchange:
             inferred = cls._infer_exchange_from_symbol(source_symbol)
-            return inferred or "KOSPI"
+            if inferred is not None:
+                return inferred
+            raise ValueError(
+                "KR exchange is required for undecorated six-digit tickers. "
+                "Provide KOSPI/KOSDAQ or use a .KS/.KQ suffix."
+            )
         normalized = _KR_EXCHANGE_ALIASES.get(exchange)
         if normalized is None:
             raise ValueError(

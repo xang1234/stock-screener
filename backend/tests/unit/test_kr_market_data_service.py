@@ -113,3 +113,44 @@ def test_krx_daily_ohlcv_dataframe_uses_canonical_price_shape() -> None:
     assert frame is not None
     assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume", "Adj Close"]
     assert frame.loc[pd.Timestamp("2026-04-29"), "Close"] == 105.0
+
+
+def test_krx_core_fundamentals_caches_whole_market_frames() -> None:
+    class _FakeStockModule:
+        def __init__(self) -> None:
+            self.market_cap_calls: list[tuple[str, str]] = []
+            self.fundamental_calls: list[tuple[str, str]] = []
+
+        def get_market_cap(self, as_of: str, *, market: str):
+            self.market_cap_calls.append((as_of, market))
+            return pd.DataFrame(
+                {
+                    "시가총액": [530_000_000_000_000, 17_000_000_000_000],
+                    "상장주식수": [5_969_782_550, 123_456_789],
+                },
+                index=["005930", "091990"],
+            )
+
+        def get_market_fundamental(self, as_of: str, *, market: str):
+            self.fundamental_calls.append((as_of, market))
+            return pd.DataFrame(
+                {
+                    "PER": [12.5, 28.0],
+                    "PBR": [1.4, 4.2],
+                    "EPS": [5600, 900],
+                    "BPS": [73000, 8000],
+                    "DIV": [2.1, 0.0],
+                },
+                index=["005930", "091990"],
+            )
+
+    stock_module = _FakeStockModule()
+    service = KrxMarketDataService(stock_module=stock_module)
+
+    samsung = service.core_fundamentals("005930", as_of=date(2026, 4, 29))
+    celltrion = service.core_fundamentals("091990", as_of=date(2026, 4, 29))
+
+    assert samsung["market_cap"] == 530_000_000_000_000
+    assert celltrion["pe_ratio"] == 28.0
+    assert stock_module.market_cap_calls == [("20260429", "ALL")]
+    assert stock_module.fundamental_calls == [("20260429", "ALL")]

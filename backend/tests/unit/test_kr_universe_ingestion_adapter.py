@@ -79,3 +79,21 @@ def test_kr_adapter_requires_approved_sources():
             source_name="random_blog",
             snapshot_id="snapshot",
         )
+
+    with pytest.raises(ValueError, match="Unapproved KR source"):
+        kr_universe_ingestion_adapter.canonicalize_rows(
+            [{"symbol": "005930", "name": "Samsung Electronics", "exchange": "KOSPI"}],
+            source_name="krx_random_blog",
+            snapshot_id="snapshot",
+        )
+
+
+def test_kr_adapter_rejects_undecorated_ticker_without_exchange():
+    result = kr_universe_ingestion_adapter.canonicalize_rows(
+        [{"symbol": "091990", "name": "Celltrion Healthcare"}],
+        source_name="krx_official",
+        snapshot_id="krx-2026-04-29",
+    )
+
+    assert result.canonical_rows == ()
+    assert "KR exchange is required" in result.rejected_rows[0].reason

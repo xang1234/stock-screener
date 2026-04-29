@@ -8,6 +8,7 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.0
 yfinance==0.2.66
 pykrx>=1.0.51
+defusedxml>=0.7.1
 curl_cffi>=0.7.0
 pandas==2.2.0
 pandas-market-calendars>=4.5.0

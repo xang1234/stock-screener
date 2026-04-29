@@ -237,12 +237,13 @@ class DataSourceService:
             merged.update({key: value for key, value in dart_data.items() if value is not None})
             sources.append(routing_policy.PROVIDER_OPENDART)
 
-        yf_data = self.yfinance_service.get_fundamentals(identity.canonical_symbol)
-        if yf_data:
-            for key, value in yf_data.items():
-                if value is not None and key not in merged:
-                    merged[key] = value
-            sources.append(routing_policy.PROVIDER_YFINANCE)
+        if self.enable_fallback:
+            yf_data = self.yfinance_service.get_fundamentals(identity.canonical_symbol)
+            if yf_data:
+                for key, value in yf_data.items():
+                    if value is not None and key not in merged:
+                        merged[key] = value
+                sources.append(routing_policy.PROVIDER_YFINANCE)
 
         if not merged:
             logger.error("All KR data sources failed for %s fundamentals", symbol)

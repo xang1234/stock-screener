@@ -231,6 +231,10 @@ def test_fetch_prices_in_batches_falls_back_to_yahoo_for_krx_misses(monkeypatch)
 
     assert results["005930.KS"]["provider"] == "krx"
     assert results["091990.KQ"]["has_error"] is False
+    assert results["091990.KQ"]["provider"] == "yfinance"
+    assert results["091990.KQ"]["fallback_from"] == "krx"
+    assert results["091990.KQ"]["primary_provider_failed"] is True
+    assert results["091990.KQ"]["primary_provider_error"] == "KRX returned empty price data"
 
 
 def test_price_cache_fetch_direct_historical_data_prefers_krx_for_korea(monkeypatch):

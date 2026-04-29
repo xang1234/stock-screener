@@ -158,6 +158,12 @@ class MarketTaxonomyService:
             if entry.industry_group == group
         )
 
+    def entry_count_for_market(self, market: str) -> int:
+        """Return the committed taxonomy row count loaded for one market."""
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        return len(self._entries.get(normalized, {}))
+
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.refresh()

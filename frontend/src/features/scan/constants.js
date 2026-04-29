@@ -76,6 +76,8 @@ export const UNIVERSE_SCOPES_BY_MARKET = {
   ],
   KR: [
     { value: 'market', label: 'All Korea' },
+    { value: 'exchange:KOSPI', label: 'KOSPI' },
+    { value: 'exchange:KOSDAQ', label: 'KOSDAQ' },
   ],
   TW: [
     { value: 'market', label: 'All Taiwan' },

@@ -12,6 +12,7 @@ import math
 import re
 import time
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -191,7 +192,7 @@ class OfficialMarketUniverseSourceService:
                 )
             )
 
-        snapshot_as_of = self._utc_today().isoformat()
+        snapshot_as_of = self._seoul_today().isoformat()
         source_metadata = {
             "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
             "fetched_at": datetime.now(UTC).isoformat(),
@@ -213,6 +214,10 @@ class OfficialMarketUniverseSourceService:
             source_metadata=source_metadata,
             rows=tuple(rows),
         )
+
+    @staticmethod
+    def _seoul_today() -> date:
+        return datetime.now(ZoneInfo("Asia/Seoul")).date()
 
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         source_urls = [settings.nse_universe_source_url]
