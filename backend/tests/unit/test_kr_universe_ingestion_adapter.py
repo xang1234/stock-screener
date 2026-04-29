@@ -72,6 +72,25 @@ def test_kr_adapter_deduplicates_deterministically():
     assert result.canonical_rows[0].name == "Samsung Electronics"
 
 
+@pytest.mark.parametrize("exchange", ["KRX", "XKRX"])
+def test_kr_adapter_preserves_kosdaq_suffix_when_exchange_is_generic(exchange):
+    result = kr_universe_ingestion_adapter.canonicalize_rows(
+        [
+            {
+                "symbol": "091990.KQ",
+                "name": "Celltrion Healthcare",
+                "exchange": exchange,
+            },
+        ],
+        source_name="krx_official",
+        snapshot_id="krx-2026-04-29",
+    )
+
+    assert result.rejected_rows == ()
+    assert result.canonical_rows[0].symbol == "091990.KQ"
+    assert result.canonical_rows[0].exchange == "KOSDAQ"
+
+
 def test_kr_adapter_keeps_row_when_market_cap_is_unparseable():
     result = kr_universe_ingestion_adapter.canonicalize_rows(
         [

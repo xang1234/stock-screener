@@ -289,6 +289,19 @@ def test_fetch_kr_snapshot_falls_back_to_previous_seoul_weekday_when_calendar_un
     assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
 
 
+@pytest.mark.parametrize(
+    ("today", "expected_previous"),
+    [
+        (date(2026, 5, 4), date(2026, 5, 1)),
+        (date(2026, 5, 5), date(2026, 5, 4)),
+        (date(2026, 5, 9), date(2026, 5, 8)),
+        (date(2026, 5, 10), date(2026, 5, 8)),
+    ],
+)
+def test_previous_seoul_business_day_returns_last_completed_weekday(today, expected_previous):
+    assert OfficialMarketUniverseSourceService._previous_seoul_business_day(today) == expected_previous
+
+
 def test_enrich_kr_rows_returns_raw_rows_when_taxonomy_lazy_load_fails(monkeypatch):
     import app.services.market_taxonomy_service as taxonomy_module
     from app.services.market_taxonomy_service import TaxonomyLoadError

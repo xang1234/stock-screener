@@ -127,6 +127,10 @@ class KRUniverseIngestionAdapter:
             raise ValueError(
                 f"Unsupported KR exchange '{exchange}'. Expected KOSPI or KOSDAQ."
             )
+        if exchange in {"KRX", "XKRX"}:
+            inferred = cls._infer_exchange_from_symbol(source_symbol)
+            if inferred is not None:
+                return inferred
         return normalized
 
     @staticmethod

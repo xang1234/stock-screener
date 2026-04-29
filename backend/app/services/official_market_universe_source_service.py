@@ -253,9 +253,11 @@ class OfficialMarketUniverseSourceService:
 
     @staticmethod
     def _previous_seoul_business_day(day: date) -> date:
-        if day.weekday() >= 5:
-            return day - timedelta(days=day.weekday() - 4)
-        return day
+        if day.weekday() == 0:
+            return day - timedelta(days=3)
+        if day.weekday() == 6:
+            return day - timedelta(days=2)
+        return day - timedelta(days=1)
 
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         source_urls = [settings.nse_universe_source_url]
