@@ -65,6 +65,14 @@ class MarketTaxonomyService:
             "KR": {},
             "TW": {},
         }
+        self._loaded_row_counts: dict[str, int] = {
+            "US": 0,
+            "HK": 0,
+            "IN": 0,
+            "JP": 0,
+            "KR": 0,
+            "TW": 0,
+        }
 
     @staticmethod
     def _default_data_dir(*, service_path: Path | None = None) -> Path:
@@ -94,6 +102,7 @@ class MarketTaxonomyService:
 
     def refresh(self) -> None:
         self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}}
+        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0}
         try:
             self._load_us()
             self._load_hk()
@@ -162,7 +171,7 @@ class MarketTaxonomyService:
         """Return the committed taxonomy row count loaded for one market."""
         self._ensure_loaded()
         normalized = security_master_resolver.normalize_market(market) or market.upper()
-        return len(self._entries.get(normalized, {}))
+        return self._loaded_row_counts.get(normalized, 0)
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:
@@ -197,6 +206,7 @@ class MarketTaxonomyService:
         sub_industry: str | None = None,
         themes: Iterable[str],
     ) -> None:
+        self._loaded_row_counts[market] = self._loaded_row_counts.get(market, 0) + 1
         bucket = self._entries[market]
         normalized_themes = []
         for theme in themes:

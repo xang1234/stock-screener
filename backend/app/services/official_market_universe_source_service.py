@@ -183,13 +183,13 @@ class OfficialMarketUniverseSourceService:
         }
         count_breaches = self._kr_baseline_count_breaches(row_counts)
         if count_breaches:
-            raise ValueError(
-                "KR official universe fetch count outside validated KRX baseline: "
-                + "; ".join(
+            logger.warning(
+                "KR official universe fetch count outside static KRX baseline: %s",
+                "; ".join(
                     f"{breach['board']} actual={breach['actual']} expected={breach['expected']} "
                     f"range=[{breach['min']},{breach['max']}]"
                     for breach in count_breaches
-                )
+                ),
             )
 
         snapshot_as_of = self._seoul_today().isoformat()
@@ -205,6 +205,10 @@ class OfficialMarketUniverseSourceService:
             "source_count": len(rows),
             "validated_krx_baseline": dict(_KR_VALIDATED_BASELINE),
             "validated_krx_baseline_tolerance": _KR_VALIDATED_BASELINE_TOLERANCE,
+            "validated_krx_baseline_breaches": count_breaches,
+            "krx_baseline_status": (
+                "outside_static_baseline" if count_breaches else "within_static_baseline"
+            ),
         }
         return OfficialMarketUniverseSnapshot(
             market="KR",

@@ -270,7 +270,7 @@ def test_enrich_kr_rows_returns_raw_rows_when_taxonomy_lazy_load_fails(monkeypat
     assert enriched == rows
 
 
-def test_fetch_kr_snapshot_fails_when_live_counts_are_below_validated_baseline():
+def test_fetch_kr_snapshot_records_baseline_drift_without_rejecting_source():
     class LowCountKrxProvider:
         def listing_rows(self, *, boards, as_of=None):
             return [
@@ -290,8 +290,14 @@ def test_fetch_kr_snapshot_fails_when_live_counts_are_below_validated_baseline()
 
     service = OfficialMarketUniverseSourceService(kr_provider=LowCountKrxProvider())
 
-    with pytest.raises(ValueError, match="outside validated KRX baseline"):
-        service.fetch_kr_snapshot()
+    snapshot = service.fetch_kr_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
+    assert snapshot.source_metadata["krx_baseline_status"] == "outside_static_baseline"
+    assert snapshot.source_metadata["validated_krx_baseline_breaches"] == [
+        {"board": "kospi", "actual": 1, "expected": 839, "min": 823, "max": 855},
+        {"board": "kosdaq", "actual": 1, "expected": 1819, "min": 1783, "max": 1855},
+    ]
 
 
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):

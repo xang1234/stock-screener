@@ -149,6 +149,33 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
     assert service.groups_for_market("XX") == []
 
 
+def test_entry_count_for_market_counts_loaded_rows_before_symbol_merge(tmp_path):
+    _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
+    _write_csv(tmp_path / "hk-deep.csv", "Symbol,EM Industry (EN),Theme (EN)\n")
+    _write_csv(
+        tmp_path / "india-deep.csv",
+        "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\n",
+    )
+    _write_csv(
+        tmp_path / "kabutan_themes_en.csv",
+        "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
+    )
+    _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(
+        tmp_path / "korea-deep.csv",
+        (
+            "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n"
+            "005930,KOSPI,Information Technology,Technology Hardware,Semiconductors,Memory Semiconductors\n"
+            "005930.KS,KOSPI,Information Technology,Hardware,Semiconductors,Memory Semiconductors\n"
+        ),
+    )
+
+    service = MarketTaxonomyService(data_dir=tmp_path)
+
+    assert service.symbols_for_group("KR", "Technology Hardware") == ["005930.KS"]
+    assert service.entry_count_for_market("KR") == 2
+
+
 def test_market_taxonomy_service_raises_load_error_for_missing_required_csv(tmp_path):
     _write_csv(tmp_path / "IBD_industry_group.csv", "AAPL,Computer-Hardware/Peripherals\n")
     _write_csv(
