@@ -548,6 +548,24 @@ class IBDGroupRankService:
             .all()
         )
 
+    def get_historical_ranks_batch(
+        self,
+        db: Session,
+        group_names: List[str],
+        current_date: date,
+        period_days: Dict[str, int],
+        *,
+        market: str = "US",
+    ) -> Dict[tuple, int]:
+        """Public alias of :meth:`_get_historical_ranks_batch`."""
+        return self._get_historical_ranks_batch(
+            db,
+            group_names,
+            current_date,
+            period_days,
+            market=market,
+        )
+
     def _get_historical_ranks_batch(
         self,
         db: Session,

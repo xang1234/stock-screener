@@ -1544,3 +1544,102 @@ def test_build_key_markets_includes_india_defaults(service_and_session_factory, 
 
     assert [item["symbol"] for item in markets] == ["^NSEI", "NIFTYBEES.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
     assert all(item["currency"] == "INR" for item in markets)
+
+
+def test_apply_group_rank_changes_from_table_fills_missing_periods(
+    service_and_session_factory, monkeypatch
+):
+    service, session_factory = service_and_session_factory
+
+    rankings = [
+        {
+            "industry_group": "Semiconductors",
+            "rank": 3,
+            "rank_change_1w": 5,
+            "rank_change_1m": None,
+            "rank_change_3m": None,
+            "rank_change_6m": None,
+        },
+        {
+            "industry_group": "Software",
+            "rank": 7,
+            "rank_change_1w": None,
+            "rank_change_1m": None,
+            "rank_change_3m": None,
+            "rank_change_6m": None,
+        },
+    ]
+
+    captured: dict[str, object] = {}
+
+    def fake_batch(db, group_names, current_date, period_days, *, market):
+        captured["group_names"] = list(group_names)
+        captured["current_date"] = current_date
+        captured["market"] = market
+        captured["period_days"] = dict(period_days)
+        return {
+            ("Semiconductors", "1w"): 99,
+            ("Semiconductors", "1m"): 6,
+            ("Semiconductors", "3m"): 12,
+            ("Software", "1w"): 10,
+            ("Software", "3m"): 4,
+        }
+
+    fake_service = SimpleNamespace(get_historical_ranks_batch=fake_batch)
+    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
+
+    with session_factory() as db:
+        service._apply_group_rank_changes_from_table(  # noqa: SLF001 - intentional unit coverage
+            db,
+            rankings,
+            market="hk",
+            calculation_date=date(2026, 4, 28),
+        )
+
+    assert captured["market"] == "HK"
+    assert captured["current_date"] == date(2026, 4, 28)
+    assert captured["group_names"] == ["Semiconductors", "Software"]
+    assert captured["period_days"] == {"1w": 5, "1m": 21, "3m": 63}
+
+    semis, software = rankings
+    assert semis["rank_change_1w"] == 5
+    assert semis["rank_change_1m"] == 6 - 3
+    assert semis["rank_change_3m"] == 12 - 3
+    assert semis["rank_change_6m"] is None
+    assert software["rank_change_1w"] == 10 - 7
+    assert software["rank_change_1m"] is None
+    assert software["rank_change_3m"] == 4 - 7
+    assert software["rank_change_6m"] is None
+
+
+def test_apply_group_rank_changes_from_table_swallows_lookup_errors(
+    service_and_session_factory, monkeypatch
+):
+    service, session_factory = service_and_session_factory
+
+    rankings = [
+        {
+            "industry_group": "Semiconductors",
+            "rank": 1,
+            "rank_change_1w": None,
+            "rank_change_1m": None,
+            "rank_change_3m": None,
+            "rank_change_6m": None,
+        }
+    ]
+
+    def fake_batch(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    fake_service = SimpleNamespace(get_historical_ranks_batch=fake_batch)
+    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: fake_service)
+
+    with session_factory() as db:
+        service._apply_group_rank_changes_from_table(  # noqa: SLF001 - intentional unit coverage
+            db,
+            rankings,
+            market="US",
+            calculation_date=date(2026, 4, 28),
+        )
+
+    assert all(rankings[0][f"rank_change_{period}"] is None for period in ("1w", "1m", "3m", "6m"))

@@ -23,10 +23,11 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
-from app.utils.market_hours import get_last_market_close, is_trading_day
+from app.utils.market_hours import get_last_market_close
 from app.utils.symbol_support import split_supported_price_symbols
 from app.wiring.bootstrap import (
     get_group_rank_service,
+    get_market_calendar_service,
     get_price_cache,
     get_provider_snapshot_service,
 )
@@ -197,29 +198,52 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
     }
 
 
-def _generate_trading_dates(start_date: date, end_date: date) -> list[date]:
+def _generate_trading_dates(
+    start_date: date,
+    end_date: date,
+    *,
+    market: str = STATIC_DEFAULT_MARKET,
+) -> list[date]:
+    normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
+    calendar_service = get_market_calendar_service()
     trading_dates: list[date] = []
     current = start_date
     while current <= end_date:
-        if is_trading_day(current):
+        if calendar_service.is_trading_day(normalized_market, current):
             trading_dates.append(current)
         current += timedelta(days=1)
     return trading_dates
 
 
-def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
+def _ensure_group_rank_history(*, as_of_date: date, market: str = "US") -> dict[str, Any]:
     """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
+    normalized_market = (market or "US").upper()
     start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
-    desired_dates = _generate_trading_dates(start_date, as_of_date)
+    desired_dates = _generate_trading_dates(
+        start_date,
+        as_of_date,
+        market=normalized_market,
+    )
 
     with SessionLocal() as db:
+        if not hasattr(db, "query"):
+            return {
+                "status": "skipped",
+                "market": normalized_market,
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "missing_dates": 0,
+                "processed": 0,
+                "errors": 0,
+                "reason": "session_factory_stub",
+            }
         existing_dates = {
             record_date
             for record_date, in db.query(IBDGroupRank.date)
             .filter(
                 IBDGroupRank.date >= start_date,
                 IBDGroupRank.date <= as_of_date,
-                IBDGroupRank.market == "US",
+                IBDGroupRank.market == normalized_market,
             )
             .distinct()
             .all()
@@ -227,12 +251,13 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
         missing_dates = [calc_date for calc_date in desired_dates if calc_date not in existing_dates]
         if not missing_dates:
             print(
-                f"[static-groups] Existing rankings already cover {len(desired_dates):,} trading dates "
-                f"through {as_of_date}.",
+                f"[static-groups:{normalized_market}] Existing rankings already cover "
+                f"{len(desired_dates):,} trading dates through {as_of_date}.",
                 flush=True,
             )
             return {
                 "status": "skipped",
+                "market": normalized_market,
                 "as_of_date": as_of_date.isoformat(),
                 "lookback_start_date": start_date.isoformat(),
                 "missing_dates": 0,
@@ -241,14 +266,33 @@ def _ensure_group_rank_history(*, as_of_date: date) -> dict[str, Any]:
             }
 
         print(
-            f"[static-groups] Backfilling {len(missing_dates):,} missing trading dates "
+            f"[static-groups:{normalized_market}] Backfilling {len(missing_dates):,} missing trading dates "
             f"from {missing_dates[0]} to {missing_dates[-1]} before publishing {as_of_date}.",
             flush=True,
         )
-        stats = get_group_rank_service().fill_gaps_optimized(db, missing_dates)
+        try:
+            stats = get_group_rank_service().fill_gaps_optimized(
+                db, missing_dates, market=normalized_market,
+            )
+        except Exception as exc:
+            print(
+                f"[static-groups:{normalized_market}] Group-rank backfill failed: {exc}",
+                flush=True,
+            )
+            return {
+                "status": "errored",
+                "market": normalized_market,
+                "as_of_date": as_of_date.isoformat(),
+                "lookback_start_date": start_date.isoformat(),
+                "missing_dates": len(missing_dates),
+                "processed": 0,
+                "errors": len(missing_dates),
+                "error": str(exc),
+            }
         stats.update(
             {
                 "status": "completed",
+                "market": normalized_market,
                 "as_of_date": as_of_date.isoformat(),
                 "lookback_start_date": start_date.isoformat(),
                 "missing_dates": len(missing_dates),
@@ -395,6 +439,23 @@ def _run_daily_refresh(
             feature_snapshots[selected_market] = market_result
 
         results["feature_snapshots"] = feature_snapshots
+
+        group_rank_history: dict[str, Any] = {}
+        for selected_market in selected_markets:
+            snapshot = feature_snapshots.get(selected_market, {})
+            if not _snapshot_ready(snapshot):
+                group_rank_history[selected_market] = {
+                    "status": "skipped",
+                    "market": selected_market,
+                    "reason": "snapshot_not_ready",
+                }
+                continue
+            group_rank_history[selected_market] = _ensure_group_rank_history(
+                as_of_date=as_of_date,
+                market=selected_market,
+            )
+        results["group_rank_history_backfill"] = group_rank_history
+
         for snapshot_market, snapshot in feature_snapshots.items():
             if snapshot_market == STATIC_DEFAULT_MARKET:
                 continue
