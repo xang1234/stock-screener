@@ -70,6 +70,10 @@ STATIC_GROUP_CHANGE_OFFSETS = {
     "3m": 63,
     "6m": 126,
 }
+STATIC_GROUP_TABLE_FALLBACK_OFFSETS = {
+    period: STATIC_GROUP_CHANGE_OFFSETS[period]
+    for period in ("1w", "1m", "3m")
+}
 _DEFAULT_KEY_MARKETS = {
     "US": (
         {"symbol": "SPY", "display_name": "S&P 500 ETF", "currency": "USD"},
@@ -1309,9 +1313,7 @@ class StaticSiteExportService:
         """
         if not rankings:
             return
-        period_days = {
-            period: offset for period, offset in STATIC_GROUP_CHANGE_OFFSETS.items()
-        }
+        period_days = dict(STATIC_GROUP_TABLE_FALLBACK_OFFSETS)
         group_names = [ranking["industry_group"] for ranking in rankings]
         normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
         try:

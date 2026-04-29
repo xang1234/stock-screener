@@ -1599,7 +1599,7 @@ def test_apply_group_rank_changes_from_table_fills_missing_periods(
     assert captured["market"] == "HK"
     assert captured["current_date"] == date(2026, 4, 28)
     assert captured["group_names"] == ["Semiconductors", "Software"]
-    assert captured["period_days"] == {"1w": 5, "1m": 21, "3m": 63, "6m": 126}
+    assert captured["period_days"] == {"1w": 5, "1m": 21, "3m": 63}
 
     semis, software = rankings
     assert semis["rank_change_1w"] == 5

@@ -23,10 +23,11 @@ from app.services.ibd_industry_service import IBDIndustryService
 from app.services.static_site_export_service import StaticSiteExportService
 from app.tasks.data_fetch_lock import disable_serialized_data_fetch_lock
 from app.tasks.workload_coordination import disable_serialized_market_workload
-from app.utils.market_hours import get_last_market_close, is_trading_day
+from app.utils.market_hours import get_last_market_close
 from app.utils.symbol_support import split_supported_price_symbols
 from app.wiring.bootstrap import (
     get_group_rank_service,
+    get_market_calendar_service,
     get_price_cache,
     get_provider_snapshot_service,
 )
@@ -197,21 +198,32 @@ def _refresh_static_daily_prices(*, as_of_date: date, market: str | None = None)
     }
 
 
-def _generate_trading_dates(start_date: date, end_date: date) -> list[date]:
+def _generate_trading_dates(
+    start_date: date,
+    end_date: date,
+    *,
+    market: str = STATIC_DEFAULT_MARKET,
+) -> list[date]:
+    normalized_market = (market or STATIC_DEFAULT_MARKET).upper()
+    calendar_service = get_market_calendar_service()
     trading_dates: list[date] = []
     current = start_date
     while current <= end_date:
-        if is_trading_day(current):
+        if calendar_service.is_trading_day(normalized_market, current):
             trading_dates.append(current)
         current += timedelta(days=1)
     return trading_dates
 
 
 def _ensure_group_rank_history(*, as_of_date: date, market: str = "US") -> dict[str, Any]:
-    """Backfill recent group-rank history so 1W/1M/3M/6M deltas can be rendered."""
+    """Backfill recent group-rank history so 1W/1M/3M deltas can be rendered."""
     normalized_market = (market or "US").upper()
     start_date = as_of_date - timedelta(days=STATIC_GROUP_HISTORY_LOOKBACK_DAYS)
-    desired_dates = _generate_trading_dates(start_date, as_of_date)
+    desired_dates = _generate_trading_dates(
+        start_date,
+        as_of_date,
+        market=normalized_market,
+    )
 
     with SessionLocal() as db:
         if not hasattr(db, "query"):

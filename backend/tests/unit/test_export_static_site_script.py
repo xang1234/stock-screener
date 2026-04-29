@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -23,6 +24,70 @@ from app.models.stock_universe import StockUniverse
 
 def test_static_export_markets_include_india():
     assert export_script.STATIC_EXPORT_MARKETS == ("US", "HK", "IN", "JP", "TW")
+
+
+def test_ensure_group_rank_history_uses_market_calendar_for_non_us_market(monkeypatch):
+    query = MagicMock()
+    query.filter.return_value = query
+    query.distinct.return_value = query
+    query.all.return_value = []
+
+    db = MagicMock()
+    db.query.return_value = query
+
+    @contextmanager
+    def fake_session():
+        yield db
+
+    calendar_calls: list[tuple[str, date]] = []
+    hk_trading_dates = {date(2026, 4, 3), date(2026, 4, 7)}
+
+    def is_trading_day(market: str, day: date) -> bool:
+        calendar_calls.append((market, day))
+        return day in hk_trading_dates
+
+    fill_calls: list[dict] = []
+
+    def fill_gaps_optimized(db_arg, missing_dates, *, market):
+        fill_calls.append(
+            {
+                "db": db_arg,
+                "missing_dates": list(missing_dates),
+                "market": market,
+            }
+        )
+        return {"processed": len(missing_dates), "errors": 0}
+
+    monkeypatch.setattr(export_script, "SessionLocal", fake_session)
+    monkeypatch.setattr(
+        export_script,
+        "get_market_calendar_service",
+        lambda: SimpleNamespace(is_trading_day=is_trading_day),
+    )
+    monkeypatch.setattr(
+        export_script,
+        "get_group_rank_service",
+        lambda: SimpleNamespace(fill_gaps_optimized=fill_gaps_optimized),
+    )
+
+    result = export_script._ensure_group_rank_history(  # noqa: SLF001 - intentional unit test coverage
+        as_of_date=date(2026, 4, 7),
+        market="hk",
+    )
+
+    assert {market for market, _day in calendar_calls} == {"HK"}
+    assert calendar_calls[0] == ("HK", date(2025, 12, 28))
+    assert calendar_calls[-1] == ("HK", date(2026, 4, 7))
+    assert fill_calls == [
+        {
+            "db": db,
+            "missing_dates": [date(2026, 4, 3), date(2026, 4, 7)],
+            "market": "HK",
+        }
+    ]
+    assert result["status"] == "completed"
+    assert result["market"] == "HK"
+    assert result["missing_dates"] == 2
 
 
 def test_run_daily_refresh_bootstraps_universe_before_other_tasks(monkeypatch):
