@@ -46,7 +46,7 @@ def _field_map(artifact: dict) -> dict:
 def test_registry_is_versioned_and_shape_is_deterministic():
     artifact = field_capability_registry.artifact()
 
-    assert artifact["registry_version"] == "2026.04.29.1"
+    assert artifact["registry_version"] == "2026.04.29.2"
     assert artifact["routing_policy_version"] == POLICY_VERSION
     assert artifact["markets"] == [MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW]
     assert artifact["providers"] == [
@@ -183,6 +183,12 @@ def test_korea_opendart_statement_fields_are_explicitly_supported():
     assert revenue["policy_provider_chain"] == [PROVIDER_KRX, PROVIDER_OPENDART, PROVIDER_YFINANCE]
     assert revenue["provider_states"][PROVIDER_OPENDART] == SUPPORT_STATE_SUPPORTED
     assert revenue["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+
+    by_field = _field_map(artifact)
+    for field in ("revenue_growth", "quick_ratio"):
+        if field in by_field:
+            row = by_field[field]["markets"][MARKET_KR]
+            assert row["provider_states"][PROVIDER_OPENDART] == SUPPORT_STATE_UNSUPPORTED
 
 
 def test_non_us_missing_ownership_fields_surface_explicit_reason_codes():

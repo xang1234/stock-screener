@@ -66,7 +66,7 @@ class FieldCapabilityEntry:
 class FieldCapabilityRegistryService:
     """Deterministic matrix for screening-field market/provider coverage."""
 
-    REGISTRY_VERSION = "2026.04.29.1"
+    REGISTRY_VERSION = "2026.04.29.2"
     MARKET_ORDER: Tuple[str, ...] = (
         routing_policy.MARKET_US,
         routing_policy.MARKET_HK,
@@ -113,7 +113,6 @@ class FieldCapabilityRegistryService:
         } & fields
         opendart_fields = {
             "revenue_current",
-            "revenue_growth",
             "profit_margin",
             "operating_margin",
             "gross_margin",
@@ -121,7 +120,6 @@ class FieldCapabilityRegistryService:
             "roa",
             "debt_to_equity",
             "current_ratio",
-            "quick_ratio",
         } & fields
         return {
             routing_policy.PROVIDER_FINVIZ: self._finviz_supported_fields(),

@@ -186,6 +186,16 @@ class _FakeDb:
         return _FakeQuery(self._rows)
 
 
+class _FakeDbSequence:
+    def __init__(self, *row_sets):
+        self._row_sets = list(row_sets)
+
+    def query(self, *args, **kwargs):
+        if not self._row_sets:
+            return _FakeQuery([])
+        return _FakeQuery(self._row_sets.pop(0))
+
+
 class TestDbBackedGateResilience:
     def test_g2_malformed_payload_returns_missing_evidence(self, monkeypatch):
         fake_models = ModuleType("app.models.market_telemetry")
@@ -207,6 +217,7 @@ class TestDbBackedGateResilience:
 
         ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("US", "HK"))
         rows = [
+            SimpleNamespace(market="US", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 1}),
             SimpleNamespace(market="HK", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 8}),
             SimpleNamespace(market="TW", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 120}),
         ]
@@ -215,6 +226,41 @@ class TestDbBackedGateResilience:
 
         assert g2.status == GateStatus.PASS
         assert g2.metrics["worst_market"] == "HK"
+
+    def test_g2_requires_drift_evidence_for_every_enabled_market(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("US", "HK"))
+        rows = [
+            SimpleNamespace(market="HK", recorded_at=_NOW, payload={"prior_size": 1000, "delta": 8}),
+        ]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDb(rows))
+
+        assert g2.status == GateStatus.MISSING_EVIDENCE
+        assert g2.metrics["missing_markets"] == ["US"]
+
+    def test_g2_fails_when_kr_taxonomy_coverage_is_below_launch_threshold(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("KR",))
+        telemetry_rows = [
+            SimpleNamespace(market="KR", recorded_at=_NOW, payload={"prior_size": 2658, "delta": 0}),
+        ]
+        active_kr_rows = [
+            ("005930.KS", "KOSPI"),
+            ("999999.KQ", "KOSDAQ"),
+        ]
+
+        g2 = _check_g2_universe(ctx, db=_FakeDbSequence(telemetry_rows, active_kr_rows))
+
+        assert g2.status == GateStatus.FAIL
+        assert "KR taxonomy coverage below launch thresholds" in g2.detail
+        assert g2.metrics["sector_industry_group_coverage"] == 0.5
 
     def test_g4_scopes_to_enabled_markets_and_checks_transparency(self, monkeypatch):
         fake_models = ModuleType("app.models.market_telemetry")
@@ -228,6 +274,14 @@ class TestDbBackedGateResilience:
             target_market="HK",
         )
         rows = [
+            SimpleNamespace(
+                market="US",
+                recorded_at=_NOW,
+                payload=completeness_distribution_payload(
+                    bucket_counts={"0-25": 10, "25-50": 120, "50-75": 220, "75-90": 270, "90-100": 380},
+                    symbols_total=1000,
+                ),
+            ),
             SimpleNamespace(
                 market="HK",
                 recorded_at=_NOW,
@@ -251,6 +305,33 @@ class TestDbBackedGateResilience:
         assert g4.status == GateStatus.PASS, g4.detail
         assert g4.metrics["worst_market"] == "HK"
         assert g4.metrics["transparency_sample_market"] == "HK"
+
+    def test_g4_requires_completeness_evidence_for_every_enabled_market(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(
+            project_root=_PROJECT_ROOT,
+            now=_NOW,
+            enabled_markets=("US", "HK"),
+            target_market="HK",
+        )
+        rows = [
+            SimpleNamespace(
+                market="HK",
+                recorded_at=_NOW,
+                payload=completeness_distribution_payload(
+                    bucket_counts={"0-25": 20, "25-50": 120, "50-75": 220, "75-90": 260, "90-100": 380},
+                    symbols_total=1000,
+                ),
+            ),
+        ]
+
+        g4 = _check_g4_fundamentals(ctx, db=_FakeDb(rows))
+
+        assert g4.status == GateStatus.MISSING_EVIDENCE
+        assert g4.metrics["missing_markets"] == ["US"]
 
 
 class TestExternalEvidenceGates:

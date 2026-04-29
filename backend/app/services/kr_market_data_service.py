@@ -38,6 +38,15 @@ def _as_yyyymmdd(value: date | str | None) -> str:
     return date.today().strftime("%Y%m%d")
 
 
+def _as_date(value: date | str | None) -> date:
+    if isinstance(value, date):
+        return value
+    token = str(value or "").strip().replace("-", "")
+    if len(token) == 8 and token.isdigit():
+        return date.fromisoformat(f"{token[:4]}-{token[4:6]}-{token[6:8]}")
+    return date.today()
+
+
 def _normalize_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -47,6 +56,21 @@ def _normalize_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _period_start_date(period: str, *, today: date | None = None) -> date:
+    """Translate common Yahoo-style periods into a KRX start date."""
+    current = today or date.today()
+    token = str(period or "2y").strip().lower()
+    if token == "max":
+        return current - timedelta(days=3650)
+    if token.endswith("d") and token[:-1].isdigit():
+        return current - timedelta(days=int(token[:-1]))
+    if token.endswith("mo") and token[:-2].isdigit():
+        return current - timedelta(days=int(token[:-2]) * 31)
+    if token.endswith("y") and token[:-1].isdigit():
+        return current - timedelta(days=int(token[:-1]) * 365)
+    return current - timedelta(days=730)
 
 
 @dataclass(frozen=True)
@@ -166,6 +190,41 @@ class KrxMarketDataService:
                 )
             )
         return result
+
+    def daily_ohlcv_dataframe(
+        self,
+        local_code: str,
+        *,
+        period: str = "2y",
+        end: date | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return KRX OHLCV as the canonical price-cache DataFrame shape."""
+        end_date = _as_date(end)
+        rows = self.daily_ohlcv(
+            local_code,
+            start=_period_start_date(period, today=end_date),
+            end=end_date,
+        )
+        if not rows:
+            return None
+
+        frame = pd.DataFrame(
+            [
+                {
+                    "Date": row.date,
+                    "Open": row.open,
+                    "High": row.high,
+                    "Low": row.low,
+                    "Close": row.close,
+                    "Volume": row.volume,
+                    "Adj Close": row.close,
+                }
+                for row in rows
+            ]
+        )
+        frame["Date"] = pd.to_datetime(frame["Date"])
+        frame = frame.set_index("Date").sort_index()
+        return frame
 
     def core_fundamentals(
         self,

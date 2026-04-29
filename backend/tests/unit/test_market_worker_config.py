@@ -19,6 +19,12 @@ def test_docker_compose_consumes_every_supported_market_queue():
         assert f"user_scans_{suffix}" in compose
 
 
+def test_docker_compose_forwards_opendart_api_key_to_app_env():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "OPENDART_API_KEY: ${OPENDART_API_KEY:-}" in compose
+
+
 def test_local_celery_script_consumes_every_supported_market_queue():
     script = (ROOT / "backend" / "start_celery.sh").read_text(encoding="utf-8")
     supported_csv = ",".join(SUPPORTED_MARKETS)

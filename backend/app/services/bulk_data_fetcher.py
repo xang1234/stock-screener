@@ -87,6 +87,7 @@ class BulkDataFetcher:
         *,
         rate_limiter: "RedisRateLimiter | None" = None,
         eps_rating_service: "EPSRatingService | None" = None,
+        krx_price_service: Any | None = None,
     ) -> None:
         # Keep standalone construction safe for tests/scripts while allowing
         # process-scoped injection from runtime wiring where needed.
@@ -94,6 +95,7 @@ class BulkDataFetcher:
         self._eps_rating_service = (
             eps_rating_service or self._build_default_eps_rating_service()
         )
+        self._krx_price_service = krx_price_service
 
     @classmethod
     def _get_fallback_rate_limiter(cls) -> "RedisRateLimiter":
@@ -519,9 +521,11 @@ class BulkDataFetcher:
         start_batch_size: Optional[int] = None,
         market: Optional[str] = None,
     ) -> Dict[str, Dict]:
-        """Fetch prices for many symbols using adaptive ``yf.download()`` batches.
+        """Fetch prices for many symbols using market-aware batch routing.
 
         Background jobs should call this method instead of any per-symbol Yahoo path.
+        Korea uses KRX/pykrx first, then falls back to Yahoo for symbols KRX
+        cannot serve.
 
         When ``market`` is supplied, per-market rate budget keys
         (``yfinance:hk`` / ``yfinance:batch:hk``) and per-market batch sizes
@@ -531,6 +535,29 @@ class BulkDataFetcher:
         if not symbols:
             return {}
 
+        if str(market or "").strip().upper() == "KR":
+            return self._fetch_kr_prices_with_yfinance_fallback(
+                symbols,
+                period=period,
+                start_batch_size=start_batch_size,
+                market=market,
+            )
+
+        return self._fetch_yfinance_prices_in_batches(
+            symbols,
+            period=period,
+            start_batch_size=start_batch_size,
+            market=market,
+        )
+
+    def _fetch_yfinance_prices_in_batches(
+        self,
+        symbols: List[str],
+        *,
+        period: str,
+        start_batch_size: Optional[int] = None,
+        market: Optional[str] = None,
+    ) -> Dict[str, Dict]:
         # Per-market initial batch size from RateBudgetPolicy when caller
         # didn't pass an explicit ``start_batch_size``.
         if start_batch_size is None and market is not None:
@@ -609,6 +636,74 @@ class BulkDataFetcher:
             batch_start += len(batch_symbols)
 
         return combined_results
+
+    def _get_krx_price_service(self):
+        if self._krx_price_service is None:
+            from .kr_market_data_service import KrxPriceService
+
+            self._krx_price_service = KrxPriceService()
+        return self._krx_price_service
+
+    def _fetch_kr_price_batch(self, symbols: List[str], *, period: str) -> Dict[str, Dict]:
+        from .security_master_service import security_master_resolver
+
+        service = self._get_krx_price_service()
+        results: Dict[str, Dict] = {}
+        for symbol in symbols:
+            try:
+                identity = security_master_resolver.resolve_identity(symbol=symbol, market="KR")
+                price_data = service.daily_ohlcv_dataframe(identity.local_code, period=period)
+                if price_data is None or price_data.empty:
+                    results[symbol] = self._build_error_result(symbol, "KRX returned empty price data")
+                    continue
+                results[symbol] = {
+                    "symbol": symbol,
+                    "price_data": price_data,
+                    "info": None,
+                    "fundamentals": None,
+                    "has_error": False,
+                    "error": None,
+                    "provider": "krx",
+                }
+            except Exception as exc:  # pragma: no cover - provider/network variability
+                logger.warning("KRX price fetch failed for %s: %s", symbol, exc)
+                results[symbol] = self._build_error_result(
+                    symbol,
+                    f"KRX price fetch error: {exc}",
+                )
+        return results
+
+    def _fetch_kr_prices_with_yfinance_fallback(
+        self,
+        symbols: List[str],
+        *,
+        period: str,
+        start_batch_size: Optional[int] = None,
+        market: Optional[str] = None,
+    ) -> Dict[str, Dict]:
+        krx_results = self._fetch_kr_price_batch(symbols, period=period)
+        fallback_symbols = [
+            symbol
+            for symbol, payload in krx_results.items()
+            if payload.get("has_error") or payload.get("price_data") is None
+        ]
+        if not fallback_symbols:
+            return krx_results
+
+        logger.info(
+            "Falling back to Yahoo for %d/%d KR symbols with missing KRX prices",
+            len(fallback_symbols),
+            len(symbols),
+        )
+        fallback_results = self._fetch_yfinance_prices_in_batches(
+            fallback_symbols,
+            period=period,
+            start_batch_size=start_batch_size,
+            market=market,
+        )
+        merged = dict(krx_results)
+        merged.update(fallback_results)
+        return merged
 
     def _fetch_price_batch_with_retries(
         self,

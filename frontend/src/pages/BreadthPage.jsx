@@ -89,6 +89,7 @@ const MARKET_LABELS = {
   HK: 'Hong Kong',
   IN: 'India',
   JP: 'Japan',
+  KR: 'South Korea',
   TW: 'Taiwan',
 };
 

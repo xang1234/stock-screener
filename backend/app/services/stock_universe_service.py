@@ -47,6 +47,7 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "KR": ("KOSPI", "KOSDAQ", "XKRX"),
     "TW": ("TWSE", "TPEX", "XTAI"),
 }
+KR_ACTIVE_UNIVERSE_MIN_COUNT = 2526
 
 
 class StockUniverseService:
@@ -916,6 +917,12 @@ class StockUniverseService:
                 field_name="asia_reconciliation_min_count_jp",
                 env_name="ASIA_RECONCILIATION_MIN_COUNT_JP",
                 default=default_min,
+            )
+        if normalized_market == "KR":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_kr",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_KR",
+                default=max(default_min, KR_ACTIVE_UNIVERSE_MIN_COUNT),
             )
         if normalized_market == "TW":
             return StockUniverseService._safety_int_setting(

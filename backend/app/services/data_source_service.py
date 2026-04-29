@@ -146,9 +146,9 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/JP/TW). When provided, the
+            market: Optional market code (US/HK/IN/JP/KR/TW). When provided, the
                 provider routing policy filters out providers that do not
-                cover this market (e.g. finviz is skipped for HK/JP/TW).
+                cover this market (e.g. finviz is skipped for non-US markets).
                 ``None`` preserves legacy US-equivalent behaviour.
 
         Returns:
@@ -300,7 +300,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/JP/TW); see
+            market: Optional market code (US/HK/IN/JP/KR/TW); see
                 ``get_fundamentals`` for semantics.
 
         Returns:
@@ -367,13 +367,33 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/JP/TW); see
+            market: Optional market code (US/HK/IN/JP/KR/TW); see
                 ``get_fundamentals`` for semantics.
 
         Returns:
             Dict with keys 'fundamentals' and 'growth', both containing data + metadata
         """
         self.metrics['total_calls'] += 1
+
+        if routing_policy.normalize_market(market) == routing_policy.MARKET_KR:
+            fundamentals = self._get_kr_fundamentals(symbol)
+            identity = security_master_resolver.resolve_identity(symbol=symbol, market="KR")
+            growth = self.yfinance_service.get_quarterly_growth(
+                identity.canonical_symbol,
+                market=routing_policy.MARKET_KR,
+            )
+            if fundamentals:
+                timestamp = datetime.utcnow()
+                if growth:
+                    growth["data_source"] = "yfinance"
+                    growth["data_source_timestamp"] = timestamp
+                return {
+                    "fundamentals": fundamentals,
+                    "growth": growth or {},
+                    "data_source": fundamentals.get("data_source", "krx"),
+                }
+            logger.error(f"All KR data sources failed for {symbol} combined data")
+            return None
 
         if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} combined data from finvizfinance")

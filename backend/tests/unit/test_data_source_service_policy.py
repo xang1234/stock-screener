@@ -13,7 +13,25 @@ import pytest
 from app.services.data_source_service import DataSourceService
 
 
-def _make_service(finviz_return=None, yfinance_return=None) -> DataSourceService:
+class _FakeOpenDart:
+    is_configured = True
+
+    def __init__(self, statement_fields=None):
+        self.statement_fields = statement_fields or {}
+        self.calls = []
+
+    def get_statement_fundamentals(self, local_code):
+        self.calls.append(local_code)
+        return dict(self.statement_fields)
+
+
+def _make_service(
+    finviz_return=None,
+    yfinance_return=None,
+    *,
+    krx_fundamentals_service=None,
+    opendart_fundamentals_service=None,
+) -> DataSourceService:
     """Build a DataSourceService with fully mocked provider dependencies."""
     finviz = MagicMock()
     finviz.get_fundamentals.return_value = finviz_return
@@ -32,6 +50,8 @@ def _make_service(finviz_return=None, yfinance_return=None) -> DataSourceService
         finviz_service=finviz,
         yfinance_service=yfinance,
         eps_rating_service=eps_rating,
+        krx_fundamentals_service=krx_fundamentals_service,
+        opendart_fundamentals_service=opendart_fundamentals_service,
         rate_limiter=rate_limiter,
         prefer_finviz=True,
     )
@@ -40,7 +60,7 @@ def _make_service(finviz_return=None, yfinance_return=None) -> DataSourceService
 class TestGetFundamentalsPolicyGate:
     """Acceptance: non-US markets skip finviz, go straight to yfinance."""
 
-    @pytest.mark.parametrize("market", ["HK", "JP", "TW"])
+    @pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
     def test_non_us_market_skips_finviz(self, market):
         svc = _make_service()
         result = svc.get_fundamentals("0700.HK", market=market)
@@ -51,6 +71,25 @@ class TestGetFundamentalsPolicyGate:
         assert result["data_source"] == "yfinance"
         assert svc.metrics["finviz_skipped_by_policy"] == 1
         assert svc.metrics["finviz_success"] == 0
+
+    def test_korea_market_uses_native_fundamental_providers_before_yfinance(self):
+        krx = MagicMock()
+        krx.core_fundamentals.return_value = {"market_cap": 1_000, "pe_ratio": 9.5}
+        opendart = _FakeOpenDart({"revenue_current": 10_000})
+        svc = _make_service(
+            krx_fundamentals_service=krx,
+            opendart_fundamentals_service=opendart,
+        )
+
+        result = svc.get_fundamentals("005930.KS", market="KR")
+
+        svc.finviz_service.get_fundamentals.assert_not_called()
+        krx.core_fundamentals.assert_called_once_with("005930")
+        assert opendart.calls == ["005930"]
+        svc.yfinance_service.get_fundamentals.assert_called_once_with("005930.KS")
+        assert result["data_source"] == "krx+opendart+yfinance"
+        assert result["market"] == "KR"
+        assert result["currency"] == "KRW"
 
     def test_us_market_still_prefers_finviz(self):
         svc = _make_service(finviz_return={"market_cap": 2_000})
@@ -66,7 +105,7 @@ class TestGetFundamentalsPolicyGate:
 
 
 class TestGetQuarterlyGrowthPolicyGate:
-    @pytest.mark.parametrize("market", ["HK", "JP", "TW"])
+    @pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
     def test_non_us_market_skips_finviz_growth(self, market):
         svc = _make_service()
         result = svc.get_quarterly_growth("7203.T", market=market)
@@ -77,7 +116,7 @@ class TestGetQuarterlyGrowthPolicyGate:
 
 
 class TestGetCombinedDataPolicyGate:
-    @pytest.mark.parametrize("market", ["HK", "JP", "TW"])
+    @pytest.mark.parametrize("market", ["HK", "IN", "JP", "TW"])
     def test_non_us_market_skips_finviz_combined(self, market):
         svc = _make_service()
         result = svc.get_combined_data("2330.TW", market=market)
@@ -85,6 +124,24 @@ class TestGetCombinedDataPolicyGate:
         svc.yfinance_service.get_fundamentals.assert_called_once_with("2330.TW")
         svc.yfinance_service.get_quarterly_growth.assert_called_once_with("2330.TW", market=market)
         assert result is not None
+
+    def test_korea_combined_data_uses_kr_fundamentals_path(self):
+        krx = MagicMock()
+        krx.core_fundamentals.return_value = {"market_cap": 1_000, "pe_ratio": 9.5}
+        opendart = _FakeOpenDart({"revenue_current": 10_000})
+        svc = _make_service(
+            krx_fundamentals_service=krx,
+            opendart_fundamentals_service=opendart,
+        )
+
+        result = svc.get_combined_data("005930.KS", market="KR")
+
+        svc.finviz_service.get_combined_data.assert_not_called()
+        krx.core_fundamentals.assert_called_once_with("005930")
+        svc.yfinance_service.get_quarterly_growth.assert_called_once_with("005930.KS", market="KR")
+        assert result is not None
+        assert result["fundamentals"]["data_source"] == "krx+opendart+yfinance"
+        assert result["growth"]["data_source"] == "yfinance"
 
 
 class TestMetricsIncludePolicySkipCounter:

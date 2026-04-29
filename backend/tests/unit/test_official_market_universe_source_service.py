@@ -179,24 +179,41 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
         def listing_rows(self, *, boards, as_of=None):
             assert boards == ("KOSPI", "KOSDAQ")
             assert as_of is None
-            return [
+            kospi_rows = [
                 {
                     "symbol": "005930.KS",
                     "local_code": "005930",
                     "name": "Samsung Electronics",
                     "exchange": "KOSPI",
-                    "sector": "Information Technology",
-                    "industry": "Semiconductors",
-                },
+                }
+            ]
+            kospi_rows.extend(
+                {
+                    "symbol": f"{index:06d}.KS",
+                    "local_code": f"{index:06d}",
+                    "name": f"KOSPI Co {index}",
+                    "exchange": "KOSPI",
+                }
+                for index in range(1, 839)
+            )
+            kosdaq_rows = [
                 {
                     "symbol": "091990.KQ",
                     "local_code": "091990",
                     "name": "Celltrion Healthcare",
                     "exchange": "KOSDAQ",
-                    "sector": "Health Care",
-                    "industry": "Biotechnology",
-                },
+                }
             ]
+            kosdaq_rows.extend(
+                {
+                    "symbol": f"{100000 + index:06d}.KQ",
+                    "local_code": f"{100000 + index:06d}",
+                    "name": f"KOSDAQ Co {index}",
+                    "exchange": "KOSDAQ",
+                }
+                for index in range(1, 1819)
+            )
+            return [*kospi_rows, *kosdaq_rows]
 
     service = OfficialMarketUniverseSourceService(kr_provider=FakeKrxProvider())
 
@@ -205,14 +222,43 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
     assert snapshot.market == "KR"
     assert snapshot.source_name == "krx_official"
     assert snapshot.snapshot_id.startswith("krx-listings-")
-    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
-    assert snapshot.source_metadata["row_counts"] == {"kospi": 1, "kosdaq": 1}
+    assert len(snapshot.rows) == 2658
+    rows_by_symbol = {row["symbol"]: row for row in snapshot.rows}
+    assert rows_by_symbol["005930.KS"]["sector"] == "Information Technology"
+    assert rows_by_symbol["091990.KQ"]["industry_group"] == "Biotechnology"
+    assert snapshot.source_metadata["row_counts"] == {"kospi": 839, "kosdaq": 1819}
+    assert snapshot.source_metadata["source_count"] == 2658
     assert snapshot.source_metadata["excluded_boards"] == ["KONEX"]
     assert snapshot.source_metadata["validated_krx_baseline"]["kospi"] == 839
     assert snapshot.source_metadata["validated_krx_baseline"]["kosdaq"] == 1819
+    assert snapshot.source_metadata["validated_krx_baseline_tolerance"] == 0.02
     assert snapshot.source_metadata["validated_krx_baseline"]["source_url"].startswith(
         "https://global.krx.co.kr/"
     )
+
+
+def test_fetch_kr_snapshot_fails_when_live_counts_are_below_validated_baseline():
+    class LowCountKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                },
+            ]
+
+    service = OfficialMarketUniverseSourceService(kr_provider=LowCountKrxProvider())
+
+    with pytest.raises(ValueError, match="outside validated KRX baseline"):
+        service.fetch_kr_snapshot()
 
 
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):

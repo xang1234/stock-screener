@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import io
 import zipfile
+from datetime import date
 
-from app.services.kr_market_data_service import OpenDartFundamentalsService
+import pandas as pd
+
+from app.services.kr_market_data_service import KrxMarketDataService, OpenDartFundamentalsService
 
 
 class _FakeResponse:
@@ -80,3 +83,33 @@ def test_opendart_maps_statement_rows_to_existing_fundamental_fields() -> None:
     assert fields["current_ratio"] == 2.0
     assert fields["recent_quarter_date"] == "2025-FY"
     assert session.calls[1][1]["corp_code"] == "00126380"
+
+
+def test_krx_daily_ohlcv_dataframe_uses_canonical_price_shape() -> None:
+    class _FakeStockModule:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str]] = []
+
+        def get_market_ohlcv_by_date(self, start: str, end: str, local_code: str):
+            self.calls.append((start, end, local_code))
+            return pd.DataFrame(
+                {
+                    "시가": [100.0],
+                    "고가": [110.0],
+                    "저가": [95.0],
+                    "종가": [105.0],
+                    "거래량": [12345],
+                    "거래대금": [1_296_225],
+                },
+                index=pd.to_datetime(["2026-04-29"]),
+            )
+
+    stock_module = _FakeStockModule()
+    service = KrxMarketDataService(stock_module=stock_module)
+
+    frame = service.daily_ohlcv_dataframe("005930", period="7d", end=date(2026, 4, 29))
+
+    assert stock_module.calls == [("20260422", "20260429", "005930")]
+    assert frame is not None
+    assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume", "Adj Close"]
+    assert frame.loc[pd.Timestamp("2026-04-29"), "Close"] == 105.0

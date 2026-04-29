@@ -35,7 +35,7 @@ from .signed_artifact import compute_content_hash
 
 REPORT_SCHEMA_VERSION = 2
 CHARTER_VERSION = "1.0"  # ties to docs/asia/asia_v2_launch_gate_charter.md
-GATE_RUNNER_VERSION = "1.1"
+GATE_RUNNER_VERSION = "1.2"
 
 
 class GateStatus:
@@ -156,6 +156,82 @@ def _latest_rows_by_market(rows: List[object], markets: tuple[str, ...]) -> Dict
     return latest
 
 
+def _missing_enabled_markets(latest_rows: Dict[str, object], enabled_markets: tuple[str, ...]) -> list[str]:
+    if not enabled_markets or "__unknown__" in latest_rows:
+        return []
+    return sorted(set(enabled_markets).difference(latest_rows.keys()))
+
+
+def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
+    if "KR" not in ctx.enabled_markets:
+        return None
+    try:
+        from ...models.stock_universe import StockUniverse
+        from ...services.market_taxonomy_service import get_market_taxonomy_service
+
+        active_rows = (
+            db.query(StockUniverse.symbol, StockUniverse.exchange)
+            .filter(StockUniverse.market == "KR", StockUniverse.active_filter())
+            .all()
+        )
+        if not active_rows:
+            return GateResult(
+                gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+                status=GateStatus.MISSING_EVIDENCE,
+                detail="KR is enabled but no active KR universe rows are available for taxonomy coverage.",
+                metrics={"enabled_markets": list(ctx.enabled_markets), "market": "KR"},
+            )
+
+        taxonomy = get_market_taxonomy_service()
+        sector_group_count = 0
+        sub_industry_count = 0
+        missing_symbols: list[str] = []
+        for symbol, exchange in active_rows:
+            entry = taxonomy.get(symbol, market="KR", exchange=exchange)
+            has_sector_group = bool(entry and entry.sector and entry.industry_group)
+            has_sub_industry = bool(entry and entry.sub_industry)
+            if has_sector_group:
+                sector_group_count += 1
+            else:
+                missing_symbols.append(symbol)
+            if has_sub_industry:
+                sub_industry_count += 1
+
+        total = len(active_rows)
+        sector_group_ratio = sector_group_count / total
+        sub_industry_ratio = sub_industry_count / total
+        metrics = {
+            "enabled_markets": list(ctx.enabled_markets),
+            "market": "KR",
+            "active_symbols": total,
+            "sector_industry_group_coverage": round(sector_group_ratio, 4),
+            "sub_industry_coverage": round(sub_industry_ratio, 4),
+            "sector_industry_group_threshold": 0.95,
+            "sub_industry_threshold": 0.85,
+            "missing_symbols_sample": missing_symbols[:25],
+            "missing_symbols_truncated": len(missing_symbols) > 25,
+        }
+        if sector_group_ratio < 0.95 or sub_industry_ratio < 0.85:
+            return GateResult(
+                gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+                status=GateStatus.FAIL,
+                detail=(
+                    "KR taxonomy coverage below launch thresholds: "
+                    f"sector+industry_group={sector_group_ratio:.2%} (<95%) or "
+                    f"sub_industry={sub_industry_ratio:.2%} (<85%)."
+                ),
+                metrics=metrics,
+            )
+        return None
+    except Exception as exc:
+        return GateResult(
+            gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+            status=GateStatus.MISSING_EVIDENCE,
+            detail=f"KR taxonomy coverage check failed: {exc}",
+            metrics={"enabled_markets": list(ctx.enabled_markets), "market": "KR"},
+        )
+
+
 def _drill_age_days(text: str, ctx: GateContext) -> Optional[int]:
     """Pull the ISO date out of a runbook drill record header line.
 
@@ -272,6 +348,21 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
                     f"{list(ctx.enabled_markets)}."
                 ),
             )
+        missing_markets = _missing_enabled_markets(latest_rows, ctx.enabled_markets)
+        if missing_markets:
+            return GateResult(
+                gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
+                status=GateStatus.MISSING_EVIDENCE,
+                detail=(
+                    "Missing universe_drift telemetry in the last 2 days for enabled markets "
+                    f"{missing_markets}."
+                ),
+                metrics={
+                    "enabled_markets": list(ctx.enabled_markets),
+                    "markets_with_evidence": sorted(latest_rows.keys()),
+                    "missing_markets": missing_markets,
+                },
+            )
 
         worst = 0.0
         worst_market = None
@@ -307,6 +398,9 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
                 "worst_market": worst_market,
             },
         )
+    kr_taxonomy_result = _check_kr_taxonomy_coverage(ctx, db=db)
+    if kr_taxonomy_result is not None:
+        return kr_taxonomy_result
     return GateResult(
         gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
         status=GateStatus.PASS,
@@ -465,6 +559,21 @@ def _check_g4_fundamentals(ctx: GateContext, db=None) -> GateResult:
             .all()
         )
         latest_rows = _latest_rows_by_market(rows, ctx.enabled_markets)
+        missing_markets = _missing_enabled_markets(latest_rows, ctx.enabled_markets)
+        if missing_markets:
+            return GateResult(
+                gate_id="G4", name="Fundamentals Data Quality", severity="hard",
+                status=GateStatus.MISSING_EVIDENCE,
+                detail=(
+                    "Missing completeness_distribution telemetry for enabled markets "
+                    f"{missing_markets}."
+                ),
+                metrics={
+                    "enabled_markets": list(ctx.enabled_markets),
+                    "markets_with_evidence": sorted(latest_rows.keys()),
+                    "missing_markets": missing_markets,
+                },
+            )
         worst = 0.0
         worst_market = None
         for market, row in latest_rows.items():

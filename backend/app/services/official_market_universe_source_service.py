@@ -8,6 +8,7 @@ from email.utils import parsedate_to_datetime
 import io
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, Iterable
@@ -38,6 +39,7 @@ _KR_VALIDATED_BASELINE = {
     "total": 2768,
     "kospi_kosdaq_target": 2658,
 }
+_KR_VALIDATED_BASELINE_TOLERANCE = 0.02
 
 _HK_EQUITY_CATEGORY = "equity"
 _HK_EQUITY_SUBCATEGORY_TOKEN = "equity securities"
@@ -173,10 +175,22 @@ class OfficialMarketUniverseSourceService:
         if not rows:
             raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
 
+        rows = self._enrich_kr_rows_with_taxonomy(rows)
         row_counts = {
             "kospi": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSPI"),
             "kosdaq": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSDAQ"),
         }
+        count_breaches = self._kr_baseline_count_breaches(row_counts)
+        if count_breaches:
+            raise ValueError(
+                "KR official universe fetch count outside validated KRX baseline: "
+                + "; ".join(
+                    f"{breach['board']} actual={breach['actual']} expected={breach['expected']} "
+                    f"range=[{breach['min']},{breach['max']}]"
+                    for breach in count_breaches
+                )
+            )
+
         snapshot_as_of = self._utc_today().isoformat()
         source_metadata = {
             "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
@@ -189,6 +203,7 @@ class OfficialMarketUniverseSourceService:
             "row_counts": row_counts,
             "source_count": len(rows),
             "validated_krx_baseline": dict(_KR_VALIDATED_BASELINE),
+            "validated_krx_baseline_tolerance": _KR_VALIDATED_BASELINE_TOLERANCE,
         }
         return OfficialMarketUniverseSnapshot(
             market="KR",
@@ -238,6 +253,64 @@ class OfficialMarketUniverseSourceService:
 
             self._kr_provider = KrxMarketDataService()
         return self._kr_provider
+
+    @staticmethod
+    def _kr_expected_range(expected: int) -> tuple[int, int]:
+        tolerance = _KR_VALIDATED_BASELINE_TOLERANCE
+        return (
+            math.ceil(expected * (1.0 - tolerance)),
+            math.floor(expected * (1.0 + tolerance)),
+        )
+
+    @classmethod
+    def _kr_baseline_count_breaches(cls, row_counts: dict[str, int]) -> list[dict[str, Any]]:
+        breaches: list[dict[str, Any]] = []
+        for board in ("kospi", "kosdaq"):
+            expected = int(_KR_VALIDATED_BASELINE[board])
+            minimum, maximum = cls._kr_expected_range(expected)
+            actual = int(row_counts.get(board) or 0)
+            if actual < minimum or actual > maximum:
+                breaches.append(
+                    {
+                        "board": board,
+                        "actual": actual,
+                        "expected": expected,
+                        "min": minimum,
+                        "max": maximum,
+                    }
+                )
+        return breaches
+
+    @staticmethod
+    def _enrich_kr_rows_with_taxonomy(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach committed KR taxonomy fields where the KRX listing row is sparse."""
+        try:
+            from .market_taxonomy_service import get_market_taxonomy_service
+
+            taxonomy = get_market_taxonomy_service()
+        except Exception as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+            return rows
+
+        enriched_rows: list[dict[str, Any]] = []
+        for row in rows:
+            enriched = dict(row)
+            entry = taxonomy.get(
+                enriched.get("symbol") or enriched.get("local_code"),
+                market="KR",
+                exchange=enriched.get("exchange"),
+            )
+            if entry is not None:
+                if not str(enriched.get("sector") or "").strip() and entry.sector:
+                    enriched["sector"] = entry.sector
+                if not str(enriched.get("industry_group") or "").strip() and entry.industry_group:
+                    enriched["industry_group"] = entry.industry_group
+                if not str(enriched.get("industry") or "").strip() and entry.industry:
+                    enriched["industry"] = entry.industry
+                if not str(enriched.get("sub_industry") or "").strip() and entry.sub_industry:
+                    enriched["sub_industry"] = entry.sub_industry
+            enriched_rows.append(enriched)
+        return enriched_rows
 
     def fetch_bse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         fetched = self._http_get(

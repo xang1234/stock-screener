@@ -95,6 +95,22 @@ describe('BreadthPage', () => {
     });
   });
 
+  it('supports Korea as a runtime primary market', async () => {
+    runtimeState.primaryMarket = 'KR';
+    runtimeState.enabledMarkets = ['KR', 'US'];
+
+    renderWithProviders(<BreadthPage />);
+
+    expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('KR');
+      expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('KR');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('069500.KS', '1mo');
+    });
+    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('South Korea');
+  });
+
   it('resyncs the default market when runtime primary market data loads late', async () => {
     runtimeState.primaryMarket = 'US';
     runtimeState.enabledMarkets = ['US'];
