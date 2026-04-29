@@ -54,7 +54,7 @@ STATIC_CHART_PRESET_TOP_N = 200
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW")
+STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN")
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
@@ -63,6 +63,7 @@ STATIC_MARKET_DISPLAY = {
     "JP": "Japan",
     "KR": "South Korea",
     "TW": "Taiwan",
+    "CN": "China A-shares",
 }
 STATIC_GROUP_HISTORY_RUNS = 40
 STATIC_GROUP_CHANGE_OFFSETS = {
@@ -117,6 +118,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "2330.TW", "display_name": "TSMC", "currency": "TWD"},
         {"symbol": "2317.TW", "display_name": "Hon Hai", "currency": "TWD"},
         {"symbol": "2454.TW", "display_name": "MediaTek", "currency": "TWD"},
+    ),
+    "CN": (
+        {"symbol": "000300.SS", "display_name": "CSI 300", "currency": "CNY"},
+        {"symbol": "000001.SS", "display_name": "Shanghai Composite", "currency": "CNY"},
+        {"symbol": "600519.SS", "display_name": "Kweichow Moutai", "currency": "CNY"},
+        {"symbol": "000001.SZ", "display_name": "Ping An Bank", "currency": "CNY"},
+        {"symbol": "300750.SZ", "display_name": "CATL", "currency": "CNY"},
     ),
 }
 

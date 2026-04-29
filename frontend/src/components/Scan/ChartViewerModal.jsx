@@ -34,6 +34,7 @@ const inferMarketFromSymbol = (symbol) => {
   if (normalized.endsWith('.T')) return 'JP';
   if (normalized.endsWith('.KS') || normalized.endsWith('.KQ')) return 'KR';
   if (normalized.endsWith('.TW') || normalized.endsWith('.TWO')) return 'TW';
+  if (normalized.endsWith('.SS') || normalized.endsWith('.SZ') || normalized.endsWith('.BJ')) return 'CN';
   return 'US';
 };
 

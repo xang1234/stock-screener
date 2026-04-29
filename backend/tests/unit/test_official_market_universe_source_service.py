@@ -358,6 +358,51 @@ def test_fetch_kr_snapshot_records_baseline_drift_without_rejecting_source():
     ]
 
 
+def test_fetch_cn_snapshot_uses_akshare_provider_and_records_validated_baseline():
+    class FakeCnProvider:
+        def listing_rows(self, *, as_of=None):
+            return [
+                {
+                    "symbol": "600519.SS",
+                    "local_code": "600519",
+                    "name": "Kweichow Moutai",
+                    "exchange": "SSE",
+                    "board": "SSE_MAIN",
+                    "industry": "Beverage Manufacturing",
+                },
+                {
+                    "symbol": "000001.SZ",
+                    "local_code": "000001",
+                    "name": "Ping An Bank",
+                    "exchange": "SZSE",
+                    "board": "SZSE_MAIN",
+                    "industry": "Banking",
+                },
+                {
+                    "symbol": "920118.BJ",
+                    "local_code": "920118",
+                    "name": "Taihu Snow",
+                    "exchange": "BSE",
+                    "board": "BSE",
+                    "industry": "Textile Manufacturing",
+                },
+            ]
+
+    service = OfficialMarketUniverseSourceService(cn_provider=FakeCnProvider())
+
+    snapshot = service.fetch_cn_snapshot()
+
+    assert snapshot.market == "CN"
+    assert snapshot.source_name == "cn_akshare_eastmoney"
+    assert snapshot.snapshot_id.startswith("cn-a-share-")
+    assert [row["symbol"] for row in snapshot.rows] == ["600519.SS", "000001.SZ", "920118.BJ"]
+    assert snapshot.source_metadata["row_counts"] == {"sse": 1, "szse": 1, "bse": 1}
+    assert snapshot.source_metadata["source_count"] == 3
+    assert snapshot.source_metadata["validated_cn_baseline"]["total"] == 5492
+    assert snapshot.source_metadata["validated_cn_baseline_tolerance"] == 0.02
+    assert snapshot.source_metadata["cn_baseline_status"] == "outside_static_baseline"
+
+
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):
     service = OfficialMarketUniverseSourceService()
     html_twse = _fixture_bytes("twse_stocks_fixture.html")

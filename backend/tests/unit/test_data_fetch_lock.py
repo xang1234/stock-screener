@@ -841,7 +841,7 @@ class TestPerMarketLockKeys:
 
     def test_all_market_lock_keys_covers_markets_and_shared(self):
         keys = all_market_lock_keys()
-        for m in ("us", "hk", "jp", "tw"):
+        for m in ("us", "hk", "jp", "tw", "cn"):
             assert f"data_fetch_job_lock:{m}" in keys
         assert "data_fetch_job_lock:shared" in keys
 
@@ -871,7 +871,7 @@ class TestAcquirePerMarket:
     def test_acquire_unknown_market_rejected(self):
         lock, _, _, _ = _make_lock(lock_value=None)
         with pytest.raises(ValueError):
-            lock.acquire("smart_refresh_cache", "task-id", market="CN")
+            lock.acquire("smart_refresh_cache", "task-id", market="ZZ")
 
 
 class TestReleasePerMarket:

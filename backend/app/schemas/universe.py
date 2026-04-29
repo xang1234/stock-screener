@@ -29,6 +29,7 @@ class Market(str, Enum):
     JP = "JP"
     KR = "KR"
     TW = "TW"
+    CN = "CN"
 
 
 class Exchange(str, Enum):
@@ -38,6 +39,9 @@ class Exchange(str, Enum):
     AMEX = "AMEX"
     KOSPI = "KOSPI"
     KOSDAQ = "KOSDAQ"
+    SSE = "SSE"
+    SZSE = "SZSE"
+    BSE = "BSE"
 
 
 class IndexName(str, Enum):
@@ -192,7 +196,9 @@ class UniverseDefinition(BaseModel):
                 Market.HK: "Hong Kong Market",
                 Market.IN: "India Market",
                 Market.JP: "Japan Market",
+                Market.KR: "South Korea Market",
                 Market.TW: "Taiwan Market",
+                Market.CN: "China A-shares",
             }
             return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
@@ -316,7 +322,7 @@ class UniverseDefinition(BaseModel):
             raw_market = u.split(":", 1)[1].strip().lower()
             if raw_market in market_map:
                 return cls(type=UniverseType.MARKET, market=market_map[raw_market])
-            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, KR, TW")
+            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, KR, TW, CN")
         elif u in exchange_map:
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":

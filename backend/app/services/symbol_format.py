@@ -7,8 +7,9 @@ symbol is always persistable.
 
 Accepts US-shape tokens (``NVDA``, ``GOOGL``) alongside the suffixed
 non-US forms supported today: ``.HK`` (Hong Kong), ``.NS``/``.BO``
-(India), ``.T`` (Tokyo), ``.KS``/``.KQ`` (Korea), and ``.TW`` /
-``.TWO`` (Taiwan). The regex itself doesn't enforce the
+(India), ``.T`` (Tokyo), ``.KS``/``.KQ`` (Korea), ``.TW`` /
+``.TWO`` (Taiwan), and ``.SS``/``.SZ``/``.BJ`` (mainland China).
+The regex itself doesn't enforce the
 suffix list — ``SUPPORTED_SUFFIXES`` is the policy lookup, and
 universe-membership is the authoritative existence check (see
 ``StockUniverse``).
@@ -39,6 +40,9 @@ SUPPORTED_SUFFIXES: Final[tuple[str, ...]] = (
     ".KQ",
     ".TW",
     ".TWO",
+    ".SS",
+    ".SZ",
+    ".BJ",
 )
 
 _MAX_SYMBOL_LEN: Final[int] = 20

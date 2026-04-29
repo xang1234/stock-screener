@@ -87,6 +87,7 @@ class BulkDataFetcher:
         *,
         rate_limiter: "RedisRateLimiter | None" = None,
         eps_rating_service: "EPSRatingService | None" = None,
+        cn_price_service: Any | None = None,
         krx_price_service: Any | None = None,
     ) -> None:
         # Keep standalone construction safe for tests/scripts while allowing
@@ -95,6 +96,7 @@ class BulkDataFetcher:
         self._eps_rating_service = (
             eps_rating_service or self._build_default_eps_rating_service()
         )
+        self._cn_price_service = cn_price_service
         self._krx_price_service = krx_price_service
 
     @classmethod
@@ -525,7 +527,8 @@ class BulkDataFetcher:
 
         Background jobs should call this method instead of any per-symbol Yahoo path.
         Korea uses KRX/pykrx first, then falls back to Yahoo for symbols KRX
-        cannot serve.
+        cannot serve. China uses AKShare/BaoStock first, then falls back to
+        Yahoo only for Shanghai/Shenzhen symbols.
 
         When ``market`` is supplied, per-market rate budget keys
         (``yfinance:hk`` / ``yfinance:batch:hk``) and per-market batch sizes
@@ -542,6 +545,13 @@ class BulkDataFetcher:
                 start_batch_size=start_batch_size,
                 market=market,
             )
+        if str(market or "").strip().upper() == "CN":
+            return self._fetch_cn_prices_with_yfinance_fallback(
+                symbols,
+                period=period,
+                start_batch_size=start_batch_size,
+                market=market,
+            )
 
         return self._fetch_yfinance_prices_in_batches(
             symbols,
@@ -549,6 +559,87 @@ class BulkDataFetcher:
             start_batch_size=start_batch_size,
             market=market,
         )
+
+    def _get_cn_price_service(self):
+        if self._cn_price_service is None:
+            from .cn_market_data_service import CnMarketDataService
+
+            self._cn_price_service = CnMarketDataService()
+        return self._cn_price_service
+
+    def _fetch_cn_price_batch(self, symbols: List[str], *, period: str) -> Dict[str, Dict]:
+        from .security_master_service import security_master_resolver
+
+        service = self._get_cn_price_service()
+        results: Dict[str, Dict] = {}
+        for symbol in symbols:
+            try:
+                identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
+                price_data = service.daily_ohlcv_dataframe(identity.local_code, period=period)
+                if price_data is None or price_data.empty:
+                    results[symbol] = self._build_error_result(symbol, "CN providers returned empty price data")
+                    continue
+                results[symbol] = {
+                    "symbol": symbol,
+                    "price_data": price_data,
+                    "info": None,
+                    "fundamentals": None,
+                    "has_error": False,
+                    "error": None,
+                    "provider": "akshare",
+                }
+            except Exception as exc:  # pragma: no cover - provider/network variability
+                logger.warning("CN price fetch failed for %s: %s", symbol, exc)
+                results[symbol] = self._build_error_result(
+                    symbol,
+                    f"CN price fetch error: {exc}",
+                )
+        return results
+
+    def _fetch_cn_prices_with_yfinance_fallback(
+        self,
+        symbols: List[str],
+        *,
+        period: str,
+        start_batch_size: Optional[int] = None,
+        market: Optional[str] = None,
+    ) -> Dict[str, Dict]:
+        cn_results = self._fetch_cn_price_batch(symbols, period=period)
+        fallback_symbols = [
+            symbol
+            for symbol, payload in cn_results.items()
+            if (
+                payload.get("has_error") or payload.get("price_data") is None
+            ) and not str(symbol or "").upper().endswith(".BJ")
+        ]
+        if not fallback_symbols:
+            return cn_results
+
+        logger.info(
+            "Falling back to Yahoo for %d/%d CN Shanghai/Shenzhen symbols with missing CN prices",
+            len(fallback_symbols),
+            len(symbols),
+        )
+        fallback_results = self._fetch_yfinance_prices_in_batches(
+            fallback_symbols,
+            period=period,
+            start_batch_size=start_batch_size,
+            market=market,
+        )
+        merged = dict(cn_results)
+        for symbol, fallback_payload in fallback_results.items():
+            primary_payload = cn_results.get(symbol, {})
+            enriched_payload = dict(fallback_payload)
+            enriched_payload.setdefault("provider", "yfinance")
+            enriched_payload["fallback_from"] = "akshare_baostock"
+            enriched_payload["primary_provider_failed"] = bool(
+                primary_payload.get("has_error") or primary_payload.get("price_data") is None
+            )
+            primary_error = primary_payload.get("error")
+            if primary_error:
+                enriched_payload["primary_provider_error"] = primary_error
+            merged[symbol] = enriched_payload
+        return merged
 
     def _fetch_yfinance_prices_in_batches(
         self,

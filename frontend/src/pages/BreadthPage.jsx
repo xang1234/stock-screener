@@ -91,6 +91,7 @@ const MARKET_LABELS = {
   JP: 'Japan',
   KR: 'South Korea',
   TW: 'Taiwan',
+  CN: 'China A-shares',
 };
 
 const MARKET_LIVE_BENCHMARK_SYMBOLS = {
@@ -100,6 +101,7 @@ const MARKET_LIVE_BENCHMARK_SYMBOLS = {
   JP: '1306.T',
   KR: '069500.KS',
   TW: '0050.TW',
+  CN: '000300.SS',
 };
 
 function normalizeMarket(market) {
@@ -113,7 +115,7 @@ function BreadthPage() {
     uiSnapshots,
     primaryMarket = 'US',
     enabledMarkets = ['US'],
-    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW'],
+    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
   } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);

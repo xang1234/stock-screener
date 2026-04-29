@@ -31,6 +31,11 @@ class TestUniverseDefinitionConstruction:
         assert u.type == UniverseType.MARKET
         assert u.market == Market.HK
 
+    def test_market_cn(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CN)
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.CN
+
     def test_exchange_nasdaq(self):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.NASDAQ)
         assert u.exchange == Exchange.NASDAQ
@@ -38,6 +43,11 @@ class TestUniverseDefinitionConstruction:
     def test_exchange_amex(self):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.AMEX)
         assert u.exchange == Exchange.AMEX
+
+    @pytest.mark.parametrize("exchange", [Exchange.SSE, Exchange.SZSE, Exchange.BSE])
+    def test_china_exchanges(self, exchange):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
+        assert u.exchange == exchange
 
     def test_index_sp500(self):
         u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.SP500)
@@ -175,6 +185,10 @@ class TestKey:
     def test_market_key(self):
         u = UniverseDefinition(type=UniverseType.MARKET, market=Market.JP)
         assert u.key() == "market:JP"
+
+    def test_china_market_key(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CN)
+        assert u.key() == "market:CN"
 
     def test_custom_key_is_deterministic(self):
         u1 = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])

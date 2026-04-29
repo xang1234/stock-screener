@@ -23,9 +23,9 @@ class BenchmarkRegistryEntry:
 
 
 class BenchmarkRegistryService:
-    """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW."""
+    """Operator-visible benchmark mapping table for US/HK/IN/JP/KR/TW/CN."""
 
-    TABLE_VERSION = "2026-04-29.v1"
+    TABLE_VERSION = "2026-04-30.v1"
 
     _TABLE: Dict[str, BenchmarkRegistryEntry] = {
         "US": BenchmarkRegistryEntry(
@@ -75,6 +75,14 @@ class BenchmarkRegistryService:
             fallback_symbol="0050.TW",
             fallback_kind="etf",
             notes="TAIEX index-primary with TW50 ETF fallback.",
+        ),
+        "CN": BenchmarkRegistryEntry(
+            market="CN",
+            primary_symbol=get_primary_benchmark_symbol("CN"),
+            primary_kind="index",
+            fallback_symbol="000001.SS",
+            fallback_kind="index",
+            notes="CSI 300 index-primary with Shanghai Composite fallback.",
         ),
     }
 

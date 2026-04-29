@@ -1,2 +1,4 @@
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+akshare>=1.18.59
+baostock>=0.8.9

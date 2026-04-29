@@ -177,12 +177,14 @@ class Settings(BaseSettings):
     yfinance_rate_limit_jp: float | None = None
     yfinance_rate_limit_kr: float | None = None
     yfinance_rate_limit_tw: float | None = None
+    yfinance_rate_limit_cn: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
     finviz_rate_limit_in: float | None = None
     finviz_rate_limit_jp: float | None = None
     finviz_rate_limit_kr: float | None = None
     finviz_rate_limit_tw: float | None = None
+    finviz_rate_limit_cn: float | None = None
 
     # Per-market batch sizes for yfinance bulk downloads. Defaults ship via
     # RateBudgetPolicy._DEFAULT_BATCH_SIZE and may be overridden per market.
@@ -192,6 +194,7 @@ class Settings(BaseSettings):
     yfinance_batch_size_jp: int | None = None
     yfinance_batch_size_kr: int | None = None
     yfinance_batch_size_tw: int | None = None
+    yfinance_batch_size_cn: int | None = None
 
     # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
     # Defaults in RateBudgetPolicy._DEFAULT_BACKOFF.
@@ -201,6 +204,7 @@ class Settings(BaseSettings):
     yfinance_backoff_max_s_jp: int | None = None
     yfinance_backoff_max_s_kr: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
+    yfinance_backoff_max_s_cn: int | None = None
 
     # Per-market parallel worker counts for finviz (which has no batch API,
     # so concurrency is the only knob). Defaults live in
@@ -213,6 +217,7 @@ class Settings(BaseSettings):
     finviz_workers_jp: int | None = None
     finviz_workers_kr: int | None = None
     finviz_workers_tw: int | None = None
+    finviz_workers_cn: int | None = None
 
     # Provider circuit breaker (services/provider_circuit_breaker.py).
     # Trips when N consecutive batches/calls hit transient 429-style errors;
@@ -304,6 +309,8 @@ class Settings(BaseSettings):
     cache_warm_minute_kr: int = 0
     cache_warm_hour_tw: int = 2
     cache_warm_minute_tw: int = 0
+    cache_warm_hour_cn: int = 3
+    cache_warm_minute_cn: int = 30
 
     # Enabled markets — subset of SUPPORTED_MARKETS. Lets ops disable a market
     # entirely (beat schedule skips it; its worker can be stopped).
@@ -357,12 +364,14 @@ class Settings(BaseSettings):
     provider_snapshot_min_active_coverage_jp: float = 0.60
     provider_snapshot_min_active_coverage_kr: float = 0.70
     provider_snapshot_min_active_coverage_tw: float = 0.70
+    provider_snapshot_min_active_coverage_cn: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
     provider_snapshot_max_missing_ratio_in: float = 0.40
     provider_snapshot_max_missing_ratio_jp: float = 0.40
     provider_snapshot_max_missing_ratio_kr: float = 0.30
     provider_snapshot_max_missing_ratio_tw: float = 0.30
+    provider_snapshot_max_missing_ratio_cn: float = 0.30
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
     github_data_api_base: str = "https://api.github.com"
@@ -399,7 +408,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
-        'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw'
+        'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw',
+        'cache_warm_hour_cn'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -409,7 +419,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
-        'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw'
+        'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw',
+        'cache_warm_minute_cn'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -446,12 +457,14 @@ class Settings(BaseSettings):
         'provider_snapshot_min_active_coverage_jp',
         'provider_snapshot_min_active_coverage_kr',
         'provider_snapshot_min_active_coverage_tw',
+        'provider_snapshot_min_active_coverage_cn',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
         'provider_snapshot_max_missing_ratio_in',
         'provider_snapshot_max_missing_ratio_jp',
         'provider_snapshot_max_missing_ratio_kr',
         'provider_snapshot_max_missing_ratio_tw',
+        'provider_snapshot_max_missing_ratio_cn',
     )
     @classmethod
     def validate_provider_snapshot_ratios(cls, v: float) -> float:
@@ -565,6 +578,7 @@ class Settings(BaseSettings):
             "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
             "KR": (self.cache_warm_hour_kr, self.cache_warm_minute_kr),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
+            "CN": (self.cache_warm_hour_cn, self.cache_warm_minute_cn),
         }
         if m not in mapping:
             raise ValueError(f"No cache warm schedule for market {market!r}")

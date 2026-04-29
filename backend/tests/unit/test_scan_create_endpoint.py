@@ -787,7 +787,7 @@ async def test_refresh_scan_cache_rejects_invalid_market(client, monkeypatch):
 
     response = await client.post(
         "/api/v1/scans/refresh-cache",
-        json={"market": "CN", "mode": "full"},
+        json={"market": "ZZ", "mode": "full"},
     )
 
     assert response.status_code == 400

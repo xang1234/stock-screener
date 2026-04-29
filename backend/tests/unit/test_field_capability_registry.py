@@ -25,6 +25,7 @@ from app.services.fundamentals_completeness import (
     screening_fields,
 )
 from app.services.provider_routing_policy import (
+    MARKET_CN,
     MARKET_HK,
     MARKET_IN,
     MARKET_JP,
@@ -33,6 +34,8 @@ from app.services.provider_routing_policy import (
     MARKET_US,
     POLICY_VERSION,
     PROVIDER_FINVIZ,
+    PROVIDER_AKSHARE,
+    PROVIDER_BAOSTOCK,
     PROVIDER_KRX,
     PROVIDER_OPENDART,
     PROVIDER_YFINANCE,
@@ -46,11 +49,21 @@ def _field_map(artifact: dict) -> dict:
 def test_registry_is_versioned_and_shape_is_deterministic():
     artifact = field_capability_registry.artifact()
 
-    assert artifact["registry_version"] == "2026.04.29.2"
+    assert artifact["registry_version"] == "2026.04.30.1"
     assert artifact["routing_policy_version"] == POLICY_VERSION
-    assert artifact["markets"] == [MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW]
+    assert artifact["markets"] == [
+        MARKET_US,
+        MARKET_HK,
+        MARKET_IN,
+        MARKET_JP,
+        MARKET_KR,
+        MARKET_TW,
+        MARKET_CN,
+    ]
     assert artifact["providers"] == [
         "finviz",
+        "akshare",
+        "baostock",
         "krx",
         "opendart",
         "yfinance",
@@ -103,6 +116,12 @@ def test_yfinance_core_field_is_partial_for_us_and_supported_for_asia():
     assert kr["provider_states"][PROVIDER_OPENDART] == SUPPORT_STATE_UNSUPPORTED
     assert kr["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
 
+    cn = market_cap[MARKET_CN]
+    assert cn["policy_provider_chain"] == [PROVIDER_AKSHARE, PROVIDER_BAOSTOCK, PROVIDER_YFINANCE]
+    assert cn["provider_states"][PROVIDER_AKSHARE] == SUPPORT_STATE_SUPPORTED
+    assert cn["provider_states"][PROVIDER_BAOSTOCK] == SUPPORT_STATE_PARTIAL
+    assert cn["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+
 
 def test_finviz_only_field_is_unsupported_for_non_us_markets():
     artifact = field_capability_registry.artifact()
@@ -114,7 +133,7 @@ def test_finviz_only_field_is_unsupported_for_non_us_markets():
     assert us["fallback_behavior"] == FALLBACK_BEHAVIOR_PRIMARY
     assert us["canonical_provider_position"] == 0
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN):
         row = short_interest[market]
         assert row["canonical_provider"] == PROVIDER_FINVIZ
         assert row["support_state"] == SUPPORT_STATE_UNSUPPORTED
@@ -137,7 +156,7 @@ def test_technical_fields_are_computed_for_all_markets():
     assert us["provider_states"][PROVIDER_FINVIZ] == SUPPORT_STATE_SUPPORTED
     assert us["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_UNSUPPORTED
 
-    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW):
+    for market in (MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN):
         row = rsi[market]
         assert row["canonical_provider"] == SOURCE_TECHNICALS
         assert row["support_state"] == SUPPORT_STATE_COMPUTED
@@ -174,6 +193,28 @@ def test_auxiliary_scan_field_is_enumerated():
     assert kr["support_state"] == SUPPORT_STATE_PARTIAL
     assert kr["providers_before_canonical"] == [PROVIDER_KRX, PROVIDER_OPENDART]
     assert kr["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+
+    cn = first_trade_date[MARKET_CN]
+    assert cn["support_state"] == SUPPORT_STATE_PARTIAL
+    assert cn["providers_before_canonical"] == [PROVIDER_AKSHARE, PROVIDER_BAOSTOCK]
+    assert cn["provider_states"][PROVIDER_YFINANCE] == SUPPORT_STATE_PARTIAL
+
+
+def test_china_native_core_and_statement_fields_are_explicitly_supported():
+    artifact = field_capability_registry.artifact()
+    by_field = _field_map(artifact)
+
+    for field in ("market_cap", "shares_outstanding", "pe_ratio", "price_to_book", "eps_current"):
+        row = by_field[field]["markets"][MARKET_CN]
+        assert row["provider_states"][PROVIDER_AKSHARE] == SUPPORT_STATE_SUPPORTED
+        assert row["provider_states"][PROVIDER_BAOSTOCK] in {
+            SUPPORT_STATE_SUPPORTED,
+            SUPPORT_STATE_PARTIAL,
+        }
+
+    revenue = by_field["revenue_current"]["markets"][MARKET_CN]
+    assert revenue["provider_states"][PROVIDER_AKSHARE] == SUPPORT_STATE_SUPPORTED
+    assert revenue["provider_states"][PROVIDER_BAOSTOCK] == SUPPORT_STATE_PARTIAL
 
 
 def test_korea_opendart_statement_fields_are_explicitly_supported():

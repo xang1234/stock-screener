@@ -8,6 +8,7 @@ import pytest
 from app.services import provider_routing_policy as policy
 from app.services.provider_routing_policy import (
     MARKET_HK,
+    MARKET_CN,
     MARKET_IN,
     MARKET_JP,
     MARKET_KR,
@@ -15,6 +16,8 @@ from app.services.provider_routing_policy import (
     MARKET_US,
     POLICY_VERSION,
     PROVIDER_ALPHAVANTAGE,
+    PROVIDER_AKSHARE,
+    PROVIDER_BAOSTOCK,
     PROVIDER_FINVIZ,
     PROVIDER_KRX,
     PROVIDER_OPENDART,
@@ -32,7 +35,7 @@ class TestPolicyVersion:
 
     def test_policy_version_is_date_stamped(self):
         # Format: YYYY.MM.DD.N — bump when routing semantics change.
-        assert POLICY_VERSION == "2026.04.29.1"
+        assert POLICY_VERSION == "2026.04.30.1"
         assert policy_version() == POLICY_VERSION
 
 
@@ -41,6 +44,7 @@ class TestMatrixShape:
 
     def test_supported_markets_covers_us_and_asia(self):
         assert supported_markets() == (
+            MARKET_CN,
             MARKET_HK,
             MARKET_IN,
             MARKET_JP,
@@ -106,6 +110,21 @@ class TestAsiaPolicy:
     def test_korea_rejects_us_only_providers(self, provider):
         assert is_supported(MARKET_KR, provider) is False
 
+    def test_china_provider_order(self):
+        assert providers_for(MARKET_CN) == (
+            PROVIDER_AKSHARE,
+            PROVIDER_BAOSTOCK,
+            PROVIDER_YFINANCE,
+        )
+
+    @pytest.mark.parametrize("provider", [PROVIDER_AKSHARE, PROVIDER_BAOSTOCK, PROVIDER_YFINANCE])
+    def test_china_allows_no_key_native_providers_and_yfinance_fallback(self, provider):
+        assert is_supported(MARKET_CN, provider) is True
+
+    @pytest.mark.parametrize("provider", [PROVIDER_FINVIZ, PROVIDER_ALPHAVANTAGE])
+    def test_china_rejects_us_only_providers(self, provider):
+        assert is_supported(MARKET_CN, provider) is False
+
 
 class TestNormalization:
     """Canonical market resolution for messy caller inputs."""
@@ -124,6 +143,7 @@ class TestNormalization:
         assert normalize_market("in") == MARKET_IN
         assert normalize_market("jp") == MARKET_JP
         assert normalize_market("kr") == MARKET_KR
+        assert normalize_market("cn") == MARKET_CN
 
     def test_mixed_case_with_padding(self):
         assert normalize_market("  Tw ") == MARKET_TW

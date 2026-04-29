@@ -17,6 +17,7 @@ from app.models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MANUAL,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from app.models.stock import StockIndustry
 from app.models.ticker_validation import TickerValidationLog
 from app.services.stock_universe_service import StockUniverseService
 
@@ -49,6 +50,41 @@ def _make_session():
 def _assert_bulk_universe_rows_prepopulate_required_defaults(objects):
     for row in objects:
         assert row.consecutive_fetch_failures == 0
+
+
+def test_ingest_cn_snapshot_rows_populates_stock_industry_taxonomy():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    service = StockUniverseService()
+
+    stats = service.ingest_cn_snapshot_rows(
+        db,
+        rows=[
+            {
+                "symbol": "600519",
+                "name": "Kweichow Moutai",
+                "exchange": "SSE",
+                "sector": "Consumer Staples",
+                "industry_group": "Food & Beverage",
+                "industry": "Beverage Manufacturing",
+                "sub_industry": "Liquor",
+            }
+        ],
+        source_name="cn_akshare_eastmoney",
+        snapshot_id="cn-test-20260430",
+        strict=True,
+    )
+
+    industry = db.query(StockIndustry).filter_by(symbol="600519.SS").one()
+    universe = db.query(StockUniverse).filter_by(symbol="600519.SS").one()
+    assert stats["stock_industry_upserts"] == 1
+    assert universe.market == "CN"
+    assert universe.currency == "CNY"
+    assert industry.sector == "Consumer Staples"
+    assert industry.industry_group == "Food & Beverage"
+    assert industry.industry == "Beverage Manufacturing"
+    assert industry.sub_industry == "Liquor"
+    db.close()
 
 
 def test_get_active_symbols_uses_is_active_over_stale_active_status():

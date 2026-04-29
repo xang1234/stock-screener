@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, and TW."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, TW, and CN."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ _BSE_SOURCE_NAME = "bse_official"
 _JP_SOURCE_NAME = "jpx_official"
 _KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
+_CN_SOURCE_NAME = "cn_akshare_eastmoney"
 _KR_VALIDATED_BASELINE = {
     "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
     "validated_at": "2026-04-29",
@@ -41,6 +42,17 @@ _KR_VALIDATED_BASELINE = {
     "kospi_kosdaq_target": 2658,
 }
 _KR_VALIDATED_BASELINE_TOLERANCE = 0.02
+_CN_VALIDATED_BASELINE = {
+    "source_url": "https://en.people.cn/n3/2026/0326/c90000-20440055.html",
+    "validated_at": "2026-04-30",
+    "as_of": "2026-02-28",
+    "sse": 2310,
+    "szse": 2887,
+    "bse": 295,
+    "total": 5492,
+    "notes": "Xinhua/China Association for Public Companies end-February 2026 domestic listed company count.",
+}
+_CN_VALIDATED_BASELINE_TOLERANCE = 0.02
 
 _HK_EQUITY_CATEGORY = "equity"
 _HK_EQUITY_SUBCATEGORY_TOKEN = "equity securities"
@@ -101,6 +113,7 @@ class OfficialMarketUniverseSourceService:
         timeout_seconds: int | None = None,
         user_agent: str | None = None,
         kr_provider: Any | None = None,
+        cn_provider: Any | None = None,
         market_calendar: Any | None = None,
     ) -> None:
         self._timeout_seconds = int(
@@ -108,6 +121,7 @@ class OfficialMarketUniverseSourceService:
         )
         self._user_agent = user_agent or settings.universe_source_user_agent
         self._kr_provider = kr_provider
+        self._cn_provider = cn_provider
         self._market_calendar = market_calendar
 
     def fetch_market_snapshot(self, market: str) -> OfficialMarketUniverseSnapshot:
@@ -122,6 +136,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_kr_snapshot()
         if normalized_market == "TW":
             return self.fetch_tw_snapshot()
+        if normalized_market == "CN":
+            return self.fetch_cn_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
 
     def fetch_hk_snapshot(self) -> OfficialMarketUniverseSnapshot:
@@ -225,6 +241,59 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
+    def fetch_cn_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        provider = self._get_cn_provider()
+        rows = list(provider.listing_rows(as_of=self._utc_today()))
+        if not rows:
+            raise ValueError("CN official universe fetch returned no A-share rows")
+
+        rows = self._enrich_cn_rows_with_taxonomy(rows)
+        row_counts = {
+            "sse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "SSE"),
+            "szse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "SZSE"),
+            "bse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "BSE"),
+        }
+        count_breaches = self._cn_baseline_count_breaches(row_counts)
+
+        snapshot_as_of = self._utc_today().isoformat()
+        source_metadata = {
+            "source_urls": [
+                _CN_VALIDATED_BASELINE["source_url"],
+                "https://akshare.akfamily.xyz/data/stock/stock.html",
+            ],
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "snapshot_as_of": snapshot_as_of,
+            "filters": {
+                "market": "mainland_a_shares",
+                "exchanges": ["SSE", "SZSE", "BSE"],
+                "excluded_products": [
+                    "B-shares",
+                    "ETFs",
+                    "funds",
+                    "bonds",
+                    "convertibles",
+                    "indices",
+                    "NEEQ-only securities",
+                ],
+            },
+            "row_counts": row_counts,
+            "source_count": len(rows),
+            "validated_cn_baseline": dict(_CN_VALIDATED_BASELINE),
+            "validated_cn_baseline_tolerance": _CN_VALIDATED_BASELINE_TOLERANCE,
+            "validated_cn_baseline_breaches": count_breaches,
+            "cn_baseline_status": (
+                "outside_static_baseline" if count_breaches else "within_static_baseline"
+            ),
+        }
+        return OfficialMarketUniverseSnapshot(
+            market="CN",
+            source_name=_CN_SOURCE_NAME,
+            snapshot_id=f"cn-a-share-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
     @staticmethod
     def _seoul_today() -> date:
         return datetime.now(ZoneInfo("Asia/Seoul")).date()
@@ -299,6 +368,13 @@ class OfficialMarketUniverseSourceService:
             self._kr_provider = KrxMarketDataService()
         return self._kr_provider
 
+    def _get_cn_provider(self):
+        if self._cn_provider is None:
+            from .cn_market_data_service import CnMarketDataService
+
+            self._cn_provider = CnMarketDataService()
+        return self._cn_provider
+
     @staticmethod
     def _kr_expected_range(expected: int) -> tuple[int, int]:
         tolerance = _KR_VALIDATED_BASELINE_TOLERANCE
@@ -327,6 +403,46 @@ class OfficialMarketUniverseSourceService:
         return breaches
 
     @staticmethod
+    def _cn_expected_range(expected: int) -> tuple[int, int]:
+        tolerance = _CN_VALIDATED_BASELINE_TOLERANCE
+        return (
+            math.ceil(expected * (1.0 - tolerance)),
+            math.floor(expected * (1.0 + tolerance)),
+        )
+
+    @classmethod
+    def _cn_baseline_count_breaches(cls, row_counts: dict[str, int]) -> list[dict[str, Any]]:
+        breaches: list[dict[str, Any]] = []
+        for exchange in ("sse", "szse", "bse"):
+            expected = int(_CN_VALIDATED_BASELINE[exchange])
+            minimum, maximum = cls._cn_expected_range(expected)
+            actual = int(row_counts.get(exchange) or 0)
+            if actual < minimum or actual > maximum:
+                breaches.append(
+                    {
+                        "exchange": exchange,
+                        "actual": actual,
+                        "expected": expected,
+                        "min": minimum,
+                        "max": maximum,
+                    }
+                )
+        expected_total = int(_CN_VALIDATED_BASELINE["total"])
+        minimum, maximum = cls._cn_expected_range(expected_total)
+        actual_total = sum(int(row_counts.get(exchange) or 0) for exchange in ("sse", "szse", "bse"))
+        if actual_total < minimum or actual_total > maximum:
+            breaches.append(
+                {
+                    "exchange": "total",
+                    "actual": actual_total,
+                    "expected": expected_total,
+                    "min": minimum,
+                    "max": maximum,
+                }
+            )
+        return breaches
+
+    @staticmethod
     def _enrich_kr_rows_with_taxonomy(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Attach committed KR taxonomy fields where the KRX listing row is sparse."""
         try:
@@ -352,6 +468,45 @@ class OfficialMarketUniverseSourceService:
                 )
             except TaxonomyLoadError as exc:
                 logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+                return rows
+            if entry is not None:
+                if not str(enriched.get("sector") or "").strip() and entry.sector:
+                    enriched["sector"] = entry.sector
+                if not str(enriched.get("industry_group") or "").strip() and entry.industry_group:
+                    enriched["industry_group"] = entry.industry_group
+                if not str(enriched.get("industry") or "").strip() and entry.industry:
+                    enriched["industry"] = entry.industry
+                if not str(enriched.get("sub_industry") or "").strip() and entry.sub_industry:
+                    enriched["sub_industry"] = entry.sub_industry
+            enriched_rows.append(enriched)
+        return enriched_rows
+
+    @staticmethod
+    def _enrich_cn_rows_with_taxonomy(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach committed CN taxonomy fields where the listing row is sparse."""
+        try:
+            from .market_taxonomy_service import TaxonomyLoadError, get_market_taxonomy_service
+        except ImportError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("CN taxonomy enrichment unavailable: %s", exc)
+            return rows
+
+        try:
+            taxonomy = get_market_taxonomy_service()
+        except TaxonomyLoadError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("CN taxonomy enrichment unavailable: %s", exc)
+            return rows
+
+        enriched_rows: list[dict[str, Any]] = []
+        for row in rows:
+            enriched = dict(row)
+            try:
+                entry = taxonomy.get(
+                    enriched.get("symbol") or enriched.get("local_code"),
+                    market="CN",
+                    exchange=enriched.get("exchange"),
+                )
+            except TaxonomyLoadError as exc:
+                logger.warning("CN taxonomy enrichment unavailable: %s", exc)
                 return rows
             if entry is not None:
                 if not str(enriched.get("sector") or "").strip() and entry.sector:

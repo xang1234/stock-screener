@@ -179,8 +179,26 @@ def _ingest_official_market_snapshot(db, stock_universe_service, snapshot) -> di
             snapshot_as_of=snapshot.snapshot_as_of,
             source_metadata=snapshot.source_metadata,
         )
+    if snapshot.market == "KR":
+        return stock_universe_service.ingest_kr_snapshot_rows(
+            db,
+            rows=snapshot.rows,
+            source_name=snapshot.source_name,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_as_of=snapshot.snapshot_as_of,
+            source_metadata=snapshot.source_metadata,
+        )
     if snapshot.market == "TW":
         return stock_universe_service.ingest_tw_snapshot_rows(
+            db,
+            rows=snapshot.rows,
+            source_name=snapshot.source_name,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_as_of=snapshot.snapshot_as_of,
+            source_metadata=snapshot.source_metadata,
+        )
+    if snapshot.market == "CN":
+        return stock_universe_service.ingest_cn_snapshot_rows(
             db,
             rows=snapshot.rows,
             source_name=snapshot.source_name,

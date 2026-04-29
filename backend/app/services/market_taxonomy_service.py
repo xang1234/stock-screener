@@ -1,4 +1,4 @@
-"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW group classifications."""
+"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW/CN group classifications."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ _IN_LOCAL_CODE_RE = re.compile(r"^[0-9A-Z-]{1,16}$")
 _JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
 _KR_LOCAL_CODE_RE = re.compile(r"^[0-9]{6}$")
 _TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
+_CN_LOCAL_CODE_RE = re.compile(r"^[0-9]{6}$")
 
 _TW_EXCHANGE_ALIASES = {
     "TWSE": "TWSE",
@@ -64,6 +65,7 @@ class MarketTaxonomyService:
             "JP": {},
             "KR": {},
             "TW": {},
+            "CN": {},
         }
         self._loaded_row_counts: dict[str, int] = {
             "US": 0,
@@ -72,6 +74,7 @@ class MarketTaxonomyService:
             "JP": 0,
             "KR": 0,
             "TW": 0,
+            "CN": 0,
         }
 
     @staticmethod
@@ -92,6 +95,7 @@ class MarketTaxonomyService:
             "kabutan_themes_en.csv",
             "korea-deep.csv",
             "taiwan-deep.csv",
+            "china-deep.csv",
         )
         unique_candidates = list(dict.fromkeys(candidates))
         best_candidate = max(
@@ -101,8 +105,8 @@ class MarketTaxonomyService:
         return best_candidate
 
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}}
-        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0}
+        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}, "CN": {}}
+        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0, "CN": 0}
         try:
             self._load_us()
             self._load_hk()
@@ -110,6 +114,7 @@ class MarketTaxonomyService:
             self._load_jp()
             self._load_kr()
             self._load_tw()
+            self._load_cn()
         except TaxonomyLoadError:
             self._loaded = False
             raise
@@ -371,6 +376,32 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
+    def _load_cn(self) -> None:
+        path = self._data_dir / "china-deep.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "Exchange", "Sector", "Industry Group", "Industry", "Sub-Industry"),
+            )
+            for row in reader:
+                symbol = self._canonicalize_cn_symbol(
+                    row.get("Symbol"),
+                    exchange=row.get("Exchange"),
+                )
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="CN",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("Industry Group")),
+                    sector=self._normalize_text(row.get("Sector")),
+                    industry=self._normalize_text(row.get("Industry")),
+                    sub_industry=self._normalize_text(row.get("Sub-Industry")),
+                    themes=(),
+                )
+
     def _candidate_symbols(
         self,
         symbol: str | None,
@@ -455,6 +486,39 @@ class MarketTaxonomyService:
                 twse_variant = self._canonicalize_tw_symbol(normalized[:-4], exchange="TWSE")
                 if twse_variant:
                     candidates.append(twse_variant)
+            candidates.append(normalized)
+            return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
+        if market == "CN":
+            candidates: list[str] = []
+            canonical = self._canonicalize_cn_symbol(normalized, exchange=exchange)
+            if canonical:
+                candidates.append(canonical)
+            if "." not in normalized:
+                raw_exchange = str(exchange or "").strip().upper()
+                if raw_exchange not in {"SZSE", "XSHE"}:
+                    sse_variant = self._canonicalize_cn_symbol(normalized, exchange="SSE")
+                    if sse_variant:
+                        candidates.append(sse_variant)
+                if raw_exchange not in {"SSE", "SHSE", "XSHG"}:
+                    szse_variant = self._canonicalize_cn_symbol(normalized, exchange="SZSE")
+                    if szse_variant:
+                        candidates.append(szse_variant)
+                if raw_exchange not in {"SSE", "SHSE", "XSHG", "SZSE", "XSHE"}:
+                    bse_variant = self._canonicalize_cn_symbol(normalized, exchange="BSE")
+                    if bse_variant:
+                        candidates.append(bse_variant)
+            elif normalized.endswith(".SS"):
+                szse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SZSE")
+                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BSE")
+                candidates.extend(candidate for candidate in (szse_variant, bse_variant) if candidate)
+            elif normalized.endswith(".SZ"):
+                sse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SSE")
+                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BSE")
+                candidates.extend(candidate for candidate in (sse_variant, bse_variant) if candidate)
+            elif normalized.endswith(".BJ"):
+                sse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SSE")
+                szse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SZSE")
+                candidates.extend(candidate for candidate in (sse_variant, szse_variant) if candidate)
             candidates.append(normalized)
             return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
         return (normalized,)
@@ -627,6 +691,70 @@ class MarketTaxonomyService:
         if normalized_symbol.endswith(".TWO") or normalized_symbol.startswith(("TPEX:", "TWO:")):
             return "TPEX"
         return "TWSE"
+
+    @staticmethod
+    def _canonicalize_cn_symbol(
+        raw_symbol: object,
+        *,
+        exchange: object | None = None,
+    ) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("SSE:", "SHSE:", "XSHG:", "SH:", "SZSE:", "XSHE:", "SZ:", "BSE:", "BJSE:", "XBSE:", "XBEI:", "BJ:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        normalized_exchange = str(exchange or "").strip().upper()
+        if token.endswith(".SS"):
+            token = token[:-3]
+            normalized_exchange = "SSE"
+        elif token.endswith(".SZ"):
+            token = token[:-3]
+            normalized_exchange = "SZSE"
+        elif token.endswith(".BJ"):
+            token = token[:-3]
+            normalized_exchange = "BSE"
+        exchange_aliases = {
+            "": "",
+            "SSE": "SSE",
+            "SHSE": "SSE",
+            "XSHG": "SSE",
+            "SH": "SSE",
+            "SZSE": "SZSE",
+            "XSHE": "SZSE",
+            "SZ": "SZSE",
+            "BSE": "BSE",
+            "BJSE": "BSE",
+            "XBSE": "BSE",
+            "XBEI": "BSE",
+            "BJ": "BSE",
+        }
+        normalized_exchange = exchange_aliases.get(normalized_exchange)
+        if normalized_exchange is None:
+            return None
+        if not _CN_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        inferred_exchange = None
+        if token.startswith(("600", "601", "603", "605", "688")):
+            inferred_exchange = "SSE"
+        elif token.startswith(("000", "001", "002", "003", "300", "301")):
+            inferred_exchange = "SZSE"
+        elif token.startswith(("4", "8", "9")):
+            inferred_exchange = "BSE"
+        if inferred_exchange is None:
+            return None
+        if not normalized_exchange:
+            normalized_exchange = inferred_exchange
+        if normalized_exchange != inferred_exchange:
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=token,
+            market="CN",
+            exchange=normalized_exchange,
+            local_code=token,
+        )
+        return identity.canonical_symbol
 
 
 _market_taxonomy_service: MarketTaxonomyService | None = None

@@ -40,6 +40,9 @@ POSITIVE_CORPUS = [
     ("0700.HK", None, "0700.HK", "HK", METHOD_SYMBOL_PASSTHROUGH),
     ("6758.T",  None, "6758.T",  "JP", METHOD_SYMBOL_PASSTHROUGH),
     ("2330.TW", None, "2330.TW", "TW", METHOD_SYMBOL_PASSTHROUGH),
+    ("600519.SS", None, "600519.SS", "CN", METHOD_SYMBOL_PASSTHROUGH),
+    ("000001.SZ", None, "000001.SZ", "CN", METHOD_SYMBOL_PASSTHROUGH),
+    ("920118.BJ", None, "920118.BJ", "CN", METHOD_SYMBOL_PASSTHROUGH),
     # HK codes may arrive un-padded with suffix; passthrough pads to 4.
     ("700.HK",  None, "0700.HK", "HK", METHOD_SYMBOL_PASSTHROUGH),
     # Lowercased suffix normalizes upstream (NFKC casefold via .upper()).
@@ -50,6 +53,9 @@ POSITIVE_CORPUS = [
     ("0700",    "HK", "0700.HK", "HK", METHOD_SYMBOL_NORMALIZED),
     ("6758",    "JP", "6758.T",  "JP", METHOD_SYMBOL_NORMALIZED),
     ("2330",    "TW", "2330.TW", "TW", METHOD_SYMBOL_NORMALIZED),
+    ("600519",  "CN", "600519.SS", "CN", METHOD_SYMBOL_NORMALIZED),
+    ("000001",  "CN", "000001.SZ", "CN", METHOD_SYMBOL_NORMALIZED),
+    ("920118",  "CN", "920118.BJ", "CN", METHOD_SYMBOL_NORMALIZED),
     # Fullwidth digits are NFKC-normalized to ASCII.
     ("６７５８", "JP", "6758.T",  "JP", METHOD_SYMBOL_NORMALIZED),  # noqa: RUF001
 
@@ -275,4 +281,4 @@ class TestGoldenCorpusCoverage:
 
     def test_every_market_is_covered(self):
         markets_in_corpus = {row[3] for row in POSITIVE_CORPUS}
-        assert markets_in_corpus == {"HK", "JP", "TW"}
+        assert markets_in_corpus == {"HK", "JP", "TW", "CN"}

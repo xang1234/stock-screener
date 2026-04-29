@@ -120,6 +120,7 @@ class TestTickerShapeRegex:
         "0700.HK", "0005.HK", "12345.HK",
         "6758.T", "9984.T",
         "2330.TW", "2330.TWO",
+        "600519.SS", "000001.SZ", "920118.BJ",
         "BRK.B", "BF.B",  # US share-class tickers
     ])
     def test_canonical_shapes_match(self, shape_ok: str):
@@ -177,6 +178,9 @@ class TestPolicySurface:
             ".KQ",
             ".TW",
             ".TWO",
+            ".SS",
+            ".SZ",
+            ".BJ",
         ]
 
     def test_drop_reasons_include_every_category(self):

@@ -297,6 +297,7 @@ class DataPreparationLayer:
         identity = self._resolve_identity(symbol)
         normalized_symbol = identity.normalized_symbol
         canonical_symbol = identity.canonical_symbol
+        normalized_market = identity.market or "US"
         fetch_errors = {}
 
         # 1. Fetch price data (always needed)
@@ -313,13 +314,16 @@ class DataPreparationLayer:
             if price_data is None or price_data.empty:
                 # Cache miss or insufficient - fetch directly
                 # (yfinance_service has its own rate limiter)
-                logger.debug(f"Cache MISS for {normalized_symbol} - fetching from yfinance")
-                price_data = self._fetch_with_retry(
-                    self._yfinance_service.get_historical_data,
-                    canonical_symbol,
-                    period=requirements.price_period,
-                    use_cache=False,  # Already checked cache
-                )
+                if normalized_market == "CN" and canonical_symbol.endswith(".BJ"):
+                    logger.debug("Cache MISS for %s - Yahoo fallback disabled for Beijing", normalized_symbol)
+                else:
+                    logger.debug(f"Cache MISS for {normalized_symbol} - fetching from yfinance")
+                    price_data = self._fetch_with_retry(
+                        self._yfinance_service.get_historical_data,
+                        canonical_symbol,
+                        period=requirements.price_period,
+                        use_cache=False,  # Already checked cache
+                    )
             else:
                 logger.debug(
                     "Cache HIT for %s (%d days) - no rate limiting",
@@ -332,10 +336,6 @@ class DataPreparationLayer:
         except Exception as e:
             logger.error(f"Error fetching price data for {normalized_symbol}: {e}")
             fetch_errors["price_data"] = str(e)
-
-        # Normalize None market to "US" so single-symbol and bulk paths are
-        # consistent (bulk path normalizes at line ~535 for the same reason).
-        normalized_market = identity.market or "US"
 
         # 2. Fetch benchmark data (if needed)
         benchmark_bundle = None
@@ -362,6 +362,7 @@ class DataPreparationLayer:
                     self.fundamentals_cache.get_fundamentals,
                     canonical_symbol,
                     force_refresh=False,  # Use cache by default
+                    market=normalized_market,
                 )
                 if fundamentals is None:
                     fetch_errors["fundamentals"] = "No fundamental data returned"
@@ -507,6 +508,7 @@ class DataPreparationLayer:
         for requested_key, identity in zip(requested_keys, identities):
             symbol = identity.canonical_symbol
             fetch_errors = {}
+            normalized_market = identity.market or "US"
 
             # Get price data (from cache or fetch)
             # Note: get_many() already handles sufficiency checks and database fallback
@@ -520,13 +522,16 @@ class DataPreparationLayer:
                     # Cache miss or insufficient - fetch directly
                     # (yfinance_service has its own rate limiter)
                     try:
-                        price_data = self._fetch_with_retry(
-                            self._yfinance_service.get_historical_data,
-                            symbol,
-                            period=requirements.price_period,
-                        )
-                        if price_data is None or price_data.empty:
-                            fetch_errors["price_data"] = "No price data returned"
+                        if normalized_market == "CN" and symbol.endswith(".BJ"):
+                            fetch_errors["price_data"] = "No price data returned; Yahoo fallback disabled for Beijing"
+                        else:
+                            price_data = self._fetch_with_retry(
+                                self._yfinance_service.get_historical_data,
+                                symbol,
+                                period=requirements.price_period,
+                            )
+                            if price_data is None or price_data.empty:
+                                fetch_errors["price_data"] = "No price data returned"
                     except Exception as e:
                         logger.error(f"Error fetching price data for {symbol}: {e}")
                         fetch_errors["price_data"] = str(e)
@@ -544,6 +549,7 @@ class DataPreparationLayer:
                             self.fundamentals_cache.get_fundamentals,
                             symbol,
                             force_refresh=False,
+                            market=normalized_market,
                         )
                         if fundamentals is None:
                             fetch_errors["fundamentals"] = "No fundamental data returned"
@@ -566,10 +572,6 @@ class DataPreparationLayer:
             # Earnings history - no longer used (consolidated into fundamentals)
             # CANSLIM now uses eps_growth_yy from fundamentals instead
             earnings_history = None
-
-            # Normalize None market to "US" so None and "US" map to the same
-            # benchmark bucket (consistent with _attach_market_rs_universe_performances).
-            normalized_market = identity.market or "US"
 
             # Create StockData
             market_benchmark_bundle = (

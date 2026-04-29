@@ -61,7 +61,7 @@ class TrendResponse(BaseModel):
 class CalculationRequest(BaseModel):
     """Request model for manual breadth calculation"""
 
-    market: str = Field("US", description="Market code: US, HK, IN, JP, KR, or TW")
+    market: str = Field("US", description="Market code: US, HK, IN, JP, KR, TW, or CN")
     calculation_date: Optional[str] = Field(
         None,
         description="Date to calculate for (YYYY-MM-DD), defaults to today"
@@ -81,7 +81,7 @@ class BackfillRequest(BaseModel):
 
     start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     end_date: str = Field(..., description="End date (YYYY-MM-DD)")
-    market: str = Field("US", description="Market code: US, HK, IN, JP, KR, or TW")
+    market: str = Field("US", description="Market code: US, HK, IN, JP, KR, TW, or CN")
 
 
 class BackfillResponse(BaseModel):

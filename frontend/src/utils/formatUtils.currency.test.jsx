@@ -9,6 +9,7 @@ describe('getCurrencyPrefix', () => {
     expect(getCurrencyPrefix('JPY')).toBe('¥');
     expect(getCurrencyPrefix('KRW')).toBe('₩');
     expect(getCurrencyPrefix('TWD')).toBe('NT$');
+    expect(getCurrencyPrefix('CNY')).toBe('¥');
   });
 
   it('falls back to $ for null/undefined/unknown codes', () => {
@@ -26,6 +27,7 @@ describe('formatLocalCurrency', () => {
     expect(formatLocalCurrency(14200, 'JPY')).toBe('¥14200.00');
     expect(formatLocalCurrency(70500, 'KRW')).toBe('₩70500.00');
     expect(formatLocalCurrency(875, 'TWD')).toBe('NT$875.00');
+    expect(formatLocalCurrency(189.5, 'CNY')).toBe('¥189.50');
     expect(formatLocalCurrency(189.5, 'USD')).toBe('$189.50');
   });
 

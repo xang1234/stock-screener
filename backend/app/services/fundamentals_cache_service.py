@@ -189,7 +189,7 @@ class FundamentalsCacheService:
         Args:
             symbol: Stock ticker symbol
             force_refresh: Force fetch from yfinance, bypass cache
-            market: Optional market code (US/HK/JP/TW). Callers that already
+            market: Optional market code (US/HK/JP/TW/CN). Callers that already
                 hold the ``StockUniverse`` row should pass this to avoid an
                 extra per-symbol DB lookup on cache misses. ``None`` falls
                 back to a best-effort DB resolve in ``_fetch_and_cache``.
@@ -632,7 +632,7 @@ class FundamentalsCacheService:
         Graceful fallback: If fetch fails, return None (caller will handle).
 
         ``market`` is consulted by the provider routing policy so US-only
-        providers (finviz, alphavantage) are skipped for HK/JP/TW symbols.
+        providers (finviz, alphavantage) are skipped for HK/JP/TW/CN symbols.
         When omitted, falls back to a single DB lookup.
         """
         try:

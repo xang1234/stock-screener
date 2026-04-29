@@ -125,3 +125,20 @@ def test_resolve_identity_uses_kosdaq_suffix_for_explicit_exchange():
     assert identity.timezone == "Asia/Seoul"
     assert identity.canonical_symbol == "091990.KQ"
     assert identity.local_code == "091990"
+
+
+def test_resolve_identity_uses_china_suffixes_by_exchange():
+    resolver = SecurityMasterResolver()
+
+    sse = resolver.resolve_identity(symbol="600519", exchange="xshg")
+    szse = resolver.resolve_identity(symbol="000001.SS", exchange="szse")
+    bse = resolver.resolve_identity(symbol="920118", market="cn", exchange="bse")
+
+    assert sse.market == "CN"
+    assert sse.currency == "CNY"
+    assert sse.timezone == "Asia/Shanghai"
+    assert sse.canonical_symbol == "600519.SS"
+    assert szse.market == "CN"
+    assert szse.canonical_symbol == "000001.SZ"
+    assert bse.market == "CN"
+    assert bse.canonical_symbol == "920118.BJ"

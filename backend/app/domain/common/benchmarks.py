@@ -9,6 +9,7 @@ PRIMARY_BENCHMARK_SYMBOL_BY_MARKET = {
     "JP": "^N225",
     "KR": "^KS11",
     "TW": "^TWII",
+    "CN": "000300.SS",
 }
 
 

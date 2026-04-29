@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-_SUPPORTED_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW"}
+_SUPPORTED_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW", "CN"}
 
 _MARKET_DEFAULTS: dict[str, tuple[str, str]] = {
     "US": ("USD", "America/New_York"),
@@ -18,6 +18,7 @@ _MARKET_DEFAULTS: dict[str, tuple[str, str]] = {
     "JP": ("JPY", "Asia/Tokyo"),
     "KR": ("KRW", "Asia/Seoul"),
     "TW": ("TWD", "Asia/Taipei"),
+    "CN": ("CNY", "Asia/Shanghai"),
 }
 
 _MARKET_BY_EXCHANGE: dict[str, str] = {
@@ -44,6 +45,14 @@ _MARKET_BY_EXCHANGE: dict[str, str] = {
     "TWSE": "TW",
     "TPEX": "TW",
     "XTAI": "TW",
+    "SSE": "CN",
+    "SHSE": "CN",
+    "XSHG": "CN",
+    "SZSE": "CN",
+    "XSHE": "CN",
+    "BJSE": "CN",
+    "XBSE": "CN",
+    "XBEI": "CN",
 }
 
 _MARKET_BY_SUFFIX: tuple[tuple[str, str], ...] = (
@@ -54,6 +63,9 @@ _MARKET_BY_SUFFIX: tuple[tuple[str, str], ...] = (
     (".KQ", "KR"),
     (".TWO", "TW"),
     (".TW", "TW"),
+    (".SS", "CN"),
+    (".SZ", "CN"),
+    (".BJ", "CN"),
     (".T", "JP"),
 )
 
@@ -63,6 +75,7 @@ _SUFFIX_BY_MARKET: dict[str, str] = {
     "JP": ".T",
     "KR": ".KS",
     "TW": ".TW",
+    "CN": ".SS",
 }
 
 _SUFFIX_BY_EXCHANGE: dict[str, str] = {
@@ -77,6 +90,14 @@ _SUFFIX_BY_EXCHANGE: dict[str, str] = {
     "TWSE": ".TW",
     "XTAI": ".TW",
     "TPEX": ".TWO",
+    "SSE": ".SS",
+    "SHSE": ".SS",
+    "XSHG": ".SS",
+    "SZSE": ".SZ",
+    "XSHE": ".SZ",
+    "BJSE": ".BJ",
+    "XBSE": ".BJ",
+    "XBEI": ".BJ",
 }
 
 
@@ -129,6 +150,8 @@ class SecurityMasterResolver:
 
     def _resolve_suffix(self, market: str, exchange: str | None) -> str | None:
         normalized_exchange = self.normalize_exchange(exchange)
+        if market == "CN" and normalized_exchange == "BSE":
+            return ".BJ"
         if normalized_exchange and normalized_exchange in _SUFFIX_BY_EXCHANGE:
             return _SUFFIX_BY_EXCHANGE[normalized_exchange]
         return _SUFFIX_BY_MARKET.get(market)
