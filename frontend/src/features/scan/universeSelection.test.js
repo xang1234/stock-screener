@@ -95,6 +95,7 @@ describe('parseLegacyUniverseDefault', () => {
   it('maps market:hk and friends to market scope', () => {
     expect(parseLegacyUniverseDefault('market:hk')).toEqual({ market: 'HK', scope: 'market' });
     expect(parseLegacyUniverseDefault('market:jp')).toEqual({ market: 'JP', scope: 'market' });
+    expect(parseLegacyUniverseDefault('market:kr')).toEqual({ market: 'KR', scope: 'market' });
   });
 
   // The 'all' default is deliberately ambiguous (it used to mean "all US"), so

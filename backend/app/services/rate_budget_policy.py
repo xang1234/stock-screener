@@ -60,8 +60,8 @@ class RateBudgetPolicy:
         # US bumped to 150 — Yahoo accepts batches up to MAX_PRICE_BATCH_SIZE
         # (200) and the adaptive shrink in fetch_prices_in_batches halves the
         # batch on transient failure, so this is safe.
-        "yfinance": {"US": 150, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
-        "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "TW": 50},
+        "yfinance": {"US": 150, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50},
+        "finviz":   {"US": 100, "HK": 50, "IN": 50, "JP": 50, "KR": 50, "TW": 50},
     }
 
     # Per-market default worker counts for providers that benefit from
@@ -72,10 +72,10 @@ class RateBudgetPolicy:
         # finvizfinance has no batch endpoint; concurrency is the only
         # speedup lever. US gets more workers because its rate-limit
         # interval is 0.5s and per-call RTT is typically ~1-2s.
-        "finviz": {"US": 4, "HK": 2, "IN": 2, "JP": 2, "TW": 2},
+        "finviz": {"US": 4, "HK": 2, "IN": 2, "JP": 2, "KR": 2, "TW": 2},
         # yfinance batch is already a single bulk HTTP call; threading
         # there caused fork issues in Celery workers, so default to 1.
-        "yfinance": {"US": 1, "HK": 1, "IN": 1, "JP": 1, "TW": 1},
+        "yfinance": {"US": 1, "HK": 1, "IN": 1, "JP": 1, "KR": 1, "TW": 1},
     }
 
     # Per-market backoff caps. Non-US markets get longer caps because
@@ -87,6 +87,7 @@ class RateBudgetPolicy:
             "HK": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "IN": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "JP": {"base_s": 60, "max_s": 600, "factor": 2.0},
+            "KR": {"base_s": 60, "max_s": 600, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 600, "factor": 2.0},
         },
         "finviz": {
@@ -94,6 +95,7 @@ class RateBudgetPolicy:
             "HK": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "IN": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "JP": {"base_s": 60, "max_s": 480, "factor": 2.0},
+            "KR": {"base_s": 60, "max_s": 480, "factor": 2.0},
             "TW": {"base_s": 60, "max_s": 480, "factor": 2.0},
         },
     }

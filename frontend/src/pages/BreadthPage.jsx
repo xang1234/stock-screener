@@ -97,6 +97,7 @@ const MARKET_LIVE_BENCHMARK_SYMBOLS = {
   HK: '2800.HK',
   IN: 'NIFTYBEES.NS',
   JP: '1306.T',
+  KR: '069500.KS',
   TW: '0050.TW',
 };
 
@@ -111,7 +112,7 @@ function BreadthPage() {
     uiSnapshots,
     primaryMarket = 'US',
     enabledMarkets = ['US'],
-    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'TW'],
+    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW'],
   } = useRuntime();
   const queryClient = useQueryClient();
   const [selectedTab, setSelectedTab] = useState(0);

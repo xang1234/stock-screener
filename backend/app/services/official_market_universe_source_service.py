@@ -1,4 +1,4 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, and TW."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, and TW."""
 
 from __future__ import annotations
 
@@ -27,7 +27,17 @@ _IN_SOURCE_NAME = "in_reference_bundle"
 _NSE_SOURCE_NAME = "nse_official"
 _BSE_SOURCE_NAME = "bse_official"
 _JP_SOURCE_NAME = "jpx_official"
+_KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
+_KR_VALIDATED_BASELINE = {
+    "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
+    "validated_at": "2026-04-29",
+    "kospi": 839,
+    "kosdaq": 1819,
+    "konex": 110,
+    "total": 2768,
+    "kospi_kosdaq_target": 2658,
+}
 
 _HK_EQUITY_CATEGORY = "equity"
 _HK_EQUITY_SUBCATEGORY_TOKEN = "equity securities"
@@ -87,11 +97,13 @@ class OfficialMarketUniverseSourceService:
         *,
         timeout_seconds: int | None = None,
         user_agent: str | None = None,
+        kr_provider: Any | None = None,
     ) -> None:
         self._timeout_seconds = int(
             timeout_seconds or settings.universe_source_timeout_seconds
         )
         self._user_agent = user_agent or settings.universe_source_user_agent
+        self._kr_provider = kr_provider
 
     def fetch_market_snapshot(self, market: str) -> OfficialMarketUniverseSnapshot:
         normalized_market = str(market or "").strip().upper()
@@ -101,6 +113,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_in_snapshot()
         if normalized_market == "JP":
             return self.fetch_jp_snapshot()
+        if normalized_market == "KR":
+            return self.fetch_kr_snapshot()
         if normalized_market == "TW":
             return self.fetch_tw_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
@@ -153,6 +167,38 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
+    def fetch_kr_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        provider = self._get_kr_provider()
+        rows = list(provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=None))
+        if not rows:
+            raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
+
+        row_counts = {
+            "kospi": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSPI"),
+            "kosdaq": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSDAQ"),
+        }
+        snapshot_as_of = self._utc_today().isoformat()
+        source_metadata = {
+            "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "filters": {
+                "boards": ["KOSPI", "KOSDAQ"],
+                "excluded_products": ["ETF", "ETN", "ELW", "funds", "REITs"],
+            },
+            "excluded_boards": ["KONEX"],
+            "row_counts": row_counts,
+            "source_count": len(rows),
+            "validated_krx_baseline": dict(_KR_VALIDATED_BASELINE),
+        }
+        return OfficialMarketUniverseSnapshot(
+            market="KR",
+            source_name=_KR_SOURCE_NAME,
+            snapshot_id=f"krx-listings-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         source_urls = [settings.nse_universe_source_url]
         try:
@@ -185,6 +231,13 @@ class OfficialMarketUniverseSourceService:
             },
             rows=tuple(rows),
         )
+
+    def _get_kr_provider(self):
+        if self._kr_provider is None:
+            from .kr_market_data_service import KrxMarketDataService
+
+            self._kr_provider = KrxMarketDataService()
+        return self._kr_provider
 
     def fetch_bse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         fetched = self._http_get(

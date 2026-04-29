@@ -59,6 +59,7 @@ def test_market_calendar_service_uses_canonical_calendar_ids():
     assert service.calendar_id("HK") == "XHKG"
     assert service.calendar_id("IN") == "XNSE"
     assert service.calendar_id("JP") == "XTKS"
+    assert service.calendar_id("KR") == "XKRX"
     assert service.calendar_id("TW") == "XTAI"
 
 

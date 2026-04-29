@@ -339,12 +339,20 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
             detail=f"Benchmark/calendar dependency import failed: {exc}",
         )
 
-    expected = {"US": "SPY", "HK": "^HSI", "IN": "^NSEI", "JP": "^N225", "TW": "^TWII"}
+    expected = {
+        "US": "SPY",
+        "HK": "^HSI",
+        "IN": "^NSEI",
+        "JP": "^N225",
+        "KR": "^KS11",
+        "TW": "^TWII",
+    }
     expected_calendar_ids = {
         "US": "XNYS",
         "HK": "XHKG",
         "IN": "XNSE",
         "JP": "XTKS",
+        "KR": "XKRX",
         "TW": "XTAI",
     }
     markets = ctx.enabled_markets

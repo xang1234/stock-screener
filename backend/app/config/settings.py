@@ -84,6 +84,7 @@ class Settings(BaseSettings):
 
     # API Keys
     alpha_vantage_api_key: str = ""
+    opendart_api_key: str = ""  # Korea FSS OpenDART enrichment (optional but required for full KR launch)
     zai_api_key: str = ""  # For Z.AI GLM models via OpenAI-compatible endpoint
     zai_api_keys: str = ""  # For Z.AI GLM models (multiple keys, comma-separated)
     zai_api_base: str = "https://api.z.ai/api/paas/v4"  # Z.AI OpenAI-compatible base URL
@@ -174,11 +175,13 @@ class Settings(BaseSettings):
     yfinance_rate_limit_hk: float | None = None
     yfinance_rate_limit_in: float | None = None
     yfinance_rate_limit_jp: float | None = None
+    yfinance_rate_limit_kr: float | None = None
     yfinance_rate_limit_tw: float | None = None
     finviz_rate_limit_us: float | None = None
     finviz_rate_limit_hk: float | None = None
     finviz_rate_limit_in: float | None = None
     finviz_rate_limit_jp: float | None = None
+    finviz_rate_limit_kr: float | None = None
     finviz_rate_limit_tw: float | None = None
 
     # Per-market batch sizes for yfinance bulk downloads. Defaults ship via
@@ -187,6 +190,7 @@ class Settings(BaseSettings):
     yfinance_batch_size_hk: int | None = None
     yfinance_batch_size_in: int | None = None
     yfinance_batch_size_jp: int | None = None
+    yfinance_batch_size_kr: int | None = None
     yfinance_batch_size_tw: int | None = None
 
     # Per-market backoff cap (seconds) for consecutive 429-driven backoffs.
@@ -195,6 +199,7 @@ class Settings(BaseSettings):
     yfinance_backoff_max_s_hk: int | None = None
     yfinance_backoff_max_s_in: int | None = None
     yfinance_backoff_max_s_jp: int | None = None
+    yfinance_backoff_max_s_kr: int | None = None
     yfinance_backoff_max_s_tw: int | None = None
 
     # Per-market parallel worker counts for finviz (which has no batch API,
@@ -206,6 +211,7 @@ class Settings(BaseSettings):
     finviz_workers_hk: int | None = None
     finviz_workers_in: int | None = None
     finviz_workers_jp: int | None = None
+    finviz_workers_kr: int | None = None
     finviz_workers_tw: int | None = None
 
     # Provider circuit breaker (services/provider_circuit_breaker.py).
@@ -218,6 +224,7 @@ class Settings(BaseSettings):
     circuit_breaker_cooldown_hk: int = 300
     circuit_breaker_cooldown_in: int = 300
     circuit_breaker_cooldown_jp: int = 300
+    circuit_breaker_cooldown_kr: int = 300
     circuit_breaker_cooldown_tw: int = 300
 
     # yfinance HTTP session: when enabled, calls are routed through a
@@ -293,6 +300,8 @@ class Settings(BaseSettings):
     cache_warm_minute_in: int = 30
     cache_warm_hour_jp: int = 2
     cache_warm_minute_jp: int = 30
+    cache_warm_hour_kr: int = 3
+    cache_warm_minute_kr: int = 0
     cache_warm_hour_tw: int = 2
     cache_warm_minute_tw: int = 0
 
@@ -387,7 +396,8 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in', 'cache_warm_hour_jp', 'cache_warm_hour_tw'
+        'cache_warm_hour_us', 'cache_warm_hour_hk', 'cache_warm_hour_in',
+        'cache_warm_hour_jp', 'cache_warm_hour_kr', 'cache_warm_hour_tw'
     )
     @classmethod
     def validate_per_market_hour(cls, v: int) -> int:
@@ -396,7 +406,8 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in', 'cache_warm_minute_jp', 'cache_warm_minute_tw'
+        'cache_warm_minute_us', 'cache_warm_minute_hk', 'cache_warm_minute_in',
+        'cache_warm_minute_jp', 'cache_warm_minute_kr', 'cache_warm_minute_tw'
     )
     @classmethod
     def validate_per_market_minute(cls, v: int) -> int:
@@ -548,6 +559,7 @@ class Settings(BaseSettings):
             "HK": (self.cache_warm_hour_hk, self.cache_warm_minute_hk),
             "IN": (self.cache_warm_hour_in, self.cache_warm_minute_in),
             "JP": (self.cache_warm_hour_jp, self.cache_warm_minute_jp),
+            "KR": (self.cache_warm_hour_kr, self.cache_warm_minute_kr),
             "TW": (self.cache_warm_hour_tw, self.cache_warm_minute_tw),
         }
         if m not in mapping:

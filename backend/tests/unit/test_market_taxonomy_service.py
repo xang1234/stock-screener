@@ -32,6 +32,14 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
         tmp_path / "taiwan-deep.csv",
         "Symbol,Market,Industry (EN)\n2330,TWSE,Semiconductors\n8069,TPEX,Computer Peripherals\n",
     )
+    _write_csv(
+        tmp_path / "korea-deep.csv",
+        (
+            "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n"
+            "005930,KOSPI,Information Technology,Technology Hardware,Semiconductors,Memory Semiconductors\n"
+            "091990,KOSDAQ,Health Care,Biotechnology,Biologics,Biopharmaceuticals\n"
+        ),
+    )
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -82,6 +90,20 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert tpex.industry_group == "Computer Peripherals"
     assert tpex.themes_list() == []
 
+    kr_kospi = service.get("005930.KS", market="KR")
+    assert kr_kospi is not None
+    assert kr_kospi.symbol == "005930.KS"
+    assert kr_kospi.sector == "Information Technology"
+    assert kr_kospi.industry_group == "Technology Hardware"
+    assert kr_kospi.industry == "Semiconductors"
+    assert kr_kospi.sub_industry == "Memory Semiconductors"
+
+    kr_kosdaq = service.get("091990", market="KR", exchange="KOSDAQ")
+    assert kr_kosdaq is not None
+    assert kr_kosdaq.symbol == "091990.KQ"
+    assert kr_kosdaq.industry_group == "Biotechnology"
+    assert kr_kosdaq.sub_industry == "Biopharmaceuticals"
+
 
 def test_groups_for_market_and_symbols_for_group(tmp_path):
     """The new group-listing helpers feed IBDIndustryService for non-US markets."""
@@ -106,6 +128,7 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
         "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -132,6 +155,7 @@ def test_market_taxonomy_service_raises_load_error_for_missing_required_csv(tmp_
         "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -151,6 +175,7 @@ def test_market_taxonomy_service_raises_load_error_for_malformed_csv(tmp_path):
         "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n",
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
+    _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -168,6 +193,7 @@ def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp
     _write_csv(app_data / "india-deep.csv", "Symbol,Exchange,Industry (Sector),Subgroup (Theme),Sub-industry\nRELIANCE.NS,XNSE,ENERGY (STOCKS),Oil & Gas,Integrated Oil & Gas\n")
     _write_csv(app_data / "kabutan_themes_en.csv", "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n7203,Transportation Equipment,Automobiles,Hybrid Vehicles\n")
     _write_csv(app_data / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n2330,TWSE,Semiconductors\n")
+    _write_csv(app_data / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n005930,KOSPI,Information Technology,Technology Hardware,Semiconductors,Memory Semiconductors\n")
 
     resolved = MarketTaxonomyService._default_data_dir(service_path=service_path)
 

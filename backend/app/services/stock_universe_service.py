@@ -33,6 +33,7 @@ from ..schemas.universe import IndexName
 from ..config import settings
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
 from .jp_universe_ingestion_adapter import jp_universe_ingestion_adapter
+from .kr_universe_ingestion_adapter import kr_universe_ingestion_adapter
 from .security_master_service import security_master_resolver
 from .tw_universe_ingestion_adapter import tw_universe_ingestion_adapter
 
@@ -43,6 +44,7 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "HK": ("HKEX", "SEHK", "XHKG"),
     "IN": ("NSE", "XNSE", "BSE", "XBOM"),
     "JP": ("TSE", "JPX", "XTKS"),
+    "KR": ("KOSPI", "KOSDAQ", "XKRX"),
     "TW": ("TWSE", "TPEX", "XTAI"),
 }
 
@@ -55,6 +57,7 @@ class StockUniverseService:
         self._security_master = security_master_resolver
         self._hk_ingestion = hk_universe_ingestion_adapter
         self._jp_ingestion = jp_universe_ingestion_adapter
+        self._kr_ingestion = kr_universe_ingestion_adapter
         self._tw_ingestion = tw_universe_ingestion_adapter
         self._bulk_fetcher = None
 
@@ -1809,6 +1812,230 @@ class StockUniverseService:
         )
 
     @staticmethod
+    def _parse_kr_csv_rows(csv_content: str) -> list[dict[str, Any]]:
+        """Parse KR ingestion CSV into normalized lowercase-key row dicts."""
+        csv_file = io.StringIO(csv_content)
+        reader = csv.DictReader(csv_file)
+        fieldnames = reader.fieldnames or []
+        normalized_fields = [str(name).strip().lower() for name in fieldnames if name]
+        has_symbol_field = any(name in {"symbol", "local_code", "ticker"} for name in normalized_fields)
+        if not fieldnames or not has_symbol_field:
+            csv_file.seek(0)
+            reader = csv.DictReader(
+                csv_file,
+                fieldnames=["symbol", "name", "exchange", "sector", "industry", "market_cap"],
+            )
+
+        rows: list[dict[str, Any]] = []
+        for row in reader:
+            row_lower = {str(k).strip().lower(): v for k, v in row.items() if k}
+            source_symbol = (
+                str(row_lower.get("symbol") or row_lower.get("local_code") or row_lower.get("ticker") or "")
+                .strip()
+                .upper()
+            )
+            if not source_symbol or source_symbol in {"SYMBOL", "LOCAL_CODE", "TICKER"}:
+                continue
+            rows.append(row_lower)
+        return rows
+
+    def ingest_kr_snapshot_rows(
+        self,
+        db: Session,
+        *,
+        rows: Iterable[dict[str, Any]],
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest KR rows with deterministic canonicalization and lineage metadata."""
+        canonicalized = self._kr_ingestion.canonicalize_rows(
+            rows,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+        )
+
+        if strict and canonicalized.rejected_rows:
+            sample = "; ".join(
+                f"row {row.source_row_number}: {row.reason}"
+                for row in canonicalized.rejected_rows[:3]
+            )
+            raise ValueError(
+                f"KR ingestion rejected {len(canonicalized.rejected_rows)} row(s). {sample}"
+            )
+
+        now = datetime.utcnow()
+        canonical_symbols = [row.symbol for row in canonicalized.canonical_rows]
+        existing_rows = {
+            row.symbol: row
+            for row in db.query(StockUniverse).filter(
+                StockUniverse.symbol.in_(canonical_symbols)
+            ).all()
+        } if canonical_symbols else {}
+
+        added_count = 0
+        updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
+
+        for row in canonicalized.canonical_rows:
+            event_payload = {
+                "source_name": row.source_name,
+                "source_symbol": row.source_symbol,
+                "source_row_number": row.source_row_number,
+                "snapshot_id": row.snapshot_id,
+                "snapshot_as_of": row.snapshot_as_of,
+                "source_metadata": row.source_metadata,
+                "lineage_hash": row.lineage_hash,
+                "row_hash": row.row_hash,
+            }
+            reason = f"Present in KR source snapshot {row.snapshot_id}"
+            existing = existing_rows.get(row.symbol)
+
+            if existing is not None:
+                existing.name = row.name or existing.name
+                existing.market = row.market
+                existing.exchange = row.exchange
+                existing.currency = row.currency
+                existing.timezone = row.timezone
+                existing.local_code = row.local_code or existing.local_code
+                existing.sector = row.sector or existing.sector
+                existing.industry = row.industry or existing.industry
+                if row.market_cap is not None:
+                    existing.market_cap = row.market_cap
+                self._apply_status_transition(
+                    db,
+                    existing,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="kr_ingest",
+                    reason=reason,
+                    now=now,
+                    payload=event_payload,
+                    source="kr_ingest",
+                    clear_failures=True,
+                    seen_in_source=True,
+                )
+                updated_count += 1
+                continue
+
+            new_rows.append(
+                StockUniverse(
+                    symbol=row.symbol,
+                    name=row.name,
+                    market=row.market,
+                    exchange=row.exchange,
+                    currency=row.currency,
+                    timezone=row.timezone,
+                    local_code=row.local_code,
+                    sector=row.sector,
+                    industry=row.industry,
+                    market_cap=row.market_cap,
+                    is_active=True,
+                    status=UNIVERSE_STATUS_ACTIVE,
+                    status_reason=reason,
+                    source="kr_ingest",
+                    consecutive_fetch_failures=0,
+                    added_at=now,
+                    first_seen_at=now,
+                    last_seen_in_source_at=now,
+                    updated_at=now,
+                )
+            )
+            new_events.append(
+                self._build_status_event_record(
+                symbol=row.symbol,
+                old_status=None,
+                new_status=UNIVERSE_STATUS_ACTIVE,
+                trigger_source="kr_ingest",
+                reason=reason,
+                payload=event_payload,
+                )
+            )
+            added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
+
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="KR",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonicalized.canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="KR",
+            snapshot_id=snapshot_id,
+            trigger_source="kr_ingest",
+            reconciliation=reconciliation,
+            now=now,
+        )
+        db.commit()
+        details_limit = 25
+        canonical_preview = canonicalized.canonical_rows[:details_limit]
+        rejected_preview = canonicalized.rejected_rows[:details_limit]
+
+        return {
+            "added": added_count,
+            "updated": updated_count,
+            "total": len(canonicalized.canonical_rows),
+            "rejected": len(canonicalized.rejected_rows),
+            "source_name": source_name,
+            "snapshot_id": snapshot_id,
+            "canonical_rows": [
+                {
+                    "symbol": row.symbol,
+                    "local_code": row.local_code,
+                    "exchange": row.exchange,
+                    "source_symbol": row.source_symbol,
+                    "lineage_hash": row.lineage_hash,
+                    "row_hash": row.row_hash,
+                }
+                for row in canonical_preview
+            ],
+            "rejected_rows": [
+                {
+                    "source_row_number": row.source_row_number,
+                    "source_symbol": row.source_symbol,
+                    "reason": row.reason,
+                }
+                for row in rejected_preview
+            ],
+            "canonical_rows_truncated": len(canonicalized.canonical_rows) > details_limit,
+            "rejected_rows_truncated": len(canonicalized.rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
+        }
+
+    def ingest_kr_from_csv(
+        self,
+        db: Session,
+        csv_content: str,
+        *,
+        source_name: str,
+        snapshot_id: str | None = None,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest KR universe rows from CSV content."""
+        rows = self._parse_kr_csv_rows(csv_content)
+        resolved_snapshot_id = snapshot_id or self._auto_snapshot_id("kr")
+        return self.ingest_kr_snapshot_rows(
+            db,
+            rows=rows,
+            source_name=source_name,
+            snapshot_id=resolved_snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+
+    @staticmethod
     def _parse_tw_csv_rows(csv_content: str) -> list[dict[str, Any]]:
         """Parse TW ingestion CSV into normalized lowercase-key row dicts."""
         csv_file = io.StringIO(csv_content)
@@ -2734,7 +2961,7 @@ class StockUniverseService:
             1,
         )
         stale_after_seconds = stale_after_hours * 3600
-        reconciliation_markets = {"HK", "IN", "JP", "TW"}
+        reconciliation_markets = {"HK", "IN", "JP", "KR", "TW"}
 
         by_market: Dict[str, Dict[str, Any]] = {
             market: {
@@ -2744,7 +2971,7 @@ class StockUniverseService:
                 "latest_seen_in_source_at": None,
                 "latest_snapshot": None,
             }
-            for market in ("US", "HK", "IN", "JP", "TW")
+            for market in ("US", "HK", "IN", "JP", "KR", "TW")
         }
 
         universe_rows = db.query(

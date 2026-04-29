@@ -23,7 +23,7 @@ from app.models.stock_universe import StockUniverse
 
 
 def test_static_export_markets_include_india():
-    assert export_script.STATIC_EXPORT_MARKETS == ("US", "HK", "IN", "JP", "TW")
+    assert export_script.STATIC_EXPORT_MARKETS == ("US", "HK", "IN", "JP", "KR", "TW")
 
 
 def test_ensure_group_rank_history_uses_market_calendar_for_non_us_market(monkeypatch):

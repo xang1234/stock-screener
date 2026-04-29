@@ -10,7 +10,7 @@ import apiClient from './client';
  * @param {Array<string>} params.symbols - Custom symbol list (required if universe='custom' or 'test')
  * @param {Object} [params.universe_def] - Structured universe definition (takes precedence over legacy universe field)
  * @param {string} params.universe_def.type - Universe type: 'all', 'market', 'exchange', 'index', 'custom', 'test'
- * @param {string} [params.universe_def.market] - Market code: 'US', 'HK', 'JP', 'TW' (if type='market')
+ * @param {string} [params.universe_def.market] - Market code: 'US', 'HK', 'IN', 'JP', 'KR', 'TW' (if type='market')
  * @param {string} [params.universe_def.exchange] - Exchange name: 'NYSE', 'NASDAQ', 'AMEX' (if type='exchange')
  * @param {string} [params.universe_def.index] - Index name: 'SP500' (if type='index')
  * @param {Array<string>} [params.universe_def.symbols] - Symbol list (if type='custom' or 'test')
@@ -41,7 +41,7 @@ export const createScan = async ({
 /**
  * Trigger a market-scoped price cache refresh from the scan workflow.
  * @param {Object} params - Refresh parameters
- * @param {string} params.market - Market code: US, HK, IN, JP, or TW
+ * @param {string} params.market - Market code: US, HK, IN, JP, KR, or TW
  * @param {string} params.mode - Refresh mode: 'auto' or 'full'
  * @returns {Promise<Object>} Refresh queue response with task_id
  */

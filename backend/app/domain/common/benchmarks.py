@@ -7,6 +7,7 @@ PRIMARY_BENCHMARK_SYMBOL_BY_MARKET = {
     "HK": "^HSI",
     "IN": "^NSEI",
     "JP": "^N225",
+    "KR": "^KS11",
     "TW": "^TWII",
 }
 

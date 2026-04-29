@@ -137,14 +137,16 @@ export const getScoreColor = (score) => {
 const CURRENCY_PREFIX_BY_CODE = Object.freeze({
   USD: '$',
   HKD: 'HK$',
+  INR: '₹',
   JPY: '¥',
+  KRW: '₩',
   TWD: 'NT$',
 });
 
 /**
  * Return the short currency-symbol prefix for a row's local currency code.
  * @param {string|null|undefined} currencyCode - ISO 4217 code from stock_universe
- * @returns {string} Currency symbol (e.g. '$', 'HK$', '¥', 'NT$'). '$' fallback.
+ * @returns {string} Currency symbol (e.g. '$', 'HK$', '₹', '¥', '₩', 'NT$'). '$' fallback.
  */
 export const getCurrencyPrefix = (currencyCode) => {
   if (!currencyCode) return '$';
@@ -156,7 +158,7 @@ export const getCurrencyPrefix = (currencyCode) => {
  * Returns '-' for null/undefined so empty cells stay visually consistent
  * with other "missing" cells in the results table.
  * @param {number|null|undefined} value - Raw numeric value (local currency units)
- * @param {string|null|undefined} currencyCode - ISO 4217 code (USD/HKD/JPY/TWD)
+ * @param {string|null|undefined} currencyCode - ISO 4217 code (USD/HKD/INR/JPY/KRW/TWD)
  * @param {number} decimals - Decimal places (default: 2)
  * @returns {string}
  */

@@ -9,13 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-_SUPPORTED_MARKETS = {"US", "HK", "IN", "JP", "TW"}
+_SUPPORTED_MARKETS = {"US", "HK", "IN", "JP", "KR", "TW"}
 
 _MARKET_DEFAULTS: dict[str, tuple[str, str]] = {
     "US": ("USD", "America/New_York"),
     "HK": ("HKD", "Asia/Hong_Kong"),
     "IN": ("INR", "Asia/Kolkata"),
     "JP": ("JPY", "Asia/Tokyo"),
+    "KR": ("KRW", "Asia/Seoul"),
     "TW": ("TWD", "Asia/Taipei"),
 }
 
@@ -36,6 +37,10 @@ _MARKET_BY_EXCHANGE: dict[str, str] = {
     "TSE": "JP",
     "JPX": "JP",
     "XTKS": "JP",
+    "KOSPI": "KR",
+    "KOSDAQ": "KR",
+    "KRX": "KR",
+    "XKRX": "KR",
     "TWSE": "TW",
     "TPEX": "TW",
     "XTAI": "TW",
@@ -45,6 +50,8 @@ _MARKET_BY_SUFFIX: tuple[tuple[str, str], ...] = (
     (".HK", "HK"),
     (".NS", "IN"),
     (".BO", "IN"),
+    (".KS", "KR"),
+    (".KQ", "KR"),
     (".TWO", "TW"),
     (".TW", "TW"),
     (".T", "JP"),
@@ -54,6 +61,7 @@ _SUFFIX_BY_MARKET: dict[str, str] = {
     "HK": ".HK",
     "IN": ".NS",
     "JP": ".T",
+    "KR": ".KS",
     "TW": ".TW",
 }
 
@@ -62,6 +70,10 @@ _SUFFIX_BY_EXCHANGE: dict[str, str] = {
     "XNSE": ".NS",
     "BSE": ".BO",
     "XBOM": ".BO",
+    "KOSPI": ".KS",
+    "KOSDAQ": ".KQ",
+    "KRX": ".KS",
+    "XKRX": ".KS",
     "TWSE": ".TW",
     "XTAI": ".TW",
     "TPEX": ".TWO",

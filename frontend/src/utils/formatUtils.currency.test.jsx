@@ -5,7 +5,9 @@ describe('getCurrencyPrefix', () => {
   it('returns the short symbol for each supported market currency', () => {
     expect(getCurrencyPrefix('USD')).toBe('$');
     expect(getCurrencyPrefix('HKD')).toBe('HK$');
+    expect(getCurrencyPrefix('INR')).toBe('₹');
     expect(getCurrencyPrefix('JPY')).toBe('¥');
+    expect(getCurrencyPrefix('KRW')).toBe('₩');
     expect(getCurrencyPrefix('TWD')).toBe('NT$');
   });
 
@@ -20,7 +22,9 @@ describe('getCurrencyPrefix', () => {
 describe('formatLocalCurrency', () => {
   it('prefixes the value with the market currency symbol', () => {
     expect(formatLocalCurrency(410.5, 'HKD')).toBe('HK$410.50');
+    expect(formatLocalCurrency(1200, 'INR')).toBe('₹1200.00');
     expect(formatLocalCurrency(14200, 'JPY')).toBe('¥14200.00');
+    expect(formatLocalCurrency(70500, 'KRW')).toBe('₩70500.00');
     expect(formatLocalCurrency(875, 'TWD')).toBe('NT$875.00');
     expect(formatLocalCurrency(189.5, 'USD')).toBe('$189.50');
   });

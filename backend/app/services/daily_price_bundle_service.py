@@ -30,7 +30,7 @@ class DailyPriceBundleService:
     DAILY_PRICE_MANIFEST_SCHEMA_VERSION = "daily-price-manifest-v1"
     DAILY_PRICE_RELEASE_TAG = "daily-price-data"
     DAILY_PRICE_BAR_PERIOD = "2y"
-    DAILY_PRICE_SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "TW")
+    DAILY_PRICE_SUPPORTED_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "KR", "TW")
     SYNC_STATE_CATEGORY = "github_sync"
 
     def __init__(

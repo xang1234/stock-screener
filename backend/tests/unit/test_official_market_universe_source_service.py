@@ -174,6 +174,47 @@ def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):
     assert snapshot.source_metadata["overlap_isin_count"] == 1
 
 
+def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata():
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            assert boards == ("KOSPI", "KOSDAQ")
+            assert as_of is None
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                    "sector": "Information Technology",
+                    "industry": "Semiconductors",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                    "sector": "Health Care",
+                    "industry": "Biotechnology",
+                },
+            ]
+
+    service = OfficialMarketUniverseSourceService(kr_provider=FakeKrxProvider())
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert snapshot.market == "KR"
+    assert snapshot.source_name == "krx_official"
+    assert snapshot.snapshot_id.startswith("krx-listings-")
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
+    assert snapshot.source_metadata["row_counts"] == {"kospi": 1, "kosdaq": 1}
+    assert snapshot.source_metadata["excluded_boards"] == ["KONEX"]
+    assert snapshot.source_metadata["validated_krx_baseline"]["kospi"] == 839
+    assert snapshot.source_metadata["validated_krx_baseline"]["kosdaq"] == 1819
+    assert snapshot.source_metadata["validated_krx_baseline"]["source_url"].startswith(
+        "https://global.krx.co.kr/"
+    )
+
+
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):
     service = OfficialMarketUniverseSourceService()
     html_twse = _fixture_bytes("twse_stocks_fixture.html")

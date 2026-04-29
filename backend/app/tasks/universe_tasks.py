@@ -21,7 +21,7 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 
-_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "TW"})
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW"})
 _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
@@ -116,6 +116,15 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
             )
         if snapshot.market == "JP":
             return stock_universe_service.ingest_jp_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        if snapshot.market == "KR":
+            return stock_universe_service.ingest_kr_snapshot_rows(
                 db,
                 rows=snapshot.rows,
                 source_name=snapshot.source_name,
@@ -650,6 +659,64 @@ def ingest_tw_universe_csv(
         }
     except Exception:
         logger.exception("Error ingesting TW universe CSV")
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, name='app.tasks.universe_tasks.ingest_kr_universe_csv')
+@serialized_data_fetch('ingest_kr_universe_csv')
+def ingest_kr_universe_csv(
+    self,
+    csv_content: str,
+    source_name: str = "kr_manual_csv",
+    snapshot_id: str | None = None,
+    snapshot_as_of: str | None = None,
+    source_metadata: dict[str, Any] | None = None,
+    strict: bool = True,
+):
+    """
+    Ingest KR universe rows from CSV using canonical KRX normalization.
+
+    KOSPI rows canonicalize to ``.KS`` and KOSDAQ rows canonicalize to
+    ``.KQ`` before upserting rows into stock_universe.
+    """
+    logger.info("=" * 60)
+    logger.info("TASK: KR Universe Ingestion")
+    logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Source: {source_name}")
+    if snapshot_id:
+        logger.info(f"Snapshot ID: {snapshot_id}")
+    logger.info("=" * 60)
+
+    _kr_prior_size = _count_active_universe("KR")
+    db = SessionLocal()
+    try:
+        stock_universe_service = get_stock_universe_service()
+        stats = stock_universe_service.ingest_kr_from_csv(
+            db,
+            csv_content,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+        logger.info("=" * 60)
+        logger.info("KR Universe Ingestion Complete!")
+        logger.info(f"Added: {stats.get('added', 0)}")
+        logger.info(f"Updated: {stats.get('updated', 0)}")
+        logger.info(f"Canonical rows: {stats.get('total', 0)}")
+        logger.info(f"Rejected rows: {stats.get('rejected', 0)}")
+        logger.info("=" * 60)
+        _emit_universe_drift("KR", _kr_prior_size)
+        return {
+            'status': 'success',
+            **stats,
+            'timestamp': datetime.now().isoformat(),
+        }
+    except Exception:
+        logger.exception("Error ingesting KR universe CSV")
         raise
     finally:
         db.close()

@@ -26,7 +26,9 @@ class TestCurrencyForMarket:
     def test_known_markets(self):
         assert currency_for_market("US") == "USD"
         assert currency_for_market("HK") == "HKD"
+        assert currency_for_market("IN") == "INR"
         assert currency_for_market("JP") == "JPY"
+        assert currency_for_market("KR") == "KRW"
         assert currency_for_market("TW") == "TWD"
 
     def test_case_insensitive_and_trimmed(self):

@@ -22,6 +22,7 @@ from app.models.theme import ThemeAlert, ThemeCluster, ThemeConstituent, ThemeMe
 from app.models.user_watchlist import UserWatchlist, WatchlistItem
 from app.schemas.scanning import ExplainResponse
 from app.services.task_registry_service import SCHEDULED_TASKS
+from app.tasks.market_queues import SUPPORTED_MARKETS
 from app.wiring.bootstrap import get_group_rank_service, get_task_registry_service
 from app.use_cases.feature_store.compare_runs import CompareFeatureRunsUseCase, CompareRunsQuery
 from app.use_cases.scanning.explain_stock import ExplainStockUseCase
@@ -59,6 +60,7 @@ _SUPPORTED_SORT_FIELDS = {
     "sales_growth_qq",
     "stage",
 }
+_MARKET_OVERVIEW_TASK_LIMIT = max(5, len(SUPPORTED_MARKETS))
 
 
 @dataclass(frozen=True)
@@ -362,7 +364,7 @@ class MarketCopilotService:
             },
             breadth=self._breadth_record(breadth),
             alerts=alerts,
-            tasks=failed_tasks or tasks[:5],
+            tasks=failed_tasks or tasks[:_MARKET_OVERVIEW_TASK_LIMIT],
             top_candidates=top_candidates,
         )
 

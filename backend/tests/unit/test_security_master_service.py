@@ -100,3 +100,28 @@ def test_resolve_identity_uses_bse_suffix_for_explicit_bse_exchange():
     assert identity.timezone == "Asia/Kolkata"
     assert identity.canonical_symbol == "500325.BO"
     assert identity.local_code == "500325"
+
+
+def test_resolve_identity_uses_kospi_suffix_for_korea_default():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="005930", market="kr")
+
+    assert identity.market == "KR"
+    assert identity.currency == "KRW"
+    assert identity.timezone == "Asia/Seoul"
+    assert identity.canonical_symbol == "005930.KS"
+    assert identity.local_code == "005930"
+
+
+def test_resolve_identity_uses_kosdaq_suffix_for_explicit_exchange():
+    resolver = SecurityMasterResolver()
+
+    identity = resolver.resolve_identity(symbol="091990.KS", exchange="kosdaq")
+
+    assert identity.market == "KR"
+    assert identity.exchange == "KOSDAQ"
+    assert identity.currency == "KRW"
+    assert identity.timezone == "Asia/Seoul"
+    assert identity.canonical_symbol == "091990.KQ"
+    assert identity.local_code == "091990"

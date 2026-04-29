@@ -6,7 +6,9 @@ import { UNIVERSE_MARKETS } from '../../features/scan/constants';
 const MARKET_COLOR = Object.freeze({
   US: 'primary',
   HK: 'success',
+  IN: 'secondary',
   JP: 'warning',
+  KR: 'error',
   TW: 'info',
 });
 

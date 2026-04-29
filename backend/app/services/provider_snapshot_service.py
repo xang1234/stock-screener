@@ -43,12 +43,13 @@ WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = "weekly-reference-bundle-v1"
 WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = "weekly-reference-manifest-v1"
 WEEKLY_REFERENCE_RELEASE_TAG = "weekly-reference-data"
 WEEKLY_REFERENCE_LATEST_MANIFEST_NAME = "weekly-reference-latest.json"
-WEEKLY_REFERENCE_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "TW")
+WEEKLY_REFERENCE_MARKETS: tuple[str, ...] = ("US", "HK", "IN", "JP", "KR", "TW")
 WEEKLY_REFERENCE_SNAPSHOT_KEYS: dict[str, str] = {
     "US": "fundamentals_v1_us",
     "HK": "fundamentals_v1_hk",
     "IN": "fundamentals_v1_in",
     "JP": "fundamentals_v1_jp",
+    "KR": "fundamentals_v1_kr",
     "TW": "fundamentals_v1_tw",
 }
 WEEKLY_REFERENCE_MARKET_BY_SNAPSHOT_KEY: dict[str, str] = {

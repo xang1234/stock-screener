@@ -37,7 +37,7 @@ class AppCapabilitiesResponse(BaseModel):
     primary_market: str = "US"
     enabled_markets: list[str] = Field(default_factory=lambda: ["US"])
     bootstrap_state: str = "not_started"
-    supported_markets: list[str] = Field(default_factory=lambda: ["US", "HK", "IN", "JP", "TW"])
+    supported_markets: list[str] = Field(default_factory=lambda: ["US", "HK", "IN", "JP", "KR", "TW"])
     api_base_path: str = "/api"
     auth: AppAuthStatusResponse = Field(default_factory=AppAuthStatusResponse)
 
@@ -50,7 +50,7 @@ class RuntimeBootstrapStatusResponse(BaseModel):
     primary_market: str
     enabled_markets: list[str]
     bootstrap_state: str
-    supported_markets: list[str] = Field(default_factory=lambda: ["US", "HK", "IN", "JP", "TW"])
+    supported_markets: list[str] = Field(default_factory=lambda: ["US", "HK", "IN", "JP", "KR", "TW"])
 
 
 class RuntimeBootstrapRequest(BaseModel):

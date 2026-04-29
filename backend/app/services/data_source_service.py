@@ -9,12 +9,16 @@ import logging
 from typing import TYPE_CHECKING, Dict, Optional
 from datetime import datetime
 
+from app.config import settings
+
 from .finviz_validator import FinvizValidator
 from . import provider_routing_policy as routing_policy
+from .security_master_service import security_master_resolver
 
 if TYPE_CHECKING:
     from app.services.eps_rating_service import EPSRatingService
     from app.services.finviz_service import FinvizService
+    from app.services.kr_market_data_service import KrxFundamentalsService, OpenDartFundamentalsService
     from app.services.rate_limiter import RedisRateLimiter
     from app.services.yfinance_service import YFinanceService
 
@@ -38,6 +42,8 @@ class DataSourceService:
         finviz_service: FinvizService | None = None,
         yfinance_service: YFinanceService | None = None,
         eps_rating_service: EPSRatingService | None = None,
+        krx_fundamentals_service: KrxFundamentalsService | None = None,
+        opendart_fundamentals_service: OpenDartFundamentalsService | None = None,
         rate_limiter: RedisRateLimiter | None = None,
         prefer_finviz: bool = True,
         enable_fallback: bool = True,
@@ -74,8 +80,20 @@ class DataSourceService:
             from .finviz_service import FinvizService
 
             finviz_service = FinvizService(rate_limiter=rate_limiter)
+        if krx_fundamentals_service is None:
+            from .kr_market_data_service import KrxFundamentalsService
+
+            krx_fundamentals_service = KrxFundamentalsService()
+        if opendart_fundamentals_service is None:
+            from .kr_market_data_service import OpenDartFundamentalsService
+
+            opendart_fundamentals_service = OpenDartFundamentalsService(
+                api_key=settings.opendart_api_key
+            )
         self.finviz_service = finviz_service
         self.yfinance_service = yfinance_service
+        self.krx_fundamentals_service = krx_fundamentals_service
+        self.opendart_fundamentals_service = opendart_fundamentals_service
 
         # Metrics tracking
         self.metrics = {
@@ -137,6 +155,8 @@ class DataSourceService:
             Dict with fundamental metrics and metadata, or None if all sources fail
         """
         self.metrics['total_calls'] += 1
+        if routing_policy.normalize_market(market) == routing_policy.MARKET_KR:
+            return self._get_kr_fundamentals(symbol)
 
         if self._finviz_allowed(market):
             logger.debug(f"Attempting to fetch {symbol} fundamentals from finvizfinance")
@@ -190,6 +210,52 @@ class DataSourceService:
 
         logger.error(f"All data sources failed for {symbol} fundamentals")
         return None
+
+    def _get_kr_fundamentals(self, symbol: str) -> Optional[Dict]:
+        """Fetch KR fundamentals in KRX -> OpenDART -> yfinance order."""
+        identity = security_master_resolver.resolve_identity(symbol=symbol, market="KR")
+        merged: Dict = {}
+        sources: list[str] = []
+
+        try:
+            krx_data = self.krx_fundamentals_service.core_fundamentals(identity.local_code)
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("KRX fundamentals failed for %s: %s", symbol, exc)
+            krx_data = {}
+        if krx_data:
+            merged.update(krx_data)
+            sources.append(routing_policy.PROVIDER_KRX)
+
+        try:
+            dart_data = self.opendart_fundamentals_service.get_statement_fundamentals(
+                identity.local_code
+            )
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("OpenDART fundamentals failed for %s: %s", symbol, exc)
+            dart_data = {}
+        if dart_data:
+            merged.update({key: value for key, value in dart_data.items() if value is not None})
+            sources.append(routing_policy.PROVIDER_OPENDART)
+
+        yf_data = self.yfinance_service.get_fundamentals(identity.canonical_symbol)
+        if yf_data:
+            for key, value in yf_data.items():
+                if value is not None and key not in merged:
+                    merged[key] = value
+            sources.append(routing_policy.PROVIDER_YFINANCE)
+
+        if not merged:
+            logger.error("All KR data sources failed for %s fundamentals", symbol)
+            return None
+
+        merged["symbol"] = identity.canonical_symbol
+        merged["market"] = "KR"
+        merged["currency"] = "KRW"
+        merged["data_source"] = "+".join(dict.fromkeys(sources)) or "kr"
+        merged["data_source_timestamp"] = datetime.utcnow()
+        if not self.opendart_fundamentals_service.is_configured:
+            merged["opendart_status"] = "missing_api_key"
+        return merged
 
     def _get_eps_rating_data(self, symbol: str) -> Optional[Dict]:
         """
