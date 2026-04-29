@@ -54,7 +54,7 @@ from .cjk_alias_data import ASIA_ALIAS_CORPUS
 # first preserves correctness without special-casing.
 from .security_master_service import _MARKET_BY_SUFFIX, _SUFFIX_BY_MARKET
 
-POLICY_VERSION: str = "2026.04.13.1"
+POLICY_VERSION: str = "2026.04.30.1"
 
 METHOD_SYMBOL_PASSTHROUGH: str = "symbol_passthrough"
 METHOD_SYMBOL_NORMALIZED: str = "symbol_normalized"

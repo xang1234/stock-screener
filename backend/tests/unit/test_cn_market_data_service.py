@@ -49,10 +49,13 @@ def test_cn_market_data_service_maps_akshare_spot_rows_to_listing_rows():
     assert [row["symbol"] for row in rows] == ["600519.SS", "000001.SZ", "920118.BJ"]
     assert rows[0]["exchange"] == "SSE"
     assert rows[0]["board"] == "SSE_MAIN"
+    assert rows[0]["sector"] == "Consumer Staples"
     assert rows[0]["industry"] == "酿酒行业"
     assert rows[0]["pe_ratio"] == 28.4
     assert rows[1]["exchange"] == "SZSE"
+    assert rows[1]["sector"] == "Financials"
     assert rows[2]["exchange"] == "BSE"
+    assert rows[2]["sector"] == "Consumer Discretionary"
 
 
 def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():

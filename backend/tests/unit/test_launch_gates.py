@@ -297,6 +297,39 @@ class TestDbBackedGateResilience:
         assert "committed taxonomy source has" in g2.detail
         assert g2.metrics["taxonomy_source_rows"] < g2.metrics["active_symbols"] * 0.95
 
+    def test_g2_cn_taxonomy_coverage_uses_ingested_stock_industry_rows(self, monkeypatch):
+        fake_models = ModuleType("app.models.market_telemetry")
+        fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent
+        monkeypatch.setitem(sys.modules, "app.models.market_telemetry", fake_models)
+
+        ctx = GateContext(project_root=_PROJECT_ROOT, now=_NOW, enabled_markets=("CN",))
+        telemetry_rows = [
+            SimpleNamespace(market="CN", recorded_at=_NOW, payload={"prior_size": 5492, "delta": 0}),
+        ]
+        active_cn_rows = [
+            ("600519.SS", "SSE"),
+            ("000001.SZ", "SZSE"),
+            ("920118.BJ", "BSE"),
+        ]
+        stock_industry_rows = [
+            SimpleNamespace(
+                symbol=symbol,
+                sector="Consumer Staples",
+                industry_group="Food & Beverage",
+                industry="Distillers & Vintners",
+                sub_industry="Baijiu",
+            )
+            for symbol, _exchange in active_cn_rows
+        ]
+
+        g2 = _check_g2_universe(
+            ctx,
+            db=_FakeDbSequence(telemetry_rows, active_cn_rows, stock_industry_rows),
+        )
+
+        assert g2.status == GateStatus.PASS
+        assert "committed taxonomy source" not in g2.detail
+
     def test_g4_scopes_to_enabled_markets_and_checks_transparency(self, monkeypatch):
         fake_models = ModuleType("app.models.market_telemetry")
         fake_models.MarketTelemetryEvent = _FakeMarketTelemetryEvent

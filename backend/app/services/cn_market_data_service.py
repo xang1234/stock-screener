@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 
+from .cn_universe_ingestion_adapter import infer_cn_sector
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,14 +181,16 @@ class CnMarketDataService:
             if market_cap is not None and latest_price and latest_price > 0:
                 shares_outstanding = market_cap / latest_price
             industry = str(raw.get("所属行业") or raw.get("行业") or raw.get("industry") or "").strip()
+            board = _board_for_code(local_code, exchange)
+            sector = infer_cn_sector(raw.get("sector"), raw.get("industry_group"), industry, board=board)
             rows.append(
                 {
                     "symbol": f"{local_code}{suffix}",
                     "local_code": local_code,
                     "name": str(raw.get("名称") or raw.get("name") or "").strip(),
                     "exchange": exchange,
-                    "board": _board_for_code(local_code, exchange),
-                    "sector": "",
+                    "board": board,
+                    "sector": sector,
                     "industry_group": industry,
                     "industry": industry,
                     "sub_industry": industry,

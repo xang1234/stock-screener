@@ -13,7 +13,7 @@ export function buildUniverseDef(market, scope) {
     return { type: 'market', market };
   }
   if (scope.startsWith('exchange:')) {
-    return { type: 'exchange', exchange: scope.slice('exchange:'.length) };
+    return { type: 'exchange', market, exchange: scope.slice('exchange:'.length) };
   }
   if (scope.startsWith('index:')) {
     return { type: 'index', index: scope.slice('index:'.length) };

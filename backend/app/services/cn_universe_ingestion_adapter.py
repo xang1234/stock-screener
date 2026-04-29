@@ -50,6 +50,35 @@ _EXCLUDED_PRODUCT_TOKENS = (
     "NEEQ",
 )
 
+_CN_SECTOR_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Financials", ("银行", "保险", "证券", "金融", "BANK", "INSURANCE", "SECURITIES", "FINANCE")),
+    ("Information Technology", ("半导体", "计算机", "软件", "电子", "芯片", "SEMICONDUCTOR", "SOFTWARE", "ELECTRONIC", "TECHNOLOGY")),
+    ("Communication Services", ("通信服务", "互联网", "游戏", "广告", "COMMUNICATION", "INTERNET", "GAME", "MEDIA")),
+    ("Health Care", ("医药", "生物", "医疗", "制药", "HEALTH", "PHARMA", "BIOTECH", "MEDICAL")),
+    ("Consumer Staples", ("食品", "饮料", "白酒", "酿酒", "农业", "农林", "牧", "渔", "FOOD", "BEVERAGE", "AGRICULTURE")),
+    ("Consumer Discretionary", ("汽车", "家电", "传媒", "旅游", "酒店", "纺织", "服饰", "零售", "AUTO", "RETAIL", "APPAREL", "TEXTILE", "LEISURE")),
+    ("Energy", ("石油", "煤炭", "天然气", "能源", "OIL", "COAL", "GAS", "ENERGY")),
+    ("Utilities", ("电力", "公用事业", "水务", "燃气", "UTILITY", "POWER", "WATER")),
+    ("Real Estate", ("房地产", "物业", "REAL ESTATE", "PROPERTY")),
+    ("Materials", ("化工", "有色", "钢铁", "建材", "材料", "采掘", "CHEMICAL", "STEEL", "MATERIAL", "MINING")),
+    ("Industrials", ("机械", "电气设备", "设备", "航空", "航运", "运输", "物流", "建筑", "工业", "MACHINERY", "INDUSTRIAL", "TRANSPORT", "CONSTRUCTION")),
+)
+
+
+def infer_cn_sector(*labels: Any, board: str = "") -> str:
+    """Infer a broad English sector from Eastmoney/AKShare industry labels."""
+    explicit = str((labels[0] if labels else "") or "").strip()
+    if explicit:
+        return explicit
+
+    haystack = " ".join(str(label or "").strip().upper() for label in labels[1:] if label)
+    for sector, keywords in _CN_SECTOR_KEYWORDS:
+        if any(keyword in haystack for keyword in keywords):
+            return sector
+    if str(board or "").strip():
+        return "Other"
+    return ""
+
 
 @dataclass(frozen=True)
 class CNCanonicalUniverseRow:
@@ -254,6 +283,8 @@ class CNUniverseIngestionAdapter:
 
     @staticmethod
     def _prefer_text(primary: str, fallback: str) -> str:
+        if primary.strip().upper() == "OTHER" and fallback.strip():
+            return fallback
         return primary if primary.strip() else fallback
 
     def _canonical_payload(
@@ -390,10 +421,16 @@ class CNUniverseIngestionAdapter:
                     local_code=local_code,
                 )
                 row_name = str(raw_row.get("name") or raw_row.get("company") or "").strip()
-                row_sector = str(raw_row.get("sector") or "").strip()
                 row_group = str(raw_row.get("industry_group") or "").strip()
                 row_industry = str(raw_row.get("industry") or raw_row.get("sub_industry") or "").strip()
                 row_sub_industry = str(raw_row.get("sub_industry") or raw_row.get("industry") or "").strip()
+                row_sector = infer_cn_sector(
+                    raw_row.get("sector"),
+                    row_group,
+                    row_industry,
+                    row_sub_industry,
+                    board=board,
+                )
                 row_market_cap = self._parse_market_cap(
                     raw_row.get("market_cap")
                     or raw_row.get("marketcap")

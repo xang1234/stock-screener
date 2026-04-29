@@ -270,6 +270,11 @@ class TestFromLegacy:
         assert u.type == UniverseType.MARKET
         assert u.market == Market.JP
 
+    def test_market_prefixed_china(self):
+        u = UniverseDefinition.from_legacy("market:cn")
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.CN
+
     def test_market_short_code_without_prefix_is_not_legacy(self):
         with pytest.raises(ValueError, match="Unknown universe"):
             UniverseDefinition.from_legacy("hk")
@@ -278,6 +283,10 @@ class TestFromLegacy:
         u = UniverseDefinition.from_legacy("nasdaq")
         assert u.type == UniverseType.EXCHANGE
         assert u.exchange == Exchange.NASDAQ
+
+    def test_exchange_can_carry_market_to_disambiguate_bse(self):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BSE)
+        assert u.key() == "exchange:CN:BSE"
 
     def test_amex(self):
         u = UniverseDefinition.from_legacy("amex")

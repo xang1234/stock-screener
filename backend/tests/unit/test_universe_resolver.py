@@ -90,6 +90,18 @@ class TestResolveSymbols:
         )
 
     @patch("app.services.universe_resolver.get_stock_universe_service")
+    def test_exchange_passes_market_param_when_present(self, mock_service, mock_db):
+        mock_service.return_value.get_active_symbols.return_value = ["920118.BJ"]
+
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BSE)
+        result = resolve_symbols(mock_db, u)
+
+        assert result == ["920118.BJ"]
+        mock_service.return_value.get_active_symbols.assert_called_once_with(
+            mock_db, market="CN", exchange="BSE", sp500_only=False, limit=None
+        )
+
+    @patch("app.services.universe_resolver.get_stock_universe_service")
     def test_exchange_nasdaq(self, mock_service, mock_db):
         mock_service.return_value.get_active_symbols.return_value = ["AAPL", "MSFT"]
 

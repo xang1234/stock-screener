@@ -30,7 +30,13 @@ describe('buildUniverseDef', () => {
   it('maps exchange and index scopes to their typed forms', () => {
     expect(buildUniverseDef('US', 'exchange:NYSE')).toEqual({
       type: 'exchange',
+      market: 'US',
       exchange: 'NYSE',
+    });
+    expect(buildUniverseDef('CN', 'exchange:BSE')).toEqual({
+      type: 'exchange',
+      market: 'CN',
+      exchange: 'BSE',
     });
     expect(buildUniverseDef('US', 'index:SP500')).toEqual({ type: 'index', index: 'SP500' });
   });

@@ -49,6 +49,7 @@ def test_cn_adapter_canonicalizes_sse_szse_and_bse_rows_with_metadata():
     assert rows_by_symbol["920118.BJ"].board == "BSE"
     assert rows_by_symbol["600519.SS"].currency == "CNY"
     assert rows_by_symbol["600519.SS"].timezone == "Asia/Shanghai"
+    assert rows_by_symbol["000001.SZ"].sector == "Financials"
     assert rows_by_symbol["600519.SS"].source_metadata["source_count"] == 3
 
 
@@ -114,6 +115,21 @@ def test_cn_adapter_deduplicates_deterministically_and_prefers_complete_rows():
     assert row.sector == "Consumer Staples"
     assert row.industry == "Beverage Manufacturing"
     assert row.market_cap == 2_500_000_000_000.0
+
+
+def test_cn_adapter_infers_sector_from_chinese_industry_when_source_sector_missing():
+    result = cn_universe_ingestion_adapter.canonicalize_rows(
+        [
+            {"symbol": "600519", "name": "贵州茅台", "exchange": "SSE", "industry": "酿酒行业"},
+            {"symbol": "300750", "name": "宁德时代", "exchange": "SZSE", "industry": "电气设备"},
+        ],
+        source_name="cn_akshare_eastmoney",
+        snapshot_id="cn-a-share-2026-04-30",
+    )
+
+    rows_by_symbol = {row.symbol: row for row in result.canonical_rows}
+    assert rows_by_symbol["600519.SS"].sector == "Consumer Staples"
+    assert rows_by_symbol["300750.SZ"].sector == "Industrials"
 
 
 def test_cn_adapter_requires_approved_sources():

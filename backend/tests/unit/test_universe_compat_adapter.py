@@ -64,3 +64,16 @@ def test_active_alias_maps_to_all_for_backward_compat():
     # normalized to canonical legacy value
     assert resolved.legacy_value == "all"
     assert resolved.migration_hint == {"type": "all"}
+
+
+def test_market_cn_legacy_alias_maps_to_typed_market_with_hint():
+    resolved = resolve_scan_universe_request(
+        universe_def=None,
+        legacy_universe="market:cn",
+        legacy_symbols=None,
+    )
+
+    assert resolved.used_legacy is True
+    assert resolved.universe_def.type == UniverseType.MARKET
+    assert resolved.universe_def.market.value == "CN"
+    assert resolved.migration_hint == {"type": "market", "market": "CN"}

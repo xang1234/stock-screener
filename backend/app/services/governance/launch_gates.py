@@ -167,6 +167,7 @@ def _check_market_taxonomy_coverage(ctx: GateContext, db=None, *, market: str) -
     if market not in ctx.enabled_markets:
         return None
     try:
+        from ...models.stock import StockIndustry
         from ...models.stock_universe import StockUniverse
         from ...services.market_taxonomy_service import get_market_taxonomy_service
 
@@ -185,13 +186,26 @@ def _check_market_taxonomy_coverage(ctx: GateContext, db=None, *, market: str) -
 
         taxonomy = get_market_taxonomy_service()
         taxonomy_source_rows = taxonomy.entry_count_for_market(market)
+        symbols = [symbol for symbol, _exchange in active_rows]
+        db_industry_by_symbol = {}
+        if market == "CN":
+            db_industry_by_symbol = {
+                row.symbol: row
+                for row in db.query(StockIndustry).filter(StockIndustry.symbol.in_(symbols)).all()
+            }
+            taxonomy_source_rows = max(taxonomy_source_rows, len(db_industry_by_symbol))
         sector_group_count = 0
         sub_industry_count = 0
         missing_symbols: list[str] = []
         for symbol, exchange in active_rows:
-            entry = taxonomy.get(symbol, market=market, exchange=exchange)
-            has_sector_group = bool(entry and entry.sector and entry.industry_group)
-            has_sub_industry = bool(entry and entry.sub_industry)
+            industry_row = db_industry_by_symbol.get(symbol)
+            if industry_row is not None:
+                has_sector_group = bool(industry_row.sector and industry_row.industry_group)
+                has_sub_industry = bool(industry_row.sub_industry)
+            else:
+                entry = taxonomy.get(symbol, market=market, exchange=exchange)
+                has_sector_group = bool(entry and entry.sector and entry.industry_group)
+                has_sub_industry = bool(entry and entry.sub_industry)
             if has_sector_group:
                 sector_group_count += 1
             else:
@@ -215,7 +229,7 @@ def _check_market_taxonomy_coverage(ctx: GateContext, db=None, *, market: str) -
             "missing_symbols_truncated": len(missing_symbols) > 25,
         }
         if sector_group_ratio < 0.95 or sub_industry_ratio < 0.85:
-            if taxonomy_source_rows < total * 0.95:
+            if market != "CN" and taxonomy_source_rows < total * 0.95:
                 return GateResult(
                     gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                     status=GateStatus.MISSING_EVIDENCE,

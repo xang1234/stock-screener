@@ -63,6 +63,9 @@ POSITIVE_CORPUS = [
     ("Tencent",       None, "0700.HK", "HK", METHOD_ALIAS_EXACT),
     ("Sony",          None, "6758.T",  "JP", METHOD_ALIAS_EXACT),
     ("TSMC",          None, "2330.TW", "TW", METHOD_ALIAS_EXACT),
+    ("贵州茅台",        None, "600519.SS", "CN", METHOD_ALIAS_EXACT),
+    ("宁德时代",        None, "300750.SZ", "CN", METHOD_ALIAS_EXACT),
+    ("Ping An",       None, "601318.SS", "CN", METHOD_ALIAS_EXACT),
     ("ソニー",          None, "6758.T",  "JP", METHOD_ALIAS_EXACT),
     ("台積電",          None, "2330.TW", "TW", METHOD_ALIAS_EXACT),
     ("臺積電",          None, "2330.TW", "TW", METHOD_ALIAS_EXACT),  # Alt traditional
@@ -79,6 +82,7 @@ POSITIVE_CORPUS = [
     ("Hon Hai Precision",None, "2317.TW", "TW", METHOD_ALIAS_EXACT),
     # Folded-only variant: hyphenated, upper-case — exercises fold_key.
     ("HON-HAI PRECISION",None, "2317.TW", "TW", METHOD_ALIAS_FOLDED),
+    ("PING-AN INSURANCE",None, "601318.SS", "CN", METHOD_ALIAS_FOLDED),
     # Interpunct (・ U+30FB) is in the strip set.
     ("ソニー・グループ",    None, "6758.T",  "JP", METHOD_ALIAS_FOLDED),
 ]

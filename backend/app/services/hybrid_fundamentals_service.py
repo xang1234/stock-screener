@@ -62,6 +62,7 @@ class HybridFundamentalsService:
         finviz_rate_limit: float = 0.5,
         price_cache: PriceCacheService | None = None,
         finviz_service: FinvizService | None = None,
+        data_source_service: Any | None = None,
     ):
         """
         Initialize HybridFundamentalsService.
@@ -105,6 +106,51 @@ class HybridFundamentalsService:
 
         self.finviz_service = finviz_service
         self.price_cache = price_cache
+        self._data_source_service = data_source_service
+
+    def _market_for_symbol(
+        self,
+        symbol: str,
+        market_by_symbol: Optional[Dict[str, str]] = None,
+    ) -> str:
+        explicit = (market_by_symbol or {}).get(symbol)
+        if explicit:
+            return str(explicit).strip().upper()
+        normalized = str(symbol or "").strip().upper()
+        if normalized.endswith((".SS", ".SZ", ".BJ")):
+            return routing_policy.MARKET_CN
+        return routing_policy.MARKET_US
+
+    def _is_cn_symbol(
+        self,
+        symbol: str,
+        market_by_symbol: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        return self._market_for_symbol(symbol, market_by_symbol) == routing_policy.MARKET_CN
+
+    def _get_data_source_service(self):
+        if self._data_source_service is None:
+            from app.wiring.bootstrap import get_data_source_service
+
+            self._data_source_service = get_data_source_service()
+        return self._data_source_service
+
+    def _fetch_cn_fundamentals_payload(self, symbol: str) -> Dict[str, Any]:
+        """Fetch CN fundamentals through AKShare/BaoStock-aware routing."""
+        data_source = self._get_data_source_service()
+        combined = data_source.get_combined_data(symbol, market=routing_policy.MARKET_CN)
+        if not combined:
+            return {}
+        merged: Dict[str, Any] = {}
+        fundamentals = combined.get("fundamentals") or {}
+        growth = combined.get("growth") or {}
+        if isinstance(fundamentals, dict):
+            merged.update(fundamentals)
+        if isinstance(growth, dict):
+            for key, value in growth.items():
+                if value is not None and key not in merged:
+                    merged[key] = value
+        return merged
 
     def fetch_fundamentals(
         self,
@@ -128,14 +174,19 @@ class HybridFundamentalsService:
 
         result = {}
 
-        # Phase 1: yfinance fundamentals
-        yf_data = self.bulk_fetcher.fetch_batch_fundamentals(
-            [symbol],
-            batch_size=1,
-            include_quarterly=True
-        )
-        if symbol in yf_data and not yf_data[symbol].get('has_error'):
-            result.update(yf_data[symbol])
+        # Phase 1: provider fundamentals. CN symbols must use the
+        # AKShare/BaoStock-aware service because Yahoo is not the primary
+        # source and Beijing yfinance support is intentionally disabled.
+        if self._is_cn_symbol(symbol):
+            result.update(self._fetch_cn_fundamentals_payload(symbol))
+        else:
+            yf_data = self.bulk_fetcher.fetch_batch_fundamentals(
+                [symbol],
+                batch_size=1,
+                include_quarterly=True
+            )
+            if symbol in yf_data and not yf_data[symbol].get('has_error'):
+                result.update(yf_data[symbol])
 
         # Phase 2: Technical calculations from price cache
         if include_technicals:
@@ -195,27 +246,46 @@ class HybridFundamentalsService:
 
         results = {symbol: {} for symbol in symbols}
 
+        cn_symbols = [s for s in symbols if self._is_cn_symbol(s, market_by_symbol)]
+        cn_symbol_set = set(cn_symbols)
+        yfinance_symbols = [s for s in symbols if s not in cn_symbol_set]
+
+        if cn_symbols:
+            logger.info(
+                "Phase 1a: Fetching CN fundamentals via AKShare/BaoStock-aware routing for %d symbols...",
+                len(cn_symbols),
+            )
+            for symbol in cn_symbols:
+                try:
+                    cn_data = self._fetch_cn_fundamentals_payload(symbol)
+                    if cn_data:
+                        results[symbol].update(cn_data)
+                except Exception as exc:  # pragma: no cover - provider/network variability
+                    logger.warning("CN fundamentals fetch failed for %s: %s", symbol, exc)
+
         # ============================================================
         # Phase 1: Batch fetch yfinance fundamentals (~25 min for 7000)
         # ============================================================
         logger.info("Phase 1: Fetching yfinance fundamentals...")
         phase1_start = time.time()
 
-        yf_data = self.bulk_fetcher.fetch_batch_fundamentals(
-            symbols,
-            batch_size=self.yfinance_batch_size,
-            include_quarterly=True,
-            delay_between_batches=self.yfinance_delay_between_batches,
-            delay_per_ticker=self.yfinance_delay_per_ticker,
-            market_by_symbol=market_by_symbol,
-        )
+        yf_data = {}
+        if yfinance_symbols:
+            yf_data = self.bulk_fetcher.fetch_batch_fundamentals(
+                yfinance_symbols,
+                batch_size=self.yfinance_batch_size,
+                include_quarterly=True,
+                delay_between_batches=self.yfinance_delay_between_batches,
+                delay_per_ticker=self.yfinance_delay_per_ticker,
+                market_by_symbol=market_by_symbol,
+            )
 
-        for symbol in symbols:
+        for symbol in yfinance_symbols:
             if symbol in yf_data and not yf_data[symbol].get('has_error'):
                 results[symbol].update(yf_data[symbol])
 
         phase1_time = time.time() - phase1_start
-        yf_success = len([s for s in symbols if s in yf_data and not yf_data.get(s, {}).get('has_error')])
+        yf_success = len([s for s in yfinance_symbols if s in yf_data and not yf_data.get(s, {}).get('has_error')])
         logger.info(f"Phase 1 complete: {yf_success}/{total} in {phase1_time:.1f}s")
 
         if progress_callback:
@@ -258,7 +328,7 @@ class HybridFundamentalsService:
             finviz_eligible = [
                 s for s in symbols
                 if routing_policy.is_supported(
-                    (market_by_symbol or {}).get(s),
+                    self._market_for_symbol(s, market_by_symbol),
                     routing_policy.PROVIDER_FINVIZ,
                 )
             ]
@@ -405,17 +475,35 @@ class HybridFundamentalsService:
         results = {symbol: {} for symbol in symbols}
 
         # Phase 1: yfinance (already batched)
-        logger.info("Phase 1: Fetching yfinance fundamentals...")
-        yf_data = self.bulk_fetcher.fetch_fundamentals_parallel(
-            symbols,
-            batch_size=self.yfinance_batch_size,
-            max_workers=3,
-            include_quarterly=True,
-            delay_per_ticker=self.yfinance_delay_per_ticker,
-            market_by_symbol=market_by_symbol,
-        )
+        cn_symbols = [s for s in symbols if self._is_cn_symbol(s, market_by_symbol)]
+        cn_symbol_set = set(cn_symbols)
+        yfinance_symbols = [s for s in symbols if s not in cn_symbol_set]
+        if cn_symbols:
+            logger.info(
+                "Phase 1a: Fetching CN fundamentals via AKShare/BaoStock-aware routing for %d symbols...",
+                len(cn_symbols),
+            )
+            for symbol in cn_symbols:
+                try:
+                    cn_data = self._fetch_cn_fundamentals_payload(symbol)
+                    if cn_data:
+                        results[symbol].update(cn_data)
+                except Exception as exc:  # pragma: no cover - provider/network variability
+                    logger.warning("CN fundamentals fetch failed for %s: %s", symbol, exc)
 
-        for symbol in symbols:
+        logger.info("Phase 1: Fetching yfinance fundamentals...")
+        yf_data = {}
+        if yfinance_symbols:
+            yf_data = self.bulk_fetcher.fetch_fundamentals_parallel(
+                yfinance_symbols,
+                batch_size=self.yfinance_batch_size,
+                max_workers=3,
+                include_quarterly=True,
+                delay_per_ticker=self.yfinance_delay_per_ticker,
+                market_by_symbol=market_by_symbol,
+            )
+
+        for symbol in yfinance_symbols:
             if symbol in yf_data and not yf_data[symbol].get('has_error'):
                 results[symbol].update(yf_data[symbol])
 
@@ -441,7 +529,7 @@ class HybridFundamentalsService:
         market_by_symbol = market_by_symbol or {}
         eligible_by_market: Dict[str, List[str]] = {}
         for symbol in symbols:
-            market = market_by_symbol.get(symbol) or "US"
+            market = self._market_for_symbol(symbol, market_by_symbol)
             if not routing_policy.is_supported(market, routing_policy.PROVIDER_FINVIZ):
                 continue
             eligible_by_market.setdefault(market, []).append(symbol)
