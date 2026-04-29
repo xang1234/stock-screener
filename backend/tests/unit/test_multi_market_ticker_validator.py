@@ -166,9 +166,18 @@ class TestPolicySurface:
     def test_accepted_suffixes_match_bead_contract(self):
         snap = describe_policy()
         # The extraction prompt in theme_extraction_service.py promises
-        # callers these exact four suffixes — keep pinned so a prompt
+        # callers these exact suffixes — keep pinned so a prompt
         # change forces a policy-version bump here too.
-        assert snap["accepted_suffixes"] == [".HK", ".T", ".TW", ".TWO"]
+        assert snap["accepted_suffixes"] == [
+            ".HK",
+            ".NS",
+            ".BO",
+            ".T",
+            ".KS",
+            ".KQ",
+            ".TW",
+            ".TWO",
+        ]
 
     def test_drop_reasons_include_every_category(self):
         snap = describe_policy()
@@ -186,7 +195,7 @@ class TestPromptValidatorSynchronization:
     """Meta-test: the acceptance criterion on bead asia.7.5 says
     'prompt contract and validator contract must be synchronized.' We
     read the prompt constant directly and assert it mentions the same
-    four suffixes the validator advertises."""
+    suffixes the validator advertises."""
 
     def test_prompt_mentions_every_accepted_suffix(self):
         # Use word-boundary regex rather than substring `in` because the
@@ -195,7 +204,7 @@ class TestPromptValidatorSynchronization:
         # the prompt dropped the literal ``.T`` spec while keeping ``.TW``.
         import re
         from app.services.theme_extraction_service import EXTRACTION_SYSTEM_PROMPT
-        for suffix in [".HK", ".T", ".TW", ".TWO"]:
+        for suffix in [".HK", ".NS", ".BO", ".T", ".KS", ".KQ", ".TW", ".TWO"]:
             pattern = re.compile(re.escape(suffix) + r"\b")
             assert pattern.search(EXTRACTION_SYSTEM_PROMPT), (
                 f"Prompt must document {suffix!r} as a literal token "

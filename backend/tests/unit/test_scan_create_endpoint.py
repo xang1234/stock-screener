@@ -580,6 +580,114 @@ async def test_create_scan_returns_409_for_us_exchange_when_us_refresh_is_active
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["KOSPI", "KOSDAQ"])
+async def test_create_scan_returns_409_for_kr_exchange_when_kr_refresh_is_active(client, exchange):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id=f"scan-{exchange.lower()}",
+            status="queued",
+            total_stocks=500,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["KR"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "KR",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 55.0,
+                        "current": 550,
+                        "total": 1000,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-kr",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "exchange", "exchange": exchange}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"]["code"] == "market_refresh_active"
+    assert payload["detail"]["market"] == "KR"
+    assert fake_use_case.received_cmd is None
+
+
+@pytest.mark.asyncio
+async def test_create_scan_kr_exchange_ignores_us_refresh_activity(client):
+    fake_uow = _FakeUoW()
+    fake_use_case = _FakeCreateScanUseCase(
+        CreateScanResult(
+            scan_id="scan-kospi",
+            status="queued",
+            total_stocks=500,
+            is_duplicate=False,
+            feature_run_id=None,
+        )
+    )
+
+    app.dependency_overrides[get_uow] = lambda: fake_uow
+    app.dependency_overrides[get_create_scan_use_case] = lambda: fake_use_case
+    try:
+        with patch(
+            "app.api.v1.scans.get_runtime_activity_status",
+            return_value={
+                "bootstrap": {},
+                "summary": {"active_market_count": 1, "active_markets": ["US"], "status": "active"},
+                "markets": [
+                    {
+                        "market": "US",
+                        "lifecycle": "daily_refresh",
+                        "stage_key": "prices",
+                        "stage_label": "Price Refresh",
+                        "status": "running",
+                        "progress_mode": "determinate",
+                        "percent": 55.0,
+                        "current": 550,
+                        "total": 1000,
+                        "message": "Refreshing prices",
+                        "task_name": "smart_refresh_cache",
+                        "task_id": "task-us",
+                        "updated_at": "2026-04-18T00:00:00Z",
+                    }
+                ],
+            },
+        ):
+            response = await client.post(
+                "/api/v1/scans",
+                json={"universe_def": {"type": "exchange", "exchange": "KOSPI"}},
+            )
+    finally:
+        app.dependency_overrides.pop(get_uow, None)
+        app.dependency_overrides.pop(get_create_scan_use_case, None)
+
+    assert response.status_code == 200
+    assert fake_use_case.received_cmd.universe_exchange == "KOSPI"
+
+
+@pytest.mark.asyncio
 async def test_create_scan_returns_409_when_market_price_data_is_stale(client):
     """The staleness gate lives inside CreateScanUseCase (after idempotency
     and symbol resolution) and surfaces as StaleMarketDataError; the route

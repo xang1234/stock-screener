@@ -97,7 +97,9 @@ Your task is to identify:
    Supported markets and canonical symbol forms:
    - US (NYSE, NASDAQ): plain ticker, e.g. NVDA, AAPL, AMZN
    - Hong Kong (HKEX): 4-digit zero-padded code with ``.HK`` suffix, e.g. 0700.HK, 0005.HK
+   - India (NSE/BSE): exchange suffix ``.NS`` or ``.BO``, e.g. RELIANCE.NS, 500325.BO
    - Japan (TSE): 4-digit code with ``.T`` suffix, e.g. 6758.T, 9984.T
+   - Korea (KOSPI/KOSDAQ): 6-digit code with ``.KS`` for KOSPI or ``.KQ`` for KOSDAQ, e.g. 005930.KS, 091990.KQ
    - Taiwan (TWSE): 4-digit code with ``.TW`` suffix (use ``.TWO`` for TPEx), e.g. 2330.TW
    Rules:
    - Convert company names to canonical symbols ONLY when the mapping is unambiguous
@@ -147,7 +149,7 @@ Content:
 
 Return a JSON array of theme mentions. Each mention should have:
 - theme: string (the market theme/narrative)
-- tickers: array of strings (canonical stock symbols related to this theme — US tickers, or suffixed forms for Hong Kong (``.HK``), Japan (``.T``), Taiwan (``.TW``/``.TWO``))
+- tickers: array of strings (canonical stock symbols related to this theme — US tickers, or suffixed forms for Hong Kong (``.HK``), India (``.NS``/``.BO``), Japan (``.T``), Korea (``.KS``/``.KQ``), Taiwan (``.TW``/``.TWO``))
 - sentiment: string ("bullish", "bearish", or "neutral")
 - confidence: float (0.0 to 1.0)
 - excerpt: string (relevant quote from content, max 200 chars)

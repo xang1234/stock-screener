@@ -14,6 +14,8 @@ Fundamentals providers have different geographic coverage:
 - ``yfinance``     : Global — supports local-suffix symbols (``.HK``, ``.T``,
   ``.TW``/``.TWO``) via the canonical symbols produced by
   ``SecurityMasterService``.
+- ``krx``          : Korea Exchange data through ``pykrx``.
+- ``opendart``     : Korea FSS OpenDART statement data when configured.
 
 Prior to this module all symbols were routed identically (finviz preferred,
 yfinance fallback). For non-US markets (HK/JP/TW) this produced:
@@ -56,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.04.21.1"
+POLICY_VERSION = "2026.04.29.1"
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream
@@ -67,11 +69,19 @@ consumers can detect a routing-semantics change and react accordingly.
 # --- Known providers --------------------------------------------------------
 
 PROVIDER_FINVIZ = "finviz"
+PROVIDER_KRX = "krx"
+PROVIDER_OPENDART = "opendart"
 PROVIDER_YFINANCE = "yfinance"
 PROVIDER_ALPHAVANTAGE = "alphavantage"
 
 KNOWN_PROVIDERS: FrozenSet[str] = frozenset(
-    {PROVIDER_FINVIZ, PROVIDER_YFINANCE, PROVIDER_ALPHAVANTAGE}
+    {
+        PROVIDER_FINVIZ,
+        PROVIDER_KRX,
+        PROVIDER_OPENDART,
+        PROVIDER_YFINANCE,
+        PROVIDER_ALPHAVANTAGE,
+    }
 )
 
 
@@ -81,10 +91,11 @@ MARKET_US = "US"
 MARKET_HK = "HK"
 MARKET_IN = "IN"
 MARKET_JP = "JP"
+MARKET_KR = "KR"
 MARKET_TW = "TW"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_TW}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -111,6 +122,9 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # symbols with repeated unresolved Yahoo validation failures.
     MARKET_IN: (PROVIDER_YFINANCE,),
     MARKET_JP: (PROVIDER_YFINANCE,),
+    # KR: KRX supplies primary quotes/valuation, OpenDART enriches statements,
+    # yfinance remains a suffix-based fallback for fields not covered natively.
+    MARKET_KR: (PROVIDER_KRX, PROVIDER_OPENDART, PROVIDER_YFINANCE),
     MARKET_TW: (PROVIDER_YFINANCE,),
 }
 

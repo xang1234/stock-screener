@@ -1,4 +1,4 @@
-"""Market calendar abstraction for US/HK/IN/JP/TW session-aware decisions."""
+"""Market calendar abstraction for US/HK/IN/JP/KR/TW session-aware decisions."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class MarketCalendarService:
         "HK": "XHKG",
         "IN": "XNSE",
         "JP": "XTKS",
+        "KR": "XKRX",
         "TW": "XTAI",
     }
     TIMEZONE_BY_MARKET: dict[str, str] = {
@@ -33,6 +34,7 @@ class MarketCalendarService:
         "HK": "Asia/Hong_Kong",
         "IN": "Asia/Kolkata",
         "JP": "Asia/Tokyo",
+        "KR": "Asia/Seoul",
         "TW": "Asia/Taipei",
     }
     PROVIDER_CALENDAR_ID_BY_MARKET: dict[str, str] = {

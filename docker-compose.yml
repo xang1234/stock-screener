@@ -27,6 +27,7 @@ x-app-env: &app-env
   HERMES_MODEL: ${HERMES_MODEL:-hermes-agent}
   HERMES_REQUEST_TIMEOUT_SECONDS: ${HERMES_REQUEST_TIMEOUT_SECONDS:-120}
   ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+  OPENDART_API_KEY: ${OPENDART_API_KEY:-}
   ZAI_API_KEY: ${ZAI_API_KEY:-}
   ZAI_API_KEYS: ${ZAI_API_KEYS:-}
   ZAI_API_BASE: ${ZAI_API_BASE:-https://api.z.ai/api/paas/v4}
@@ -164,7 +165,7 @@ services:
 
   celery-datafetch:
     <<: *worker-common
-    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_tw -n datafetch-global@%h
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_kr,data_fetch_tw -n datafetch-global@%h
 
   celery-marketjobs-us:
     <<: *worker-common
@@ -181,6 +182,10 @@ services:
   celery-marketjobs-jp:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_jp -n marketjobs-jp@%h
+
+  celery-marketjobs-kr:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q market_jobs_kr -n marketjobs-kr@%h
 
   celery-marketjobs-tw:
     <<: *worker-common
@@ -205,6 +210,10 @@ services:
   celery-userscans-jp:
     <<: *worker-common
     command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_jp -n userscans-jp@%h
+
+  celery-userscans-kr:
+    <<: *worker-common
+    command: celery -A app.celery_app worker --pool=prefork --loglevel=info --concurrency=1 --without-mingle --without-gossip -Q user_scans_kr -n userscans-kr@%h
 
   celery-userscans-tw:
     <<: *worker-common

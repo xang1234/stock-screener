@@ -29,7 +29,7 @@ echo "Starting Celery workers..."
 POOL="${CELERY_POOL:-solo}"
 
 # Enabled markets (comma-separated). Override via env to skip markets locally.
-ENABLED_MARKETS="${ENABLED_MARKETS:-US,HK,IN,JP,TW}"
+ENABLED_MARKETS="${ENABLED_MARKETS:-US,HK,IN,JP,KR,TW}"
 
 echo "  Pool: $POOL"
 echo "  Enabled markets: $ENABLED_MARKETS"
@@ -47,7 +47,7 @@ echo "  Enabled markets: $ENABLED_MARKETS"
     --loglevel=info \
     --pool="$POOL" \
     --concurrency=1 \
-    -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_tw \
+    -Q data_fetch_shared,data_fetch_us,data_fetch_hk,data_fetch_in,data_fetch_jp,data_fetch_kr,data_fetch_tw \
     -n datafetch-global@%h &
 
 # Shared user-scans worker — same safety-net pattern for user-initiated scans.
@@ -64,7 +64,7 @@ for RAW_MARKET in "${MARKET_ARRAY[@]}"; do
     MARKET_LOWER="$(echo "$MARKET_UPPER" | tr '[:upper:]' '[:lower:]')"
 
     case "$MARKET_UPPER" in
-        US|HK|IN|JP|TW) ;;
+        US|HK|IN|JP|KR|TW) ;;
         *)
             echo "  Skipping unknown market: $MARKET_UPPER"
             continue

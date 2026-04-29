@@ -1517,6 +1517,18 @@ def test_ingest_hk_snapshot_rows_applies_safe_deactivation_when_enabled(monkeypa
     db.close()
 
 
+def test_korea_reconciliation_min_count_defaults_to_launch_baseline(monkeypatch):
+    monkeypatch.delenv("ASIA_RECONCILIATION_MIN_COUNT_KR", raising=False)
+
+    assert stock_universe_service._min_count_threshold_for_market("KR") == 2526
+
+
+def test_korea_reconciliation_min_count_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("ASIA_RECONCILIATION_MIN_COUNT_KR", "2600")
+
+    assert stock_universe_service._min_count_threshold_for_market("KR") == 2600
+
+
 def test_get_market_audit_reports_by_market_counts_freshness_and_diff_summary(monkeypatch):
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

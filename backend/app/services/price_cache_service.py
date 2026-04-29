@@ -447,15 +447,10 @@ class PriceCacheService:
 
     def _fetch_full_and_cache(self, symbol: str, period: str) -> Optional[pd.DataFrame]:
         """
-        Fetch full historical data from yfinance and cache it.
+        Fetch full historical data from the market provider and cache it.
         """
         try:
-            # Import here to avoid circular dependency
-            from .yfinance_service import YFinanceService
-
-            yfinance_service = YFinanceService()
-            # IMPORTANT: use_cache=False to avoid circular dependency
-            data = yfinance_service.get_historical_data(symbol, period=period, use_cache=False)
+            data = self._fetch_direct_historical_data(symbol, period=period)
 
             if data is None or data.empty:
                 logger.warning(f"Failed to fetch data for {symbol}")
@@ -491,6 +486,37 @@ class PriceCacheService:
             )
             return None
 
+    @staticmethod
+    def _is_kr_price_symbol(symbol: str) -> bool:
+        normalized = str(symbol or "").strip().upper()
+        return normalized.endswith(".KS") or normalized.endswith(".KQ")
+
+    def _fetch_kr_historical_data(self, symbol: str, *, period: str) -> Optional[pd.DataFrame]:
+        try:
+            from .kr_market_data_service import KrxPriceService
+            from .security_master_service import security_master_resolver
+
+            identity = security_master_resolver.resolve_identity(symbol=symbol, market="KR")
+            local_code = str(identity.local_code or "").strip()
+            if not local_code.isdigit():
+                return None
+            return KrxPriceService().daily_ohlcv_dataframe(local_code, period=period)
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("KRX historical fetch failed for %s: %s", symbol, exc)
+            return None
+
+    def _fetch_direct_historical_data(self, symbol: str, *, period: str) -> Optional[pd.DataFrame]:
+        if self._is_kr_price_symbol(symbol):
+            krx_data = self._fetch_kr_historical_data(symbol, period=period)
+            if krx_data is not None and not krx_data.empty:
+                return krx_data
+
+        from .yfinance_service import YFinanceService
+
+        yfinance_service = YFinanceService()
+        # IMPORTANT: use_cache=False to avoid circular dependency
+        return yfinance_service.get_historical_data(symbol, period=period, use_cache=False)
+
     def _fetch_incremental_and_merge(
         self,
         symbol: str,
@@ -506,8 +532,6 @@ class PriceCacheService:
         we only fetch the missing days!
         """
         try:
-            from .yfinance_service import YFinanceService
-
             # Calculate how many days we're missing
             today = datetime.now().date()
             days_missing = (today - last_cached_date).days
@@ -525,9 +549,7 @@ class PriceCacheService:
                 logger.info(f"{symbol} is {days_missing} days old - fetching incremental update")
 
             # Fetch only recent data (last 7 days to ensure overlap)
-            yfinance_service = YFinanceService()
-            # IMPORTANT: use_cache=False to avoid circular dependency
-            new_data = yfinance_service.get_historical_data(symbol, period="7d", use_cache=False)
+            new_data = self._fetch_direct_historical_data(symbol, period="7d")
 
             if new_data is None or new_data.empty:
                 logger.warning(f"Failed to fetch incremental data for {symbol}")
@@ -1809,9 +1831,9 @@ class PriceCacheService:
 
         active_query_db = self._session_factory()
         try:
-            active_symbols = {
-                row[0]
-                for row in active_query_db.query(StockUniverse.symbol).filter(
+            active_market_by_symbol = {
+                row[0]: row[1]
+                for row in active_query_db.query(StockUniverse.symbol, StockUniverse.market).filter(
                     StockUniverse.symbol.in_(yfinance_needed),
                     StockUniverse.active_filter(),
                 ).all()
@@ -1819,11 +1841,11 @@ class PriceCacheService:
         finally:
             active_query_db.close()
 
-        inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_symbols]
-        active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_symbols]
+        inactive_symbols = [symbol for symbol in yfinance_needed if symbol not in active_market_by_symbol]
+        active_yfinance_needed = [symbol for symbol in yfinance_needed if symbol in active_market_by_symbol]
 
         logger.info(
-            "Batch fetching %d active symbols from yfinance (%d inactive skipped)",
+            "Batch fetching %d active symbols from market price providers (%d inactive skipped)",
             len(active_yfinance_needed),
             len(inactive_symbols),
         )
@@ -1838,11 +1860,28 @@ class PriceCacheService:
 
         if active_yfinance_needed:
             bulk_fetcher = BulkDataFetcher()
-            bulk_results = bulk_fetcher.fetch_prices_in_batches(
-                active_yfinance_needed,
-                period=period,
-                start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
-            )
+            bulk_results = {}
+            market_groups: dict[str | None, list[str]] = {}
+            for symbol in active_yfinance_needed:
+                market = active_market_by_symbol.get(symbol)
+                market_groups.setdefault(market, []).append(symbol)
+            for market, market_symbols in market_groups.items():
+                try:
+                    provider_results = bulk_fetcher.fetch_prices_in_batches(
+                        market_symbols,
+                        period=period,
+                        start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
+                        market=market,
+                    )
+                except TypeError as exc:
+                    if "market" not in str(exc):
+                        raise
+                    provider_results = bulk_fetcher.fetch_prices_in_batches(
+                        market_symbols,
+                        period=period,
+                        start_batch_size=getattr(settings, 'price_cache_yfinance_batch_size', 100),
+                    )
+                bulk_results.update(provider_results)
             batch_to_store = {}
             for symbol, data in bulk_results.items():
                 if not data.get('has_error') and data.get('price_data') is not None:

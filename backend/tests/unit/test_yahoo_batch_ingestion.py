@@ -193,6 +193,112 @@ def test_fetch_prices_in_batches_delays_growth_until_cooldown_expires(monkeypatc
     assert observed_batch_sizes[:8] == [100, 50, 50, 50, 50, 50, 50, 75]
 
 
+def test_fetch_prices_in_batches_uses_krx_first_for_korea(monkeypatch):
+    price_frame = _price_df(date(2026, 4, 29), 105.0)
+    krx_service = MagicMock()
+    krx_service.daily_ohlcv_dataframe.return_value = price_frame
+    fetcher = BulkDataFetcher(krx_price_service=krx_service)
+    yahoo_fallback = MagicMock(return_value={})
+    monkeypatch.setattr(fetcher, "_fetch_yfinance_prices_in_batches", yahoo_fallback)
+
+    results = fetcher.fetch_prices_in_batches(["005930.KS"], period="7d", market="KR")
+
+    krx_service.daily_ohlcv_dataframe.assert_called_once_with("005930", period="7d")
+    yahoo_fallback.assert_not_called()
+    assert results["005930.KS"]["provider"] == "krx"
+    assert results["005930.KS"]["price_data"].equals(price_frame)
+
+
+def test_fetch_prices_in_batches_falls_back_to_yahoo_for_krx_misses(monkeypatch):
+    price_frame = _price_df(date(2026, 4, 29), 105.0)
+    krx_service = MagicMock()
+    krx_service.daily_ohlcv_dataframe.side_effect = [price_frame, None]
+    fetcher = BulkDataFetcher(krx_price_service=krx_service)
+
+    def fake_yahoo(symbols, *, period, start_batch_size=None, market=None):
+        assert symbols == ["091990.KQ"]
+        assert period == "7d"
+        assert market == "KR"
+        return {"091990.KQ": _success_result("091990.KQ")}
+
+    monkeypatch.setattr(fetcher, "_fetch_yfinance_prices_in_batches", fake_yahoo)
+
+    results = fetcher.fetch_prices_in_batches(
+        ["005930.KS", "091990.KQ"],
+        period="7d",
+        market="KR",
+    )
+
+    assert results["005930.KS"]["provider"] == "krx"
+    assert results["091990.KQ"]["has_error"] is False
+    assert results["091990.KQ"]["provider"] == "yfinance"
+    assert results["091990.KQ"]["fallback_from"] == "krx"
+    assert results["091990.KQ"]["primary_provider_failed"] is True
+    assert results["091990.KQ"]["primary_provider_error"] == "KRX returned empty price data"
+
+
+def test_price_cache_fetch_direct_historical_data_prefers_krx_for_korea(monkeypatch):
+    service = PriceCacheService(redis_client=None, session_factory=MagicMock())
+    price_frame = _price_df(date(2026, 4, 29), 105.0)
+    monkeypatch.setattr(
+        service,
+        "_fetch_kr_historical_data",
+        lambda symbol, *, period: price_frame,
+    )
+
+    result = service._fetch_direct_historical_data("005930.KS", period="7d")
+
+    assert result is price_frame
+
+
+def test_price_cache_bulk_fallback_passes_market_to_batch_fetcher(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    db = TestingSessionLocal()
+    db.add(
+        StockUniverse(
+            symbol="005930.KS",
+            name="Samsung Electronics",
+            market="KR",
+            exchange="KOSPI",
+            currency="KRW",
+            timezone="Asia/Seoul",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+    db.close()
+
+    service = PriceCacheService(redis_client=None, session_factory=TestingSessionLocal)
+    monkeypatch.setattr(service, "store_batch_in_cache", lambda payload, also_store_db=True: len(payload))
+    calls = []
+    price_frame = _price_df(date(2026, 4, 29), 105.0)
+
+    class _FakeFetcher:
+        def fetch_prices_in_batches(self, symbols, period="2y", start_batch_size=None, market=None):
+            calls.append({"symbols": list(symbols), "period": period, "market": market})
+            return {
+                symbol: {"price_data": price_frame, "has_error": False}
+                for symbol in symbols
+            }
+
+    import app.services.bulk_data_fetcher as bulk_module
+
+    monkeypatch.setattr(bulk_module, "BulkDataFetcher", lambda: _FakeFetcher())
+
+    result = service._resolve_bulk_fallback(
+        ["005930.KS"],
+        period="7d",
+        expected_date=date(2026, 4, 29),
+        now_et=datetime(2026, 4, 29, 16, 0),
+    )
+
+    assert calls == [{"symbols": ["005930.KS"], "period": "7d", "market": "KR"}]
+    assert result["005930.KS"] is price_frame
+
+
 def test_store_in_database_replaces_latest_day_row(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

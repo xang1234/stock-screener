@@ -251,6 +251,56 @@ def test_create_snapshot_run_uses_market_specific_thresholds_for_hk(monkeypatch)
     db.close()
 
 
+def test_create_snapshot_run_uses_market_specific_thresholds_for_kr(monkeypatch):
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol=f"{code:06d}.KS",
+                market="KR",
+                exchange="KOSPI",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+                status_reason="active",
+            )
+            for code in range(1, 11)
+        ]
+    )
+    db.commit()
+
+    service = _make_provider_snapshot_service()
+    monkeypatch.setattr(
+        service,
+        "_build_snapshot_rows",
+        lambda exchange_filter=None, **kwargs: {
+            f"{code:06d}.KS": {
+                "exchange": "KOSPI",
+                "row_hash": f"hash-{code:06d}",
+                "normalized_payload": {"symbol": f"{code:06d}.KS", "exchange": "KOSPI"},
+                "raw_payload": {"overview": {"Ticker": f"{code:06d}.KS"}},
+            }
+            for code in range(1, 8)
+        },
+    )
+
+    result = service.create_snapshot_run(
+        db,
+        run_mode="publish",
+        snapshot_key=ProviderSnapshotService.snapshot_key_for_market("KR"),
+        market="KR",
+        publish=True,
+    )
+
+    assert result["published"] is True
+    assert result["coverage"]["active_symbols"] == 10
+    assert result["coverage"]["covered_active_symbols"] == 7
+    assert result["coverage_thresholds"]["market"] == "KR"
+    assert result["coverage_thresholds"]["active_coverage"] == pytest.approx(0.7)
+    assert result["coverage_thresholds"]["missing_ratio"] == pytest.approx(0.3)
+    db.close()
+
+
 def test_hydrate_published_snapshot_fetches_yahoo_only_fields_for_missing_scan_data():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()

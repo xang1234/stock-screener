@@ -1,16 +1,18 @@
-"""Fetch and parse official exchange universe snapshots for HK, IN, JP, and TW."""
+"""Fetch and parse official exchange universe snapshots for HK, IN, JP, KR, and TW."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import io
 import json
 import logging
+import math
 import re
 import time
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -27,7 +29,18 @@ _IN_SOURCE_NAME = "in_reference_bundle"
 _NSE_SOURCE_NAME = "nse_official"
 _BSE_SOURCE_NAME = "bse_official"
 _JP_SOURCE_NAME = "jpx_official"
+_KR_SOURCE_NAME = "krx_official"
 _TW_SOURCE_NAME = "tw_reference_bundle"
+_KR_VALIDATED_BASELINE = {
+    "source_url": "https://global.krx.co.kr/main/main.jspx?bld=listing_list",
+    "validated_at": "2026-04-29",
+    "kospi": 839,
+    "kosdaq": 1819,
+    "konex": 110,
+    "total": 2768,
+    "kospi_kosdaq_target": 2658,
+}
+_KR_VALIDATED_BASELINE_TOLERANCE = 0.02
 
 _HK_EQUITY_CATEGORY = "equity"
 _HK_EQUITY_SUBCATEGORY_TOKEN = "equity securities"
@@ -87,11 +100,15 @@ class OfficialMarketUniverseSourceService:
         *,
         timeout_seconds: int | None = None,
         user_agent: str | None = None,
+        kr_provider: Any | None = None,
+        market_calendar: Any | None = None,
     ) -> None:
         self._timeout_seconds = int(
             timeout_seconds or settings.universe_source_timeout_seconds
         )
         self._user_agent = user_agent or settings.universe_source_user_agent
+        self._kr_provider = kr_provider
+        self._market_calendar = market_calendar
 
     def fetch_market_snapshot(self, market: str) -> OfficialMarketUniverseSnapshot:
         normalized_market = str(market or "").strip().upper()
@@ -101,6 +118,8 @@ class OfficialMarketUniverseSourceService:
             return self.fetch_in_snapshot()
         if normalized_market == "JP":
             return self.fetch_jp_snapshot()
+        if normalized_market == "KR":
+            return self.fetch_kr_snapshot()
         if normalized_market == "TW":
             return self.fetch_tw_snapshot()
         raise ValueError(f"Official universe refresh is unsupported for market {market!r}")
@@ -153,6 +172,93 @@ class OfficialMarketUniverseSourceService:
             rows=tuple(rows),
         )
 
+    def fetch_kr_snapshot(self) -> OfficialMarketUniverseSnapshot:
+        provider = self._get_kr_provider()
+        listing_as_of = self._kr_listing_as_of()
+        rows = list(
+            provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=listing_as_of)
+        )
+        if not rows:
+            raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
+
+        rows = self._enrich_kr_rows_with_taxonomy(rows)
+        row_counts = {
+            "kospi": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSPI"),
+            "kosdaq": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSDAQ"),
+        }
+        count_breaches = self._kr_baseline_count_breaches(row_counts)
+        if count_breaches:
+            logger.warning(
+                "KR official universe fetch count outside static KRX baseline: %s",
+                "; ".join(
+                    f"{breach['board']} actual={breach['actual']} expected={breach['expected']} "
+                    f"range=[{breach['min']},{breach['max']}]"
+                    for breach in count_breaches
+                ),
+            )
+
+        snapshot_as_of = listing_as_of.isoformat()
+        source_metadata = {
+            "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "listing_as_of": snapshot_as_of,
+            "filters": {
+                "boards": ["KOSPI", "KOSDAQ"],
+                "excluded_products": ["ETF", "ETN", "ELW", "funds", "REITs"],
+            },
+            "excluded_boards": ["KONEX"],
+            "row_counts": row_counts,
+            "source_count": len(rows),
+            "validated_krx_baseline": dict(_KR_VALIDATED_BASELINE),
+            "validated_krx_baseline_tolerance": _KR_VALIDATED_BASELINE_TOLERANCE,
+            "validated_krx_baseline_breaches": count_breaches,
+            "krx_baseline_status": (
+                "outside_static_baseline" if count_breaches else "within_static_baseline"
+            ),
+        }
+        return OfficialMarketUniverseSnapshot(
+            market="KR",
+            source_name=_KR_SOURCE_NAME,
+            snapshot_id=f"krx-listings-{snapshot_as_of}",
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            rows=tuple(rows),
+        )
+
+    @staticmethod
+    def _seoul_today() -> date:
+        return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+    def _kr_listing_as_of(self) -> date:
+        try:
+            listing_day = self._get_market_calendar().last_completed_trading_day("KR")
+            if isinstance(listing_day, datetime):
+                return listing_day.date()
+            if isinstance(listing_day, date):
+                return listing_day
+            raise ValueError(f"KR calendar returned invalid date: {listing_day!r}")
+        except (AttributeError, ImportError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning(
+                "KR calendar lookup unavailable; using Seoul weekday fallback: %s",
+                exc,
+            )
+            return self._previous_seoul_business_day(self._seoul_today())
+
+    def _get_market_calendar(self):
+        if self._market_calendar is None:
+            from .market_calendar_service import MarketCalendarService
+
+            self._market_calendar = MarketCalendarService()
+        return self._market_calendar
+
+    @staticmethod
+    def _previous_seoul_business_day(day: date) -> date:
+        if day.weekday() == 0:
+            return day - timedelta(days=3)
+        if day.weekday() == 6:
+            return day - timedelta(days=2)
+        return day - timedelta(days=1)
+
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         source_urls = [settings.nse_universe_source_url]
         try:
@@ -185,6 +291,79 @@ class OfficialMarketUniverseSourceService:
             },
             rows=tuple(rows),
         )
+
+    def _get_kr_provider(self):
+        if self._kr_provider is None:
+            from .kr_market_data_service import KrxMarketDataService
+
+            self._kr_provider = KrxMarketDataService()
+        return self._kr_provider
+
+    @staticmethod
+    def _kr_expected_range(expected: int) -> tuple[int, int]:
+        tolerance = _KR_VALIDATED_BASELINE_TOLERANCE
+        return (
+            math.ceil(expected * (1.0 - tolerance)),
+            math.floor(expected * (1.0 + tolerance)),
+        )
+
+    @classmethod
+    def _kr_baseline_count_breaches(cls, row_counts: dict[str, int]) -> list[dict[str, Any]]:
+        breaches: list[dict[str, Any]] = []
+        for board in ("kospi", "kosdaq"):
+            expected = int(_KR_VALIDATED_BASELINE[board])
+            minimum, maximum = cls._kr_expected_range(expected)
+            actual = int(row_counts.get(board) or 0)
+            if actual < minimum or actual > maximum:
+                breaches.append(
+                    {
+                        "board": board,
+                        "actual": actual,
+                        "expected": expected,
+                        "min": minimum,
+                        "max": maximum,
+                    }
+                )
+        return breaches
+
+    @staticmethod
+    def _enrich_kr_rows_with_taxonomy(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach committed KR taxonomy fields where the KRX listing row is sparse."""
+        try:
+            from .market_taxonomy_service import TaxonomyLoadError, get_market_taxonomy_service
+        except ImportError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+            return rows
+
+        try:
+            taxonomy = get_market_taxonomy_service()
+        except TaxonomyLoadError as exc:  # pragma: no cover - taxonomy availability is launch-gated separately
+            logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+            return rows
+
+        enriched_rows: list[dict[str, Any]] = []
+        for row in rows:
+            enriched = dict(row)
+            try:
+                entry = taxonomy.get(
+                    enriched.get("symbol") or enriched.get("local_code"),
+                    market="KR",
+                    exchange=enriched.get("exchange"),
+                )
+            except TaxonomyLoadError as exc:
+                logger.warning("KR taxonomy enrichment unavailable: %s", exc)
+                return rows
+            if entry is not None:
+                if not str(enriched.get("sector") or "").strip() and entry.sector:
+                    enriched["sector"] = entry.sector
+                if not str(enriched.get("industry_group") or "").strip() and entry.industry_group:
+                    enriched["industry_group"] = entry.industry_group
+                if not str(enriched.get("industry") or "").strip() and entry.industry:
+                    enriched["industry"] = entry.industry
+                if not str(enriched.get("sub_industry") or "").strip() and entry.sub_industry:
+                    enriched["sub_industry"] = entry.sub_industry
+            enriched_rows.append(enriched)
+        return enriched_rows
 
     def fetch_bse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         fetched = self._http_get(

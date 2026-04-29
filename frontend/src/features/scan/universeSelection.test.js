@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { TEST_SYMBOLS } from './constants';
+import { TEST_SYMBOLS, UNIVERSE_SCOPES_BY_MARKET } from './constants';
 import {
   buildUniverseDef,
   getSelectionCount,
@@ -95,6 +95,7 @@ describe('parseLegacyUniverseDefault', () => {
   it('maps market:hk and friends to market scope', () => {
     expect(parseLegacyUniverseDefault('market:hk')).toEqual({ market: 'HK', scope: 'market' });
     expect(parseLegacyUniverseDefault('market:jp')).toEqual({ market: 'JP', scope: 'market' });
+    expect(parseLegacyUniverseDefault('market:kr')).toEqual({ market: 'KR', scope: 'market' });
   });
 
   // The 'all' default is deliberately ambiguous (it used to mean "all US"), so
@@ -106,5 +107,15 @@ describe('parseLegacyUniverseDefault', () => {
   it('yields unselected state for null / unknown values', () => {
     expect(parseLegacyUniverseDefault(null)).toEqual({ market: null, scope: null });
     expect(parseLegacyUniverseDefault('bogus')).toEqual({ market: null, scope: null });
+  });
+});
+
+describe('UNIVERSE_SCOPES_BY_MARKET', () => {
+  it('exposes KOSPI and KOSDAQ scopes for Korea', () => {
+    expect(UNIVERSE_SCOPES_BY_MARKET.KR).toEqual([
+      { value: 'market', label: 'All Korea' },
+      { value: 'exchange:KOSPI', label: 'KOSPI' },
+      { value: 'exchange:KOSDAQ', label: 'KOSDAQ' },
+    ]);
   });
 });

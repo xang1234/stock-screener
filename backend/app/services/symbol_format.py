@@ -6,8 +6,9 @@ width of ``stock_universe.symbol`` (``VARCHAR(20)``), so a format-valid
 symbol is always persistable.
 
 Accepts US-shape tokens (``NVDA``, ``GOOGL``) alongside the suffixed
-non-US forms supported today: ``.HK`` (Hong Kong), ``.T`` (Tokyo),
-``.TW`` / ``.TWO`` (Taiwan). The regex itself doesn't enforce the
+non-US forms supported today: ``.HK`` (Hong Kong), ``.NS``/``.BO``
+(India), ``.T`` (Tokyo), ``.KS``/``.KQ`` (Korea), and ``.TW`` /
+``.TWO`` (Taiwan). The regex itself doesn't enforce the
 suffix list — ``SUPPORTED_SUFFIXES`` is the policy lookup, and
 universe-membership is the authoritative existence check (see
 ``StockUniverse``).
@@ -29,7 +30,16 @@ SYMBOL_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19
 # Known exchange suffixes. Extending to a new market (e.g. '.KS' for KRX)
 # requires adding entries here, in the market-ingestion adapters, and in
 # the Market/Exchange enums in schemas/universe.py.
-SUPPORTED_SUFFIXES: Final[tuple[str, ...]] = (".HK", ".T", ".TW", ".TWO")
+SUPPORTED_SUFFIXES: Final[tuple[str, ...]] = (
+    ".HK",
+    ".NS",
+    ".BO",
+    ".T",
+    ".KS",
+    ".KQ",
+    ".TW",
+    ".TWO",
+)
 
 _MAX_SYMBOL_LEN: Final[int] = 20
 

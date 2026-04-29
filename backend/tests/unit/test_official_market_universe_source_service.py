@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 import re
 from unittest.mock import MagicMock
@@ -172,6 +173,189 @@ def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):
     assert snapshot.source_metadata["nse_count"] == 2
     assert snapshot.source_metadata["bse_count"] == 2
     assert snapshot.source_metadata["overlap_isin_count"] == 1
+
+
+def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(monkeypatch):
+    provider_as_of_dates = []
+
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            assert boards == ("KOSPI", "KOSDAQ")
+            provider_as_of_dates.append(as_of)
+            kospi_rows = [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                }
+            ]
+            kospi_rows.extend(
+                {
+                    "symbol": f"{index:06d}.KS",
+                    "local_code": f"{index:06d}",
+                    "name": f"KOSPI Co {index}",
+                    "exchange": "KOSPI",
+                }
+                for index in range(1, 839)
+            )
+            kosdaq_rows = [
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                }
+            ]
+            kosdaq_rows.extend(
+                {
+                    "symbol": f"{100000 + index:06d}.KQ",
+                    "local_code": f"{100000 + index:06d}",
+                    "name": f"KOSDAQ Co {index}",
+                    "exchange": "KOSDAQ",
+                }
+                for index in range(1, 1819)
+            )
+            return [*kospi_rows, *kosdaq_rows]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert provider_as_of_dates == [date(2026, 4, 30)]
+    assert snapshot.market == "KR"
+    assert snapshot.source_name == "krx_official"
+    assert snapshot.snapshot_id == "krx-listings-2026-04-30"
+    assert snapshot.snapshot_as_of == "2026-04-30"
+    assert len(snapshot.rows) == 2658
+    rows_by_symbol = {row["symbol"]: row for row in snapshot.rows}
+    assert rows_by_symbol["005930.KS"]["sector"] == "Information Technology"
+    assert rows_by_symbol["091990.KQ"]["industry_group"] == "Biotechnology"
+    assert snapshot.source_metadata["row_counts"] == {"kospi": 839, "kosdaq": 1819}
+    assert snapshot.source_metadata["source_count"] == 2658
+    assert snapshot.source_metadata["listing_as_of"] == "2026-04-30"
+    assert snapshot.source_metadata["excluded_boards"] == ["KONEX"]
+    assert snapshot.source_metadata["validated_krx_baseline"]["kospi"] == 839
+    assert snapshot.source_metadata["validated_krx_baseline"]["kosdaq"] == 1819
+    assert snapshot.source_metadata["validated_krx_baseline_tolerance"] == 0.02
+    assert snapshot.source_metadata["validated_krx_baseline"]["source_url"].startswith(
+        "https://global.krx.co.kr/"
+    )
+
+
+def test_fetch_kr_snapshot_falls_back_to_previous_seoul_weekday_when_calendar_unavailable(monkeypatch):
+    provider_as_of_dates = []
+
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            provider_as_of_dates.append(as_of)
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                },
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.side_effect = RuntimeError("calendar unavailable")
+    monkeypatch.setattr(
+        OfficialMarketUniverseSourceService,
+        "_seoul_today",
+        staticmethod(lambda: date(2026, 5, 2)),
+    )
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert provider_as_of_dates == [date(2026, 5, 1)]
+    assert snapshot.snapshot_id == "krx-listings-2026-05-01"
+    assert snapshot.snapshot_as_of == "2026-05-01"
+    assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
+
+
+@pytest.mark.parametrize(
+    ("today", "expected_previous"),
+    [
+        (date(2026, 5, 4), date(2026, 5, 1)),
+        (date(2026, 5, 5), date(2026, 5, 4)),
+        (date(2026, 5, 9), date(2026, 5, 8)),
+        (date(2026, 5, 10), date(2026, 5, 8)),
+    ],
+)
+def test_previous_seoul_business_day_returns_last_completed_weekday(today, expected_previous):
+    assert OfficialMarketUniverseSourceService._previous_seoul_business_day(today) == expected_previous
+
+
+def test_enrich_kr_rows_returns_raw_rows_when_taxonomy_lazy_load_fails(monkeypatch):
+    import app.services.market_taxonomy_service as taxonomy_module
+    from app.services.market_taxonomy_service import TaxonomyLoadError
+
+    rows = [
+        {
+            "symbol": "005930.KS",
+            "local_code": "005930",
+            "name": "Samsung Electronics",
+            "exchange": "KOSPI",
+            "sector": "",
+        }
+    ]
+
+    class BrokenTaxonomy:
+        @staticmethod
+        def get(*args, **kwargs):
+            raise TaxonomyLoadError("malformed korea-deep.csv")
+
+    monkeypatch.setattr(taxonomy_module, "get_market_taxonomy_service", lambda: BrokenTaxonomy())
+
+    enriched = OfficialMarketUniverseSourceService._enrich_kr_rows_with_taxonomy(rows)
+
+    assert enriched == rows
+
+
+def test_fetch_kr_snapshot_records_baseline_drift_without_rejecting_source():
+    class LowCountKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                },
+            ]
+
+    service = OfficialMarketUniverseSourceService(kr_provider=LowCountKrxProvider())
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
+    assert snapshot.source_metadata["krx_baseline_status"] == "outside_static_baseline"
+    assert snapshot.source_metadata["validated_krx_baseline_breaches"] == [
+        {"board": "kospi", "actual": 1, "expected": 839, "min": 823, "max": 855},
+        {"board": "kosdaq", "actual": 1, "expected": 1819, "min": 1783, "max": 1855},
+    ]
 
 
 def test_fetch_tw_snapshot_combines_twse_and_tpex_rows(monkeypatch):
@@ -471,6 +655,9 @@ def test_refresh_official_market_universe_ingests_snapshot(monkeypatch):
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     emitted = []
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: emitted.append((market, prior)))
+    no_github_sync = MagicMock()
+    no_github_sync.sync_weekly_reference_from_github.return_value = {"status": "missing"}
+    monkeypatch.setattr(module, "get_provider_snapshot_service", lambda: no_github_sync)
     monkeypatch.setattr(
         "app.services.official_market_universe_source_service.OfficialMarketUniverseSourceService.fetch_market_snapshot",
         lambda self, market: snapshot,
@@ -537,6 +724,9 @@ def test_refresh_official_market_universe_does_not_ingest_on_fetch_failure(monke
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "_count_active_universe", lambda market: 10)
     monkeypatch.setattr(module, "_emit_universe_drift", lambda market, prior: None)
+    no_github_sync = MagicMock()
+    no_github_sync.sync_weekly_reference_from_github.return_value = {"status": "missing"}
+    monkeypatch.setattr(module, "get_provider_snapshot_service", lambda: no_github_sync)
     monkeypatch.setattr(
         "app.services.official_market_universe_source_service.OfficialMarketUniverseSourceService.fetch_market_snapshot",
         MagicMock(side_effect=RuntimeError("upstream unavailable")),

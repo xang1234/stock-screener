@@ -27,7 +27,7 @@ class TestNormalizeMarket:
         ("US", "US"), ("us", "US"), ("Us", "US"), (" us ", "US"),
         ("HK", "HK"), ("hk", "HK"),
         ("IN", "IN"), ("in", "IN"),
-        ("JP", "JP"), ("TW", "TW"),
+        ("JP", "JP"), ("KR", "KR"), ("kr", "KR"), ("TW", "TW"),
         (None, SHARED_SENTINEL), ("", SHARED_SENTINEL), ("  ", SHARED_SENTINEL),
         ("SHARED", SHARED_SENTINEL), ("shared", SHARED_SENTINEL),
     ])
@@ -50,6 +50,7 @@ class TestQueueForMarket:
         ("HK", "data_fetch_hk"),
         ("IN", "data_fetch_in"),
         ("JP", "data_fetch_jp"),
+        ("KR", "data_fetch_kr"),
         ("TW", "data_fetch_tw"),
         (None, "data_fetch_shared"),
         ("shared", "data_fetch_shared"),
@@ -77,6 +78,7 @@ class TestQueueForMarket:
         ("HK", "market_jobs_hk"),
         ("IN", "market_jobs_in"),
         ("JP", "market_jobs_jp"),
+        ("KR", "market_jobs_kr"),
         ("TW", "market_jobs_tw"),
     ])
     def test_market_jobs_queue(self, market, expected):

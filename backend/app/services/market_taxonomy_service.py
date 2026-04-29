@@ -1,4 +1,4 @@
-"""Shared market-taxonomy loader for US/HK/IN/JP/TW group classifications."""
+"""Shared market-taxonomy loader for US/HK/IN/JP/KR/TW group classifications."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .security_master_service import security_master_resolver
 _HK_LOCAL_CODE_RE = re.compile(r"^[0-9]{1,8}$")
 _IN_LOCAL_CODE_RE = re.compile(r"^[0-9A-Z-]{1,16}$")
 _JP_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,5}[A-Z]?$")
+_KR_LOCAL_CODE_RE = re.compile(r"^[0-9]{6}$")
 _TW_LOCAL_CODE_RE = re.compile(r"^[0-9]{3,6}[A-Z]?$")
 
 _TW_EXCHANGE_ALIASES = {
@@ -43,6 +44,7 @@ class MarketTaxonomyEntry:
     industry_group: str | None = None
     sector: str | None = None
     industry: str | None = None
+    sub_industry: str | None = None
     themes: tuple[str, ...] = ()
 
     def themes_list(self) -> list[str]:
@@ -60,7 +62,16 @@ class MarketTaxonomyService:
             "HK": {},
             "IN": {},
             "JP": {},
+            "KR": {},
             "TW": {},
+        }
+        self._loaded_row_counts: dict[str, int] = {
+            "US": 0,
+            "HK": 0,
+            "IN": 0,
+            "JP": 0,
+            "KR": 0,
+            "TW": 0,
         }
 
     @staticmethod
@@ -79,6 +90,7 @@ class MarketTaxonomyService:
             "hk-deep.csv",
             "india-deep.csv",
             "kabutan_themes_en.csv",
+            "korea-deep.csv",
             "taiwan-deep.csv",
         )
         unique_candidates = list(dict.fromkeys(candidates))
@@ -89,12 +101,14 @@ class MarketTaxonomyService:
         return best_candidate
 
     def refresh(self) -> None:
-        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "TW": {}}
+        self._entries = {"US": {}, "HK": {}, "IN": {}, "JP": {}, "KR": {}, "TW": {}}
+        self._loaded_row_counts = {"US": 0, "HK": 0, "IN": 0, "JP": 0, "KR": 0, "TW": 0}
         try:
             self._load_us()
             self._load_hk()
             self._load_in()
             self._load_jp()
+            self._load_kr()
             self._load_tw()
         except TaxonomyLoadError:
             self._loaded = False
@@ -153,6 +167,12 @@ class MarketTaxonomyService:
             if entry.industry_group == group
         )
 
+    def entry_count_for_market(self, market: str) -> int:
+        """Return the committed taxonomy row count loaded for one market."""
+        self._ensure_loaded()
+        normalized = security_master_resolver.normalize_market(market) or market.upper()
+        return self._loaded_row_counts.get(normalized, 0)
+
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.refresh()
@@ -183,8 +203,10 @@ class MarketTaxonomyService:
         industry_group: str | None,
         sector: str | None,
         industry: str | None,
+        sub_industry: str | None = None,
         themes: Iterable[str],
     ) -> None:
+        self._loaded_row_counts[market] = self._loaded_row_counts.get(market, 0) + 1
         bucket = self._entries[market]
         normalized_themes = []
         for theme in themes:
@@ -200,6 +222,7 @@ class MarketTaxonomyService:
                 industry_group=industry_group,
                 sector=sector,
                 industry=industry,
+                sub_industry=sub_industry,
                 themes=tuple(dict.fromkeys(normalized_themes)),
             )
             return
@@ -210,6 +233,7 @@ class MarketTaxonomyService:
             industry_group=current.industry_group or industry_group,
             sector=current.sector or sector,
             industry=current.industry or industry,
+            sub_industry=current.sub_industry or sub_industry,
             themes=merged_themes,
         )
 
@@ -321,6 +345,32 @@ class MarketTaxonomyService:
                     themes=(),
                 )
 
+    def _load_kr(self) -> None:
+        path = self._data_dir / "korea-deep.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self._require_columns(
+                path,
+                reader,
+                ("Symbol", "Market", "Sector", "Industry Group", "Industry", "Sub-Industry"),
+            )
+            for row in reader:
+                symbol = self._canonicalize_kr_symbol(
+                    row.get("Symbol"),
+                    exchange=row.get("Market"),
+                )
+                if symbol is None:
+                    continue
+                self._merge_entry(
+                    market="KR",
+                    symbol=symbol,
+                    industry_group=self._normalize_text(row.get("Industry Group")),
+                    sector=self._normalize_text(row.get("Sector")),
+                    industry=self._normalize_text(row.get("Industry")),
+                    sub_industry=self._normalize_text(row.get("Sub-Industry")),
+                    themes=(),
+                )
+
     def _candidate_symbols(
         self,
         symbol: str | None,
@@ -356,6 +406,33 @@ class MarketTaxonomyService:
         if market == "JP":
             canonical = self._canonicalize_jp_symbol(normalized)
             return (canonical,) if canonical else (normalized,)
+        if market == "KR":
+            candidates: list[str] = []
+            canonical = self._canonicalize_kr_symbol(normalized, exchange=exchange)
+            if canonical:
+                candidates.append(canonical)
+            if "." not in normalized:
+                raw_exchange = str(exchange or "").strip().upper()
+                if raw_exchange in {"KRX", "XKRX", "STK"}:
+                    raw_exchange = ""
+                if raw_exchange not in {"KOSDAQ", "KSQ"}:
+                    kospi_variant = self._canonicalize_kr_symbol(normalized, exchange="KOSPI")
+                    if kospi_variant:
+                        candidates.append(kospi_variant)
+                if raw_exchange not in {"KOSPI", "KRX", "XKRX", "STK"}:
+                    kosdaq_variant = self._canonicalize_kr_symbol(normalized, exchange="KOSDAQ")
+                    if kosdaq_variant:
+                        candidates.append(kosdaq_variant)
+            elif normalized.endswith(".KS"):
+                kosdaq_variant = self._canonicalize_kr_symbol(normalized[:-3], exchange="KOSDAQ")
+                if kosdaq_variant:
+                    candidates.append(kosdaq_variant)
+            elif normalized.endswith(".KQ"):
+                kospi_variant = self._canonicalize_kr_symbol(normalized[:-3], exchange="KOSPI")
+                if kospi_variant:
+                    candidates.append(kospi_variant)
+            candidates.append(normalized)
+            return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
         if market == "TW":
             candidates: list[str] = []
             canonical = self._canonicalize_tw_symbol(normalized, exchange=exchange)
@@ -460,6 +537,42 @@ class MarketTaxonomyService:
             symbol=f"{token}.T",
             market="JP",
             exchange="XTKS",
+            local_code=token,
+        )
+        return identity.canonical_symbol
+
+    @staticmethod
+    def _canonicalize_kr_symbol(
+        raw_symbol: object,
+        *,
+        exchange: object | None = None,
+    ) -> str | None:
+        token = security_master_resolver.normalize_symbol(str(raw_symbol or ""))
+        if not token:
+            return None
+        for prefix in ("KOSPI:", "KOSDAQ:", "KRX:", "XKRX:", "STK:", "KSQ:"):
+            if token.startswith(prefix):
+                token = token[len(prefix):]
+                break
+        normalized_exchange = str(exchange or "").strip().upper()
+        if token.endswith(".KS"):
+            token = token[:-3]
+            normalized_exchange = "KOSPI"
+        elif token.endswith(".KQ"):
+            token = token[:-3]
+            normalized_exchange = "KOSDAQ"
+        if normalized_exchange in {"", "KRX", "XKRX", "STK"}:
+            normalized_exchange = "KOSPI"
+        elif normalized_exchange == "KSQ":
+            normalized_exchange = "KOSDAQ"
+        if normalized_exchange not in {"KOSPI", "KOSDAQ"}:
+            return None
+        if not _KR_LOCAL_CODE_RE.fullmatch(token):
+            return None
+        identity = security_master_resolver.resolve_identity(
+            symbol=f"{token}.KS",
+            market="KR",
+            exchange=normalized_exchange,
             local_code=token,
         )
         return identity.canonical_symbol

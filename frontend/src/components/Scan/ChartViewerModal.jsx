@@ -30,7 +30,9 @@ import { getGroupRankColor } from '../../utils/colorUtils';
 const inferMarketFromSymbol = (symbol) => {
   const normalized = String(symbol || '').toUpperCase();
   if (normalized.endsWith('.HK')) return 'HK';
+  if (normalized.endsWith('.NS') || normalized.endsWith('.BO')) return 'IN';
   if (normalized.endsWith('.T')) return 'JP';
+  if (normalized.endsWith('.KS') || normalized.endsWith('.KQ')) return 'KR';
   if (normalized.endsWith('.TW') || normalized.endsWith('.TWO')) return 'TW';
   return 'US';
 };

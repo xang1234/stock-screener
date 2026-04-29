@@ -45,12 +45,12 @@ from .security_master_service import (
 
 logger = logging.getLogger(__name__)
 
-POLICY_VERSION: str = "2026.04.13.1"
+POLICY_VERSION: str = "2026.04.29.1"
 
 # Shape regex — unchanged from the original ThemeExtractionService. It's
-# permissive enough for US (NVDA), HK (0700.HK), JP (6758.T), TW (2330.TW),
-# and TWO (2330.TWO) canonical forms. Max length 12 covers all canonical
-# shapes with room for 5-digit HK/JP/TW codes.
+# permissive enough for US (NVDA), HK (0700.HK), IN (RELIANCE.NS),
+# JP (6758.T), KR (005930.KS), TW (2330.TW), and TWO (2330.TWO)
+# canonical forms. Max length 12 covers all current canonical shapes.
 TICKER_SHAPE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\.\-]{0,11}$")
 
 # Drop-reason tags used in logger.debug so ops can grep drop rates by bucket.
@@ -155,7 +155,7 @@ def describe_policy() -> dict:
     """Stable snapshot for API / admin surfacing."""
     return {
         "policy_version": POLICY_VERSION,
-        "accepted_suffixes": [".HK", ".T", ".TW", ".TWO"],
+        "accepted_suffixes": [".HK", ".NS", ".BO", ".T", ".KS", ".KQ", ".TW", ".TWO"],
         "drop_reasons": sorted(_DROP_REASONS),
         "shape_regex": TICKER_SHAPE_RE.pattern,
     }

@@ -57,6 +57,13 @@ SCAN_GUARD_MARKET_BY_INDEX = {
     IndexName.NIKKEI225.value: "JP",
     IndexName.TAIEX.value: "TW",
 }
+SCAN_GUARD_MARKET_BY_EXCHANGE = {
+    "NYSE": "US",
+    "NASDAQ": "US",
+    "AMEX": "US",
+    "KOSPI": "KR",
+    "KOSDAQ": "KR",
+}
 
 
 class ScanCacheRefreshRequest(BaseModel):
@@ -121,7 +128,7 @@ def _resolve_scan_guard_market(universe_def: Any) -> str | None:
     if getattr(universe_def, "market", None):
         return universe_def.market.value
     if getattr(universe_def, "exchange", None):
-        return "US"
+        return SCAN_GUARD_MARKET_BY_EXCHANGE.get(universe_def.exchange.value)
     if getattr(universe_def, "index", None):
         return SCAN_GUARD_MARKET_BY_INDEX.get(universe_def.index.value)
     return None

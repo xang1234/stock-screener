@@ -54,13 +54,14 @@ STATIC_CHART_PRESET_TOP_N = 200
 STATIC_GROUP_DETAIL_HISTORY_DAYS = 100
 STATIC_BREADTH_HISTORY_LOOKBACK_DAYS = 90
 STATIC_DEFAULT_MARKET = "US"
-STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "TW")
+STATIC_SUPPORTED_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW")
 STATIC_MARKET_METADATA_FILENAME = "manifest.market.json"
 STATIC_MARKET_DISPLAY = {
     "US": "United States",
     "HK": "Hong Kong",
     "IN": "India",
     "JP": "Japan",
+    "KR": "South Korea",
     "TW": "Taiwan",
 }
 STATIC_GROUP_HISTORY_RUNS = 40
@@ -102,6 +103,13 @@ _DEFAULT_KEY_MARKETS = {
         {"symbol": "7203.T", "display_name": "Toyota", "currency": "JPY"},
         {"symbol": "6758.T", "display_name": "Sony Group", "currency": "JPY"},
         {"symbol": "9984.T", "display_name": "SoftBank Group", "currency": "JPY"},
+    ),
+    "KR": (
+        {"symbol": "^KS11", "display_name": "KOSPI Composite", "currency": "KRW"},
+        {"symbol": "069500.KS", "display_name": "KODEX 200 ETF", "currency": "KRW"},
+        {"symbol": "005930.KS", "display_name": "Samsung Electronics", "currency": "KRW"},
+        {"symbol": "000660.KS", "display_name": "SK hynix", "currency": "KRW"},
+        {"symbol": "035420.KS", "display_name": "NAVER", "currency": "KRW"},
     ),
     "TW": (
         {"symbol": "^TWII", "display_name": "TAIEX", "currency": "TWD"},

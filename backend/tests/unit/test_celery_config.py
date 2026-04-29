@@ -125,12 +125,13 @@ class TestSettingsValidators:
 
         assert {
             market: settings.cache_warm_schedule_for(market)
-            for market in ("US", "HK", "IN", "JP", "TW")
+            for market in ("US", "HK", "IN", "JP", "KR", "TW")
         } == {
             "US": (16, 30),
             "HK": (4, 30),
             "IN": (6, 30),
             "JP": (2, 30),
+            "KR": (3, 0),
             "TW": (2, 0),
         }
 
@@ -138,10 +139,12 @@ class TestSettingsValidators:
         ("field_name", "value"),
         [
             ("provider_snapshot_min_active_coverage_in", 1.1),
+            ("provider_snapshot_min_active_coverage_kr", 1.1),
             ("provider_snapshot_max_missing_ratio_in", -0.1),
+            ("provider_snapshot_max_missing_ratio_kr", -0.1),
         ],
     )
-    def test_invalid_india_provider_snapshot_ratio(self, field_name, value):
+    def test_invalid_market_provider_snapshot_ratio(self, field_name, value):
         with pytest.raises(ValidationError, match="provider snapshot ratio must be between 0 and 1"):
             self._make_settings(**{field_name: value})
 

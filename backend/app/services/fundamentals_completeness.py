@@ -268,8 +268,9 @@ def _expected_fields(market: str | None) -> Tuple[FrozenSet[str], FrozenSet[str]
     The enhanced tier is empty for markets whose routing policy excludes
     finviz.
     """
+    normalized_market = routing_policy.normalize_market(market)
     finviz_allowed = routing_policy.is_supported(
-        market, routing_policy.PROVIDER_FINVIZ
+        normalized_market, routing_policy.PROVIDER_FINVIZ
     )
     enhanced = ENHANCED_FIELDS if finviz_allowed else frozenset()
     return CORE_FIELDS, STANDARD_FIELDS, enhanced
@@ -347,8 +348,9 @@ def derive_field_provenance(
     """
     if not data:
         return {}
-    expected = expected_fields(market)
-    allowed = set(routing_policy.providers_for(market))
+    normalized_market = routing_policy.normalize_market(market)
+    expected = expected_fields(normalized_market)
+    allowed = set(routing_policy.providers_for(normalized_market))
     provenance: Dict[str, str] = {}
     for field, value in data.items():
         if field not in expected:

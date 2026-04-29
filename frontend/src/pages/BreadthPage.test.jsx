@@ -12,7 +12,7 @@ const runtimeState = {
   uiSnapshots: { breadth: false },
   primaryMarket: 'HK',
   enabledMarkets: ['US', 'HK'],
-  supportedMarkets: ['US', 'HK', 'IN', 'JP', 'TW'],
+  supportedMarkets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW'],
 };
 
 vi.mock('../contexts/RuntimeContext', () => ({
@@ -65,7 +65,7 @@ beforeEach(() => {
   runtimeState.uiSnapshots = { breadth: false };
   runtimeState.primaryMarket = 'HK';
   runtimeState.enabledMarkets = ['US', 'HK'];
-  runtimeState.supportedMarkets = ['US', 'HK', 'IN', 'JP', 'TW'];
+  runtimeState.supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW'];
 
   breadthApi.getCurrentBreadth.mockImplementation((market = 'US') => Promise.resolve(breadthRow(market)));
   breadthApi.getHistoricalBreadth.mockImplementation((startDate, endDate, limit, market = 'US') => (
@@ -93,6 +93,22 @@ describe('BreadthPage', () => {
       expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('HK');
       expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('2800.HK', '1mo');
     });
+  });
+
+  it('supports Korea as a runtime primary market', async () => {
+    runtimeState.primaryMarket = 'KR';
+    runtimeState.enabledMarkets = ['KR', 'US'];
+
+    renderWithProviders(<BreadthPage />);
+
+    expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('KR');
+      expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('KR');
+      expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('069500.KS', '1mo');
+    });
+    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('South Korea');
   });
 
   it('resyncs the default market when runtime primary market data loads late', async () => {

@@ -58,7 +58,9 @@ USD = "USD"
 MARKET_CURRENCY_MAP: Mapping[str, str] = {
     "US": "USD",
     "HK": "HKD",
+    "IN": "INR",
     "JP": "JPY",
+    "KR": "KRW",
     "TW": "TWD",
 }
 

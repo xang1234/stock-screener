@@ -12,7 +12,9 @@ class TestProviderKey:
     @pytest.mark.parametrize("provider,market,expected", [
         ("yfinance", "US", "yfinance:us"),
         ("yfinance", "HK", "yfinance:hk"),
+        ("yfinance", "IN", "yfinance:in"),
         ("yfinance", "JP", "yfinance:jp"),
+        ("yfinance", "KR", "yfinance:kr"),
         ("yfinance", "TW", "yfinance:tw"),
         ("yfinance", None, "yfinance:shared"),
         ("yfinance", "shared", "yfinance:shared"),
@@ -31,16 +33,29 @@ class TestUniverseWeights:
     def test_equal_split_when_universe_empty(self):
         """Fresh deploy / no universe rows -> equal split across SUPPORTED_MARKETS."""
         with patch("app.services.rate_budget_policy.RateBudgetPolicy._compute_weights_from_db") as m:
-            m.return_value = {"US": 0.25, "HK": 0.25, "JP": 0.25, "TW": 0.25}
+            m.return_value = {
+                "US": 1 / 6,
+                "HK": 1 / 6,
+                "IN": 1 / 6,
+                "JP": 1 / 6,
+                "KR": 1 / 6,
+                "TW": 1 / 6,
+            }
             policy = RateBudgetPolicy()
             weights = policy._universe_weights(force_refresh=True)
-        assert weights == {"US": 0.25, "HK": 0.25, "JP": 0.25, "TW": 0.25}
+        assert weights == {
+            "US": 1 / 6,
+            "HK": 1 / 6,
+            "IN": 1 / 6,
+            "JP": 1 / 6,
+            "KR": 1 / 6,
+            "TW": 1 / 6,
+        }
         assert sum(weights.values()) == pytest.approx(1.0)
 
     def test_universe_weighted_split_normalizes(self):
         with patch("app.services.rate_budget_policy.RateBudgetPolicy._compute_weights_from_db") as m:
-            # 6000 US, 2500 HK, 1000 JP, 500 TW = 10000 total
-            m.return_value = {"US": 0.6, "HK": 0.25, "JP": 0.10, "TW": 0.05}
+            m.return_value = {"US": 0.5, "HK": 0.2, "IN": 0.1, "JP": 0.08, "KR": 0.07, "TW": 0.05}
             policy = RateBudgetPolicy()
             weights = policy._universe_weights(force_refresh=True)
         assert sum(weights.values()) == pytest.approx(1.0)
@@ -49,7 +64,7 @@ class TestUniverseWeights:
 
     def test_invalidate_cache_forces_recompute(self):
         with patch("app.services.rate_budget_policy.RateBudgetPolicy._compute_weights_from_db") as m:
-            m.return_value = {"US": 0.4, "HK": 0.3, "JP": 0.2, "TW": 0.1}
+            m.return_value = {"US": 0.35, "HK": 0.2, "IN": 0.15, "JP": 0.12, "KR": 0.1, "TW": 0.08}
             policy = RateBudgetPolicy()
             policy._universe_weights(force_refresh=True)
             policy._universe_weights()  # cached
@@ -63,7 +78,7 @@ class TestRateInterval:
     def test_universe_weighted_default_inversely_scales(self):
         """Bigger universe weight -> smaller interval (gets more tokens/sec)."""
         with patch("app.services.rate_budget_policy.RateBudgetPolicy._compute_weights_from_db") as m:
-            m.return_value = {"US": 0.6, "HK": 0.20, "JP": 0.10, "TW": 0.10}
+            m.return_value = {"US": 0.5, "HK": 0.18, "IN": 0.12, "JP": 0.08, "KR": 0.07, "TW": 0.05}
             policy = RateBudgetPolicy()
             # global yfinance interval = 1.0s (yfinance_rate_limit=1 req/s)
             us_interval = policy.get_rate_interval("yfinance", "US")
@@ -92,7 +107,7 @@ class TestBatchSize:
         # US bumped to 150 in steady-crunching-candle: Yahoo accepts up to
         # MAX_PRICE_BATCH_SIZE (200) and the adaptive shrink halves on
         # transient failure. Non-US markets stay at 50 (smaller universes).
-        ("US", 150), ("HK", 50), ("JP", 50), ("TW", 50),
+        ("US", 150), ("HK", 50), ("IN", 50), ("JP", 50), ("KR", 50), ("TW", 50),
     ])
     def test_default_batch_sizes(self, market, expected_default):
         with patch("app.services.rate_budget_policy.settings") as mock_settings:
