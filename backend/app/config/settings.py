@@ -355,11 +355,13 @@ class Settings(BaseSettings):
     provider_snapshot_min_active_coverage_hk: float = 0.70
     provider_snapshot_min_active_coverage_in: float = 0.60
     provider_snapshot_min_active_coverage_jp: float = 0.60
+    provider_snapshot_min_active_coverage_kr: float = 0.70
     provider_snapshot_min_active_coverage_tw: float = 0.70
     provider_snapshot_max_missing_ratio_us: float = 0.005
     provider_snapshot_max_missing_ratio_hk: float = 0.30
     provider_snapshot_max_missing_ratio_in: float = 0.40
     provider_snapshot_max_missing_ratio_jp: float = 0.40
+    provider_snapshot_max_missing_ratio_kr: float = 0.30
     provider_snapshot_max_missing_ratio_tw: float = 0.30
     market_data_source_mode: str = "github_first"  # github_first | live_only
     github_data_repository: str = "xang1234/stock-screener"
@@ -442,11 +444,13 @@ class Settings(BaseSettings):
         'provider_snapshot_min_active_coverage_hk',
         'provider_snapshot_min_active_coverage_in',
         'provider_snapshot_min_active_coverage_jp',
+        'provider_snapshot_min_active_coverage_kr',
         'provider_snapshot_min_active_coverage_tw',
         'provider_snapshot_max_missing_ratio_us',
         'provider_snapshot_max_missing_ratio_hk',
         'provider_snapshot_max_missing_ratio_in',
         'provider_snapshot_max_missing_ratio_jp',
+        'provider_snapshot_max_missing_ratio_kr',
         'provider_snapshot_max_missing_ratio_tw',
     )
     @classmethod
