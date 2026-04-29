@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 import io
 import json
@@ -101,12 +101,14 @@ class OfficialMarketUniverseSourceService:
         timeout_seconds: int | None = None,
         user_agent: str | None = None,
         kr_provider: Any | None = None,
+        market_calendar: Any | None = None,
     ) -> None:
         self._timeout_seconds = int(
             timeout_seconds or settings.universe_source_timeout_seconds
         )
         self._user_agent = user_agent or settings.universe_source_user_agent
         self._kr_provider = kr_provider
+        self._market_calendar = market_calendar
 
     def fetch_market_snapshot(self, market: str) -> OfficialMarketUniverseSnapshot:
         normalized_market = str(market or "").strip().upper()
@@ -172,7 +174,10 @@ class OfficialMarketUniverseSourceService:
 
     def fetch_kr_snapshot(self) -> OfficialMarketUniverseSnapshot:
         provider = self._get_kr_provider()
-        rows = list(provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=None))
+        listing_as_of = self._kr_listing_as_of()
+        rows = list(
+            provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=listing_as_of)
+        )
         if not rows:
             raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
 
@@ -192,10 +197,11 @@ class OfficialMarketUniverseSourceService:
                 ),
             )
 
-        snapshot_as_of = self._seoul_today().isoformat()
+        snapshot_as_of = listing_as_of.isoformat()
         source_metadata = {
             "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
             "fetched_at": datetime.now(UTC).isoformat(),
+            "listing_as_of": snapshot_as_of,
             "filters": {
                 "boards": ["KOSPI", "KOSDAQ"],
                 "excluded_products": ["ETF", "ETN", "ELW", "funds", "REITs"],
@@ -222,6 +228,34 @@ class OfficialMarketUniverseSourceService:
     @staticmethod
     def _seoul_today() -> date:
         return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+    def _kr_listing_as_of(self) -> date:
+        try:
+            listing_day = self._get_market_calendar().last_completed_trading_day("KR")
+            if isinstance(listing_day, datetime):
+                return listing_day.date()
+            if isinstance(listing_day, date):
+                return listing_day
+            raise ValueError(f"KR calendar returned invalid date: {listing_day!r}")
+        except (AttributeError, ImportError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning(
+                "KR calendar lookup unavailable; using Seoul weekday fallback: %s",
+                exc,
+            )
+            return self._previous_seoul_business_day(self._seoul_today())
+
+    def _get_market_calendar(self):
+        if self._market_calendar is None:
+            from .market_calendar_service import MarketCalendarService
+
+            self._market_calendar = MarketCalendarService()
+        return self._market_calendar
+
+    @staticmethod
+    def _previous_seoul_business_day(day: date) -> date:
+        if day.weekday() >= 5:
+            return day - timedelta(days=day.weekday() - 4)
+        return day
 
     def fetch_nse_snapshot(self) -> OfficialMarketUniverseSnapshot:
         source_urls = [settings.nse_universe_source_url]

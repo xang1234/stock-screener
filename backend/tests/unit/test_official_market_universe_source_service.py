@@ -176,10 +176,12 @@ def test_fetch_in_snapshot_prefers_nse_for_overlapping_isin(monkeypatch):
 
 
 def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(monkeypatch):
+    provider_as_of_dates = []
+
     class FakeKrxProvider:
         def listing_rows(self, *, boards, as_of=None):
             assert boards == ("KOSPI", "KOSDAQ")
-            assert as_of is None
+            provider_as_of_dates.append(as_of)
             kospi_rows = [
                 {
                     "symbol": "005930.KS",
@@ -216,15 +218,16 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
             )
             return [*kospi_rows, *kosdaq_rows]
 
-    monkeypatch.setattr(
-        OfficialMarketUniverseSourceService,
-        "_seoul_today",
-        staticmethod(lambda: date(2026, 4, 30)),
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
     )
-    service = OfficialMarketUniverseSourceService(kr_provider=FakeKrxProvider())
 
     snapshot = service.fetch_kr_snapshot()
 
+    assert provider_as_of_dates == [date(2026, 4, 30)]
     assert snapshot.market == "KR"
     assert snapshot.source_name == "krx_official"
     assert snapshot.snapshot_id == "krx-listings-2026-04-30"
@@ -235,6 +238,7 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
     assert rows_by_symbol["091990.KQ"]["industry_group"] == "Biotechnology"
     assert snapshot.source_metadata["row_counts"] == {"kospi": 839, "kosdaq": 1819}
     assert snapshot.source_metadata["source_count"] == 2658
+    assert snapshot.source_metadata["listing_as_of"] == "2026-04-30"
     assert snapshot.source_metadata["excluded_boards"] == ["KONEX"]
     assert snapshot.source_metadata["validated_krx_baseline"]["kospi"] == 839
     assert snapshot.source_metadata["validated_krx_baseline"]["kosdaq"] == 1819
@@ -242,6 +246,47 @@ def test_fetch_kr_snapshot_uses_krx_provider_and_records_live_baseline_metadata(
     assert snapshot.source_metadata["validated_krx_baseline"]["source_url"].startswith(
         "https://global.krx.co.kr/"
     )
+
+
+def test_fetch_kr_snapshot_falls_back_to_previous_seoul_weekday_when_calendar_unavailable(monkeypatch):
+    provider_as_of_dates = []
+
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            provider_as_of_dates.append(as_of)
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                },
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.side_effect = RuntimeError("calendar unavailable")
+    monkeypatch.setattr(
+        OfficialMarketUniverseSourceService,
+        "_seoul_today",
+        staticmethod(lambda: date(2026, 5, 2)),
+    )
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert provider_as_of_dates == [date(2026, 5, 1)]
+    assert snapshot.snapshot_id == "krx-listings-2026-05-01"
+    assert snapshot.snapshot_as_of == "2026-05-01"
+    assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
 
 
 def test_enrich_kr_rows_returns_raw_rows_when_taxonomy_lazy_load_fails(monkeypatch):
