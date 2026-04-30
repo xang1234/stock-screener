@@ -5,7 +5,7 @@ import pytest
 from app.services.cn_universe_ingestion_adapter import cn_universe_ingestion_adapter
 
 
-def test_cn_adapter_canonicalizes_sse_szse_and_bse_rows_with_metadata():
+def test_cn_adapter_canonicalizes_sse_szse_and_bjse_rows_with_metadata():
     result = cn_universe_ingestion_adapter.canonicalize_rows(
         [
             {
@@ -45,7 +45,7 @@ def test_cn_adapter_canonicalizes_sse_szse_and_bse_rows_with_metadata():
     assert rows_by_symbol["600519.SS"].board == "SSE_MAIN"
     assert rows_by_symbol["000001.SZ"].exchange == "SZSE"
     assert rows_by_symbol["000001.SZ"].board == "SZSE_MAIN"
-    assert rows_by_symbol["920118.BJ"].exchange == "BSE"
+    assert rows_by_symbol["920118.BJ"].exchange == "BJSE"
     assert rows_by_symbol["920118.BJ"].board == "BSE"
     assert rows_by_symbol["600519.SS"].currency == "CNY"
     assert rows_by_symbol["600519.SS"].timezone == "Asia/Shanghai"
@@ -68,7 +68,7 @@ def test_cn_adapter_infers_exchange_and_board_from_suffix_or_code_prefix():
     rows_by_symbol = {row.symbol: row for row in result.canonical_rows}
     assert rows_by_symbol["688981.SS"].board == "SSE_STAR"
     assert rows_by_symbol["300750.SZ"].board == "SZSE_CHINEXT"
-    assert rows_by_symbol["920118.BJ"].exchange == "BSE"
+    assert rows_by_symbol["920118.BJ"].exchange == "BJSE"
 
 
 def test_cn_adapter_rejects_non_a_share_products_and_invalid_codes():

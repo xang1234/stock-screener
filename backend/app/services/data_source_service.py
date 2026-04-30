@@ -243,7 +243,7 @@ class DataSourceService:
             statement_data = {}
         if statement_data:
             merged.update({key: value for key, value in statement_data.items() if value is not None})
-            sources.append(routing_policy.PROVIDER_BAOSTOCK)
+            sources.append("cn_statement")
 
         if self.enable_fallback and not identity.canonical_symbol.endswith(".BJ"):
             yf_data = self.yfinance_service.get_fundamentals(identity.canonical_symbol)

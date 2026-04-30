@@ -382,7 +382,7 @@ def test_fetch_cn_snapshot_uses_akshare_provider_and_records_validated_baseline(
                     "symbol": "920118.BJ",
                     "local_code": "920118",
                     "name": "Taihu Snow",
-                    "exchange": "BSE",
+                    "exchange": "BJSE",
                     "board": "BSE",
                     "industry": "Textile Manufacturing",
                 },

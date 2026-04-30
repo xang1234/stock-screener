@@ -54,8 +54,18 @@ def test_cn_market_data_service_maps_akshare_spot_rows_to_listing_rows():
     assert rows[0]["pe_ratio"] == 28.4
     assert rows[1]["exchange"] == "SZSE"
     assert rows[1]["sector"] == "Financials"
-    assert rows[2]["exchange"] == "BSE"
+    assert rows[2]["exchange"] == "BJSE"
     assert rows[2]["sector"] == "Consumer Discretionary"
+
+
+def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
+    class FakeBaoStock:
+        def login(self):  # pragma: no cover - should not be called
+            raise AssertionError("BaoStock should not be queried for Beijing Stock Exchange codes")
+
+    service = CnMarketDataService(akshare_module=object(), baostock_module=FakeBaoStock())
+
+    assert service._daily_ohlcv_from_baostock("920118", start="20260401", end="20260430") == []
 
 
 def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():

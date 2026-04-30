@@ -48,7 +48,7 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "JP": ("TSE", "JPX", "XTKS"),
     "KR": ("KOSPI", "KOSDAQ", "XKRX"),
     "TW": ("TWSE", "TPEX", "XTAI"),
-    "CN": ("SSE", "SZSE", "BSE", "XSHG"),
+    "CN": ("SSE", "SZSE", "BJSE", "XSHG"),
 }
 KR_ACTIVE_UNIVERSE_MIN_COUNT = 2526
 CN_ACTIVE_UNIVERSE_MIN_COUNT = 5217

@@ -504,16 +504,16 @@ class MarketTaxonomyService:
                     if szse_variant:
                         candidates.append(szse_variant)
                 if raw_exchange not in {"SSE", "SHSE", "XSHG", "SZSE", "XSHE"}:
-                    bse_variant = self._canonicalize_cn_symbol(normalized, exchange="BSE")
+                    bse_variant = self._canonicalize_cn_symbol(normalized, exchange="BJSE")
                     if bse_variant:
                         candidates.append(bse_variant)
             elif normalized.endswith(".SS"):
                 szse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SZSE")
-                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BSE")
+                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BJSE")
                 candidates.extend(candidate for candidate in (szse_variant, bse_variant) if candidate)
             elif normalized.endswith(".SZ"):
                 sse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SSE")
-                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BSE")
+                bse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="BJSE")
                 candidates.extend(candidate for candidate in (sse_variant, bse_variant) if candidate)
             elif normalized.endswith(".BJ"):
                 sse_variant = self._canonicalize_cn_symbol(normalized[:-3], exchange="SSE")
@@ -714,7 +714,7 @@ class MarketTaxonomyService:
             normalized_exchange = "SZSE"
         elif token.endswith(".BJ"):
             token = token[:-3]
-            normalized_exchange = "BSE"
+            normalized_exchange = "BJSE"
         exchange_aliases = {
             "": "",
             "SSE": "SSE",
@@ -724,11 +724,11 @@ class MarketTaxonomyService:
             "SZSE": "SZSE",
             "XSHE": "SZSE",
             "SZ": "SZSE",
-            "BSE": "BSE",
-            "BJSE": "BSE",
-            "XBSE": "BSE",
-            "XBEI": "BSE",
-            "BJ": "BSE",
+            "BSE": "BJSE",
+            "BJSE": "BJSE",
+            "XBSE": "BJSE",
+            "XBEI": "BJSE",
+            "BJ": "BJSE",
         }
         normalized_exchange = exchange_aliases.get(normalized_exchange)
         if normalized_exchange is None:
@@ -741,7 +741,7 @@ class MarketTaxonomyService:
         elif token.startswith(("000", "001", "002", "003", "300", "301")):
             inferred_exchange = "SZSE"
         elif token.startswith(("4", "8", "9")):
-            inferred_exchange = "BSE"
+            inferred_exchange = "BJSE"
         if inferred_exchange is None:
             return None
         if not normalized_exchange:

@@ -19,11 +19,11 @@ _CN_EXCHANGE_ALIASES: dict[str, str] = {
     "SZSE": "SZSE",
     "XSHE": "SZSE",
     "SZ": "SZSE",
-    "BSE": "BSE",
-    "BJSE": "BSE",
-    "XBSE": "BSE",
-    "XBEI": "BSE",
-    "BJ": "BSE",
+    "BSE": "BJSE",
+    "BJSE": "BJSE",
+    "XBSE": "BJSE",
+    "XBEI": "BJSE",
+    "BJ": "BJSE",
 }
 
 _APPROVED_CN_SOURCES: frozenset[str] = frozenset(
@@ -154,7 +154,7 @@ class CNUniverseIngestionAdapter:
         if token.startswith(("SZSE:", "XSHE:", "SZ:")) or token.endswith(".SZ"):
             return "SZSE"
         if token.startswith(("BSE:", "BJSE:", "XBSE:", "XBEI:", "BJ:")) or token.endswith(".BJ"):
-            return "BSE"
+            return "BJSE"
         code = CNUniverseIngestionAdapter._strip_symbol_decoration(token)
         if _CN_LOCAL_CODE_RE.fullmatch(code):
             return CNUniverseIngestionAdapter._infer_exchange_from_code(code)
@@ -169,12 +169,12 @@ class CNUniverseIngestionAdapter:
                 return inferred
             raise ValueError(
                 "CN exchange is required for undecorated six-digit tickers. "
-                "Provide SSE/SZSE/BSE or use a .SS/.SZ/.BJ suffix."
+                "Provide SSE/SZSE/BJSE or use a .SS/.SZ/.BJ suffix."
             )
         normalized = _CN_EXCHANGE_ALIASES.get(exchange)
         if normalized is None:
             raise ValueError(
-                f"Unsupported CN exchange '{exchange}'. Expected SSE, SZSE, or BSE."
+                f"Unsupported CN exchange '{exchange}'. Expected SSE, SZSE, or BJSE."
             )
         return normalized
 
@@ -208,7 +208,7 @@ class CNUniverseIngestionAdapter:
         if local_code.startswith(("000", "001", "002", "003", "300", "301")):
             return "SZSE"
         if local_code.startswith(("4", "8", "9")):
-            return "BSE"
+            return "BJSE"
         return None
 
     @staticmethod

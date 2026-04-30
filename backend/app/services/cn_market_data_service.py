@@ -92,7 +92,7 @@ def _exchange_for_code(local_code: str) -> str | None:
     if local_code.startswith(("000", "001", "002", "003", "300", "301")):
         return "SZSE"
     if local_code.startswith(("4", "8", "9")):
-        return "BSE"
+        return "BJSE"
     return None
 
 
@@ -111,7 +111,7 @@ def _board_for_code(local_code: str, exchange: str) -> str:
 def _suffix_for_exchange(exchange: str) -> str:
     if exchange == "SZSE":
         return ".SZ"
-    if exchange == "BSE":
+    if exchange == "BJSE":
         return ".BJ"
     return ".SS"
 
@@ -292,7 +292,7 @@ class CnMarketDataService:
     ) -> dict[str, Any]:
         bs = self._baostock
         exchange = _exchange_for_code(local_code)
-        if exchange is None or exchange == "BSE":
+        if exchange is None or exchange == "BJSE":
             return {}
         bs_prefix = "sh" if exchange == "SSE" else "sz"
         bs_code = f"{bs_prefix}.{local_code}"
@@ -388,7 +388,7 @@ class CnMarketDataService:
     ) -> list[CnDailyPriceRow]:
         bs = self._baostock
         exchange = _exchange_for_code(local_code)
-        if exchange is None:
+        if exchange is None or exchange == "BJSE":
             return []
         bs_prefix = "sh" if exchange == "SSE" else "sz"
         bs_code = f"{bs_prefix}.{local_code}"

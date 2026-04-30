@@ -44,7 +44,7 @@ class TestUniverseDefinitionConstruction:
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.AMEX)
         assert u.exchange == Exchange.AMEX
 
-    @pytest.mark.parametrize("exchange", [Exchange.SSE, Exchange.SZSE, Exchange.BSE])
+    @pytest.mark.parametrize("exchange", [Exchange.SSE, Exchange.SZSE, Exchange.BJSE])
     def test_china_exchanges(self, exchange):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
         assert u.exchange == exchange
@@ -285,8 +285,8 @@ class TestFromLegacy:
         assert u.exchange == Exchange.NASDAQ
 
     def test_exchange_can_carry_market_to_disambiguate_bse(self):
-        u = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BSE)
-        assert u.key() == "exchange:CN:BSE"
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BJSE)
+        assert u.key() == "exchange:CN:BJSE"
 
     def test_amex(self):
         u = UniverseDefinition.from_legacy("amex")

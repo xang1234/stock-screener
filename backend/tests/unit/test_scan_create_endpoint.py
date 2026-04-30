@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.main import app
+from app.api.v1.scans import _resolve_scan_guard_market
+from app.schemas.universe import Exchange, Market, UniverseDefinition, UniverseType
 from app.services import server_auth
 from app.wiring.bootstrap import get_create_scan_use_case, get_uow
 from app.use_cases.scanning.create_scan import (
@@ -58,6 +60,14 @@ class _ConflictCreateScanUseCase(_FakeCreateScanUseCase):
                 started_at=None,
             )
         )
+
+
+def test_scan_guard_resolves_beijing_and_bombay_exchange_codes_distinctly():
+    cn_universe = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BJSE)
+    legacy_bombay = SimpleNamespace(market=None, exchange=SimpleNamespace(value="BSE"), index=None)
+
+    assert _resolve_scan_guard_market(cn_universe) == "CN"
+    assert _resolve_scan_guard_market(legacy_bombay) == "IN"
 
 
 @pytest_asyncio.fixture

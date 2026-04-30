@@ -41,7 +41,7 @@ class Exchange(str, Enum):
     KOSDAQ = "KOSDAQ"
     SSE = "SSE"
     SZSE = "SZSE"
-    BSE = "BSE"
+    BJSE = "BJSE"
 
 
 class IndexName(str, Enum):

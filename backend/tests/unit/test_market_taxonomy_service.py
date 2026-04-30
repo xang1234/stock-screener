@@ -46,7 +46,7 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
             "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n"
             "600519,SSE,Consumer Staples,Food & Beverage,Beverage Manufacturing,Liquor\n"
             "000001,SZSE,Financials,Banks,Commercial Banks,Joint-stock Banks\n"
-            "920118,BSE,Consumer Discretionary,Textiles,Textile Manufacturing,Home Textiles\n"
+            "920118,BJSE,Consumer Discretionary,Textiles,Textile Manufacturing,Home Textiles\n"
         ),
     )
 
@@ -131,7 +131,7 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert cn_szse.symbol == "000001.SZ"
     assert cn_szse.industry_group == "Banks"
 
-    cn_bse = service.get("920118", market="CN", exchange="BSE")
+    cn_bse = service.get("920118", market="CN", exchange="BJSE")
     assert cn_bse is not None
     assert cn_bse.symbol == "920118.BJ"
     assert cn_bse.industry_group == "Textiles"

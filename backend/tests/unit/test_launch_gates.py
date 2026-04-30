@@ -309,7 +309,7 @@ class TestDbBackedGateResilience:
         active_cn_rows = [
             ("600519.SS", "SSE"),
             ("000001.SZ", "SZSE"),
-            ("920118.BJ", "BSE"),
+            ("920118.BJ", "BJSE"),
         ]
         stock_industry_rows = [
             SimpleNamespace(

@@ -12,7 +12,7 @@ The static page is for demo purposes only. It is a read-only daily snapshot with
 
 ### Multi-Market Coverage
 
-Scan and track seven markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **India** (NSE, BSE), **Japan** (Nikkei 225), **Korea** (KOSPI, KOSDAQ), **Taiwan** (TAIEX), and **mainland China A-shares** (SSE, SZSE, BSE). Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
+Scan and track seven markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **India** (NSE, BSE), **Japan** (Nikkei 225), **Korea** (KOSPI, KOSDAQ), **Taiwan** (TAIEX), and **mainland China A-shares** (SSE, SZSE, BJSE). Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
 
 ![Market selector](docs/screenshots/market-selector.jpg)
 *Market picker in the scan control bar — pick US, HK, IN, JP, KR, TW, or CN and scope to an exchange or index*

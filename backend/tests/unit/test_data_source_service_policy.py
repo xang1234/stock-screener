@@ -29,6 +29,7 @@ def _make_service(
     finviz_return=None,
     yfinance_return=None,
     *,
+    cn_market_data_service=None,
     krx_fundamentals_service=None,
     opendart_fundamentals_service=None,
     enable_fallback=True,
@@ -51,6 +52,7 @@ def _make_service(
         finviz_service=finviz,
         yfinance_service=yfinance,
         eps_rating_service=eps_rating,
+        cn_market_data_service=cn_market_data_service,
         krx_fundamentals_service=krx_fundamentals_service,
         opendart_fundamentals_service=opendart_fundamentals_service,
         rate_limiter=rate_limiter,
@@ -92,6 +94,21 @@ class TestGetFundamentalsPolicyGate:
         assert result["data_source"] == "krx+opendart+yfinance"
         assert result["market"] == "KR"
         assert result["currency"] == "KRW"
+
+    def test_china_statement_fundamentals_uses_neutral_statement_provenance(self):
+        cn = MagicMock()
+        cn.core_fundamentals.return_value = {"market_cap": 1_000, "pe_ratio": 9.5}
+        cn.statement_fundamentals.return_value = {"revenue_current": 10_000}
+        svc = _make_service(cn_market_data_service=cn, enable_fallback=False)
+
+        result = svc.get_fundamentals("600519.SS", market="CN")
+
+        svc.finviz_service.get_fundamentals.assert_not_called()
+        cn.core_fundamentals.assert_called_once_with("600519")
+        cn.statement_fundamentals.assert_called_once_with("600519")
+        assert result["data_source"] == "akshare+cn_statement"
+        assert result["market"] == "CN"
+        assert result["currency"] == "CNY"
 
     def test_korea_market_respects_disabled_yfinance_fallback(self):
         krx = MagicMock()

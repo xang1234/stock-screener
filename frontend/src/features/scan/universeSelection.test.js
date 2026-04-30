@@ -33,10 +33,10 @@ describe('buildUniverseDef', () => {
       market: 'US',
       exchange: 'NYSE',
     });
-    expect(buildUniverseDef('CN', 'exchange:BSE')).toEqual({
+    expect(buildUniverseDef('CN', 'exchange:BJSE')).toEqual({
       type: 'exchange',
       market: 'CN',
-      exchange: 'BSE',
+      exchange: 'BJSE',
     });
     expect(buildUniverseDef('US', 'index:SP500')).toEqual({ type: 'index', index: 'SP500' });
   });
@@ -128,12 +128,12 @@ describe('UNIVERSE_SCOPES_BY_MARKET', () => {
     ]);
   });
 
-  it('exposes SSE, SZSE, and BSE scopes for China', () => {
+  it('exposes SSE, SZSE, and BJSE scopes for China', () => {
     expect(UNIVERSE_SCOPES_BY_MARKET.CN).toEqual([
       { value: 'market', label: 'All China A-shares' },
       { value: 'exchange:SSE', label: 'Shanghai Stock Exchange' },
       { value: 'exchange:SZSE', label: 'Shenzhen Stock Exchange' },
-      { value: 'exchange:BSE', label: 'Beijing Stock Exchange' },
+      { value: 'exchange:BJSE', label: 'Beijing Stock Exchange' },
     ]);
   });
 });

@@ -251,7 +251,7 @@ class OfficialMarketUniverseSourceService:
         row_counts = {
             "sse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "SSE"),
             "szse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "SZSE"),
-            "bse": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "BSE"),
+            "bse": sum(1 for row in rows if str(row.get("exchange") or "").upper() in {"BJSE", "BSE"}),
         }
         count_breaches = self._cn_baseline_count_breaches(row_counts)
 
@@ -265,7 +265,7 @@ class OfficialMarketUniverseSourceService:
             "snapshot_as_of": snapshot_as_of,
             "filters": {
                 "market": "mainland_a_shares",
-                "exchanges": ["SSE", "SZSE", "BSE"],
+                "exchanges": ["SSE", "SZSE", "BJSE"],
                 "excluded_products": [
                     "B-shares",
                     "ETFs",
