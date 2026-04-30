@@ -250,6 +250,62 @@ def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     assert result.iloc[-1]["Close"] == 105.0
 
 
+def test_cn_market_data_service_skips_akshare_after_repeated_ohlcv_transport_failures():
+    class FakeAkshare:
+        calls = 0
+
+        @classmethod
+        def stock_zh_a_hist(cls, **kwargs):
+            cls.calls += 1
+            raise ConnectionError("remote disconnected")
+
+    class FakeLogin:
+        error_code = "0"
+
+    class FakeQuery:
+        error_code = "0"
+        fields = ["date", "open", "high", "low", "close", "volume", "amount"]
+
+        def __init__(self):
+            self._remaining = [
+                ["2026-04-29", "10", "11", "9", "10.5", "1000", "10500"],
+            ]
+
+        def next(self):
+            return bool(self._remaining)
+
+        def get_row_data(self):
+            return self._remaining.pop(0)
+
+    class FakeBaoStock:
+        queries = 0
+
+        @staticmethod
+        def login():
+            return FakeLogin()
+
+        @classmethod
+        def query_history_k_data_plus(cls, *args, **kwargs):
+            cls.queries += 1
+            return FakeQuery()
+
+        @staticmethod
+        def logout():
+            return None
+
+    service = CnMarketDataService(
+        akshare_module=FakeAkshare(),
+        baostock_module=FakeBaoStock(),
+    )
+
+    for _ in range(3):
+        rows = service.daily_ohlcv("002153", start="20260401", end="20260430")
+        assert rows[0].close == 10.5
+
+    assert FakeAkshare.calls == 2
+    assert FakeBaoStock.queries == 3
+
+
 def test_cn_market_data_service_raises_dependency_error_when_akshare_missing(monkeypatch):
     import app.services.cn_market_data_service as module
 

@@ -19,6 +19,9 @@ from .cn_universe_ingestion_adapter import infer_cn_sector
 
 logger = logging.getLogger(__name__)
 
+_AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
+_AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
+
 
 class CnDependencyError(RuntimeError):
     """Raised when a CN market dependency is unavailable."""
@@ -181,6 +184,8 @@ class CnMarketDataService:
             timeout_seconds or settings.universe_source_timeout_seconds
         )
         self._listing_rows_cache: list[dict[str, Any]] | None = None
+        self._akshare_ohlcv_consecutive_failures = 0
+        self._akshare_ohlcv_disabled_until = 0.0
 
     @property
     def _akshare(self):
@@ -428,23 +433,43 @@ class CnMarketDataService:
         code = _normalize_code(local_code)
         start_token = _as_yyyymmdd(start)
         end_token = _as_yyyymmdd(end or date.today())
-        try:
-            frame = self._akshare.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_token,
-                end_date=end_token,
-                adjust="",
-            )
-            rows = self._daily_rows_from_akshare_frame(frame)
-            if rows:
-                return rows
-        except CnDependencyError:
-            raise
-        except Exception as exc:  # pragma: no cover - network variability
-            logger.warning("AKShare CN OHLCV fetch failed for %s: %s", code, exc)
+        if self._should_try_akshare_ohlcv():
+            try:
+                frame = self._akshare.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start_token,
+                    end_date=end_token,
+                    adjust="",
+                )
+                rows = self._daily_rows_from_akshare_frame(frame)
+                if rows:
+                    self._record_akshare_ohlcv_success()
+                    return rows
+            except CnDependencyError:
+                raise
+            except Exception as exc:  # pragma: no cover - network variability
+                self._record_akshare_ohlcv_failure()
+                logger.warning("AKShare CN OHLCV fetch failed for %s: %s", code, exc)
 
         return self._daily_ohlcv_from_baostock(code, start=start_token, end=end_token)
+
+    def _should_try_akshare_ohlcv(self) -> bool:
+        return time.monotonic() >= self._akshare_ohlcv_disabled_until
+
+    def _record_akshare_ohlcv_success(self) -> None:
+        self._akshare_ohlcv_consecutive_failures = 0
+        self._akshare_ohlcv_disabled_until = 0.0
+
+    def _record_akshare_ohlcv_failure(self) -> None:
+        self._akshare_ohlcv_consecutive_failures += 1
+        if self._akshare_ohlcv_consecutive_failures < _AKSHARE_OHLCV_FAILURE_THRESHOLD:
+            return
+        self._akshare_ohlcv_disabled_until = time.monotonic() + _AKSHARE_OHLCV_COOLDOWN_SECONDS
+        logger.warning(
+            "Temporarily disabling AKShare CN OHLCV after %d consecutive failures; using BaoStock fallback",
+            self._akshare_ohlcv_consecutive_failures,
+        )
 
     @staticmethod
     def _daily_rows_from_akshare_frame(frame: pd.DataFrame | None) -> list[CnDailyPriceRow]:
