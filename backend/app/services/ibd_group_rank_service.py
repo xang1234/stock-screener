@@ -34,8 +34,12 @@ class IncompleteGroupRankingCacheError(RuntimeError):
 
     def __init__(self, stats: Dict[str, int | bool]):
         self.stats = stats
-        reason = "SPY benchmark data is missing from cache"
-        if stats.get("spy_cached"):
+        benchmark_cached = stats.get("benchmark_cached", stats.get("spy_cached"))
+        benchmark_symbol = str(stats.get("benchmark_symbol") or "SPY")
+        market = str(stats.get("market") or "").strip().upper()
+        market_suffix = f" for {market}" if market else ""
+        reason = f"{benchmark_symbol} benchmark data is missing from cache{market_suffix}"
+        if benchmark_cached:
             reason = (
                 f"{stats.get('cache_miss_symbols', 0)} symbols are missing cached price data"
             )
@@ -981,6 +985,9 @@ class IBDGroupRankService:
                     "symbols_with_prices": 0,
                     "cache_miss_symbols": 0,
                     "spy_cached": False,
+                    "benchmark_cached": False,
+                    "benchmark_symbol": benchmark_symbol,
+                    "market": normalized_market,
                 },
                 symbols_by_group={},
             )

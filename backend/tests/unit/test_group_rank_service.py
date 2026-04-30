@@ -264,6 +264,37 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAPL"], period="2y")
 
 
+def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    price_cache = Mock()
+    price_cache.get_cached_only_fresh.return_value = None
+    price_cache.get_many_cached_only_fresh.return_value = {}
+    service.price_cache = price_cache
+
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "^N225"
+    service.benchmark_cache = benchmark_cache
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["JP_Software"],
+    )
+
+    with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
+        service.calculate_group_rankings(
+            db_session,
+            date(2026, 5, 1),
+            market="JP",
+            cache_only=True,
+            require_complete_cache=True,
+        )
+
+    assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
+    assert excinfo.value.stats["benchmark_symbol"] == "^N225"
+    assert excinfo.value.stats["market"] == "JP"
+
+
 def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, monkeypatch):
     service = _make_group_rank_service()
     spy_data = _price_frame()
