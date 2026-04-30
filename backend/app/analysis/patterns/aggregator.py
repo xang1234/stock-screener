@@ -83,10 +83,18 @@ _STRUCTURAL_TIE_EPSILON = 0.015
 class SetupEngineAggregator:
     """Run detectors and normalize candidates for setup_engine payload use."""
 
-    def __init__(self, detectors: Sequence[PatternDetector] | None = None):
+    def __init__(
+        self,
+        detectors: Sequence[PatternDetector] | None = None,
+        *,
+        detector_workers: int = 1,
+    ):
+        if detector_workers < 1:
+            raise ValueError("detector_workers must be >= 1")
         self._detectors: tuple[PatternDetector, ...] = tuple(
             detectors if detectors is not None else default_pattern_detectors()
         )
+        self._detector_workers = detector_workers
 
     def aggregate(
         self,
@@ -110,6 +118,7 @@ class SetupEngineAggregator:
             self._detectors,
             detector_input,
             parameters,
+            detector_workers=self._detector_workers,
         ):
             detector_traces.append(trace)
             if result.outcome == DetectorOutcome.ERROR:
@@ -181,15 +190,21 @@ def _run_detectors_ordered(
     detectors: Sequence[PatternDetector],
     detector_input: PatternDetectorInput,
     parameters: SetupEngineParameters,
+    *,
+    detector_workers: int = 1,
 ):
-    if len(detectors) <= 1:
+    if detector_workers < 1:
+        raise ValueError("detector_workers must be >= 1")
+    if len(detectors) <= 1 or detector_workers <= 1:
         return [
             _run_detector(idx, detector, detector_input, parameters)
             for idx, detector in enumerate(detectors)
         ]
 
     results = []
-    with ThreadPoolExecutor(max_workers=len(detectors)) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(detector_workers, len(detectors))
+    ) as executor:
         futures = {
             executor.submit(
                 _run_detector,

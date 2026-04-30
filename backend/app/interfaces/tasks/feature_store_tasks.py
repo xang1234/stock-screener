@@ -754,9 +754,17 @@ def build_daily_snapshot(
         if as_of_date_str
         else MarketCalendarService().last_completed_trading_day(effective_market)
     )
-    from app.domain.scanning.defaults import get_default_scan_profile
+    bootstrap_gate_requested = bool(bootstrap_cache_only_if_covered)
+    from app.domain.scanning.defaults import (
+        get_bootstrap_scan_profile,
+        get_default_scan_profile,
+    )
 
-    defaults = get_default_scan_profile(effective_market)
+    defaults = (
+        get_bootstrap_scan_profile(effective_market)
+        if bootstrap_gate_requested and screener_names is None
+        else get_default_scan_profile(effective_market)
+    )
     screeners = defaults["screeners"] if screener_names is None else screener_names
     universe_name = defaults["universe"] if universe_name is None else universe_name
     criteria = defaults["criteria"] if criteria is None else criteria
@@ -768,7 +776,6 @@ def build_daily_snapshot(
     publish_pointer_key = publish_pointer_key or f"latest_published_market:{effective_market}"
     correlation_id = self.request.id
     activity_lifecycle = activity_lifecycle or "daily_refresh"
-    bootstrap_gate_requested = bool(bootstrap_cache_only_if_covered)
     static_worker_config_requested = static_daily_mode or bootstrap_gate_requested
     effective_bootstrap_coverage_report = bootstrap_coverage_report
 

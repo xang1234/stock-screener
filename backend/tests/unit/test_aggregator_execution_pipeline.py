@@ -1,6 +1,7 @@
 """Tests for deterministic detector orchestration in the aggregator."""
 
 import threading
+from unittest.mock import patch
 
 from app.analysis.patterns.aggregator import SetupEngineAggregator, _pick_primary_candidate
 from app.analysis.patterns.config import DEFAULT_SETUP_ENGINE_PARAMETERS
@@ -71,6 +72,40 @@ def test_aggregator_execution_trace_preserves_detector_order():
     assert "detector_pipeline_executed" in first.passed_checks
 
 
+def test_aggregator_runs_detectors_serially_by_default():
+    execution_order: list[str] = []
+
+    class _FirstDetector(PatternDetector):
+        name = "first"
+
+        def detect(self, detector_input, parameters):
+            del detector_input, parameters
+            execution_order.append(self.name)
+            return PatternDetectorResult.no_detection(self.name)
+
+    class _SecondDetector(PatternDetector):
+        name = "second"
+
+        def detect(self, detector_input, parameters):
+            del detector_input, parameters
+            execution_order.append(self.name)
+            return PatternDetectorResult.no_detection(self.name)
+
+    agg = SetupEngineAggregator(detectors=[_FirstDetector(), _SecondDetector()])
+
+    with patch(
+        "app.analysis.patterns.aggregator.ThreadPoolExecutor",
+        side_effect=AssertionError("default detector execution must not spawn a pool"),
+    ):
+        result = agg.aggregate(_detector_input(), parameters=DEFAULT_SETUP_ENGINE_PARAMETERS)
+
+    assert execution_order == ["first", "second"]
+    assert [trace.detector_name for trace in result.detector_traces] == [
+        "first",
+        "second",
+    ]
+
+
 def test_aggregator_runs_detectors_concurrently_while_preserving_trace_order():
     barrier = threading.Barrier(2)
     overlapped: list[str] = []
@@ -94,7 +129,8 @@ def test_aggregator_runs_detectors_concurrently_while_preserving_trace_order():
             return PatternDetectorResult.no_detection(self.name)
 
     agg = SetupEngineAggregator(
-        detectors=[_FirstDetector(), _SecondDetector()]
+        detectors=[_FirstDetector(), _SecondDetector()],
+        detector_workers=2,
     )
 
     result = agg.aggregate(_detector_input(), parameters=DEFAULT_SETUP_ENGINE_PARAMETERS)
