@@ -189,19 +189,62 @@ class CnMarketDataService:
         return self._baostock_module
 
     def listing_rows(self, *, as_of: date | str | None = None) -> list[dict[str, Any]]:
-        """Return A-share listing/quote rows from AKShare's Eastmoney bulk surface."""
-        del as_of  # AKShare spot returns the current source snapshot.
+        """Return A-share listing rows from AKShare-backed no-key sources."""
+        del as_of  # CN listing sources return the current source snapshot.
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
 
+        frame = self._listing_frame()
+        if frame is None or frame.empty:
+            return []
+
+        rows = self._rows_from_listing_frame(frame)
+        self._listing_rows_cache = rows
+        return [dict(row) for row in rows]
+
+    def _listing_frame(self) -> pd.DataFrame | None:
+        spot_error: Exception | None = None
+        try:
+            frame = self._akshare_spot_frame()
+            if frame is not None and not frame.empty:
+                return frame
+        except CnDependencyError:
+            raise
+        except Exception as exc:
+            spot_error = exc
+            logger.warning("AKShare CN spot listing fetch failed: %s", exc)
+
+        fallback_fetcher = getattr(self._akshare, "stock_info_a_code_name", None)
+        if callable(fallback_fetcher):
+            try:
+                frame = _call_with_timeout(
+                    fallback_fetcher,
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name="CN A-share code-name fetch",
+                )
+                if frame is not None and not frame.empty:
+                    logger.info("Using AKShare CN code-name listing fallback")
+                    return frame
+            except Exception as exc:
+                logger.warning("AKShare CN code-name listing fallback failed: %s", exc)
+                if spot_error is None:
+                    raise
+
+        if spot_error is not None:
+            raise spot_error
+        return None
+
+    def _akshare_spot_frame(self) -> pd.DataFrame | None:
         frame = _call_with_timeout(
             self._akshare.stock_zh_a_spot_em,
             timeout_seconds=self._timeout_seconds,
             operation_name="CN A-share listing fetch",
         )
         if frame is None or frame.empty:
-            return []
+            logger.warning("AKShare CN spot listing fetch returned no rows")
+        return frame
 
+    def _rows_from_listing_frame(self, frame: pd.DataFrame) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for raw in frame.to_dict("records"):
             local_code = _normalize_code(raw.get("代码") or raw.get("code") or raw.get("symbol"))
@@ -237,8 +280,7 @@ class CnMarketDataService:
                     "source_board": _board_for_code(local_code, exchange),
                 }
             )
-        self._listing_rows_cache = rows
-        return [dict(row) for row in rows]
+        return rows
 
     def core_fundamentals(
         self,

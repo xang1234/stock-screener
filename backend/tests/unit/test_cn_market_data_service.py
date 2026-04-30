@@ -94,6 +94,51 @@ def test_cn_market_data_service_preserves_zero_listing_numeric_fields():
     assert row["dividend_yield"] == 0
 
 
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_fails():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.ConnectionError("eastmoney disconnected")
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame(
+                [
+                    {"code": "600519", "name": "贵州茅台"},
+                    {"code": "000001", "name": "平安银行"},
+                    {"code": "920118", "name": "太湖雪"},
+                ]
+            )
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert [row["symbol"] for row in rows] == ["600519.SS", "000001.SZ", "920118.BJ"]
+    assert rows[0]["name"] == "贵州茅台"
+    assert rows[0]["market_cap"] is None
+    assert rows[1]["exchange"] == "SZSE"
+    assert rows[2]["exchange"] == "BJSE"
+
+
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_is_empty():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return pd.DataFrame()
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame([{"code": 688001, "name": "华兴源创"}])
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert rows[0]["symbol"] == "688001.SS"
+    assert rows[0]["board"] == "SSE_STAR"
+
+
 def test_cn_market_data_service_times_out_listing_fetch():
     class SlowAkshare:
         @staticmethod
