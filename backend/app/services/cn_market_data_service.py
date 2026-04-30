@@ -6,10 +6,14 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import importlib
 import logging
+import signal
+import threading
 from typing import Any
 
 import pandas as pd
+import requests
 
+from ..config import settings
 from .cn_universe_ingestion_adapter import infer_cn_sector
 
 logger = logging.getLogger(__name__)
@@ -116,6 +120,28 @@ def _suffix_for_exchange(exchange: str) -> str:
     return ".SS"
 
 
+def _call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
+    if timeout_seconds <= 0 or threading.current_thread() is not threading.main_thread():
+        return fetcher()
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return fetcher()
+
+    def _raise_timeout(signum, frame):
+        del signum, frame
+        raise TimeoutError(f"{operation_name} timed out after {timeout_seconds}s")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    try:
+        signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+        return fetcher()
+    except TimeoutError as exc:
+        raise requests.exceptions.Timeout(str(exc)) from exc
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 @dataclass(frozen=True)
 class CnDailyPriceRow:
     date: str
@@ -135,9 +161,13 @@ class CnMarketDataService:
         *,
         akshare_module: Any | None = None,
         baostock_module: Any | None = None,
+        timeout_seconds: int | None = None,
     ) -> None:
         self._akshare_module = akshare_module
         self._baostock_module = baostock_module
+        self._timeout_seconds = int(
+            timeout_seconds or settings.universe_source_timeout_seconds
+        )
         self._listing_rows_cache: list[dict[str, Any]] | None = None
 
     @property
@@ -164,7 +194,11 @@ class CnMarketDataService:
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
 
-        frame = self._akshare.stock_zh_a_spot_em()
+        frame = _call_with_timeout(
+            self._akshare.stock_zh_a_spot_em,
+            timeout_seconds=self._timeout_seconds,
+            operation_name="CN A-share listing fetch",
+        )
         if frame is None or frame.empty:
             return []
 

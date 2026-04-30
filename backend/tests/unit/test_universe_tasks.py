@@ -45,6 +45,7 @@ def test_refresh_stock_universe_returns_original_error_when_activity_publish_fai
     monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
     monkeypatch.setattr(
         module,
         "mark_market_activity_failed",
@@ -77,6 +78,7 @@ def test_refresh_official_market_universe_preserves_original_error_when_activity
     monkeypatch.setattr(module, "SessionLocal", lambda: activity_sessions.pop(0))
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
     monkeypatch.setattr(
         module,
         "mark_market_activity_failed",
@@ -105,6 +107,7 @@ def test_refresh_stock_universe_prefers_github_weekly_bundle(monkeypatch):
     monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         module,
@@ -145,6 +148,7 @@ def test_refresh_official_market_universe_falls_back_when_github_sync_is_unsuppo
     monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         module,
@@ -196,6 +200,7 @@ def test_refresh_official_market_universe_retries_transient_provider_failure(mon
     monkeypatch.setattr(module, "_count_active_universe", lambda _market: 10)
     monkeypatch.setattr("app.services.runtime_preferences_service.is_market_enabled_now", lambda _market: True)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_mark_market_activity_progress_safely", lambda **kwargs: None)
     failed = MagicMock()
     monkeypatch.setattr(module, "mark_market_activity_failed", failed)
     monkeypatch.setattr(

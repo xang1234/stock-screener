@@ -16,6 +16,7 @@ from ..database import SessionLocal, safe_rollback
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from ..wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
@@ -47,6 +48,26 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
+
+
+def _mark_market_activity_progress_safely(**kwargs) -> None:
+    db = None
+    try:
+        db = SessionLocal()
+        mark_market_activity_progress(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity progress for universe task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _count_active_universe(market: Optional[str]) -> Optional[int]:
@@ -397,6 +418,14 @@ def refresh_official_market_universe(
         finally:
             activity_db.close()
         prior_size = _count_active_universe(_market)
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message="Checking weekly reference bundle",
+        )
         sync_db = SessionLocal()
         try:
             github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
@@ -438,7 +467,27 @@ def refresh_official_market_universe(
                 "timestamp": datetime.now().isoformat(),
             }
 
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message=(
+                "Fetching live CN A-share listings"
+                if _market == "CN"
+                else "Fetching live official market universe"
+            ),
+        )
         snapshot = OfficialMarketUniverseSourceService().fetch_market_snapshot(_market)
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message="Ingesting official market universe",
+        )
         stats = _ingest_official_snapshot(snapshot)
         _emit_universe_drift(_market, prior_size)
 

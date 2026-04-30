@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+import time
 
 import pandas as pd
 import pytest
+import requests
 
 from app.services.cn_market_data_service import (
     CnDependencyError,
@@ -90,6 +92,22 @@ def test_cn_market_data_service_preserves_zero_listing_numeric_fields():
     assert row["pe_ratio"] == 0
     assert row["price_to_book"] == 0
     assert row["dividend_yield"] == 0
+
+
+def test_cn_market_data_service_times_out_listing_fetch():
+    class SlowAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            time.sleep(5)
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+    service = CnMarketDataService(akshare_module=SlowAkshare(), timeout_seconds=1)
+    started_at = time.monotonic()
+
+    with pytest.raises(requests.exceptions.Timeout, match="CN A-share listing fetch timed out"):
+        service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert time.monotonic() - started_at < 3
 
 
 def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
