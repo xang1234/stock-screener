@@ -491,6 +491,11 @@ class PriceCacheService:
         normalized = str(symbol or "").strip().upper()
         return normalized.endswith(".KS") or normalized.endswith(".KQ")
 
+    @staticmethod
+    def _is_cn_price_symbol(symbol: str) -> bool:
+        normalized = str(symbol or "").strip().upper()
+        return normalized.endswith(".SS") or normalized.endswith(".SZ") or normalized.endswith(".BJ")
+
     def _fetch_kr_historical_data(self, symbol: str, *, period: str) -> Optional[pd.DataFrame]:
         try:
             from .kr_market_data_service import KrxPriceService
@@ -505,11 +510,31 @@ class PriceCacheService:
             logger.warning("KRX historical fetch failed for %s: %s", symbol, exc)
             return None
 
+    def _fetch_cn_historical_data(self, symbol: str, *, period: str) -> Optional[pd.DataFrame]:
+        try:
+            from .cn_market_data_service import CnMarketDataService
+            from .security_master_service import security_master_resolver
+
+            identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
+            local_code = str(identity.local_code or "").strip()
+            if not local_code.isdigit():
+                return None
+            return CnMarketDataService().daily_ohlcv_dataframe(local_code, period=period)
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("CN historical fetch failed for %s: %s", symbol, exc)
+            return None
+
     def _fetch_direct_historical_data(self, symbol: str, *, period: str) -> Optional[pd.DataFrame]:
         if self._is_kr_price_symbol(symbol):
             krx_data = self._fetch_kr_historical_data(symbol, period=period)
             if krx_data is not None and not krx_data.empty:
                 return krx_data
+        if self._is_cn_price_symbol(symbol):
+            cn_data = self._fetch_cn_historical_data(symbol, period=period)
+            if cn_data is not None and not cn_data.empty:
+                return cn_data
+            if str(symbol or "").strip().upper().endswith(".BJ"):
+                return None
 
         from .yfinance_service import YFinanceService
 

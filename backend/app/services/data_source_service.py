@@ -16,6 +16,7 @@ from . import provider_routing_policy as routing_policy
 from .security_master_service import security_master_resolver
 
 if TYPE_CHECKING:
+    from app.services.cn_market_data_service import CnMarketDataService
     from app.services.eps_rating_service import EPSRatingService
     from app.services.finviz_service import FinvizService
     from app.services.kr_market_data_service import KrxFundamentalsService, OpenDartFundamentalsService
@@ -42,6 +43,7 @@ class DataSourceService:
         finviz_service: FinvizService | None = None,
         yfinance_service: YFinanceService | None = None,
         eps_rating_service: EPSRatingService | None = None,
+        cn_market_data_service: CnMarketDataService | None = None,
         krx_fundamentals_service: KrxFundamentalsService | None = None,
         opendart_fundamentals_service: OpenDartFundamentalsService | None = None,
         rate_limiter: RedisRateLimiter | None = None,
@@ -80,6 +82,10 @@ class DataSourceService:
             from .finviz_service import FinvizService
 
             finviz_service = FinvizService(rate_limiter=rate_limiter)
+        if cn_market_data_service is None:
+            from .cn_market_data_service import CnMarketDataService
+
+            cn_market_data_service = CnMarketDataService()
         if krx_fundamentals_service is None:
             from .kr_market_data_service import KrxFundamentalsService
 
@@ -92,6 +98,7 @@ class DataSourceService:
             )
         self.finviz_service = finviz_service
         self.yfinance_service = yfinance_service
+        self.cn_market_data_service = cn_market_data_service
         self.krx_fundamentals_service = krx_fundamentals_service
         self.opendart_fundamentals_service = opendart_fundamentals_service
 
@@ -103,7 +110,7 @@ class DataSourceService:
             'yfinance_primary': 0,
             'total_calls': 0,
             # Count of calls where prefer_finviz=True but routing policy
-            # excluded finviz (e.g. HK/JP/TW). Useful for measuring how many
+            # excluded finviz (e.g. HK/JP/TW/CN). Useful for measuring how many
             # wasted US-only provider calls the policy is preventing.
             'finviz_skipped_by_policy': 0,
         }
@@ -146,7 +153,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW). When provided, the
+            market: Optional market code (US/HK/IN/JP/KR/TW/CN). When provided, the
                 provider routing policy filters out providers that do not
                 cover this market (e.g. finviz is skipped for non-US markets).
                 ``None`` preserves legacy US-equivalent behaviour.
@@ -155,6 +162,8 @@ class DataSourceService:
             Dict with fundamental metrics and metadata, or None if all sources fail
         """
         self.metrics['total_calls'] += 1
+        if routing_policy.normalize_market(market) == routing_policy.MARKET_CN:
+            return self._get_cn_fundamentals(symbol)
         if routing_policy.normalize_market(market) == routing_policy.MARKET_KR:
             return self._get_kr_fundamentals(symbol)
 
@@ -210,6 +219,52 @@ class DataSourceService:
 
         logger.error(f"All data sources failed for {symbol} fundamentals")
         return None
+
+    def _get_cn_fundamentals(self, symbol: str) -> Optional[Dict]:
+        """Fetch CN fundamentals in AKShare -> BaoStock -> yfinance order."""
+        identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
+        local_code = str(identity.local_code or "").strip()
+        merged: Dict = {}
+        sources: list[str] = []
+
+        try:
+            core_data = self.cn_market_data_service.core_fundamentals(local_code)
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("AKShare CN core fundamentals failed for %s: %s", symbol, exc)
+            core_data = {}
+        if core_data:
+            merged.update(core_data)
+            sources.append(routing_policy.PROVIDER_AKSHARE)
+
+        try:
+            statement_data = self.cn_market_data_service.statement_fundamentals(local_code)
+        except Exception as exc:  # pragma: no cover - provider/network variability
+            logger.warning("CN statement fundamentals failed for %s: %s", symbol, exc)
+            statement_data = {}
+        if statement_data:
+            merged.update({key: value for key, value in statement_data.items() if value is not None})
+            sources.append("cn_statement")
+
+        if self.enable_fallback and not identity.canonical_symbol.endswith(".BJ"):
+            yf_data = self.yfinance_service.get_fundamentals(identity.canonical_symbol)
+            if yf_data:
+                for key, value in yf_data.items():
+                    if value is not None and key not in merged:
+                        merged[key] = value
+                sources.append(routing_policy.PROVIDER_YFINANCE)
+
+        if not merged:
+            logger.error("All CN data sources failed for %s fundamentals", symbol)
+            return None
+
+        merged["symbol"] = identity.canonical_symbol
+        merged["market"] = "CN"
+        merged["currency"] = "CNY"
+        merged["data_source"] = "+".join(dict.fromkeys(sources)) or "cn"
+        merged["data_source_timestamp"] = datetime.utcnow()
+        if identity.canonical_symbol.endswith(".BJ"):
+            merged["yfinance_status"] = "disabled_for_beijing"
+        return merged
 
     def _get_kr_fundamentals(self, symbol: str) -> Optional[Dict]:
         """Fetch KR fundamentals in KRX -> OpenDART -> yfinance order."""
@@ -301,7 +356,7 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW); see
+            market: Optional market code (US/HK/IN/JP/KR/TW/CN); see
                 ``get_fundamentals`` for semantics.
 
         Returns:
@@ -368,13 +423,35 @@ class DataSourceService:
 
         Args:
             symbol: Stock ticker symbol
-            market: Optional market code (US/HK/IN/JP/KR/TW); see
+            market: Optional market code (US/HK/IN/JP/KR/TW/CN); see
                 ``get_fundamentals`` for semantics.
 
         Returns:
             Dict with keys 'fundamentals' and 'growth', both containing data + metadata
         """
         self.metrics['total_calls'] += 1
+
+        if routing_policy.normalize_market(market) == routing_policy.MARKET_CN:
+            fundamentals = self._get_cn_fundamentals(symbol)
+            identity = security_master_resolver.resolve_identity(symbol=symbol, market="CN")
+            growth = {}
+            if not identity.canonical_symbol.endswith(".BJ"):
+                growth = self.yfinance_service.get_quarterly_growth(
+                    identity.canonical_symbol,
+                    market=routing_policy.MARKET_CN,
+                ) or {}
+            if fundamentals:
+                timestamp = datetime.utcnow()
+                if growth:
+                    growth["data_source"] = "yfinance"
+                    growth["data_source_timestamp"] = timestamp
+                return {
+                    "fundamentals": fundamentals,
+                    "growth": growth,
+                    "data_source": fundamentals.get("data_source", "cn"),
+                }
+            logger.error(f"All CN data sources failed for {symbol} combined data")
+            return None
 
         if routing_policy.normalize_market(market) == routing_policy.MARKET_KR:
             fundamentals = self._get_kr_fundamentals(symbol)

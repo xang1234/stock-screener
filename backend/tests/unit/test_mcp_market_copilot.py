@@ -62,7 +62,9 @@ def test_market_overview_returns_expected_sections(read_only_service):
     assert payload["runs"]["selected"]["id"] == 2
     assert payload["breadth"]["date"] == "2026-03-29"
     assert payload["alerts"][0]["title"] == "AI Infrastructure velocity spike"
-    assert payload["tasks"][0]["name"] == "daily-market-pipeline-hk"
+    task_names = {task["name"] for task in payload["tasks"]}
+    assert "daily-market-pipeline-hk" in task_names
+    assert "daily-market-pipeline-cn" in task_names
     assert payload["top_candidates"][0]["symbol"] == "NVDA"
     assert payload["citations"][2]["as_of"] == "2026-03-29"
 

@@ -63,6 +63,11 @@ SCAN_GUARD_MARKET_BY_EXCHANGE = {
     "AMEX": "US",
     "KOSPI": "KR",
     "KOSDAQ": "KR",
+    "BSE": "IN",
+    "XBOM": "IN",
+    "SSE": "CN",
+    "SZSE": "CN",
+    "BJSE": "CN",
 }
 
 

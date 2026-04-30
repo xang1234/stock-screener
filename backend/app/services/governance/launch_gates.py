@@ -163,35 +163,49 @@ def _missing_enabled_markets(latest_rows: Dict[str, object], enabled_markets: tu
     return sorted(set(enabled_markets).difference(markets_with_evidence))
 
 
-def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
-    if "KR" not in ctx.enabled_markets:
+def _check_market_taxonomy_coverage(ctx: GateContext, db=None, *, market: str) -> GateResult | None:
+    if market not in ctx.enabled_markets:
         return None
     try:
+        from ...models.stock import StockIndustry
         from ...models.stock_universe import StockUniverse
         from ...services.market_taxonomy_service import get_market_taxonomy_service
 
         active_rows = (
             db.query(StockUniverse.symbol, StockUniverse.exchange)
-            .filter(StockUniverse.market == "KR", StockUniverse.active_filter())
+            .filter(StockUniverse.market == market, StockUniverse.active_filter())
             .all()
         )
         if not active_rows:
             return GateResult(
                 gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                 status=GateStatus.MISSING_EVIDENCE,
-                detail="KR is enabled but no active KR universe rows are available for taxonomy coverage.",
-                metrics={"enabled_markets": list(ctx.enabled_markets), "market": "KR"},
+                detail=f"{market} is enabled but no active {market} universe rows are available for taxonomy coverage.",
+                metrics={"enabled_markets": list(ctx.enabled_markets), "market": market},
             )
 
         taxonomy = get_market_taxonomy_service()
-        taxonomy_source_rows = taxonomy.entry_count_for_market("KR")
+        taxonomy_source_rows = taxonomy.entry_count_for_market(market)
+        symbols = [symbol for symbol, _exchange in active_rows]
+        db_industry_by_symbol = {}
+        if market == "CN":
+            db_industry_by_symbol = {
+                row.symbol: row
+                for row in db.query(StockIndustry).filter(StockIndustry.symbol.in_(symbols)).all()
+            }
+            taxonomy_source_rows = max(taxonomy_source_rows, len(db_industry_by_symbol))
         sector_group_count = 0
         sub_industry_count = 0
         missing_symbols: list[str] = []
         for symbol, exchange in active_rows:
-            entry = taxonomy.get(symbol, market="KR", exchange=exchange)
-            has_sector_group = bool(entry and entry.sector and entry.industry_group)
-            has_sub_industry = bool(entry and entry.sub_industry)
+            industry_row = db_industry_by_symbol.get(symbol)
+            if industry_row is not None:
+                has_sector_group = bool(industry_row.sector and industry_row.industry_group)
+                has_sub_industry = bool(industry_row.sub_industry)
+            else:
+                entry = taxonomy.get(symbol, market=market, exchange=exchange)
+                has_sector_group = bool(entry and entry.sector and entry.industry_group)
+                has_sub_industry = bool(entry and entry.sub_industry)
             if has_sector_group:
                 sector_group_count += 1
             else:
@@ -204,7 +218,7 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
         sub_industry_ratio = sub_industry_count / total
         metrics = {
             "enabled_markets": list(ctx.enabled_markets),
-            "market": "KR",
+            "market": market,
             "active_symbols": total,
             "sector_industry_group_coverage": round(sector_group_ratio, 4),
             "sub_industry_coverage": round(sub_industry_ratio, 4),
@@ -215,14 +229,14 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
             "missing_symbols_truncated": len(missing_symbols) > 25,
         }
         if sector_group_ratio < 0.95 or sub_industry_ratio < 0.85:
-            if taxonomy_source_rows < total * 0.95:
+            if market != "CN" and taxonomy_source_rows < total * 0.95:
                 return GateResult(
                     gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                     status=GateStatus.MISSING_EVIDENCE,
                     detail=(
-                        "KR taxonomy coverage cannot be evaluated against launch thresholds "
+                        f"{market} taxonomy coverage cannot be evaluated against launch thresholds "
                         f"because the committed taxonomy source has {taxonomy_source_rows} rows "
-                        f"for {total} active KR symbols."
+                        f"for {total} active {market} symbols."
                     ),
                     metrics=metrics,
                 )
@@ -230,7 +244,7 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
                 gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
                 status=GateStatus.FAIL,
                 detail=(
-                    "KR taxonomy coverage below launch thresholds: "
+                    f"{market} taxonomy coverage below launch thresholds: "
                     f"sector+industry_group={sector_group_ratio:.2%} (<95%) or "
                     f"sub_industry={sub_industry_ratio:.2%} (<85%)."
                 ),
@@ -241,8 +255,8 @@ def _check_kr_taxonomy_coverage(ctx: GateContext, db=None) -> GateResult | None:
         return GateResult(
             gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
             status=GateStatus.MISSING_EVIDENCE,
-            detail=f"KR taxonomy coverage check failed: {exc}",
-            metrics={"enabled_markets": list(ctx.enabled_markets), "market": "KR"},
+            detail=f"{market} taxonomy coverage check failed: {exc}",
+            metrics={"enabled_markets": list(ctx.enabled_markets), "market": market},
         )
 
 
@@ -412,9 +426,10 @@ def _check_g2_universe(ctx: GateContext, db=None) -> GateResult:
                 "worst_market": worst_market,
             },
         )
-    kr_taxonomy_result = _check_kr_taxonomy_coverage(ctx, db=db)
-    if kr_taxonomy_result is not None:
-        return kr_taxonomy_result
+    for taxonomy_market in ("KR", "CN"):
+        taxonomy_result = _check_market_taxonomy_coverage(ctx, db=db, market=taxonomy_market)
+        if taxonomy_result is not None:
+            return taxonomy_result
     return GateResult(
         gate_id="G2", name="Universe Integrity and Freshness", severity="hard",
         status=GateStatus.PASS,
@@ -454,6 +469,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "JP": "^N225",
         "KR": "^KS11",
         "TW": "^TWII",
+        "CN": "000300.SS",
     }
     expected_calendar_ids = {
         "US": "XNYS",
@@ -462,6 +478,7 @@ def _check_g3_benchmark(ctx: GateContext) -> GateResult:
         "JP": "XTKS",
         "KR": "XKRX",
         "TW": "XTAI",
+        "CN": "XSHG",
     }
     markets = ctx.enabled_markets
     benchmark_mismatches = {}

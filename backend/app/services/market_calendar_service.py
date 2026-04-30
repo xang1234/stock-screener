@@ -1,4 +1,4 @@
-"""Market calendar abstraction for US/HK/IN/JP/KR/TW session-aware decisions."""
+"""Market calendar abstraction for US/HK/IN/JP/KR/TW/CN session-aware decisions."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ class MarketCalendarService:
         "JP": "XTKS",
         "KR": "XKRX",
         "TW": "XTAI",
+        "CN": "XSHG",
     }
     TIMEZONE_BY_MARKET: dict[str, str] = {
         "US": "America/New_York",
@@ -36,6 +37,7 @@ class MarketCalendarService:
         "JP": "Asia/Tokyo",
         "KR": "Asia/Seoul",
         "TW": "Asia/Taipei",
+        "CN": "Asia/Shanghai",
     }
     PROVIDER_CALENDAR_ID_BY_MARKET: dict[str, str] = {
         "IN": "NSE",
@@ -126,10 +128,38 @@ class MarketCalendarService:
             raise ValueError(f"No previous session available before {session.date().isoformat()}")
         return pd.Timestamp(schedule.index[-1])
 
+    @staticmethod
+    def _is_calendar_bounds_error(exc: Exception) -> bool:
+        class_name = exc.__class__.__name__.lower()
+        message = str(exc).lower()
+        return (
+            "outofbounds" in class_name
+            or "out of bounds" in message
+            or "last session" in message
+            or "first session" in message
+        )
+
+    @staticmethod
+    def _is_weekday(day: date) -> bool:
+        return day.weekday() < 5
+
+    @classmethod
+    def _previous_weekday(cls, day: date) -> date:
+        candidate = day - timedelta(days=1)
+        while not cls._is_weekday(candidate):
+            candidate -= timedelta(days=1)
+        return candidate
+
     def is_trading_day(self, market: str, day: date | None = None) -> bool:
-        calendar = self._get_calendar(market)
-        candidate_day = day or self.market_now(market).date()
-        return self._is_session(calendar, pd.Timestamp(candidate_day))
+        normalized = self.normalize_market(market)
+        candidate_day = day or self.market_now(normalized).date()
+        try:
+            calendar = self._get_calendar(normalized)
+            return self._is_session(calendar, pd.Timestamp(candidate_day))
+        except Exception as exc:
+            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+                return self._is_weekday(candidate_day)
+            raise
 
     def is_market_open(self, market: str, now: datetime | None = None) -> bool:
         calendar = self._get_calendar(market)
@@ -165,34 +195,42 @@ class MarketCalendarService:
     def last_completed_trading_day(self, market: str, now: datetime | None = None) -> date:
         """Return the latest trading day that should already have end-of-day bars."""
         normalized = self.normalize_market(market)
-        calendar = self._get_calendar(normalized)
         market_now = self.market_now(normalized, now=now)
         current_session = pd.Timestamp(market_now.date())
 
-        if not self._is_session(calendar, current_session):
-            date_to_session = getattr(calendar, "date_to_session", None)
-            if callable(date_to_session):
-                return date_to_session(current_session, direction="previous").date()
-            return self._previous_session(calendar, current_session).date()
+        try:
+            calendar = self._get_calendar(normalized)
 
-        schedule = self._schedule_for_range(
-            calendar,
-            start_day=current_session.date(),
-            end_day=current_session.date(),
-        )
-        if schedule.empty:
-            date_to_session = getattr(calendar, "date_to_session", None)
-            if callable(date_to_session):
-                return date_to_session(current_session, direction="previous").date()
-            return self._previous_session(calendar, current_session).date()
+            if not self._is_session(calendar, current_session):
+                date_to_session = getattr(calendar, "date_to_session", None)
+                if callable(date_to_session):
+                    return date_to_session(current_session, direction="previous").date()
+                return self._previous_session(calendar, current_session).date()
 
-        market_close = schedule.iloc[0]["close"] if "close" in schedule.columns else schedule.iloc[0]["market_close"]
-        if market_close.tzinfo is None:
-            market_close = market_close.tz_localize("UTC")
-        close_with_buffer = (
-            market_close.tz_convert(self.market_timezone(normalized)).to_pydatetime()
-            + timedelta(minutes=30)
-        )
-        if market_now >= close_with_buffer:
-            return current_session.date()
-        return self._previous_session(calendar, current_session).date()
+            schedule = self._schedule_for_range(
+                calendar,
+                start_day=current_session.date(),
+                end_day=current_session.date(),
+            )
+            if schedule.empty:
+                date_to_session = getattr(calendar, "date_to_session", None)
+                if callable(date_to_session):
+                    return date_to_session(current_session, direction="previous").date()
+                return self._previous_session(calendar, current_session).date()
+
+            market_close = schedule.iloc[0]["close"] if "close" in schedule.columns else schedule.iloc[0]["market_close"]
+            if market_close.tzinfo is None:
+                market_close = market_close.tz_localize("UTC")
+            close_with_buffer = (
+                market_close.tz_convert(self.market_timezone(normalized)).to_pydatetime()
+                + timedelta(minutes=30)
+            )
+            if market_now >= close_with_buffer:
+                return current_session.date()
+            return self._previous_session(calendar, current_session).date()
+        except Exception as exc:
+            if normalized == "CN" and self._is_calendar_bounds_error(exc):
+                if self._is_weekday(current_session.date()) and market_now.time().hour >= 16:
+                    return current_session.date()
+                return self._previous_weekday(current_session.date())
+            raise

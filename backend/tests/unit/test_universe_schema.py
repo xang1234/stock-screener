@@ -31,6 +31,11 @@ class TestUniverseDefinitionConstruction:
         assert u.type == UniverseType.MARKET
         assert u.market == Market.HK
 
+    def test_market_cn(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CN)
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.CN
+
     def test_exchange_nasdaq(self):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.NASDAQ)
         assert u.exchange == Exchange.NASDAQ
@@ -38,6 +43,11 @@ class TestUniverseDefinitionConstruction:
     def test_exchange_amex(self):
         u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=Exchange.AMEX)
         assert u.exchange == Exchange.AMEX
+
+    @pytest.mark.parametrize("exchange", [Exchange.SSE, Exchange.SZSE, Exchange.BJSE])
+    def test_china_exchanges(self, exchange):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, exchange=exchange)
+        assert u.exchange == exchange
 
     def test_index_sp500(self):
         u = UniverseDefinition(type=UniverseType.INDEX, index=IndexName.SP500)
@@ -176,6 +186,10 @@ class TestKey:
         u = UniverseDefinition(type=UniverseType.MARKET, market=Market.JP)
         assert u.key() == "market:JP"
 
+    def test_china_market_key(self):
+        u = UniverseDefinition(type=UniverseType.MARKET, market=Market.CN)
+        assert u.key() == "market:CN"
+
     def test_custom_key_is_deterministic(self):
         u1 = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["AAPL", "MSFT"])
         u2 = UniverseDefinition(type=UniverseType.CUSTOM, symbols=["MSFT", "AAPL"])
@@ -256,6 +270,11 @@ class TestFromLegacy:
         assert u.type == UniverseType.MARKET
         assert u.market == Market.JP
 
+    def test_market_prefixed_china(self):
+        u = UniverseDefinition.from_legacy("market:cn")
+        assert u.type == UniverseType.MARKET
+        assert u.market == Market.CN
+
     def test_market_short_code_without_prefix_is_not_legacy(self):
         with pytest.raises(ValueError, match="Unknown universe"):
             UniverseDefinition.from_legacy("hk")
@@ -264,6 +283,10 @@ class TestFromLegacy:
         u = UniverseDefinition.from_legacy("nasdaq")
         assert u.type == UniverseType.EXCHANGE
         assert u.exchange == Exchange.NASDAQ
+
+    def test_exchange_can_carry_market_to_disambiguate_bse(self):
+        u = UniverseDefinition(type=UniverseType.EXCHANGE, market=Market.CN, exchange=Exchange.BJSE)
+        assert u.key() == "exchange:CN:BJSE"
 
     def test_amex(self):
         u = UniverseDefinition.from_legacy("amex")

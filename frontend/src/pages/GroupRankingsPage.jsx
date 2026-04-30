@@ -59,8 +59,11 @@ import GroupChartsGrid from '../components/Charts/GroupChartsGrid';
 const MARKET_LABELS = {
   US: 'US',
   HK: 'HK',
+  IN: 'IN',
   JP: 'JP',
+  KR: 'KR',
   TW: 'TW',
+  CN: 'CN',
 };
 
 const REASON_HINTS = {

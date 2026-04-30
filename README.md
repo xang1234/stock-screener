@@ -1,6 +1,6 @@
-# Stock Screener 🇺🇸 🇯🇵 🇭🇰 🇰🇷 🇹🇼 🇮🇳
+# Stock Screener 🇺🇸 🇭🇰 🇮🇳 🇯🇵 🇰🇷 🇹🇼 🇨🇳
 
-A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, and Taiwan** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
+A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, Taiwan, and mainland China A-share** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
 ![Stock Scanner Demo](docs/gifs/scan-workflow.gif)
 
@@ -12,13 +12,13 @@ The static page is for demo purposes only. It is a read-only daily snapshot with
 
 ### Multi-Market Coverage
 
-Scan and track six markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **India** (NSE, BSE), **Japan** (Nikkei 225), **Korea** (KOSPI, KOSDAQ), and **Taiwan** (TAIEX). Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
+Scan and track seven markets — **United States** (NYSE, NASDAQ, AMEX, S&P 500), **Hong Kong** (HSI), **India** (NSE, BSE), **Japan** (Nikkei 225), **Korea** (KOSPI, KOSDAQ), **Taiwan** (TAIEX), and **mainland China A-shares** (SSE, SZSE, BJSE). Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG) with independent Celery refresh queues and locks, so US and Asia can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
 
 ![Market selector](docs/screenshots/market-selector.jpg)
-*Market picker in the scan control bar — pick US, HK, IN, JP, KR, or TW and scope to an exchange or index*
+*Market picker in the scan control bar — pick US, HK, IN, JP, KR, TW, or CN and scope to an exchange or index*
 
 ![Market badges](docs/screenshots/market-badges.png)
-*Color-coded per-market badges in the Symbol column — US (blue), HK (green), JP (yellow); Taiwan, India, and Korea follow the same pattern*
+*Color-coded per-market badges in the Symbol column — US (blue), HK (green), JP (yellow); Taiwan, India, Korea, and China follow the same pattern*
 
 Deep-dive: **[ASIA v2 ADRs & runbooks](docs/asia/README.md)**
 
@@ -107,7 +107,7 @@ On first launch the app boots into a setup screen — no pre-seeded database req
 
 The orchestrator runs a staged Celery pipeline for the primary market:
 
-1. **Universe refresh** — seeds the market's symbol list (S&P 500 / Russell / NDX for US via `refresh_stock_universe`; official exchange feeds for HK / IN / JP / KR / TW via `refresh_official_market_universe`).
+1. **Universe refresh** — seeds the market's symbol list (S&P 500 / Russell / NDX for US via `refresh_stock_universe`; official exchange feeds for HK / IN / JP / KR / TW / CN via `refresh_official_market_universe`).
 2. **Benchmark + price refresh** — 5y OHLCV cached in Redis with PostgreSQL fallback.
 3. **Fundamentals refresh** — quarterly and annual financials.
 4. **Breadth calculation** — StockBee-style advance/decline with gap-fill.
@@ -119,7 +119,7 @@ The orchestrator runs a staged Celery pipeline for the primary market:
 
 *Per-stage progress with per-market queue status while the pipeline is running*
 
-The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,in,jp,kr,tw}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
+The workspace opens as soon as the primary market reaches `ready`. Secondary markets keep hydrating in the background on their own queues (`data_fetch_{us,hk,in,jp,kr,tw,cn}`) so you can start scanning immediately. Scans against a market that's still refreshing return HTTP 409 `market_refresh_active` — the UI surfaces this as a wait indicator rather than a failure.
 
 State is persisted in `AppSetting` under `runtime.primary_market`, `runtime.enabled_markets`, and `runtime.bootstrap_state` (`not_started` → `running` → `ready`). To re-run the wizard, reset `runtime.bootstrap_state` to `not_started`.
 
@@ -143,7 +143,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | Routine | Market dashboard with Key Markets, Themes, Watchlists, Stockbee tabs |
-| `/scan` | Bulk Scanner | Multi-market scanning (US / HK / IN / JP / KR / TW) with 80+ filters, per-market badges, and CSV export |
+| `/scan` | Bulk Scanner | Multi-market scanning (US / HK / IN / JP / KR / TW / CN) with 80+ filters, per-market badges, and CSV export |
 | `/breadth` | Market Breadth | StockBee-style breadth indicators and trends |
 | `/groups` | Group Rankings | IBD industry group rankings with movers |
 | `/themes` | Themes | AI-powered theme discovery with trending/emerging detection |

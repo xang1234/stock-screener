@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -52,6 +52,11 @@ class _ProviderCalendar:
     pass
 
 
+class _BoundsCalendar:
+    def is_session(self, session: pd.Timestamp) -> bool:
+        raise ValueError("Requested date is later than the last session available")
+
+
 def test_market_calendar_service_uses_canonical_calendar_ids():
     service = MarketCalendarService(calendar_provider=lambda _: _FakeCalendar())
 
@@ -61,6 +66,7 @@ def test_market_calendar_service_uses_canonical_calendar_ids():
     assert service.calendar_id("JP") == "XTKS"
     assert service.calendar_id("KR") == "XKRX"
     assert service.calendar_id("TW") == "XTAI"
+    assert service.calendar_id("CN") == "XSHG"
 
 
 def test_last_completed_trading_day_before_close_returns_previous_session():
@@ -117,3 +123,20 @@ def test_india_pmc_lookup_uses_provider_specific_calendar_id():
     service._get_calendar("IN")
 
     assert calls == ["NSE"]
+
+
+def test_china_calendar_bounds_fallback_uses_weekdays():
+    service = MarketCalendarService(calendar_provider=lambda _: _BoundsCalendar())
+
+    assert service.is_trading_day("CN", date(2026, 4, 10)) is True
+    assert service.is_trading_day("CN", date(2026, 4, 11)) is False
+
+
+def test_china_last_completed_trading_day_bounds_fallback():
+    service = MarketCalendarService(calendar_provider=lambda _: _BoundsCalendar())
+
+    before_close = datetime.fromisoformat("2026-04-10T15:00:00+08:00")
+    after_close = datetime.fromisoformat("2026-04-10T16:00:00+08:00")
+
+    assert service.last_completed_trading_day("CN", now=before_close) == date(2026, 4, 9)
+    assert service.last_completed_trading_day("CN", now=after_close) == date(2026, 4, 10)

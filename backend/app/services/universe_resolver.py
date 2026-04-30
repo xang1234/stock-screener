@@ -93,7 +93,7 @@ def resolve_symbols(
     elif t == UniverseType.EXCHANGE:
         return get_stock_universe_service().get_active_symbols(
             db,
-            market=None,
+            market=universe_def.market.value if universe_def.market else None,
             exchange=universe_def.exchange.value,
             sp500_only=False,
             limit=limit,

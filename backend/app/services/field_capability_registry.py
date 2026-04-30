@@ -66,7 +66,7 @@ class FieldCapabilityEntry:
 class FieldCapabilityRegistryService:
     """Deterministic matrix for screening-field market/provider coverage."""
 
-    REGISTRY_VERSION = "2026.04.29.2"
+    REGISTRY_VERSION = "2026.04.30.1"
     MARKET_ORDER: Tuple[str, ...] = (
         routing_policy.MARKET_US,
         routing_policy.MARKET_HK,
@@ -74,9 +74,12 @@ class FieldCapabilityRegistryService:
         routing_policy.MARKET_JP,
         routing_policy.MARKET_KR,
         routing_policy.MARKET_TW,
+        routing_policy.MARKET_CN,
     )
     PROVIDER_ORDER: Tuple[str, ...] = (
         routing_policy.PROVIDER_FINVIZ,
+        routing_policy.PROVIDER_AKSHARE,
+        routing_policy.PROVIDER_BAOSTOCK,
         routing_policy.PROVIDER_KRX,
         routing_policy.PROVIDER_OPENDART,
         routing_policy.PROVIDER_YFINANCE,
@@ -121,8 +124,28 @@ class FieldCapabilityRegistryService:
             "debt_to_equity",
             "current_ratio",
         } & fields
+        cn_quote_fields = {
+            "market_cap",
+            "shares_outstanding",
+            "pe_ratio",
+            "price_to_book",
+            "eps_current",
+            "dividend_yield",
+        } & fields
+        cn_statement_fields = {
+            "revenue_current",
+            "profit_margin",
+            "operating_margin",
+            "gross_margin",
+            "roe",
+            "roa",
+            "debt_to_equity",
+            "current_ratio",
+        } & fields
         return {
             routing_policy.PROVIDER_FINVIZ: self._finviz_supported_fields(),
+            routing_policy.PROVIDER_AKSHARE: frozenset(cn_quote_fields | cn_statement_fields),
+            routing_policy.PROVIDER_BAOSTOCK: frozenset(cn_quote_fields | cn_statement_fields),
             routing_policy.PROVIDER_KRX: frozenset(krx_fields),
             routing_policy.PROVIDER_OPENDART: frozenset(opendart_fields),
             # yfinance supports the baseline screening surface; enhanced
@@ -380,6 +403,7 @@ class FieldCapabilityRegistryService:
                     routing_policy.MARKET_JP,
                     routing_policy.MARKET_KR,
                     routing_policy.MARKET_TW,
+                    routing_policy.MARKET_CN,
                 )
             ):
                 reason_code = REASON_CODE_NON_US_GAP

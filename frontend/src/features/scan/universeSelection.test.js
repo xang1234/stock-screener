@@ -30,7 +30,13 @@ describe('buildUniverseDef', () => {
   it('maps exchange and index scopes to their typed forms', () => {
     expect(buildUniverseDef('US', 'exchange:NYSE')).toEqual({
       type: 'exchange',
+      market: 'US',
       exchange: 'NYSE',
+    });
+    expect(buildUniverseDef('CN', 'exchange:BJSE')).toEqual({
+      type: 'exchange',
+      market: 'CN',
+      exchange: 'BJSE',
     });
     expect(buildUniverseDef('US', 'index:SP500')).toEqual({ type: 'index', index: 'SP500' });
   });
@@ -44,6 +50,7 @@ describe('getSelectionCount', () => {
     by_market: {
       US: { counts: { active: 5900 } },
       HK: { counts: { active: 2400 } },
+      CN: { counts: { active: 5492 } },
     },
   };
 
@@ -54,6 +61,7 @@ describe('getSelectionCount', () => {
   it('returns the per-market active count for market scope', () => {
     expect(getSelectionCount('US', 'market', stats)).toBe(5900);
     expect(getSelectionCount('HK', 'market', stats)).toBe(2400);
+    expect(getSelectionCount('CN', 'market', stats)).toBe(5492);
   });
 
   it('returns the by_exchange count for exchange scopes', () => {
@@ -96,6 +104,7 @@ describe('parseLegacyUniverseDefault', () => {
     expect(parseLegacyUniverseDefault('market:hk')).toEqual({ market: 'HK', scope: 'market' });
     expect(parseLegacyUniverseDefault('market:jp')).toEqual({ market: 'JP', scope: 'market' });
     expect(parseLegacyUniverseDefault('market:kr')).toEqual({ market: 'KR', scope: 'market' });
+    expect(parseLegacyUniverseDefault('market:cn')).toEqual({ market: 'CN', scope: 'market' });
   });
 
   // The 'all' default is deliberately ambiguous (it used to mean "all US"), so
@@ -116,6 +125,15 @@ describe('UNIVERSE_SCOPES_BY_MARKET', () => {
       { value: 'market', label: 'All Korea' },
       { value: 'exchange:KOSPI', label: 'KOSPI' },
       { value: 'exchange:KOSDAQ', label: 'KOSDAQ' },
+    ]);
+  });
+
+  it('exposes SSE, SZSE, and BJSE scopes for China', () => {
+    expect(UNIVERSE_SCOPES_BY_MARKET.CN).toEqual([
+      { value: 'market', label: 'All China A-shares' },
+      { value: 'exchange:SSE', label: 'Shanghai Stock Exchange' },
+      { value: 'exchange:SZSE', label: 'Shenzhen Stock Exchange' },
+      { value: 'exchange:BJSE', label: 'Beijing Stock Exchange' },
     ]);
   });
 });

@@ -10,6 +10,7 @@ const MARKET_COLOR = Object.freeze({
   JP: 'warning',
   KR: 'error',
   TW: 'info',
+  CN: 'secondary',
 });
 
 // Derive full-name labels from the canonical universe constants so renames

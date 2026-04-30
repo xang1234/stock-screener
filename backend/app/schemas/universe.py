@@ -29,6 +29,7 @@ class Market(str, Enum):
     JP = "JP"
     KR = "KR"
     TW = "TW"
+    CN = "CN"
 
 
 class Exchange(str, Enum):
@@ -38,6 +39,9 @@ class Exchange(str, Enum):
     AMEX = "AMEX"
     KOSPI = "KOSPI"
     KOSDAQ = "KOSDAQ"
+    SSE = "SSE"
+    SZSE = "SZSE"
+    BJSE = "BJSE"
 
 
 class IndexName(str, Enum):
@@ -63,7 +67,7 @@ class UniverseDefinition(BaseModel):
     Validates that the right fields are populated for each universe type:
     - ALL: no extra fields
     - MARKET: market required
-    - EXCHANGE: exchange required
+    - EXCHANGE: exchange required, market optional for ambiguous exchange codes
     - INDEX: index required
     - CUSTOM/TEST: symbols required (non-empty, max 500)
     """
@@ -121,12 +125,11 @@ class UniverseDefinition(BaseModel):
             if self.exchange is None:
                 raise ValueError("EXCHANGE universe requires 'exchange' field")
             if (
-                self.market is not None
-                or self.index is not None
+                self.index is not None
                 or self.symbols is not None
                 or self.allow_inactive_symbols
             ):
-                raise ValueError("EXCHANGE universe must not specify market, index, or symbols")
+                raise ValueError("EXCHANGE universe must not specify index or symbols")
 
         elif t == UniverseType.INDEX:
             if self.index is None:
@@ -167,6 +170,8 @@ class UniverseDefinition(BaseModel):
         elif self.type == UniverseType.MARKET:
             return f"market:{self.market.value}"
         elif self.type == UniverseType.EXCHANGE:
+            if self.market is not None and self.market != Market.US:
+                return f"exchange:{self.market.value}:{self.exchange.value}"
             return f"exchange:{self.exchange.value}"
         elif self.type == UniverseType.INDEX:
             return f"index:{self.index.value}"
@@ -192,7 +197,9 @@ class UniverseDefinition(BaseModel):
                 Market.HK: "Hong Kong Market",
                 Market.IN: "India Market",
                 Market.JP: "Japan Market",
+                Market.KR: "South Korea Market",
                 Market.TW: "Taiwan Market",
+                Market.CN: "China A-shares",
             }
             return market_labels.get(self.market, f"{self.market.value} Market")
         elif self.type == UniverseType.EXCHANGE:
@@ -253,6 +260,7 @@ class UniverseDefinition(BaseModel):
                     resolved_market = universe_key.split(":", 1)[1].upper()
                 market = Market(resolved_market) if resolved_market else None
             elif parsed_type == UniverseType.EXCHANGE:
+                market = Market(resolved_market) if resolved_market else None
                 exchange = Exchange(universe_exchange) if universe_exchange else None
             elif parsed_type == UniverseType.INDEX:
                 index = IndexName(universe_index) if universe_index else None
@@ -280,6 +288,7 @@ class UniverseDefinition(BaseModel):
         - "market:hk" -> MARKET:HK
         - "market:jp" -> MARKET:JP
         - "market:tw" -> MARKET:TW
+        - "market:cn" -> MARKET:CN
         - "nyse" -> EXCHANGE:NYSE
         - "nasdaq" -> EXCHANGE:NASDAQ
         - "amex" -> EXCHANGE:AMEX
@@ -308,6 +317,7 @@ class UniverseDefinition(BaseModel):
             "jp": Market.JP,
             "kr": Market.KR,
             "tw": Market.TW,
+            "cn": Market.CN,
         }
 
         if u == "all":
@@ -316,7 +326,7 @@ class UniverseDefinition(BaseModel):
             raw_market = u.split(":", 1)[1].strip().lower()
             if raw_market in market_map:
                 return cls(type=UniverseType.MARKET, market=market_map[raw_market])
-            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, KR, TW")
+            raise ValueError(f"Unknown market '{raw_market}'. Valid values: US, HK, IN, JP, KR, TW, CN")
         elif u in exchange_map:
             return cls(type=UniverseType.EXCHANGE, exchange=exchange_map[u])
         elif u == "sp500":
@@ -332,6 +342,6 @@ class UniverseDefinition(BaseModel):
                 return cls(type=UniverseType.CUSTOM, symbols=symbols)
             raise ValueError(
                 f"Unknown universe '{universe}' and no symbols provided. "
-                f"Valid values: all, market:us, market:hk, market:in, market:jp, market:kr, market:tw, "
+                f"Valid values: all, market:us, market:hk, market:in, market:jp, market:kr, market:tw, market:cn, "
                 f"nyse, nasdaq, amex, sp500, custom, test"
             )

@@ -141,6 +141,7 @@ const CURRENCY_PREFIX_BY_CODE = Object.freeze({
   JPY: '¥',
   KRW: '₩',
   TWD: 'NT$',
+  CNY: '¥',
 });
 
 /**
@@ -158,7 +159,7 @@ export const getCurrencyPrefix = (currencyCode) => {
  * Returns '-' for null/undefined so empty cells stay visually consistent
  * with other "missing" cells in the results table.
  * @param {number|null|undefined} value - Raw numeric value (local currency units)
- * @param {string|null|undefined} currencyCode - ISO 4217 code (USD/HKD/INR/JPY/KRW/TWD)
+ * @param {string|null|undefined} currencyCode - ISO 4217 code (USD/HKD/INR/JPY/KRW/TWD/CNY)
  * @param {number} decimals - Decimal places (default: 2)
  * @returns {string}
  */

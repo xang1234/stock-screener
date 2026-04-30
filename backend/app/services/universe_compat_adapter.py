@@ -30,7 +30,9 @@ LEGACY_UNIVERSE_ALIAS_MAP: dict[str, dict[str, Any]] = {
     "market:us": {"type": "market", "market": "US"},
     "market:hk": {"type": "market", "market": "HK"},
     "market:jp": {"type": "market", "market": "JP"},
+    "market:kr": {"type": "market", "market": "KR"},
     "market:tw": {"type": "market", "market": "TW"},
+    "market:cn": {"type": "market", "market": "CN"},
     "custom": {"type": "custom"},
     "test": {"type": "test"},
 }

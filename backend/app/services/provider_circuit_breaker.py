@@ -102,7 +102,9 @@ class ProviderCircuitBreaker:
         "HK": 300,
         "IN": 300,
         "JP": 300,
+        "KR": 300,
         "TW": 300,
+        "CN": 300,
     }
 
     def __init__(self, redis_client_factory=None):

@@ -131,7 +131,7 @@ describe('RuntimeProvider', () => {
       primary_market: 'HK',
       enabled_markets: ['HK', 'US'],
       bootstrap_state: 'running',
-      supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW'],
+      supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
       api_base_path: '/api',
     });
 
@@ -160,7 +160,7 @@ describe('RuntimeProvider', () => {
       primary_market: 'HK',
       enabled_markets: ['HK', 'US'],
       bootstrap_state: 'running',
-      supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW'],
+      supported_markets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN'],
       task_id: 'task-bootstrap-123',
     });
 
@@ -194,7 +194,7 @@ describe('RuntimeProvider', () => {
     });
   });
 
-  it('preserves the India and Korea markets in bootstrap fallback supported markets', async () => {
+  it('preserves the non-US markets in bootstrap fallback supported markets', async () => {
     getAppCapabilities
       .mockResolvedValueOnce({
         ...DEFAULT_CAPABILITIES,
@@ -230,7 +230,7 @@ describe('RuntimeProvider', () => {
       expect(queryClient.getQueryData(['appCapabilities'])?.supported_markets).toEqual(
         DEFAULT_CAPABILITIES.supported_markets
       );
-      expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,KR,TW');
+      expect(screen.getByTestId('supported-markets')).toHaveTextContent('US,HK,IN,JP,KR,TW,CN');
     });
   });
 });

@@ -28,9 +28,11 @@ from ..models.stock_universe import (
     UNIVERSE_STATUS_INACTIVE_MISSING_SOURCE,
     UNIVERSE_STATUS_INACTIVE_NO_DATA,
 )
+from ..models.stock import StockIndustry
 from ..models.ticker_validation import TickerValidationLog
 from ..schemas.universe import IndexName
 from ..config import settings
+from .cn_universe_ingestion_adapter import cn_universe_ingestion_adapter
 from .hk_universe_ingestion_adapter import hk_universe_ingestion_adapter
 from .jp_universe_ingestion_adapter import jp_universe_ingestion_adapter
 from .kr_universe_ingestion_adapter import kr_universe_ingestion_adapter
@@ -46,8 +48,10 @@ MARKET_EXCHANGE_FALLBACKS: dict[str, tuple[str, ...]] = {
     "JP": ("TSE", "JPX", "XTKS"),
     "KR": ("KOSPI", "KOSDAQ", "XKRX"),
     "TW": ("TWSE", "TPEX", "XTAI"),
+    "CN": ("SSE", "SZSE", "BJSE", "XSHG"),
 }
 KR_ACTIVE_UNIVERSE_MIN_COUNT = 2526
+CN_ACTIVE_UNIVERSE_MIN_COUNT = 5217
 
 
 class StockUniverseService:
@@ -56,6 +60,7 @@ class StockUniverseService:
     def __init__(self):
         """Initialize stock universe service."""
         self._security_master = security_master_resolver
+        self._cn_ingestion = cn_universe_ingestion_adapter
         self._hk_ingestion = hk_universe_ingestion_adapter
         self._jp_ingestion = jp_universe_ingestion_adapter
         self._kr_ingestion = kr_universe_ingestion_adapter
@@ -929,6 +934,12 @@ class StockUniverseService:
                 field_name="asia_reconciliation_min_count_tw",
                 env_name="ASIA_RECONCILIATION_MIN_COUNT_TW",
                 default=default_min,
+            )
+        if normalized_market == "CN":
+            return StockUniverseService._safety_int_setting(
+                field_name="asia_reconciliation_min_count_cn",
+                env_name="ASIA_RECONCILIATION_MIN_COUNT_CN",
+                default=max(default_min, CN_ACTIVE_UNIVERSE_MIN_COUNT),
             )
         return default_min
 
@@ -2043,6 +2054,308 @@ class StockUniverseService:
         )
 
     @staticmethod
+    def _parse_cn_csv_rows(csv_content: str) -> list[dict[str, Any]]:
+        """Parse CN ingestion CSV into normalized lowercase-key row dicts."""
+        csv_file = io.StringIO(csv_content)
+        reader = csv.DictReader(csv_file)
+        fieldnames = reader.fieldnames or []
+        normalized_fields = [str(name).strip().lower() for name in fieldnames if name]
+        has_symbol_field = any(name in {"symbol", "local_code", "ticker", "code"} for name in normalized_fields)
+        if not fieldnames or not has_symbol_field:
+            csv_file.seek(0)
+            reader = csv.DictReader(
+                csv_file,
+                fieldnames=[
+                    "symbol",
+                    "name",
+                    "exchange",
+                    "sector",
+                    "industry_group",
+                    "industry",
+                    "sub_industry",
+                    "market_cap",
+                ],
+            )
+
+        rows: list[dict[str, Any]] = []
+        for row in reader:
+            row_lower = {str(k).strip().lower(): v for k, v in row.items() if k}
+            source_symbol = (
+                str(
+                    row_lower.get("symbol")
+                    or row_lower.get("local_code")
+                    or row_lower.get("ticker")
+                    or row_lower.get("code")
+                    or ""
+                )
+                .strip()
+                .upper()
+            )
+            if not source_symbol or source_symbol in {"SYMBOL", "LOCAL_CODE", "TICKER", "CODE"}:
+                continue
+            rows.append(row_lower)
+        return rows
+
+    def _upsert_cn_stock_industry_rows(
+        self,
+        db: Session,
+        rows: Iterable[Any],
+        *,
+        now: datetime,
+    ) -> int:
+        """Populate stock_industry with CN sector/group/industry/sub-industry data."""
+        canonical_rows = [
+            row
+            for row in rows
+            if any(
+                str(getattr(row, attr, "") or "").strip()
+                for attr in ("sector", "industry_group", "industry", "sub_industry")
+            )
+        ]
+        if not canonical_rows:
+            return 0
+
+        symbols = [row.symbol for row in canonical_rows]
+        existing_by_symbol = {
+            record.symbol: record
+            for record in db.query(StockIndustry).filter(StockIndustry.symbol.in_(symbols)).all()
+        }
+        new_rows: list[StockIndustry] = []
+        changed = 0
+        for row in canonical_rows:
+            existing = existing_by_symbol.get(row.symbol)
+            if existing is not None:
+                if row.sector:
+                    existing.sector = row.sector
+                if row.industry_group:
+                    existing.industry_group = row.industry_group
+                if row.industry:
+                    existing.industry = row.industry
+                if row.sub_industry:
+                    existing.sub_industry = row.sub_industry
+                existing.updated_at = now
+                changed += 1
+                continue
+            new_rows.append(
+                StockIndustry(
+                    symbol=row.symbol,
+                    sector=row.sector or None,
+                    industry_group=row.industry_group or None,
+                    industry=row.industry or row.industry_group or None,
+                    sub_industry=row.sub_industry or None,
+                    updated_at=now,
+                )
+            )
+            changed += 1
+
+        self._bulk_insert_records(db, new_rows)
+        return changed
+
+    def ingest_cn_snapshot_rows(
+        self,
+        db: Session,
+        *,
+        rows: Iterable[dict[str, Any]],
+        source_name: str,
+        snapshot_id: str,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest CN rows with deterministic canonicalization and lineage metadata."""
+        canonicalized = self._cn_ingestion.canonicalize_rows(
+            rows,
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+        )
+
+        if strict and canonicalized.rejected_rows:
+            sample = "; ".join(
+                f"row {row.source_row_number}: {row.reason}"
+                for row in canonicalized.rejected_rows[:3]
+            )
+            raise ValueError(
+                f"CN ingestion rejected {len(canonicalized.rejected_rows)} row(s). {sample}"
+            )
+
+        now = datetime.utcnow()
+        canonical_symbols = [row.symbol for row in canonicalized.canonical_rows]
+        existing_rows = {
+            row.symbol: row
+            for row in db.query(StockUniverse).filter(
+                StockUniverse.symbol.in_(canonical_symbols)
+            ).all()
+        } if canonical_symbols else {}
+
+        added_count = 0
+        updated_count = 0
+        new_rows: list[StockUniverse] = []
+        new_events: list[StockUniverseStatusEvent] = []
+
+        for row in canonicalized.canonical_rows:
+            event_payload = {
+                "source_name": row.source_name,
+                "source_symbol": row.source_symbol,
+                "source_row_number": row.source_row_number,
+                "snapshot_id": row.snapshot_id,
+                "snapshot_as_of": row.snapshot_as_of,
+                "source_metadata": row.source_metadata,
+                "board": row.board,
+                "lineage_hash": row.lineage_hash,
+                "row_hash": row.row_hash,
+            }
+            reason = f"Present in CN source snapshot {row.snapshot_id}"
+            existing = existing_rows.get(row.symbol)
+
+            if existing is not None:
+                existing.name = row.name or existing.name
+                existing.market = row.market
+                existing.exchange = row.exchange
+                existing.currency = row.currency
+                existing.timezone = row.timezone
+                existing.local_code = row.local_code or existing.local_code
+                existing.sector = row.sector or existing.sector
+                existing.industry = row.industry or row.industry_group or existing.industry
+                if row.market_cap is not None:
+                    existing.market_cap = row.market_cap
+                self._apply_status_transition(
+                    db,
+                    existing,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="cn_ingest",
+                    reason=reason,
+                    now=now,
+                    payload=event_payload,
+                    source="cn_ingest",
+                    clear_failures=True,
+                    seen_in_source=True,
+                )
+                updated_count += 1
+                continue
+
+            new_rows.append(
+                StockUniverse(
+                    symbol=row.symbol,
+                    name=row.name,
+                    market=row.market,
+                    exchange=row.exchange,
+                    currency=row.currency,
+                    timezone=row.timezone,
+                    local_code=row.local_code,
+                    sector=row.sector,
+                    industry=row.industry or row.industry_group,
+                    market_cap=row.market_cap,
+                    is_active=True,
+                    status=UNIVERSE_STATUS_ACTIVE,
+                    status_reason=reason,
+                    source="cn_ingest",
+                    consecutive_fetch_failures=0,
+                    added_at=now,
+                    first_seen_at=now,
+                    last_seen_in_source_at=now,
+                    updated_at=now,
+                )
+            )
+            new_events.append(
+                self._build_status_event_record(
+                    symbol=row.symbol,
+                    old_status=None,
+                    new_status=UNIVERSE_STATUS_ACTIVE,
+                    trigger_source="cn_ingest",
+                    reason=reason,
+                    payload=event_payload,
+                )
+            )
+            added_count += 1
+
+        self._bulk_insert_records(db, new_rows)
+        self._bulk_insert_records(db, new_events)
+        stock_industry_upserts = self._upsert_cn_stock_industry_rows(
+            db,
+            canonicalized.canonical_rows,
+            now=now,
+        )
+
+        reconciliation = self._record_market_reconciliation_run(
+            db,
+            market="CN",
+            source_name=source_name,
+            snapshot_id=snapshot_id,
+            canonical_rows=canonicalized.canonical_rows,
+        )
+        reconciliation = self._apply_market_reconciliation_policy(
+            db,
+            market="CN",
+            snapshot_id=snapshot_id,
+            trigger_source="cn_ingest",
+            reconciliation=reconciliation,
+            now=now,
+        )
+        db.commit()
+        details_limit = 25
+        canonical_preview = canonicalized.canonical_rows[:details_limit]
+        rejected_preview = canonicalized.rejected_rows[:details_limit]
+
+        return {
+            "added": added_count,
+            "updated": updated_count,
+            "total": len(canonicalized.canonical_rows),
+            "rejected": len(canonicalized.rejected_rows),
+            "source_name": source_name,
+            "snapshot_id": snapshot_id,
+            "stock_industry_upserts": stock_industry_upserts,
+            "canonical_rows": [
+                {
+                    "symbol": row.symbol,
+                    "local_code": row.local_code,
+                    "exchange": row.exchange,
+                    "board": row.board,
+                    "source_symbol": row.source_symbol,
+                    "lineage_hash": row.lineage_hash,
+                    "row_hash": row.row_hash,
+                }
+                for row in canonical_preview
+            ],
+            "rejected_rows": [
+                {
+                    "source_row_number": row.source_row_number,
+                    "source_symbol": row.source_symbol,
+                    "reason": row.reason,
+                }
+                for row in rejected_preview
+            ],
+            "canonical_rows_truncated": len(canonicalized.canonical_rows) > details_limit,
+            "rejected_rows_truncated": len(canonicalized.rejected_rows) > details_limit,
+            "reconciliation": reconciliation,
+        }
+
+    def ingest_cn_from_csv(
+        self,
+        db: Session,
+        csv_content: str,
+        *,
+        source_name: str,
+        snapshot_id: str | None = None,
+        snapshot_as_of: str | None = None,
+        source_metadata: Optional[dict[str, Any]] = None,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """Ingest CN universe rows from CSV content."""
+        rows = self._parse_cn_csv_rows(csv_content)
+        resolved_snapshot_id = snapshot_id or self._auto_snapshot_id("cn")
+        return self.ingest_cn_snapshot_rows(
+            db,
+            rows=rows,
+            source_name=source_name,
+            snapshot_id=resolved_snapshot_id,
+            snapshot_as_of=snapshot_as_of,
+            source_metadata=source_metadata,
+            strict=strict,
+        )
+
+    @staticmethod
     def _parse_tw_csv_rows(csv_content: str) -> list[dict[str, Any]]:
         """Parse TW ingestion CSV into normalized lowercase-key row dicts."""
         csv_file = io.StringIO(csv_content)
@@ -2968,7 +3281,7 @@ class StockUniverseService:
             1,
         )
         stale_after_seconds = stale_after_hours * 3600
-        reconciliation_markets = {"HK", "IN", "JP", "KR", "TW"}
+        reconciliation_markets = {"HK", "IN", "JP", "KR", "TW", "CN"}
 
         by_market: Dict[str, Dict[str, Any]] = {
             market: {
@@ -2978,7 +3291,7 @@ class StockUniverseService:
                 "latest_seen_in_source_at": None,
                 "latest_snapshot": None,
             }
-            for market in ("US", "HK", "IN", "JP", "KR", "TW")
+            for market in ("US", "HK", "IN", "JP", "KR", "TW", "CN")
         }
 
         universe_rows = db.query(

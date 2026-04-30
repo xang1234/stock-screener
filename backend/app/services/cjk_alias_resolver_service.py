@@ -14,7 +14,8 @@ non-deterministic).
 Resolution precedence (highest → lowest)
 ----------------------------------------
 1. ``symbol_passthrough`` — input already carries a SecurityMaster
-   suffix (``.HK``, ``.T``, ``.TW``, ``.TWO``) and a valid local code.
+   suffix (``.HK``, ``.T``, ``.TW``, ``.TWO``, ``.SS``, ``.SZ``,
+   ``.BJ``) and a valid local code.
 2. ``symbol_normalized`` — input is a bare exchange code (e.g. ``700``
    with ``hint_market="HK"``) that we can reshape to canonical form.
 3. ``alias_exact`` — NFKC-normalized input matches an alias verbatim.
@@ -53,7 +54,7 @@ from .cjk_alias_data import ASIA_ALIAS_CORPUS
 # first preserves correctness without special-casing.
 from .security_master_service import _MARKET_BY_SUFFIX, _SUFFIX_BY_MARKET
 
-POLICY_VERSION: str = "2026.04.13.1"
+POLICY_VERSION: str = "2026.04.30.1"
 
 METHOD_SYMBOL_PASSTHROUGH: str = "symbol_passthrough"
 METHOD_SYMBOL_NORMALIZED: str = "symbol_normalized"
@@ -61,7 +62,7 @@ METHOD_ALIAS_EXACT: str = "alias_exact"
 METHOD_ALIAS_FOLDED: str = "alias_folded"
 METHOD_NONE: str = "none"
 
-SUPPORTED_MARKETS: frozenset[str] = frozenset({"HK", "JP", "TW"})
+SUPPORTED_MARKETS: frozenset[str] = frozenset({"HK", "JP", "TW", "CN"})
 
 # Exchange-local code shape by market. HK codes range 1-5 digits but
 # canonicalize to a 4-digit zero-padded form (HSBC = 0005.HK); JP/TW
@@ -70,6 +71,7 @@ SUPPORTED_MARKETS: frozenset[str] = frozenset({"HK", "JP", "TW"})
 _LOCAL_CODE_RE_HK_PASSTHROUGH = re.compile(r"^\d{1,5}$")
 _LOCAL_CODE_RE_HK_NORMALIZED = re.compile(r"^\d{3,5}$")
 _LOCAL_CODE_RE_JP_TW = re.compile(r"^\d{4,5}$")
+_LOCAL_CODE_RE_CN = re.compile(r"^\d{6}$")
 
 # Punctuation to strip when building the aggressive (folded) match key.
 # Kept small and CJK-aware: interpuncts, middle dots, hyphens, commas,
@@ -187,6 +189,12 @@ def _try_symbol_passthrough(
                 market=market, method=METHOD_SYMBOL_PASSTHROUGH,
                 policy_version=POLICY_VERSION,
             )
+        elif market == "CN" and _LOCAL_CODE_RE_CN.match(local_code):
+            return AliasResolution(
+                query=query, canonical_symbol=f"{local_code}{suffix}",
+                market=market, method=METHOD_SYMBOL_PASSTHROUGH,
+                policy_version=POLICY_VERSION,
+            )
     return None
 
 
@@ -205,10 +213,23 @@ def _try_symbol_normalized(
             return None
         local_code = f"{int(normalized):04d}"
     else:
-        if not _LOCAL_CODE_RE_JP_TW.match(normalized):
+        if market == "CN":
+            if not _LOCAL_CODE_RE_CN.match(normalized):
+                return None
+            if normalized.startswith(("600", "601", "603", "605", "688")):
+                suffix = ".SS"
+            elif normalized.startswith(("000", "001", "002", "003", "300", "301")):
+                suffix = ".SZ"
+            elif normalized.startswith(("4", "8", "9")):
+                suffix = ".BJ"
+            else:
+                return None
+            local_code = normalized
+        elif not _LOCAL_CODE_RE_JP_TW.match(normalized):
             return None
-        # JP/TW canonical codes are preserved verbatim at 4 or 5 digits.
-        local_code = normalized
+        else:
+            # JP/TW canonical codes are preserved verbatim at 4 or 5 digits.
+            local_code = normalized
     return AliasResolution(
         query=query,
         canonical_symbol=f"{local_code}{suffix}",

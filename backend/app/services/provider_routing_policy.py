@@ -16,6 +16,8 @@ Fundamentals providers have different geographic coverage:
   ``SecurityMasterService``.
 - ``krx``          : Korea Exchange data through ``pykrx``.
 - ``opendart``     : Korea FSS OpenDART statement data when configured.
+- ``akshare``      : Mainland China A-share bulk quotes/fundamentals.
+- ``baostock``     : Mainland China A-share no-key historical/fundamentals fallback.
 
 Prior to this module all symbols were routed identically (finviz preferred,
 yfinance fallback). For non-US markets (HK/JP/TW) this produced:
@@ -58,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 # --- Policy version ---------------------------------------------------------
 
-POLICY_VERSION = "2026.04.29.1"
+POLICY_VERSION = "2026.04.30.1"
 """Bump (date-stamped) when routing semantics change.
 
 Consumed by audit logs, cache keys, and provenance tags so downstream
@@ -73,6 +75,8 @@ PROVIDER_KRX = "krx"
 PROVIDER_OPENDART = "opendart"
 PROVIDER_YFINANCE = "yfinance"
 PROVIDER_ALPHAVANTAGE = "alphavantage"
+PROVIDER_AKSHARE = "akshare"
+PROVIDER_BAOSTOCK = "baostock"
 
 KNOWN_PROVIDERS: FrozenSet[str] = frozenset(
     {
@@ -81,6 +85,8 @@ KNOWN_PROVIDERS: FrozenSet[str] = frozenset(
         PROVIDER_OPENDART,
         PROVIDER_YFINANCE,
         PROVIDER_ALPHAVANTAGE,
+        PROVIDER_AKSHARE,
+        PROVIDER_BAOSTOCK,
     }
 )
 
@@ -93,9 +99,10 @@ MARKET_IN = "IN"
 MARKET_JP = "JP"
 MARKET_KR = "KR"
 MARKET_TW = "TW"
+MARKET_CN = "CN"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -126,6 +133,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # yfinance remains a suffix-based fallback for fields not covered natively.
     MARKET_KR: (PROVIDER_KRX, PROVIDER_OPENDART, PROVIDER_YFINANCE),
     MARKET_TW: (PROVIDER_YFINANCE,),
+    # CN: AKShare/Eastmoney is primary because it offers no-key bulk A-share
+    # coverage; BaoStock is a no-key fallback; yfinance is last and only useful
+    # for .SS/.SZ fields where Yahoo coverage exists.
+    MARKET_CN: (PROVIDER_AKSHARE, PROVIDER_BAOSTOCK, PROVIDER_YFINANCE),
 }
 
 

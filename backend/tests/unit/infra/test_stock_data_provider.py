@@ -163,7 +163,11 @@ class TestPartialFailureAllowPartialTrue:
 
         assert result.symbol == "0700.HK"
         mock_price_cache.get_historical_data.assert_called_once_with("0700.HK", period="2y")
-        mock_fundamentals_cache.get_fundamentals.assert_called_once_with("0700.HK", force_refresh=False)
+        mock_fundamentals_cache.get_fundamentals.assert_called_once_with(
+            "0700.HK",
+            force_refresh=False,
+            market="HK",
+        )
 
     def test_all_components_fail_returns_stock_data_with_all_errors(
         self, data_layer, mock_price_cache, mock_yfinance,

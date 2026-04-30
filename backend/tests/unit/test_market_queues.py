@@ -27,14 +27,14 @@ class TestNormalizeMarket:
         ("US", "US"), ("us", "US"), ("Us", "US"), (" us ", "US"),
         ("HK", "HK"), ("hk", "HK"),
         ("IN", "IN"), ("in", "IN"),
-        ("JP", "JP"), ("KR", "KR"), ("kr", "KR"), ("TW", "TW"),
+        ("JP", "JP"), ("KR", "KR"), ("kr", "KR"), ("TW", "TW"), ("CN", "CN"),
         (None, SHARED_SENTINEL), ("", SHARED_SENTINEL), ("  ", SHARED_SENTINEL),
         ("SHARED", SHARED_SENTINEL), ("shared", SHARED_SENTINEL),
     ])
     def test_canonicalizes(self, raw, expected):
         assert normalize_market(raw) == expected
 
-    @pytest.mark.parametrize("bad", ["CN", "UK", "ALL", "xx", "US_CANADA"])
+    @pytest.mark.parametrize("bad", ["UK", "ALL", "xx", "US_CANADA"])
     def test_rejects_unknown(self, bad):
         with pytest.raises(ValueError):
             normalize_market(bad)
@@ -52,6 +52,7 @@ class TestQueueForMarket:
         ("JP", "data_fetch_jp"),
         ("KR", "data_fetch_kr"),
         ("TW", "data_fetch_tw"),
+        ("CN", "data_fetch_cn"),
         (None, "data_fetch_shared"),
         ("shared", "data_fetch_shared"),
     ])
@@ -80,14 +81,14 @@ class TestQueueForMarket:
         ("JP", "market_jobs_jp"),
         ("KR", "market_jobs_kr"),
         ("TW", "market_jobs_tw"),
+        ("CN", "market_jobs_cn"),
     ])
     def test_market_jobs_queue(self, market, expected):
         assert market_jobs_queue_for_market(market) == expected
         assert queue_for_market(market, base=MARKET_JOBS_BASE) == expected
 
     def test_unknown_market_raises(self):
-        with pytest.raises(ValueError):
-            queue_for_market("CN")
+        assert queue_for_market("CN") == "data_fetch_cn"
 
 
 class TestAllQueues:

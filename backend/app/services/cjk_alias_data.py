@@ -116,6 +116,36 @@ ASIA_ALIAS_CORPUS: Dict[str, _AliasEntry] = {
             "鴻海精密",
         ],
     },
+
+    # --- Mainland China A-shares ------------------------------------
+    "600519.SS": {
+        "market": "CN",
+        "aliases": [
+            "Kweichow Moutai",
+            "Moutai",
+            "贵州茅台",
+            "貴州茅台",
+            "茅台",
+        ],
+    },
+    "300750.SZ": {
+        "market": "CN",
+        "aliases": [
+            "CATL",
+            "Contemporary Amperex Technology",
+            "宁德时代",
+            "寧德時代",
+        ],
+    },
+    "601318.SS": {
+        "market": "CN",
+        "aliases": [
+            "Ping An",
+            "Ping An Insurance",
+            "中国平安",
+            "中國平安",
+        ],
+    },
 }
 
 

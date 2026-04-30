@@ -21,7 +21,7 @@ from .data_fetch_lock import serialized_data_fetch
 
 logger = logging.getLogger(__name__)
 
-_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW"})
+_OFFICIAL_SOURCE_MARKETS = frozenset({"HK", "IN", "JP", "KR", "TW", "CN"})
 _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
@@ -134,6 +134,15 @@ def _ingest_official_snapshot(snapshot: Any) -> dict[str, Any]:
             )
         if snapshot.market == "TW":
             return stock_universe_service.ingest_tw_snapshot_rows(
+                db,
+                rows=snapshot.rows,
+                source_name=snapshot.source_name,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_as_of=snapshot.snapshot_as_of,
+                source_metadata=snapshot.source_metadata,
+            )
+        if snapshot.market == "CN":
+            return stock_universe_service.ingest_cn_snapshot_rows(
                 db,
                 rows=snapshot.rows,
                 source_name=snapshot.source_name,

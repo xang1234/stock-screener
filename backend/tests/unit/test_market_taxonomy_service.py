@@ -40,6 +40,15 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
             "091990,KOSDAQ,Health Care,Biotechnology,Biologics,Biopharmaceuticals\n"
         ),
     )
+    _write_csv(
+        tmp_path / "china-deep.csv",
+        (
+            "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n"
+            "600519,SSE,Consumer Staples,Food & Beverage,Beverage Manufacturing,Liquor\n"
+            "000001,SZSE,Financials,Banks,Commercial Banks,Joint-stock Banks\n"
+            "920118,BJSE,Consumer Discretionary,Textiles,Textile Manufacturing,Home Textiles\n"
+        ),
+    )
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -109,6 +118,25 @@ def test_market_taxonomy_service_normalizes_hk_jp_and_tw_symbols(tmp_path):
     assert kr_kosdaq_umbrella.symbol == "091990.KQ"
     assert service.entry_count_for_market("KR") == 2
 
+    cn_sse = service.get("600519.SS", market="CN")
+    assert cn_sse is not None
+    assert cn_sse.symbol == "600519.SS"
+    assert cn_sse.sector == "Consumer Staples"
+    assert cn_sse.industry_group == "Food & Beverage"
+    assert cn_sse.industry == "Beverage Manufacturing"
+    assert cn_sse.sub_industry == "Liquor"
+
+    cn_szse = service.get("000001", market="CN", exchange="SZSE")
+    assert cn_szse is not None
+    assert cn_szse.symbol == "000001.SZ"
+    assert cn_szse.industry_group == "Banks"
+
+    cn_bse = service.get("920118", market="CN", exchange="BJSE")
+    assert cn_bse is not None
+    assert cn_bse.symbol == "920118.BJ"
+    assert cn_bse.industry_group == "Textiles"
+    assert service.entry_count_for_market("CN") == 3
+
 
 def test_groups_for_market_and_symbols_for_group(tmp_path):
     """The new group-listing helpers feed IBDIndustryService for non-US markets."""
@@ -134,6 +162,7 @@ def test_groups_for_market_and_symbols_for_group(tmp_path):
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
     _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
+    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -169,6 +198,7 @@ def test_entry_count_for_market_counts_loaded_rows_before_symbol_merge(tmp_path)
             "005930.KS,KOSPI,Information Technology,Hardware,Semiconductors,Memory Semiconductors\n"
         ),
     )
+    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -188,6 +218,7 @@ def test_market_taxonomy_service_raises_load_error_for_missing_required_csv(tmp_
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
     _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
+    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -208,6 +239,7 @@ def test_market_taxonomy_service_raises_load_error_for_malformed_csv(tmp_path):
     )
     _write_csv(tmp_path / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n")
     _write_csv(tmp_path / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n")
+    _write_csv(tmp_path / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n")
 
     service = MarketTaxonomyService(data_dir=tmp_path)
 
@@ -226,6 +258,7 @@ def test_market_taxonomy_service_default_data_dir_prefers_container_app_data(tmp
     _write_csv(app_data / "kabutan_themes_en.csv", "Symbol,TSE 33-Sector,TSE 17-Sector,Theme (EN)\n7203,Transportation Equipment,Automobiles,Hybrid Vehicles\n")
     _write_csv(app_data / "taiwan-deep.csv", "Symbol,Market,Industry (EN)\n2330,TWSE,Semiconductors\n")
     _write_csv(app_data / "korea-deep.csv", "Symbol,Market,Sector,Industry Group,Industry,Sub-Industry\n005930,KOSPI,Information Technology,Technology Hardware,Semiconductors,Memory Semiconductors\n")
+    _write_csv(app_data / "china-deep.csv", "Symbol,Exchange,Sector,Industry Group,Industry,Sub-Industry\n600519,SSE,Consumer Staples,Food & Beverage,Beverage Manufacturing,Liquor\n")
 
     resolved = MarketTaxonomyService._default_data_dir(service_path=service_path)
 

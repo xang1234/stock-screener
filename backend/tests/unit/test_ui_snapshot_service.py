@@ -255,7 +255,8 @@ def test_publish_all_skips_groups_when_rankings_are_missing(monkeypatch):
     assert published["breadth_us"] == fake_snapshot
     assert published["breadth_hk"] == fake_snapshot
     assert published["breadth_in"] == fake_snapshot
-    assert published_breadth_markets == ["US", "HK", "IN", "JP", "KR", "TW"]
+    assert published["breadth_cn"] == fake_snapshot
+    assert published_breadth_markets == ["US", "HK", "IN", "JP", "KR", "TW", "CN"]
     assert published["groups"] is None
 
 

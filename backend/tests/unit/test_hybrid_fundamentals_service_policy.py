@@ -26,6 +26,21 @@ def _make_service() -> HybridFundamentalsService:
     return svc
 
 
+def _make_cn_data_source() -> MagicMock:
+    data_source = MagicMock()
+    data_source.get_combined_data.side_effect = lambda symbol, market=None: {
+        "fundamentals": {
+            "symbol": symbol,
+            "market": market,
+            "market_cap": 123.0,
+            "data_source": "akshare+baostock",
+        },
+        "growth": {"eps_growth_qq": 12.5},
+        "data_source": "akshare+baostock",
+    }
+    return data_source
+
+
 class TestPhase3PolicyFiltering:
     def test_non_us_symbols_are_excluded_from_finviz_phase(self):
         svc = _make_service()
@@ -92,6 +107,60 @@ class TestPhase3PolicyFiltering:
         kwargs = svc.bulk_fetcher.fetch_batch_fundamentals.call_args.kwargs
         assert kwargs.get("market_by_symbol") == market_by_symbol
 
+    def test_cn_symbols_use_cn_provider_path_and_skip_yfinance_batch(self):
+        svc = _make_service()
+        svc._data_source_service = _make_cn_data_source()
+        symbols = ["920118.BJ", "000001.SZ"]
+        market_by_symbol = {"920118.BJ": "CN", "000001.SZ": "CN"}
+
+        result = svc.fetch_fundamentals_batch(
+            symbols,
+            include_technicals=False,
+            include_finviz=False,
+            market_by_symbol=market_by_symbol,
+        )
+
+        svc.bulk_fetcher.fetch_batch_fundamentals.assert_not_called()
+        assert svc._data_source_service.get_combined_data.call_count == 2
+        assert result["920118.BJ"]["data_source"] == "akshare+baostock"
+        assert result["920118.BJ"]["eps_growth_qq"] == 12.5
+
+    def test_mixed_cn_batch_only_sends_non_cn_symbols_to_yfinance(self):
+        svc = _make_service()
+        svc._data_source_service = _make_cn_data_source()
+        svc.bulk_fetcher.fetch_batch_fundamentals.return_value = {
+            "AAPL": {"market_cap": 456.0}
+        }
+        symbols = ["920118.BJ", "AAPL"]
+        market_by_symbol = {"920118.BJ": "CN", "AAPL": "US"}
+
+        result = svc.fetch_fundamentals_batch(
+            symbols,
+            include_technicals=False,
+            include_finviz=False,
+            market_by_symbol=market_by_symbol,
+        )
+
+        svc.bulk_fetcher.fetch_batch_fundamentals.assert_called_once()
+        assert svc.bulk_fetcher.fetch_batch_fundamentals.call_args.args[0] == ["AAPL"]
+        assert result["920118.BJ"]["market"] == "CN"
+        assert result["AAPL"]["market_cap"] == 456.0
+
+    def test_cn_suffix_without_market_map_skips_yfinance_and_finviz(self):
+        svc = _make_service()
+        svc._data_source_service = _make_cn_data_source()
+
+        result = svc.fetch_fundamentals_batch(
+            ["920118.BJ"],
+            include_technicals=False,
+            include_finviz=True,
+            market_by_symbol=None,
+        )
+
+        svc.bulk_fetcher.fetch_batch_fundamentals.assert_not_called()
+        svc.finviz_service.get_finviz_only_fields.assert_not_called()
+        assert result["920118.BJ"]["market"] == "CN"
+
     def test_progress_callback_reaches_completion_when_finviz_phase_is_empty(self):
         svc = _make_service()
         symbols = ["0700.HK", "7203.T"]
@@ -125,3 +194,19 @@ class TestPhase3PolicyFiltering:
         assert svc.bulk_fetcher.fetch_fundamentals_parallel.call_count == 1
         kwargs = svc.bulk_fetcher.fetch_fundamentals_parallel.call_args.kwargs
         assert kwargs.get("market_by_symbol") == market_by_symbol
+
+    def test_parallel_cn_suffix_without_market_map_skips_yfinance_and_finviz(self):
+        svc = _make_service()
+        svc._data_source_service = _make_cn_data_source()
+        svc.bulk_fetcher.fetch_fundamentals_parallel.return_value = {}
+
+        result = svc.fetch_fundamentals_with_parallel_finviz(
+            ["920118.BJ"],
+            include_technicals=False,
+            finviz_workers=1,
+            market_by_symbol=None,
+        )
+
+        svc.bulk_fetcher.fetch_fundamentals_parallel.assert_not_called()
+        svc.finviz_service.get_finviz_only_fields_batch.assert_not_called()
+        assert result["920118.BJ"]["market"] == "CN"
