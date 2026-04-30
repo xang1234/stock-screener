@@ -605,7 +605,7 @@ class TestRunBulkScanHappyPath:
         )
 
         assert observed_workers == [2]
-        assert scanner.calls == ["AAPL", "MSFT"]
+        assert sorted(scanner.calls) == ["AAPL", "MSFT"]
 
     def test_parallel_workers_ignored_for_partial_prefetch_cache_populating_scans(
         self, monkeypatch

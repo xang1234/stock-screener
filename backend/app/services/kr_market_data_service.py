@@ -197,9 +197,12 @@ class KrxMarketDataService:
             row_market_code = str(item.get("marketCode") or "").strip().upper()
             if row_market_code and row_market_code != market_code:
                 continue
-            ticker = str(item.get("short_code") or "").strip().zfill(6)
+            raw_ticker = str(item.get("short_code") or "").strip()
+            if not raw_ticker or not raw_ticker.isdigit():
+                continue
+            ticker = raw_ticker.zfill(6)
             name = str(item.get("codeName") or "").strip()
-            if not ticker or not ticker.isdigit() or not name:
+            if not name:
                 continue
             row: dict[str, Any] = {
                 "symbol": f"{ticker}{_KR_BOARD_TO_SUFFIX[board]}",

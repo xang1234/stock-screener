@@ -205,6 +205,8 @@ def _run_detectors_ordered(
     with ThreadPoolExecutor(
         max_workers=min(detector_workers, len(detectors))
     ) as executor:
+        # PatternDetectorInput is frozen and detector implementations treat
+        # feature frames as read-only. Sharing avoids copying large OHLCV data.
         futures = {
             executor.submit(
                 _run_detector,

@@ -312,6 +312,7 @@ def _find_pole_windows(frame: pd.DataFrame) -> list[_PoleCandidateWindow]:
             valid_returns,
             recencies,
             weighted_scores,
+            strict=True,
         ):
             candidates.append(
                 _PoleCandidateWindow(

@@ -196,6 +196,12 @@ def test_krx_listing_rows_falls_back_to_current_listing_finder_when_daily_ticker
                         "codeName": "Wrong Board",
                         "marketCode": "KNX",
                     },
+                    {
+                        "full_code": "KR7000000000",
+                        "short_code": "",
+                        "codeName": "Blank Code",
+                        "marketCode": "STK",
+                    },
                 ]
             )
 
