@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from app.analysis.patterns.config import SetupEngineParameters
@@ -273,31 +274,53 @@ def _find_pole_windows(frame: pd.DataFrame) -> list[_PoleCandidateWindow]:
     last_idx = n - 1
     closes = close.to_numpy(dtype=float)
 
-    for end_idx in range(_POLE_MIN_BARS - 1, n):
-        for window_bars in range(_POLE_MIN_BARS, _POLE_MAX_BARS + 1):
-            start_idx = end_idx - window_bars + 1
-            if start_idx < 0:
-                continue
+    for window_bars in range(_POLE_MIN_BARS, _POLE_MAX_BARS + 1):
+        end_indices = np.arange(window_bars - 1, n)
+        start_indices = end_indices - window_bars + 1
+        start_closes = closes[start_indices]
+        end_closes = closes[end_indices]
 
-            start_close = closes[start_idx]
-            end_close = closes[end_idx]
-            if start_close <= 0.0:
-                continue
+        valid_start = start_closes > 0.0
+        if not np.any(valid_start):
+            continue
 
-            pole_return = (end_close / start_close) - 1.0
-            if pole_return < _MIN_POLE_RETURN:
-                continue
+        pole_returns = np.full_like(end_closes, np.nan, dtype=float)
+        np.divide(
+            end_closes,
+            start_closes,
+            out=pole_returns,
+            where=valid_start,
+        )
+        pole_returns -= 1.0
+        valid = valid_start & (pole_returns >= _MIN_POLE_RETURN)
+        if not np.any(valid):
+            continue
 
-            recency_bars = last_idx - end_idx
-            weighted_score = pole_return * (1.0 + _recency_weight(recency_bars))
+        valid_start_indices = start_indices[valid]
+        valid_end_indices = end_indices[valid]
+        valid_returns = pole_returns[valid]
+        recencies = last_idx - valid_end_indices
+        recency_weights = np.array(
+            [_recency_weight(int(value)) for value in recencies],
+            dtype=float,
+        )
+        weighted_scores = valid_returns * (1.0 + recency_weights)
+
+        for start_idx, end_idx, pole_return, recency_bars, weighted_score in zip(
+            valid_start_indices,
+            valid_end_indices,
+            valid_returns,
+            recencies,
+            weighted_scores,
+        ):
             candidates.append(
                 _PoleCandidateWindow(
-                    start_idx=start_idx,
-                    end_idx=end_idx,
+                    start_idx=int(start_idx),
+                    end_idx=int(end_idx),
                     window_bars=window_bars,
-                    pole_return=pole_return,
-                    recency_bars=recency_bars,
-                    weighted_score=weighted_score,
+                    pole_return=float(pole_return),
+                    recency_bars=int(recency_bars),
+                    weighted_score=float(weighted_score),
                 )
             )
 
@@ -342,107 +365,137 @@ def _find_best_flag_candidate(
     if start_idx >= len(frame):
         return None, ("flag_missing_structure",)
 
-    highs = frame["High"]
-    lows = frame["Low"]
-    volumes = frame["Volume"]
+    highs = frame["High"].to_numpy(dtype=float)
+    lows = frame["Low"].to_numpy(dtype=float)
+    volumes = frame["Volume"].to_numpy(dtype=float)
 
-    pole_high = float(highs.iloc[pole_candidate.start_idx : pole_candidate.end_idx + 1].max())
-    pole_low = float(lows.iloc[pole_candidate.start_idx : pole_candidate.end_idx + 1].min())
+    pole_slice = slice(pole_candidate.start_idx, pole_candidate.end_idx + 1)
+    pole_high = float(np.nanmax(highs[pole_slice]))
+    pole_low = float(np.nanmin(lows[pole_slice]))
     pole_range = max(pole_high - pole_low, 1e-9)
     upper_half_floor = pole_low + (pole_range * 0.5)
-    pole_volume_mean = float(
-        volumes.iloc[pole_candidate.start_idx : pole_candidate.end_idx + 1].mean()
-    )
+    pole_volume_mean = float(np.nanmean(volumes[pole_slice]))
     if pole_volume_mean <= 0.0 or pd.isna(pole_volume_mean):
         return None, ("flag_volume_baseline_invalid",)
 
-    rejected: list[str] = []
-    valid_candidates: list[_FlagCandidate] = []
     n = len(frame)
+    max_duration = min(_FLAG_MAX_BARS, n - start_idx)
+    if max_duration < _FLAG_MIN_BARS:
+        return None, ("flag_missing_structure",)
 
-    for duration_bars in range(_FLAG_MIN_BARS, _FLAG_MAX_BARS + 1):
-        end_idx = start_idx + duration_bars - 1
-        if end_idx >= n:
-            break
+    duration_bars = np.arange(_FLAG_MIN_BARS, max_duration + 1)
+    duration_offsets = duration_bars - 1
+    high_segment = highs[start_idx : start_idx + max_duration]
+    low_segment = lows[start_idx : start_idx + max_duration]
+    volume_segment = volumes[start_idx : start_idx + max_duration]
 
-        segment = frame.iloc[start_idx : end_idx + 1]
-        segment_high = segment["High"].to_numpy(dtype=float)
-        segment_low = segment["Low"].to_numpy(dtype=float)
-        segment_volume = segment["Volume"].to_numpy(dtype=float)
+    cumulative_high = np.fmax.accumulate(high_segment)
+    cumulative_low = np.fmin.accumulate(low_segment)
+    volume_valid = ~np.isnan(volume_segment)
+    cumulative_volume = np.cumsum(np.where(volume_valid, volume_segment, 0.0))
+    cumulative_volume_count = np.cumsum(volume_valid)
 
-        flag_high = float(segment_high.max())
-        flag_low = float(segment_low.min())
-        if flag_high <= 0.0:
-            rejected.append("flag_missing_structure")
-            continue
+    flag_highs = cumulative_high[duration_offsets]
+    flag_lows = cumulative_low[duration_offsets]
+    volume_counts = cumulative_volume_count[duration_offsets]
+    flag_volume_means = np.full_like(flag_highs, np.nan, dtype=float)
+    np.divide(
+        cumulative_volume[duration_offsets],
+        volume_counts,
+        out=flag_volume_means,
+        where=volume_counts > 0,
+    )
 
-        flag_depth_pct = ((flag_high - flag_low) / flag_high) * 100.0
-        upper_half_margin_pct = ((flag_low - upper_half_floor) / pole_range) * 100.0
-        flag_volume_mean = float(segment_volume.mean())
-        if flag_volume_mean <= 0.0 or pd.isna(flag_volume_mean):
-            rejected.append("flag_volume_rejected")
-            continue
-        volume_ratio = flag_volume_mean / pole_volume_mean
+    structure_ok = flag_highs > 0.0
+    flag_depth_pct = ((flag_highs - flag_lows) / flag_highs) * 100.0
+    upper_half_margin_pct = ((flag_lows - upper_half_floor) / pole_range) * 100.0
+    volume_mean_ok = (flag_volume_means > 0.0) & ~np.isnan(flag_volume_means)
+    volume_ratios = np.full_like(flag_volume_means, np.nan, dtype=float)
+    np.divide(
+        flag_volume_means,
+        pole_volume_mean,
+        out=volume_ratios,
+        where=volume_mean_ok,
+    )
 
-        depth_ok = flag_depth_pct <= _FLAG_MAX_DEPTH_PCT
-        upper_half_ok = flag_low >= upper_half_floor
-        volume_ok = volume_ratio <= _FLAG_MAX_VOLUME_RATIO
+    depth_ok = flag_depth_pct <= _FLAG_MAX_DEPTH_PCT
+    upper_half_ok = flag_lows >= upper_half_floor
+    volume_ok = volume_ratios <= _FLAG_MAX_VOLUME_RATIO
+    valid = structure_ok & volume_mean_ok & depth_ok & upper_half_ok & volume_ok
 
-        if not depth_ok:
-            rejected.append("flag_depth_rejected")
-        if not upper_half_ok:
-            rejected.append("flag_upper_half_rejected")
-        if not volume_ok:
-            rejected.append("flag_volume_rejected")
-        if not (depth_ok and upper_half_ok and volume_ok):
-            continue
+    rejected: list[str] = []
+    if np.any(~structure_ok):
+        rejected.append("flag_missing_structure")
+    if np.any(structure_ok & ~depth_ok):
+        rejected.append("flag_depth_rejected")
+    if np.any(structure_ok & ~upper_half_ok):
+        rejected.append("flag_upper_half_rejected")
+    if np.any(structure_ok & (~volume_mean_ok | ~volume_ok)):
+        rejected.append("flag_volume_rejected")
 
-        pivot_offset = int(segment_high.argmax())
-        pivot_idx = start_idx + pivot_offset
-        recency_bars = (n - 1) - end_idx
-        depth_component = max(0.0, 1.0 - (flag_depth_pct / _FLAG_MAX_DEPTH_PCT))
-        volume_component = max(0.0, 1.0 - max(0.0, volume_ratio - 1.0))
-        score = (
-            depth_component * 0.50
-            + min(max(upper_half_margin_pct, 0.0), 12.0) / 12.0 * 0.25
-            + volume_component * 0.15
-            + _recency_weight(recency_bars) * 0.10
-        )
-
-        valid_candidates.append(
-            _FlagCandidate(
-                pole=pole_candidate,
-                start_idx=start_idx,
-                end_idx=end_idx,
-                duration_bars=duration_bars,
-                flag_high=flag_high,
-                flag_low=flag_low,
-                pivot_idx=pivot_idx,
-                flag_depth_pct=flag_depth_pct,
-                upper_half_floor=upper_half_floor,
-                upper_half_margin_pct=upper_half_margin_pct,
-                volume_ratio=volume_ratio,
-                score=score,
-                recency_bars=recency_bars,
-            )
-        )
-
-    if not valid_candidates:
+    valid_positions = np.flatnonzero(valid)
+    if len(valid_positions) == 0:
         fallback = ("flag_missing_structure",) if not rejected else tuple(
             _stable_unique(rejected)
         )
         return None, fallback
 
-    valid_candidates.sort(
-        key=lambda candidate: (
-            -candidate.score,
-            candidate.flag_depth_pct,
-            candidate.duration_bars,
-            candidate.recency_bars,
-            -candidate.pivot_idx,
-        )
+    depth_components = np.maximum(
+        0.0,
+        1.0 - (flag_depth_pct / _FLAG_MAX_DEPTH_PCT),
     )
-    return valid_candidates[0], tuple(_stable_unique(rejected))
+    volume_components = np.maximum(
+        0.0,
+        1.0 - np.maximum(0.0, volume_ratios - 1.0),
+    )
+    recency_bars_values = (n - 1) - (start_idx + duration_bars - 1)
+    scores = (
+        depth_components * 0.50
+        + np.minimum(np.maximum(upper_half_margin_pct, 0.0), 12.0) / 12.0 * 0.25
+        + volume_components * 0.15
+        + np.array(
+            [_recency_weight(int(value)) for value in recency_bars_values],
+            dtype=float,
+        )
+        * 0.10
+    )
+
+    def _candidate_sort_key(position: int) -> tuple[float, float, int, int, int]:
+        pivot_offset = int(np.nanargmax(high_segment[: duration_bars[position]]))
+        return (
+            -float(scores[position]),
+            float(flag_depth_pct[position]),
+            int(duration_bars[position]),
+            int(recency_bars_values[position]),
+            -(start_idx + pivot_offset),
+        )
+
+    best_position = min(
+        (int(position) for position in valid_positions),
+        key=_candidate_sort_key,
+    )
+    best_duration = int(duration_bars[best_position])
+    pivot_idx = start_idx + int(np.nanargmax(high_segment[:best_duration]))
+    end_idx = start_idx + best_duration - 1
+
+    return (
+        _FlagCandidate(
+            pole=pole_candidate,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            duration_bars=best_duration,
+            flag_high=float(flag_highs[best_position]),
+            flag_low=float(flag_lows[best_position]),
+            pivot_idx=pivot_idx,
+            flag_depth_pct=float(flag_depth_pct[best_position]),
+            upper_half_floor=upper_half_floor,
+            upper_half_margin_pct=float(upper_half_margin_pct[best_position]),
+            volume_ratio=float(volume_ratios[best_position]),
+            score=float(scores[best_position]),
+            recency_bars=int(recency_bars_values[best_position]),
+        ),
+        tuple(_stable_unique(rejected)),
+    )
 
 
 def _stable_unique(values: list[str]) -> list[str]:

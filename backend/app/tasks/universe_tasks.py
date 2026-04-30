@@ -9,6 +9,8 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
+import requests
+
 from ..celery_app import celery_app
 from ..database import SessionLocal, safe_rollback
 from ..services.market_activity_service import (
@@ -26,6 +28,10 @@ _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
+_OFFICIAL_UNIVERSE_TRANSIENT_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
 
 
 def _mark_market_activity_failed_safely(db, **kwargs) -> None:
@@ -470,6 +476,46 @@ def refresh_official_market_universe(
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
+    except _OFFICIAL_UNIVERSE_TRANSIENT_EXCEPTIONS as exc:
+        retry_count = int(getattr(self.request, "retries", 0) or 0)
+        if retry_count < _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES:
+            delay_seconds = _official_lock_retry_delay(retry_count)
+            logger.warning(
+                "Transient official universe refresh failure for %s; retrying in %ss: %s",
+                _market,
+                delay_seconds,
+                exc,
+                extra=_log_extra,
+            )
+            raise self.retry(
+                countdown=delay_seconds,
+                max_retries=_OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES,
+                exc=exc,
+            )
+
+        activity_db = None
+        try:
+            activity_db = SessionLocal()
+            _mark_market_activity_failed_safely(
+                activity_db,
+                market=_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", task_name),
+                task_id=task_id,
+                message=str(exc),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to open activity session for official universe refresh",
+                extra={"market": _market, "task_id": task_id},
+                exc_info=True,
+            )
+        finally:
+            if activity_db is not None:
+                activity_db.close()
+        logger.exception("Error refreshing official universe for %s", _market)
+        raise
     except Exception as exc:
         activity_db = None
         try:

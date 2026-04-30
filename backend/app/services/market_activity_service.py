@@ -45,6 +45,7 @@ DEFAULT_LIFECYCLE_BY_STAGE = {
 }
 
 ACTIVE_STATUSES = {"queued", "running"}
+_OPTIONAL_FAILURE_SCAN_SUPERSEDE_STAGES = frozenset({"groups"})
 
 
 def _utcnow_iso() -> str:
@@ -98,6 +99,24 @@ def _should_preserve_existing_failed_message(
     )
 
 
+def _should_supersede_failed_activity(
+    existing_payload: dict[str, Any],
+    payload: dict[str, Any],
+) -> bool:
+    """Allow a real scan stage to replace stale optional-stage failures."""
+    if existing_payload.get("stage_key") not in _OPTIONAL_FAILURE_SCAN_SUPERSEDE_STAGES:
+        return False
+    if payload.get("status") not in {"running", "completed"}:
+        return False
+    if payload.get("stage_key") != "scan":
+        return False
+    if existing_payload.get("lifecycle") != payload.get("lifecycle"):
+        return False
+    if payload.get("lifecycle") != "bootstrap":
+        return False
+    return _stage_index(payload.get("stage_key")) > _stage_index(existing_payload.get("stage_key"))
+
+
 def _save_market_activity(
     db: Session,
     market: str,
@@ -136,13 +155,19 @@ def _save_market_activity(
                     if not incoming_new_cycle:
                         return existing_payload
             elif existing_status == "failed":
+                supersedes_failed_activity = _should_supersede_failed_activity(
+                    existing_payload,
+                    payload,
+                )
                 incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
                 if incoming_new_cycle:
                     existing_stage_index = _stage_index(existing_payload.get("stage_key"))
                     payload_stage_index = _stage_index(payload.get("stage_key"))
                     lifecycle_changed = existing_payload.get("lifecycle") != payload.get("lifecycle")
                     incoming_new_cycle = lifecycle_changed or payload_stage_index <= existing_stage_index
-                if payload_status == "failed" and same_owner:
+                if supersedes_failed_activity:
+                    pass
+                elif payload_status == "failed" and same_owner:
                     if _should_preserve_existing_failed_message(existing_payload, payload):
                         return existing_payload
                 elif not incoming_new_cycle:

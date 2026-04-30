@@ -6,6 +6,7 @@ TODO(SE-B7): Emit typed SetupEngineReport-compatible aggregation output.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -105,31 +106,19 @@ class SetupEngineAggregator:
         key_levels: dict[str, float | None] = {}
         detector_traces: list[DetectorExecutionTrace] = []
 
-        for idx, detector in enumerate(self._detectors):
-            t0 = time.perf_counter()
-            result = detector.detect_safe(detector_input, parameters)
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            detector_traces.append(
-                DetectorExecutionTrace(
-                    execution_index=idx,
-                    detector_name=detector.name,
-                    outcome=result.outcome.value,
-                    candidate_count=len(result.candidates),
-                    passed_checks=tuple(result.passed_checks),
-                    failed_checks=tuple(result.failed_checks),
-                    warnings=tuple(result.warnings),
-                    error_detail=result.error_detail,
-                    elapsed_ms=elapsed_ms,
-                )
-            )
-
+        for idx, _detector, result, trace in _run_detectors_ordered(
+            self._detectors,
+            detector_input,
+            parameters,
+        ):
+            detector_traces.append(trace)
             if result.outcome == DetectorOutcome.ERROR:
                 failed_checks.append(
-                    f"{detector.name}:{DetectorOutcome.ERROR.value}"
+                    f"{trace.detector_name}:{DetectorOutcome.ERROR.value}"
                 )
                 if result.error_detail:
                     diagnostics.append(
-                        f"{detector.name}:{result.error_detail}"
+                        f"{trace.detector_name}:{result.error_detail}"
                     )
                 continue
 
@@ -186,6 +175,59 @@ class SetupEngineAggregator:
             diagnostics=tuple(diagnostics),
             detector_traces=tuple(detector_traces),
         )
+
+
+def _run_detectors_ordered(
+    detectors: Sequence[PatternDetector],
+    detector_input: PatternDetectorInput,
+    parameters: SetupEngineParameters,
+):
+    if len(detectors) <= 1:
+        return [
+            _run_detector(idx, detector, detector_input, parameters)
+            for idx, detector in enumerate(detectors)
+        ]
+
+    results = []
+    with ThreadPoolExecutor(max_workers=len(detectors)) as executor:
+        futures = {
+            executor.submit(
+                _run_detector,
+                idx,
+                detector,
+                detector_input,
+                parameters,
+            ): idx
+            for idx, detector in enumerate(detectors)
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    results.sort(key=lambda item: item[0])
+    return results
+
+
+def _run_detector(
+    idx: int,
+    detector: PatternDetector,
+    detector_input: PatternDetectorInput,
+    parameters: SetupEngineParameters,
+):
+    t0 = time.perf_counter()
+    result = detector.detect_safe(detector_input, parameters)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    trace = DetectorExecutionTrace(
+        execution_index=idx,
+        detector_name=detector.name,
+        outcome=result.outcome.value,
+        candidate_count=len(result.candidates),
+        passed_checks=tuple(result.passed_checks),
+        failed_checks=tuple(result.failed_checks),
+        warnings=tuple(result.warnings),
+        error_detail=result.error_detail,
+        elapsed_ms=elapsed_ms,
+    )
+    return idx, detector, result, trace
 
 
 def _select_primary_candidate(

@@ -293,8 +293,8 @@ class TestRunBulkScanViaUseCase:
 
         assert captured_cmd is not None
         assert captured_cmd.cache_only is False
-        assert captured_cmd.parallel_workers == 1
-        mock_bounded.assert_not_called()
+        assert captured_cmd.parallel_workers == 2
+        mock_bounded.assert_called_once_with(4)
 
     @patch(f"{_WRAPPER_PATH}._run_post_scan_pipeline")
     @patch(f"{_WRAPPER_PATH}.settings")

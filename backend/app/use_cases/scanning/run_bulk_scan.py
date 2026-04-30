@@ -294,7 +294,14 @@ class RunBulkScanUseCase:
             outcomes: list[tuple[str, dict | None, bool, bool] | None] = [
                 None for _ in chunk
             ]
-            effective_workers = cmd.parallel_workers if cmd.cache_only else 1
+            prefetch_covers_chunk = bool(pre_fetched_data) and all(
+                symbol.upper() in pre_fetched_data for symbol in chunk
+            )
+            effective_workers = (
+                cmd.parallel_workers
+                if cmd.cache_only or prefetch_covers_chunk
+                else 1
+            )
             if effective_workers > 1 and len(chunk) > 1:
                 workers = min(effective_workers, len(chunk))
                 with ThreadPoolExecutor(max_workers=workers) as executor:
