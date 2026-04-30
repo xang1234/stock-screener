@@ -29,6 +29,8 @@ _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
+_OFFICIAL_UNIVERSE_SOFT_TIME_LIMIT_SECONDS = 1800
+_OFFICIAL_UNIVERSE_HARD_TIME_LIMIT_SECONDS = 2100
 _OFFICIAL_UNIVERSE_TRANSIENT_EXCEPTIONS = (
     requests.exceptions.ConnectionError,
     requests.exceptions.Timeout,
@@ -344,7 +346,12 @@ def refresh_stock_universe(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_official_market_universe')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.universe_tasks.refresh_official_market_universe',
+    soft_time_limit=_OFFICIAL_UNIVERSE_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=_OFFICIAL_UNIVERSE_HARD_TIME_LIMIT_SECONDS,
+)
 def refresh_official_market_universe(
     self,
     market: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import signal
 import time
 
 import pandas as pd
@@ -137,6 +138,61 @@ def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_is_empty(
 
     assert rows[0]["symbol"] == "688001.SS"
     assert rows[0]["board"] == "SSE_STAR"
+
+
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_times_out():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            time.sleep(5)
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame([{"code": "000001", "name": "平安银行"}])
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+    started_at = time.monotonic()
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert time.monotonic() - started_at < 3
+    assert rows[0]["symbol"] == "000001.SZ"
+    assert rows[0]["name"] == "平安银行"
+
+
+def test_cn_timeout_helper_restores_existing_signal_timer():
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        pytest.skip("SIGALRM timers are unavailable on this platform")
+
+    import app.services.cn_market_data_service as module
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def temporary_handler(signum, frame):
+        del signum, frame
+
+    try:
+        signal.signal(signal.SIGALRM, temporary_handler)
+        signal.setitimer(signal.ITIMER_REAL, 10.0)
+
+        result = module._call_with_timeout(
+            lambda: "ok",
+            timeout_seconds=1,
+            operation_name="test fetch",
+        )
+
+        restored_delay, restored_interval = signal.getitimer(signal.ITIMER_REAL)
+        assert result == "ok"
+        assert restored_delay > 8.0
+        assert restored_interval == 0.0
+        assert signal.getsignal(signal.SIGALRM) is temporary_handler
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0 or previous_timer[1] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
 
 def test_cn_market_data_service_times_out_listing_fetch():

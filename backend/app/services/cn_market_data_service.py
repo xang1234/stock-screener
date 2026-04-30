@@ -8,6 +8,7 @@ import importlib
 import logging
 import signal
 import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -131,6 +132,8 @@ def _call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
         raise TimeoutError(f"{operation_name} timed out after {timeout_seconds}s")
 
     previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    started_at = time.monotonic()
     try:
         signal.signal(signal.SIGALRM, _raise_timeout)
         signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
@@ -140,6 +143,15 @@ def _call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
+        previous_delay, previous_interval = previous_timer
+        if previous_delay > 0 or previous_interval > 0:
+            elapsed = time.monotonic() - started_at
+            restored_delay = max(previous_delay - elapsed, 0.001)
+            signal.setitimer(
+                signal.ITIMER_REAL,
+                restored_delay,
+                previous_interval,
+            )
 
 
 @dataclass(frozen=True)
