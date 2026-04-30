@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from ..models.fx_rate import FXRate
@@ -430,11 +431,29 @@ class FXService:
             db.close()
 
     def _persist_database(self, quote: FXQuote) -> None:
-        # Try insert; if the UNIQUE constraint trips (another worker wrote
-        # the same tuple), roll back and UPDATE the rate. This avoids the
-        # check-then-insert race window.
         db = self._session_factory()
         try:
+            bind = db.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                stmt = pg_insert(FXRate).values(
+                    from_currency=quote.from_currency,
+                    to_currency=quote.to_currency,
+                    as_of_date=quote.as_of_date,
+                    rate=quote.rate,
+                    source=quote.source,
+                )
+                db.execute(
+                    stmt.on_conflict_do_update(
+                        constraint="uq_fx_rates_currency_date_source",
+                        set_={"rate": stmt.excluded.rate},
+                    )
+                )
+                db.commit()
+                return
+
+            # Non-Postgres fallback for tests/local tooling. Production uses
+            # the atomic ON CONFLICT path above so duplicate writes do not emit
+            # Postgres ERROR log entries.
             db.add(FXRate(
                 from_currency=quote.from_currency,
                 to_currency=quote.to_currency,
