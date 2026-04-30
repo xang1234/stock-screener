@@ -175,10 +175,10 @@ class CnMarketDataService:
             if exchange is None:
                 continue
             suffix = _suffix_for_exchange(exchange)
-            latest_price = _normalize_float(raw.get("最新价") or raw.get("price"))
-            market_cap = _normalize_float(raw.get("总市值") or raw.get("market_cap"))
+            latest_price = _first_numeric(raw, ("最新价", "price"))
+            market_cap = _first_numeric(raw, ("总市值", "market_cap"))
             shares_outstanding = None
-            if market_cap is not None and latest_price and latest_price > 0:
+            if market_cap is not None and latest_price is not None and latest_price > 0:
                 shares_outstanding = market_cap / latest_price
             industry = str(raw.get("所属行业") or raw.get("行业") or raw.get("industry") or "").strip()
             board = _board_for_code(local_code, exchange)
@@ -195,13 +195,11 @@ class CnMarketDataService:
                     "industry": industry,
                     "sub_industry": industry,
                     "market_cap": market_cap,
-                    "float_market_cap": _normalize_float(raw.get("流通市值")),
+                    "float_market_cap": _first_numeric(raw, ("流通市值", "float_market_cap")),
                     "shares_outstanding": shares_outstanding,
-                    "pe_ratio": _normalize_float(
-                        raw.get("市盈率-动态") or raw.get("市盈率") or raw.get("pe_ratio")
-                    ),
-                    "price_to_book": _normalize_float(raw.get("市净率") or raw.get("price_to_book")),
-                    "dividend_yield": _normalize_float(raw.get("股息率") or raw.get("dividend_yield")),
+                    "pe_ratio": _first_numeric(raw, ("市盈率-动态", "市盈率", "pe_ratio")),
+                    "price_to_book": _first_numeric(raw, ("市净率", "price_to_book")),
+                    "dividend_yield": _first_numeric(raw, ("股息率", "dividend_yield")),
                     "source_board": _board_for_code(local_code, exchange),
                 }
             )
@@ -309,10 +307,10 @@ class CnMarketDataService:
                 row = dict(zip(getattr(profit, "fields", []) or (), profit.get_row_data()))
                 fields.update(
                     {
-                        "roe": _normalize_float(row.get("roeAvg") or row.get("roe")),
-                        "eps_current": _normalize_float(row.get("epsTTM") or row.get("eps")),
-                        "profit_margin": _normalize_float(row.get("netProfitMargin")),
-                        "gross_margin": _normalize_float(row.get("grossProfitMargin")),
+                        "roe": _first_numeric(row, ("roeAvg", "roe")),
+                        "eps_current": _first_numeric(row, ("epsTTM", "eps")),
+                        "profit_margin": _first_numeric(row, ("netProfitMargin",)),
+                        "gross_margin": _first_numeric(row, ("grossProfitMargin",)),
                     }
                 )
             operation = bs.query_operation_data(code=bs_code, year=year, quarter=quarter)
@@ -320,8 +318,8 @@ class CnMarketDataService:
                 row = dict(zip(getattr(operation, "fields", []) or (), operation.get_row_data()))
                 fields.update(
                     {
-                        "current_ratio": _normalize_float(row.get("currentRatio")),
-                        "quick_ratio": _normalize_float(row.get("quickRatio")),
+                        "current_ratio": _first_numeric(row, ("currentRatio",)),
+                        "quick_ratio": _first_numeric(row, ("quickRatio",)),
                     }
                 )
             return {key: value for key, value in fields.items() if value is not None}
@@ -369,12 +367,12 @@ class CnMarketDataService:
             result.append(
                 CnDailyPriceRow(
                     date=str(row.get("日期") or row.get("date") or "")[:10],
-                    open=_normalize_float(row.get("开盘") or row.get("open")),
-                    high=_normalize_float(row.get("最高") or row.get("high")),
-                    low=_normalize_float(row.get("最低") or row.get("low")),
-                    close=_normalize_float(row.get("收盘") or row.get("close")),
-                    volume=_normalize_float(row.get("成交量") or row.get("volume")),
-                    value=_normalize_float(row.get("成交额") or row.get("amount")),
+                    open=_first_numeric(row, ("开盘", "open")),
+                    high=_first_numeric(row, ("最高", "high")),
+                    low=_first_numeric(row, ("最低", "low")),
+                    close=_first_numeric(row, ("收盘", "close")),
+                    volume=_first_numeric(row, ("成交量", "volume")),
+                    value=_first_numeric(row, ("成交额", "amount")),
                 )
             )
         return [row for row in result if row.date]

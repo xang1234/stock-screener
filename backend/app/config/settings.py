@@ -231,6 +231,7 @@ class Settings(BaseSettings):
     circuit_breaker_cooldown_jp: int = 300
     circuit_breaker_cooldown_kr: int = 300
     circuit_breaker_cooldown_tw: int = 300
+    circuit_breaker_cooldown_cn: int = 300
 
     # yfinance HTTP session: when enabled, calls are routed through a
     # process-wide curl_cffi session impersonating Chrome to dramatically

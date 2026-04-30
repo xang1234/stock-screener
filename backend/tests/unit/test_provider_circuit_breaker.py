@@ -129,6 +129,14 @@ class TestStateMachine:
 
 
 class TestPerMarketIsolation:
+    def test_cn_cooldown_uses_market_specific_setting(self):
+        with patch("app.services.provider_circuit_breaker.settings") as s:
+            s.circuit_breaker_enabled = True
+            s.circuit_breaker_threshold = 2
+            s.circuit_breaker_cooldown_cn = 17
+            breaker = _no_redis()
+            assert breaker.cooldown_s("CN") == 17
+
     def test_different_markets_dont_share_state(self):
         with patch("app.services.provider_circuit_breaker.settings") as s:
             s.circuit_breaker_enabled = True

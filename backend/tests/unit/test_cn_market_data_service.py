@@ -58,6 +58,40 @@ def test_cn_market_data_service_maps_akshare_spot_rows_to_listing_rows():
     assert rows[2]["sector"] == "Consumer Discretionary"
 
 
+def test_cn_market_data_service_preserves_zero_listing_numeric_fields():
+    frame = pd.DataFrame(
+        [
+            {
+                "代码": "600519",
+                "名称": "贵州茅台",
+                "最新价": 0,
+                "总市值": 0,
+                "流通市值": 0,
+                "市盈率-动态": 0,
+                "市净率": 0,
+                "股息率": 0,
+                "所属行业": "酿酒行业",
+            },
+        ]
+    )
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return frame
+
+    service = CnMarketDataService(akshare_module=FakeAkshare())
+
+    row = service.listing_rows(as_of=date(2026, 4, 30))[0]
+
+    assert row["market_cap"] == 0
+    assert row["float_market_cap"] == 0
+    assert row["shares_outstanding"] is None
+    assert row["pe_ratio"] == 0
+    assert row["price_to_book"] == 0
+    assert row["dividend_yield"] == 0
+
+
 def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
     class FakeBaoStock:
         def login(self):  # pragma: no cover - should not be called
@@ -71,7 +105,7 @@ def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
 def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     frame = pd.DataFrame(
         [
-            {"日期": "2026-04-28", "开盘": 100.0, "最高": 105.0, "最低": 99.0, "收盘": 104.0, "成交量": 123456},
+            {"日期": "2026-04-28", "开盘": 0.0, "最高": 0.0, "最低": 0.0, "收盘": 0.0, "成交量": 0, "成交额": 0},
             {"日期": "2026-04-29", "开盘": 104.0, "最高": 106.0, "最低": 103.0, "收盘": 105.0, "成交量": 234567},
         ]
     )
@@ -92,6 +126,8 @@ def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     assert result is not None
     assert list(result.columns) == ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
     assert result.index[0].date().isoformat() == "2026-04-28"
+    assert result.iloc[0]["Open"] == 0
+    assert result.iloc[0]["Volume"] == 0
     assert result.iloc[-1]["Close"] == 105.0
 
 
