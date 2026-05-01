@@ -289,6 +289,142 @@ def test_fetch_kr_snapshot_falls_back_to_previous_seoul_weekday_when_calendar_un
     assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
 
 
+def test_fetch_kr_snapshot_falls_back_to_current_listing_rows_when_historical_empty(monkeypatch):
+    provider_calls = []
+
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            provider_calls.append((boards, as_of))
+            if as_of is not None:
+                return []
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "091990.KQ",
+                    "local_code": "091990",
+                    "name": "Celltrion Healthcare",
+                    "exchange": "KOSDAQ",
+                },
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    monkeypatch.setattr(
+        OfficialMarketUniverseSourceService,
+        "_seoul_today",
+        staticmethod(lambda: date(2026, 5, 1)),
+    )
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert provider_calls == [
+        (("KOSPI", "KOSDAQ"), date(2026, 4, 30)),
+        (("KOSPI", "KOSDAQ"), None),
+    ]
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
+    assert snapshot.snapshot_id == "krx-listings-2026-05-01"
+    assert snapshot.snapshot_as_of == "2026-05-01"
+    assert snapshot.source_metadata["requested_listing_as_of"] == "2026-04-30"
+    assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
+    assert snapshot.source_metadata["krx_listing_mode"] == "current_listing_fallback"
+    assert snapshot.source_metadata["historical_listing_empty"] is True
+
+
+def test_fetch_kr_snapshot_raises_when_historical_and_current_listing_rows_are_empty():
+    class EmptyKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            return []
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=EmptyKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    with pytest.raises(ValueError, match="KR official universe fetch returned no KOSPI/KOSDAQ rows"):
+        service.fetch_kr_snapshot()
+
+
+def test_fetch_kr_snapshot_falls_back_when_historical_rows_have_no_supported_boards(monkeypatch):
+    provider_calls = []
+
+    class FakeKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            provider_calls.append((boards, as_of))
+            if as_of is not None:
+                return [
+                    {
+                        "symbol": "000001.KN",
+                        "local_code": "000001",
+                        "name": "Konex Only",
+                        "exchange": "KONEX",
+                    }
+                ]
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                }
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    monkeypatch.setattr(
+        OfficialMarketUniverseSourceService,
+        "_seoul_today",
+        staticmethod(lambda: date(2026, 5, 1)),
+    )
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=FakeKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert provider_calls == [
+        (("KOSPI", "KOSDAQ"), date(2026, 4, 30)),
+        (("KOSPI", "KOSDAQ"), None),
+    ]
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS"]
+    assert snapshot.source_metadata["row_counts"] == {"kospi": 1, "kosdaq": 0}
+    assert snapshot.source_metadata["krx_listing_mode"] == "current_listing_fallback"
+
+
+def test_fetch_kr_snapshot_raises_when_fallback_has_no_supported_boards():
+    class UnsupportedKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            return [
+                {
+                    "symbol": "000001.KN",
+                    "local_code": "000001",
+                    "name": "Konex Only",
+                    "exchange": "KONEX",
+                }
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=UnsupportedKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    with pytest.raises(ValueError, match="KR official universe fetch returned no KOSPI/KOSDAQ rows"):
+        service.fetch_kr_snapshot()
+
+
 @pytest.mark.parametrize(
     ("today", "expected_previous"),
     [

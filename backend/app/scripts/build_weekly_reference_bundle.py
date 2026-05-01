@@ -22,6 +22,8 @@ from app.wiring.bootstrap import (
     get_stock_universe_service,
 )
 
+_WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER = 0.2
+
 
 def _default_output_dir() -> Path:
     return repo_root() / ".tmp" / "weekly-reference"
@@ -89,6 +91,27 @@ def _print_snapshot_publish_summary(snapshot_stats: dict[str, Any]) -> None:
         f"(max={thresholds.get('max_missing_ratio', 0.0):.2%}) "
         f"snapshot_rows={coverage.get('snapshot_symbols', 0)} "
         f"active_symbols={coverage.get('active_symbols', 0)}",
+        flush=True,
+    )
+
+
+def _configure_weekly_hybrid_service(market: str, hybrid_service: Any) -> None:
+    if market == "US" or not hasattr(hybrid_service, "yfinance_delay_per_ticker"):
+        return
+    hybrid_service.yfinance_delay_per_ticker = _WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER
+    print(
+        "Using weekly non-US yfinance per-ticker delay "
+        f"{_WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER:.2f}s for {market}",
+        flush=True,
+    )
+
+
+def _print_fundamentals_progress(market: str, completed: float, total: int) -> None:
+    total_count = max(int(total), 1)
+    completed_count = min(int(completed), total_count)
+    percent = (completed_count / total_count) * 100
+    print(
+        f"[fundamentals] {market} {completed_count}/{total_count} ({percent:.1f}%)",
         flush=True,
     )
 
@@ -303,6 +326,7 @@ def _build_asia_bundle(
     official_source_service = OfficialMarketUniverseSourceService()
     fundamentals_cache = get_fundamentals_cache()
     hybrid_service = get_hybrid_fundamentals_service()
+    _configure_weekly_hybrid_service(market, hybrid_service)
 
     print(f"Starting official universe refresh for {market}...", flush=True)
     official_snapshot = official_source_service.fetch_market_snapshot(market)
@@ -329,6 +353,11 @@ def _build_asia_bundle(
         symbols,
         include_technicals=True,
         include_finviz=False,
+        progress_callback=lambda completed, total: _print_fundamentals_progress(
+            market,
+            completed,
+            total,
+        ),
         market_by_symbol=market_by_symbol,
     )
     fundamentals_stats = hybrid_service.store_all_caches(

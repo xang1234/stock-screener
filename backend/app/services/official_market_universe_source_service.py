@@ -190,11 +190,25 @@ class OfficialMarketUniverseSourceService:
 
     def fetch_kr_snapshot(self) -> OfficialMarketUniverseSnapshot:
         provider = self._get_kr_provider()
-        listing_as_of = self._kr_listing_as_of()
+        requested_listing_as_of = self._kr_listing_as_of()
         rows = list(
-            provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=listing_as_of)
+            provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=requested_listing_as_of)
         )
-        if not rows:
+        historical_listing_empty = False
+        krx_listing_mode = "last_completed_trading_day"
+        listing_as_of = requested_listing_as_of
+        if self._kr_kospi_kosdaq_row_count(rows) == 0:
+            historical_listing_empty = True
+            logger.warning(
+                "KR official universe fetch returned no rows for historical as_of=%s; "
+                "retrying current KRX listing finder.",
+                requested_listing_as_of.isoformat(),
+            )
+            rows = list(provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=None))
+            if self._kr_kospi_kosdaq_row_count(rows) > 0:
+                krx_listing_mode = "current_listing_fallback"
+                listing_as_of = self._seoul_today()
+        if self._kr_kospi_kosdaq_row_count(rows) == 0:
             raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
 
         rows = self._enrich_kr_rows_with_taxonomy(rows)
@@ -218,6 +232,9 @@ class OfficialMarketUniverseSourceService:
             "source_urls": [_KR_VALIDATED_BASELINE["source_url"]],
             "fetched_at": datetime.now(UTC).isoformat(),
             "listing_as_of": snapshot_as_of,
+            "requested_listing_as_of": requested_listing_as_of.isoformat(),
+            "krx_listing_mode": krx_listing_mode,
+            "historical_listing_empty": historical_listing_empty,
             "filters": {
                 "boards": ["KOSPI", "KOSDAQ"],
                 "excluded_products": ["ETF", "ETN", "ELW", "funds", "REITs"],
@@ -381,6 +398,14 @@ class OfficialMarketUniverseSourceService:
         return (
             math.ceil(expected * (1.0 - tolerance)),
             math.floor(expected * (1.0 + tolerance)),
+        )
+
+    @staticmethod
+    def _kr_kospi_kosdaq_row_count(rows: Iterable[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for row in rows
+            if str(row.get("exchange") or "").strip().upper() in {"KOSPI", "KOSDAQ"}
         )
 
     @classmethod
