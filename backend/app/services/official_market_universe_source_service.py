@@ -207,7 +207,7 @@ class OfficialMarketUniverseSourceService:
             rows = list(provider.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=None))
             if self._kr_kospi_kosdaq_row_count(rows) > 0:
                 krx_listing_mode = "current_listing_fallback"
-                listing_as_of = self._seoul_today()
+                listing_as_of = requested_listing_as_of
         if self._kr_kospi_kosdaq_row_count(rows) == 0:
             raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
 

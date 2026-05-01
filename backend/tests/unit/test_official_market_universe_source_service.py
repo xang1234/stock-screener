@@ -317,7 +317,7 @@ def test_fetch_kr_snapshot_falls_back_to_current_listing_rows_when_historical_em
     monkeypatch.setattr(
         OfficialMarketUniverseSourceService,
         "_seoul_today",
-        staticmethod(lambda: date(2026, 5, 1)),
+        staticmethod(lambda: date(2026, 5, 2)),
     )
     service = OfficialMarketUniverseSourceService(
         kr_provider=FakeKrxProvider(),
@@ -331,10 +331,10 @@ def test_fetch_kr_snapshot_falls_back_to_current_listing_rows_when_historical_em
         (("KOSPI", "KOSDAQ"), None),
     ]
     assert [row["symbol"] for row in snapshot.rows] == ["005930.KS", "091990.KQ"]
-    assert snapshot.snapshot_id == "krx-listings-2026-05-01"
-    assert snapshot.snapshot_as_of == "2026-05-01"
+    assert snapshot.snapshot_id == "krx-listings-2026-04-30"
+    assert snapshot.snapshot_as_of == "2026-04-30"
     assert snapshot.source_metadata["requested_listing_as_of"] == "2026-04-30"
-    assert snapshot.source_metadata["listing_as_of"] == "2026-05-01"
+    assert snapshot.source_metadata["listing_as_of"] == "2026-04-30"
     assert snapshot.source_metadata["krx_listing_mode"] == "current_listing_fallback"
     assert snapshot.source_metadata["historical_listing_empty"] is True
 
