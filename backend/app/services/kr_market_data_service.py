@@ -139,7 +139,14 @@ class KrxMarketDataService:
                 )
                 tickers = []
             if not tickers:
-                rows.extend(self._current_listing_rows(normalized_board))
+                if as_of is None or _as_date(as_of) == date.today():
+                    rows.extend(self._current_listing_rows(normalized_board))
+                else:
+                    logger.warning(
+                        "Skipping current-listing fallback for historical KR as_of=%s board=%s",
+                        as_of_token,
+                        normalized_board,
+                    )
                 continue
 
             market_cap_frame = self._market_cap_frame(as_of_token, normalized_board)

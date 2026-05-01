@@ -435,12 +435,16 @@ class CnMarketDataService:
         end_token = _as_yyyymmdd(end or date.today())
         if self._should_try_akshare_ohlcv():
             try:
-                frame = self._akshare.stock_zh_a_hist(
-                    symbol=code,
-                    period="daily",
-                    start_date=start_token,
-                    end_date=end_token,
-                    adjust="",
+                frame = _call_with_timeout(
+                    lambda: self._akshare.stock_zh_a_hist(
+                        symbol=code,
+                        period="daily",
+                        start_date=start_token,
+                        end_date=end_token,
+                        adjust="",
+                    ),
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name=f"CN OHLCV fetch for {code}",
                 )
                 rows = self._daily_rows_from_akshare_frame(frame)
                 if rows:

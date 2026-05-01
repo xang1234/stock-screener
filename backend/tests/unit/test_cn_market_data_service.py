@@ -8,10 +8,14 @@ import pandas as pd
 import pytest
 import requests
 
+import app.services.cn_market_data_service as cn_market_data_module
 from app.services.cn_market_data_service import (
     CnDependencyError,
     CnMarketDataService,
 )
+
+
+_SIGALRM_AVAILABLE = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
 
 
 def test_cn_market_data_service_maps_akshare_spot_rows_to_listing_rows():
@@ -140,6 +144,7 @@ def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_is_empty(
     assert rows[0]["board"] == "SSE_STAR"
 
 
+@pytest.mark.skipif(not _SIGALRM_AVAILABLE, reason="SIGALRM timers are unavailable on this platform")
 def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_times_out():
     class FallbackAkshare:
         @staticmethod
@@ -162,7 +167,7 @@ def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_times_out
 
 
 def test_cn_timeout_helper_restores_existing_signal_timer():
-    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+    if not _SIGALRM_AVAILABLE:
         pytest.skip("SIGALRM timers are unavailable on this platform")
 
     import app.services.cn_market_data_service as module
@@ -195,6 +200,7 @@ def test_cn_timeout_helper_restores_existing_signal_timer():
             signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
 
+@pytest.mark.skipif(not _SIGALRM_AVAILABLE, reason="SIGALRM timers are unavailable on this platform")
 def test_cn_market_data_service_times_out_listing_fetch():
     class SlowAkshare:
         @staticmethod
@@ -247,6 +253,41 @@ def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     assert result.index[0].date().isoformat() == "2026-04-28"
     assert result.iloc[0]["Open"] == 0
     assert result.iloc[0]["Volume"] == 0
+    assert result.iloc[-1]["Close"] == 105.0
+
+
+def test_cn_market_data_service_wraps_akshare_ohlcv_fetch_in_timeout_helper(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "日期": "2026-04-29",
+                "开盘": 104.0,
+                "最高": 106.0,
+                "最低": 103.0,
+                "收盘": 105.0,
+                "成交量": 234567,
+            },
+        ]
+    )
+    helper_calls = []
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_hist(**kwargs):  # pragma: no cover - should be called only by helper
+            raise AssertionError("AKShare OHLCV must be invoked via timeout helper")
+
+    def fake_call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
+        del fetcher
+        helper_calls.append((timeout_seconds, operation_name))
+        return frame
+
+    monkeypatch.setattr(cn_market_data_module, "_call_with_timeout", fake_call_with_timeout)
+    service = CnMarketDataService(akshare_module=FakeAkshare(), timeout_seconds=7)
+
+    result = service.daily_ohlcv_dataframe("600519", period="1mo", end=date(2026, 4, 30))
+
+    assert helper_calls == [(7, "CN OHLCV fetch for 600519")]
+    assert result is not None
     assert result.iloc[-1]["Close"] == 105.0
 
 
