@@ -10,6 +10,7 @@ docs/learning_loop/adr_ll2_e1_canonical_price_contract_v1.md
 """
 import logging
 import math
+from collections.abc import Callable
 from typing import TYPE_CHECKING, List, Dict, Optional, Any
 from threading import RLock
 import yfinance as yf
@@ -898,6 +899,7 @@ class BulkDataFetcher:
         delay_per_ticker: float = 1.5,
         market_by_symbol: Optional[Dict[str, str]] = None,
         market: Optional[str] = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> Dict[str, Dict]:
         """
         Fetch fundamentals for multiple symbols efficiently.
@@ -913,6 +915,8 @@ class BulkDataFetcher:
             delay_per_ticker: Seconds to wait between individual ticker info fetches (default 0.2)
             market_by_symbol: Optional mapping ``{symbol: market}`` for
                 cadence-aware growth extraction.
+            progress_callback: Optional callback invoked after each yfinance batch
+                as ``(processed_symbols, total_symbols)``.
 
         Returns:
             Dict mapping symbols to their fundamental data
@@ -1023,6 +1027,17 @@ class BulkDataFetcher:
                 logger.error(f"Batch error: {e}")
                 for symbol in batch_symbols:
                     all_results[symbol] = {'has_error': True, 'error': str(e)}
+
+            if progress_callback:
+                try:
+                    progress_callback(end_idx, len(symbols))
+                except Exception as exc:
+                    logger.warning(
+                        "Ignoring progress callback failure at batch %d/%d: %s",
+                        batch_num + 1,
+                        total_batches,
+                        exc,
+                    )
 
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0

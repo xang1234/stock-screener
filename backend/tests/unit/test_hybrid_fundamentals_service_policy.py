@@ -178,6 +178,53 @@ class TestPhase3PolicyFiltering:
         assert progress_calls
         assert progress_calls[-1] == (len(symbols), len(symbols))
 
+    def test_progress_callback_reports_yfinance_batch_progress_without_finviz(self):
+        svc = _make_service()
+        symbols = [f"{index:04d}.HK" for index in range(100)]
+        market_by_symbol = {symbol: "HK" for symbol in symbols}
+        progress_calls = []
+
+        def fake_fetch_batch_fundamentals(batch_symbols, **kwargs):
+            kwargs["progress_callback"](50, 100)
+            kwargs["progress_callback"](100, 100)
+            return {symbol: {"market_cap": 1.0} for symbol in batch_symbols}
+
+        svc.bulk_fetcher.fetch_batch_fundamentals.side_effect = fake_fetch_batch_fundamentals
+
+        svc.fetch_fundamentals_batch(
+            symbols,
+            include_technicals=False,
+            include_finviz=False,
+            progress_callback=lambda current, total: progress_calls.append((current, total)),
+            market_by_symbol=market_by_symbol,
+        )
+
+        assert (15, 100) in progress_calls
+        assert (30, 100) in progress_calls
+        assert progress_calls[-1] == (100, 100)
+
+    def test_progress_callback_uses_integer_nonzero_phase1_checkpoint_for_tiny_batch(self):
+        svc = _make_service()
+        progress_calls = []
+
+        def fake_fetch_batch_fundamentals(batch_symbols, **kwargs):
+            kwargs["progress_callback"](1, 1)
+            return {symbol: {"market_cap": 1.0} for symbol in batch_symbols}
+
+        svc.bulk_fetcher.fetch_batch_fundamentals.side_effect = fake_fetch_batch_fundamentals
+
+        svc.fetch_fundamentals_batch(
+            ["0700.HK"],
+            include_technicals=False,
+            include_finviz=False,
+            progress_callback=lambda current, total: progress_calls.append((current, total)),
+            market_by_symbol={"0700.HK": "HK"},
+        )
+
+        assert progress_calls
+        assert all(isinstance(current, int) for current, _total in progress_calls)
+        assert all(current >= 1 for current, _total in progress_calls)
+
     def test_parallel_hybrid_forwards_market_map_to_parallel_growth_extractor(self):
         svc = _make_service()
         svc.bulk_fetcher.fetch_fundamentals_parallel.return_value = {}

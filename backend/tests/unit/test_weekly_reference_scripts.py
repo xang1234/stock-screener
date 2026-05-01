@@ -241,11 +241,15 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     monkeypatch.setattr(build_script, "get_stock_universe_service", lambda: stock_universe_service)
 
     hybrid_calls: list[dict[str, object]] = []
+
+    def fake_fetch_fundamentals_batch(symbols, **kwargs):
+        hybrid_calls.append({"symbols": symbols, **kwargs})
+        kwargs["progress_callback"](1, len(symbols))
+        return {"0700.HK": {"market_cap": 456.0, "sector": "Technology"}}
+
     hybrid_service = SimpleNamespace(
-        fetch_fundamentals_batch=lambda symbols, **kwargs: hybrid_calls.append(
-            {"symbols": symbols, **kwargs}
-        )
-        or {"0700.HK": {"market_cap": 456.0, "sector": "Technology"}},
+        yfinance_delay_per_ticker=1.5,
+        fetch_fundamentals_batch=fake_fetch_fundamentals_batch,
         store_all_caches=lambda *args, **kwargs: {
             "fundamentals_stored": 1,
             "persisted_symbols": 1,
@@ -317,6 +321,8 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     assert fetch_calls == ["HK"]
     assert hybrid_calls[0]["include_finviz"] is False
     assert hybrid_calls[0]["market_by_symbol"] == {"0700.HK": "HK"}
+    assert callable(hybrid_calls[0]["progress_callback"])
+    assert hybrid_service.yfinance_delay_per_ticker == build_script._WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER
     assert published_rows[0]["snapshot_key"] == build_script.ProviderSnapshotService.snapshot_key_for_market("HK")
     assert published_rows[0]["market"] == "HK"
     assert export_calls[0]["output_path"] == (
@@ -326,7 +332,12 @@ def test_build_weekly_reference_bundle_runs_hk_official_path(monkeypatch, tmp_pa
     assert export_calls[0]["market"] == "HK"
     stdout = capsys.readouterr().out
     assert "Starting official universe refresh for HK..." in stdout
+    assert (
+        "Using weekly non-US yfinance per-ticker delay "
+        f"{build_script._WEEKLY_NON_US_YFINANCE_DELAY_PER_TICKER:.2f}s for HK"
+    ) in stdout
     assert "Starting hybrid fundamentals refresh for HK..." in stdout
+    assert "[fundamentals] HK 1/1 (100.0%)" in stdout
     assert "Fundamentals refresh complete:" in stdout
     assert "[publish] market=HK coverage=100.00% (min=70.00%) missing_ratio=0.00% (max=30.00%)" in stdout
     assert "Weekly reference bundle complete for HK:" in stdout

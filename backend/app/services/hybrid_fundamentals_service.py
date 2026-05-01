@@ -278,6 +278,14 @@ class HybridFundamentalsService:
                 delay_between_batches=self.yfinance_delay_between_batches,
                 delay_per_ticker=self.yfinance_delay_per_ticker,
                 market_by_symbol=market_by_symbol,
+                progress_callback=(
+                    lambda completed, yf_total: progress_callback(
+                        max(1, int(total * 0.3 * (completed / max(yf_total, 1)))),
+                        total,
+                    )
+                    if progress_callback
+                    else None
+                ),
             )
 
         for symbol in yfinance_symbols:
@@ -289,7 +297,8 @@ class HybridFundamentalsService:
         logger.info(f"Phase 1 complete: {yf_success}/{total} in {phase1_time:.1f}s")
 
         if progress_callback:
-            progress_callback(total * 0.3, total)  # 30% after phase 1
+            phase1_checkpoint = max(1, int(total * 0.3)) if total else 0
+            progress_callback(phase1_checkpoint, total)  # 30% after phase 1
 
         # ============================================================
         # Phase 2: Calculate technicals from price cache (~10 min)
@@ -397,6 +406,8 @@ class HybridFundamentalsService:
             if progress_callback:
                 # Always emit completion even when finviz_eligible is empty.
                 progress_callback(total, total)
+        elif progress_callback:
+            progress_callback(total, total)
 
         # Add metadata to all results
         for symbol in symbols:
