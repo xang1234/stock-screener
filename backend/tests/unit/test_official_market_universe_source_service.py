@@ -402,6 +402,38 @@ def test_fetch_kr_snapshot_falls_back_when_historical_rows_have_no_supported_boa
     assert snapshot.source_metadata["krx_listing_mode"] == "current_listing_fallback"
 
 
+def test_fetch_kr_snapshot_filters_unsupported_boards_from_mixed_rows():
+    class MixedKrxProvider:
+        def listing_rows(self, *, boards, as_of=None):
+            return [
+                {
+                    "symbol": "005930.KS",
+                    "local_code": "005930",
+                    "name": "Samsung Electronics",
+                    "exchange": "KOSPI",
+                },
+                {
+                    "symbol": "000001.KN",
+                    "local_code": "000001",
+                    "name": "Konex Only",
+                    "exchange": "KONEX",
+                },
+            ]
+
+    market_calendar = MagicMock()
+    market_calendar.last_completed_trading_day.return_value = date(2026, 4, 30)
+    service = OfficialMarketUniverseSourceService(
+        kr_provider=MixedKrxProvider(),
+        market_calendar=market_calendar,
+    )
+
+    snapshot = service.fetch_kr_snapshot()
+
+    assert [row["symbol"] for row in snapshot.rows] == ["005930.KS"]
+    assert snapshot.source_metadata["row_counts"] == {"kospi": 1, "kosdaq": 0}
+    assert snapshot.source_metadata["source_count"] == 1
+
+
 def test_fetch_kr_snapshot_raises_when_fallback_has_no_supported_boards():
     class UnsupportedKrxProvider:
         def listing_rows(self, *, boards, as_of=None):

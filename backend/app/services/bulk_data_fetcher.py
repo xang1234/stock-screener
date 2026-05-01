@@ -1029,7 +1029,15 @@ class BulkDataFetcher:
                     all_results[symbol] = {'has_error': True, 'error': str(e)}
 
             if progress_callback:
-                progress_callback(end_idx, len(symbols))
+                try:
+                    progress_callback(end_idx, len(symbols))
+                except Exception as exc:
+                    logger.warning(
+                        "Ignoring progress callback failure at batch %d/%d: %s",
+                        batch_num + 1,
+                        total_batches,
+                        exc,
+                    )
 
             # Batch-level backoff: if >50% of batch hit rate limits, back off
             batch_failure_rate = batch_rate_limit_failures / len(batch_symbols) if batch_symbols else 0

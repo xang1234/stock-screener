@@ -297,7 +297,8 @@ class HybridFundamentalsService:
         logger.info(f"Phase 1 complete: {yf_success}/{total} in {phase1_time:.1f}s")
 
         if progress_callback:
-            progress_callback(total * 0.3, total)  # 30% after phase 1
+            phase1_checkpoint = max(1, int(total * 0.3)) if total else 0
+            progress_callback(phase1_checkpoint, total)  # 30% after phase 1
 
         # ============================================================
         # Phase 2: Calculate technicals from price cache (~10 min)

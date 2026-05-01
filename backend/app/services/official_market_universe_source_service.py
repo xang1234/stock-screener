@@ -211,6 +211,7 @@ class OfficialMarketUniverseSourceService:
         if self._kr_kospi_kosdaq_row_count(rows) == 0:
             raise ValueError("KR official universe fetch returned no KOSPI/KOSDAQ rows")
 
+        rows = self._kr_supported_board_rows(rows)
         rows = self._enrich_kr_rows_with_taxonomy(rows)
         row_counts = {
             "kospi": sum(1 for row in rows if str(row.get("exchange") or "").upper() == "KOSPI"),
@@ -405,8 +406,20 @@ class OfficialMarketUniverseSourceService:
         return sum(
             1
             for row in rows
-            if str(row.get("exchange") or "").strip().upper() in {"KOSPI", "KOSDAQ"}
+            if OfficialMarketUniverseSourceService._is_kr_supported_board(row)
         )
+
+    @staticmethod
+    def _kr_supported_board_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in rows
+            if OfficialMarketUniverseSourceService._is_kr_supported_board(row)
+        ]
+
+    @staticmethod
+    def _is_kr_supported_board(row: dict[str, Any]) -> bool:
+        return str(row.get("exchange") or "").strip().upper() in {"KOSPI", "KOSDAQ"}
 
     @classmethod
     def _kr_baseline_count_breaches(cls, row_counts: dict[str, int]) -> list[dict[str, Any]]:

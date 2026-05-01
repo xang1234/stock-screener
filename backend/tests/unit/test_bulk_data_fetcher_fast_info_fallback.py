@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import app.services.bulk_data_fetcher as bulk_data_fetcher_module
 from app.services.bulk_data_fetcher import BulkDataFetcher
 
 
@@ -132,3 +133,39 @@ def test_zero_from_info_is_preserved_not_replaced_by_fast_info():
     )
     assert result["market_cap"] == 0
     assert result["shares_outstanding"] == 0
+
+
+def test_fetch_batch_fundamentals_ignores_progress_callback_failures(monkeypatch, caplog):
+    class FakeTickers:
+        tickers = {
+            "AAPL": SimpleNamespace(
+                info={
+                    "marketCap": 1_000_000,
+                    "sharesOutstanding": 100_000,
+                    "currentPrice": 10.0,
+                }
+            )
+        }
+
+    monkeypatch.setattr(
+        bulk_data_fetcher_module,
+        "_new_yf_tickers",
+        lambda _symbols: FakeTickers(),
+    )
+    fetcher = BulkDataFetcher()
+
+    def broken_progress_callback(_completed, _total):
+        raise RuntimeError("telemetry sink unavailable")
+
+    caplog.set_level("WARNING", logger="app.services.bulk_data_fetcher")
+    result = fetcher.fetch_batch_fundamentals(
+        ["AAPL"],
+        batch_size=1,
+        include_quarterly=False,
+        delay_between_batches=0,
+        delay_per_ticker=0,
+        progress_callback=broken_progress_callback,
+    )
+
+    assert result["AAPL"]["market_cap"] == 1_000_000
+    assert "Ignoring progress callback failure at batch 1/1" in caplog.text
