@@ -73,7 +73,7 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.1.1
+#   APP_IMAGE_TAG=v1.1.2
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   GROQ_API_KEY=...
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
@@ -81,7 +81,7 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compos
 # Open http://localhost
 ```
 
-This path deploys the tagged `v1.1.1` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+This path deploys the tagged `v1.1.2` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
 
 For local development or contributor laptops, use the default local compose stack instead:
 
@@ -100,6 +100,8 @@ See the **[Development Guide](docs/DEVELOPMENT.md)** for full backend + frontend
 ## First-Run Bootstrap
 
 On first launch the app boots into a setup screen — no pre-seeded database required. Pick a **primary market** (the one that opens first) and any additional **enabled markets** to hydrate in the background, then click **Start bootstrap**.
+
+> **Bootstrap performance note:** selecting multiple enabled markets starts separate universe, price, fundamentals, breadth, group-rank, and scan work for each market. This can noticeably slow first load and ongoing data updates on smaller hosts or when upstream market-data providers throttle requests. For the fastest first run, start with one primary market and enable additional markets after the workspace is ready.
 
 <img src="docs/screenshots/bootstrap-setup.jpg" alt="Bootstrap setup" width="500" />
 

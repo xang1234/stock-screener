@@ -1,60 +1,48 @@
-# Stock Scanner v1.1.1
+# Stock Scanner v1.1.2
 
-Stock Scanner v1.1.1 is a bootstrap hotfix release for users deploying the v1.1 series. It includes the v1.1.0 India and multi-market feature set plus fixes for first-run bootstrap coordination and group-ranking memory pressure that could crash fresh deployments during the initial market hydration pipeline.
+Stock Scanner v1.1.2 expands the v1.1 multi-market release with Korea and mainland China support, improves first-run bootstrap reliability, and hardens market-data fallbacks for static and Docker deployments.
 
 ## Highlights
 
-### India market support
+### Korea and China market support
 
-- Fifth supported market alongside US, Hong Kong, Japan, and Taiwan.
-- 4,927-symbol universe loaded from official NSE/BSE feeds with 165 industry subgroups.
-- Dedicated `data_fetch_in` and `user_scans_in` Celery queues, per-market cache warming schedules, and a `MarketTaxonomyService` loader that's wired end-to-end through the scan API and the React market selector.
+- Adds Korea coverage for KOSPI and KOSDAQ, including KRX-backed universe listings, KRX price/fundamental fields, KRW currency formatting, market badges, and dedicated Celery queues.
+- Adds mainland China A-share coverage for SSE, SZSE, and BJSE with AKShare/BaoStock-backed listings and OHLCV fallbacks.
+- Extends market selectors, breadth views, group rankings, static market flags, benchmark registry, calendars, FX handling, and ticker validation across the seven-market set: US, HK, IN, JP, KR, TW, and CN.
 
-### Per-market lifecycle harmonization
+### Bootstrap reliability and scan throughput
 
-- Each market runs on its own exchange calendar (XNYS / XHKG / XTKS / XTAI / XNSE) with independent refresh queues and locks, so US and Asia hydrate in parallel without contention.
-- Daily breadth and group-ranking pipelines now extend to HK, JP, TW, and IN — not just US.
-- New gap-fill orchestrator backfills missing breadth and group-rank rows across all markets when a refresh cycle is interrupted.
-- Bootstrap cache-only mode is hardened so first-run scans no longer fall back to live API calls when the cache is incomplete.
+- Initial bootstrap now reports market-stage failures more accurately and isolates market queues so a failing non-primary market does not block unrelated market work.
+- Bootstrap scans use a lighter default profile and cache-only safeguards to avoid expensive live-provider fallbacks while the cache is warming.
+- Bulk scans can use symbol-level parallelism for non-cache-only runs, and Setup Engine detector execution is bounded to reduce slow per-symbol outliers.
+- High-tight-flag detection was vectorized to reduce detector spikes on real 500+ bar histories.
 
-### Richer scan-results table
+### Market-data fallback hardening
 
-- New per-row classification columns: **GICS Sector**, **IBD Industry**, **Themes** (compact chip cluster with `+N` overflow), and **Group Rank** (bolded for top-20 groups).
-- Company names now render under the ticker in the Symbol cell.
-- Compact theme rendering keeps the wrap view from clipping when a stock carries multiple market themes.
+- Korea official-universe refresh falls back to KRX listing finder data when daily ticker lists are unavailable, while preserving point-in-time correctness for historical dates.
+- China listing fetches and OHLCV refreshes are bounded by timeout handling so slow AKShare requests can fail over instead of hanging a worker.
+- China AKShare OHLCV failures are throttled after repeated transport errors to avoid hammering unstable upstream endpoints.
+- pykrx runtime imports now include the setuptools dependency required by `pkg_resources`.
 
-### Bootstrap and performance hotfixes
+### Static site and release workflows
 
-- Coordination waits during bootstrap now keep retrying with an explicit high retry budget instead of exhausting Celery's default retry limit and marking bootstrap failed during expected contention.
-- Group-ranking gap-fill and cache-only price reads now process symbols in smaller chunks to reduce worker memory spikes during fresh database bootstrap.
-- Breadth refreshes bypass nested market-workload leases where the outer bootstrap stage already owns the workload coordination.
-
-### Performance
-
-- Parallel cache-warm scans across markets cut the bootstrap warm-up window.
-- Scanner data fetch parallelized across Finviz, yfinance, and the curl_cffi path with a shared circuit breaker.
-- Optimized breadth and group-rank backfills reduce per-day refresh cost.
-
-### Documentation and licensing
-
-- Refreshed hero GIF demonstrates the cross-market workflow with the stock-detail popup (TradingView-style chart, scores, RS, growth, valuation, and Setup Engine pattern).
-- README visuals re-captured against the current UI: market selector with India, breadth chart, scan results with new classification columns, market badges across US/HK/JP.
-- Apache 2.0 license added.
-- `docs/SCREENSHOT_GUIDE.md` updated with the new column list and per-asset capture specs.
+- Static-site and weekly-reference-data workflows now include Korea in the market matrix.
+- Group-ranking cache misses now use benchmark cache fallbacks and report clearer missing-cache messages.
+- Release notes and README deployment examples now point at `v1.1.2`.
 
 ## Deployment
 
-Release images are published to GHCR under the `v1.1.1` tag:
+Release images are published to GHCR under the `v1.1.2` tag:
 
-- `ghcr.io/<owner>/stockscreenclaude-backend:v1.1.1`
-- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.1.1`
+- `ghcr.io/<owner>/stockscreenclaude-backend:v1.1.2`
+- `ghcr.io/<owner>/stockscreenclaude-frontend:v1.1.2`
 
-Deploy by setting `APP_IMAGE_TAG=v1.1.1` in `.env.docker`, then `docker-compose ... pull` and `up -d --no-build`. To roll back, set `APP_IMAGE_TAG=v1.1.0` or `APP_IMAGE_TAG=v1.0.0` and redeploy, but prefer v1.1.1 over v1.1.0 for fresh bootstrap installs.
+Deploy by setting `APP_IMAGE_TAG=v1.1.2` in `.env.docker`, then `docker-compose ... pull` and `up -d --no-build`.
 
 ## Upgrade notes
 
-- The bootstrap state machine now rejects `manual` scans against markets whose price cache is stale relative to the last completed trading day. If you were relying on automatic yfinance fallback for manual scans, expect HTTP 409 `market_data_stale` until the cache catches up.
-- New per-market Celery queues (`user_scans_in`, `data_fetch_in`, `market_jobs_in`) are spawned automatically by `start_celery.sh` when `IN` is in `ENABLED_MARKETS` (default).
-- `MARKET_TAXONOMY_SERVICE` paths now expect `data/india-deep.csv` to be present; the file ships with the repo.
+- Fresh bootstrap can take longer when several markets are enabled. Each selected market starts its own universe, price, fundamentals, breadth, group-rank, and scan work; smaller hosts should start with one primary market and enable more markets after the workspace is ready.
+- Korea requires `pykrx` and the pinned setuptools runtime dependency included in this release.
+- China data providers can throttle or disconnect under sustained load. The new timeout and backoff behavior should keep workers moving, but some CN symbols may still be skipped until the next refresh cycle.
 
 Update this file before future semver tags so each GitHub release carries a maintained capability summary alongside the tagged image version.
