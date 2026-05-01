@@ -319,6 +319,48 @@ class TestTimingObservability:
             assert "elapsed=" in line.message
             assert "outcome=" in line.message
 
+    def test_slow_detector_summary_logs_at_info(self, caplog):
+        """Slow detector phases should expose top detector timings at INFO."""
+        from app.scanners.setup_engine_screener import _log_slow_detector_summary
+
+        traces = (
+            DetectorExecutionTrace(
+                execution_index=0,
+                detector_name="fast",
+                outcome="success",
+                candidate_count=0,
+                passed_checks=(),
+                failed_checks=(),
+                warnings=(),
+                error_detail=None,
+                elapsed_ms=12.3,
+            ),
+            DetectorExecutionTrace(
+                execution_index=1,
+                detector_name="slow",
+                outcome="success",
+                candidate_count=2,
+                passed_checks=(),
+                failed_checks=(),
+                warnings=(),
+                error_detail=None,
+                elapsed_ms=812.4,
+            ),
+        )
+
+        with caplog.at_level(logging.INFO, logger="app.scanners.setup_engine_screener"):
+            _log_slow_detector_summary(
+                "SLOW",
+                traces,
+                detectors_ms=930.0,
+                threshold_ms=500.0,
+            )
+
+        messages = [r.message for r in caplog.records]
+        assert any("SE slow detectors SLOW" in msg for msg in messages)
+        assert any("slow=812.4ms/2/success" in msg for msg in messages)
+        assert all("fast=12.3ms" not in msg for msg in messages)
+
 
 class TestOperationalFlagsIntegration:
     """SE-E7: Operational invalidation flags wired through full pipeline."""

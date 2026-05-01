@@ -9,11 +9,14 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
+import requests
+
 from ..celery_app import celery_app
 from ..database import SessionLocal, safe_rollback
 from ..services.market_activity_service import (
     mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
     mark_market_activity_started,
 )
 from ..wiring.bootstrap import get_provider_snapshot_service, get_stock_universe_service
@@ -26,6 +29,12 @@ _GITHUB_SYNC_SUCCESS_STATUSES = frozenset({"success", "up_to_date"})
 _OFFICIAL_UNIVERSE_LOCK_RETRY_BASE_SECONDS = 300
 _OFFICIAL_UNIVERSE_LOCK_RETRY_MAX_SECONDS = 1800
 _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES = 12
+_OFFICIAL_UNIVERSE_SOFT_TIME_LIMIT_SECONDS = 1800
+_OFFICIAL_UNIVERSE_HARD_TIME_LIMIT_SECONDS = 2100
+_OFFICIAL_UNIVERSE_TRANSIENT_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
 
 
 def _mark_market_activity_failed_safely(db, **kwargs) -> None:
@@ -41,6 +50,26 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
+
+
+def _mark_market_activity_progress_safely(**kwargs) -> None:
+    db = None
+    try:
+        db = SessionLocal()
+        mark_market_activity_progress(db, **kwargs)
+    except Exception:
+        logger.warning(
+            "Failed to publish market activity progress for universe task",
+            extra={
+                "market": kwargs.get("market"),
+                "stage_key": kwargs.get("stage_key"),
+                "task_id": kwargs.get("task_id"),
+            },
+            exc_info=True,
+        )
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _count_active_universe(market: Optional[str]) -> Optional[int]:
@@ -317,7 +346,12 @@ def refresh_stock_universe(
         db.close()
 
 
-@celery_app.task(bind=True, name='app.tasks.universe_tasks.refresh_official_market_universe')
+@celery_app.task(
+    bind=True,
+    name='app.tasks.universe_tasks.refresh_official_market_universe',
+    soft_time_limit=_OFFICIAL_UNIVERSE_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=_OFFICIAL_UNIVERSE_HARD_TIME_LIMIT_SECONDS,
+)
 def refresh_official_market_universe(
     self,
     market: str,
@@ -391,6 +425,14 @@ def refresh_official_market_universe(
         finally:
             activity_db.close()
         prior_size = _count_active_universe(_market)
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message="Checking weekly reference bundle",
+        )
         sync_db = SessionLocal()
         try:
             github_sync = get_provider_snapshot_service().sync_weekly_reference_from_github(
@@ -432,7 +474,27 @@ def refresh_official_market_universe(
                 "timestamp": datetime.now().isoformat(),
             }
 
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message=(
+                "Fetching live CN A-share listings"
+                if _market == "CN"
+                else "Fetching live official market universe"
+            ),
+        )
         snapshot = OfficialMarketUniverseSourceService().fetch_market_snapshot(_market)
+        _mark_market_activity_progress_safely(
+            market=_market,
+            stage_key="universe",
+            lifecycle=activity_lifecycle,
+            task_name=getattr(self, "name", task_name),
+            task_id=task_id,
+            message="Ingesting official market universe",
+        )
         stats = _ingest_official_snapshot(snapshot)
         _emit_universe_drift(_market, prior_size)
 
@@ -470,6 +532,46 @@ def refresh_official_market_universe(
             **stats,
             'timestamp': datetime.now().isoformat(),
         }
+    except _OFFICIAL_UNIVERSE_TRANSIENT_EXCEPTIONS as exc:
+        retry_count = int(getattr(self.request, "retries", 0) or 0)
+        if retry_count < _OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES:
+            delay_seconds = _official_lock_retry_delay(retry_count)
+            logger.warning(
+                "Transient official universe refresh failure for %s; retrying in %ss: %s",
+                _market,
+                delay_seconds,
+                exc,
+                extra=_log_extra,
+            )
+            raise self.retry(
+                countdown=delay_seconds,
+                max_retries=_OFFICIAL_UNIVERSE_LOCK_MAX_RETRIES,
+                exc=exc,
+            )
+
+        activity_db = None
+        try:
+            activity_db = SessionLocal()
+            _mark_market_activity_failed_safely(
+                activity_db,
+                market=_market,
+                stage_key="universe",
+                lifecycle=activity_lifecycle,
+                task_name=getattr(self, "name", task_name),
+                task_id=task_id,
+                message=str(exc),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to open activity session for official universe refresh",
+                extra={"market": _market, "task_id": task_id},
+                exc_info=True,
+            )
+        finally:
+            if activity_db is not None:
+                activity_db.close()
+        logger.exception("Error refreshing official universe for %s", _market)
+        raise
     except Exception as exc:
         activity_db = None
         try:

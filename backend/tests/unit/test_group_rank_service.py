@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from uuid import uuid4
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pandas as pd
 import pytest
@@ -262,6 +262,87 @@ def test_prefetch_all_data_uses_cached_only_prices_for_same_day(db_session, monk
     }
     price_cache.get_cached_only_fresh.assert_called_once_with("SPY", period="2y")
     price_cache.get_many_cached_only_fresh.assert_called_once_with(["AAPL"], period="2y")
+
+
+def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, monkeypatch):
+    service = _make_group_rank_service()
+
+    price_cache = Mock()
+    price_cache.get_cached_only_fresh.return_value = None
+    price_cache.get_many_cached_only_fresh.return_value = {}
+    service.price_cache = price_cache
+
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "^N225"
+    service.benchmark_cache = benchmark_cache
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["JP_Software"],
+    )
+
+    with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
+        service.calculate_group_rankings(
+            db_session,
+            date(2026, 5, 1),
+            market="JP",
+            cache_only=True,
+            require_complete_cache=True,
+        )
+
+    assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
+    assert excinfo.value.stats["benchmark_symbol"] == "^N225"
+    assert excinfo.value.stats["market"] == "JP"
+
+
+def test_cache_only_prefetch_uses_cached_market_benchmark_fallback(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    fallback_data = _price_frame()
+    sony_data = _price_frame()
+
+    price_cache = Mock()
+    price_cache.get_cached_only_fresh.side_effect = [None, fallback_data]
+    price_cache.get_many_cached_only_fresh.return_value = {"6758.T": sony_data}
+    service.price_cache = price_cache
+
+    benchmark_cache = Mock()
+    benchmark_cache.get_benchmark_symbol.return_value = "^N225"
+    benchmark_cache.get_benchmark_candidates.return_value = ["^N225", "1306.T"]
+    service.benchmark_cache = benchmark_cache
+
+    stock_universe_service = Mock()
+    stock_universe_service.get_active_symbols.return_value = ["6758.T"]
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_stock_universe_service",
+        lambda: stock_universe_service,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["JP_Technology"],
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_group_symbols",
+        lambda db, group, **kw: ["6758.T"],
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_market_caps_for_symbols",
+        lambda db, symbols: {"6758.T": 1_000_000_000},
+    )
+
+    prefetch = service._prefetch_all_data(
+        db_session,
+        market="JP",
+        cache_only=True,
+    )
+
+    assert prefetch.benchmark_prices is fallback_data
+    assert prefetch.stats["benchmark_symbol"] == "1306.T"
+    assert prefetch.stats["benchmark_role"] == "fallback"
+    assert price_cache.get_cached_only_fresh.call_args_list == [
+        call("^N225", period="2y"),
+        call("1306.T", period="2y"),
+    ]
 
 
 def test_prefetch_all_data_treats_stale_same_day_cache_as_missing(db_session, monkeypatch):

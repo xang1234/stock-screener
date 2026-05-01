@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        market: [US, HK, IN, JP, TW]
+        market: [US, HK, IN, JP, KR, TW]
     services:
       postgres:
         image: postgres:16-alpine

@@ -16,6 +16,10 @@ DEFAULT_SCAN_SCREENERS = [
     "volume_breakthrough",
     "setup_engine",
 ]
+DEFAULT_BOOTSTRAP_SCAN_SCREENERS = [
+    screener for screener in DEFAULT_SCAN_SCREENERS
+    if screener != "setup_engine"
+]
 DEFAULT_SCAN_COMPOSITE_METHOD = "weighted_average"
 DEFAULT_SCAN_CUSTOM_FILTERS = {
     "price_min": 20,
@@ -59,4 +63,16 @@ def get_default_scan_profile(market: str | None = None) -> dict[str, Any]:
     profile["universe"] = f"market:{normalized_market}"
     profile["benchmark_symbol"] = benchmark_symbol
     profile["criteria"]["benchmark_symbol"] = benchmark_symbol
+    return profile
+
+
+def get_bootstrap_scan_profile(market: str | None = None) -> dict[str, Any]:
+    """Return the lightweight initial-bootstrap scan profile.
+
+    Bootstrap snapshots run across whole market universes while the app is
+    coming online, so they avoid Setup Engine's expensive pattern detectors.
+    Manual and daily scan defaults keep using the full profile.
+    """
+    profile = get_default_scan_profile(market)
+    profile["screeners"] = list(DEFAULT_BOOTSTRAP_SCAN_SCREENERS)
     return profile

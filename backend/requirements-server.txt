@@ -7,6 +7,8 @@ pydantic==2.5.3
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 yfinance==0.2.66
+# pykrx imports pkg_resources at module import time; setuptools>=81 removes it.
+setuptools<81
 pykrx>=1.0.51
 akshare>=1.18.59
 baostock>=0.8.9

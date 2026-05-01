@@ -32,10 +32,14 @@ CACHE_MISS_TOLERANCE_RATIO = 0.05  # Allow up to 5% cache misses in cache-only g
 class IncompleteGroupRankingCacheError(RuntimeError):
     """Raised when a cache-only same-day group ranking run lacks required inputs."""
 
-    def __init__(self, stats: Dict[str, int | bool]):
+    def __init__(self, stats: Dict[str, Any]):
         self.stats = stats
-        reason = "SPY benchmark data is missing from cache"
-        if stats.get("spy_cached"):
+        benchmark_cached = stats.get("benchmark_cached", stats.get("spy_cached"))
+        benchmark_symbol = str(stats.get("benchmark_symbol") or "SPY")
+        market = str(stats.get("market") or "").strip().upper()
+        market_suffix = f" for {market}" if market else ""
+        reason = f"{benchmark_symbol} benchmark data is missing from cache{market_suffix}"
+        if benchmark_cached:
             reason = (
                 f"{stats.get('cache_miss_symbols', 0)} symbols are missing cached price data"
             )
@@ -960,8 +964,13 @@ class IBDGroupRankService:
         )
 
         # 1. Get benchmark data once (SPY for US, HSI/N225/TAIEX/NIFTY for Asia)
+        benchmark_role = "primary"
         if cache_only:
-            spy_data = self.price_cache.get_cached_only_fresh(benchmark_symbol, period="2y")
+            spy_data, benchmark_symbol, benchmark_role = self._get_cached_only_benchmark_data(
+                normalized_market,
+                benchmark_symbol,
+                period="2y",
+            )
         else:
             spy_data = self.benchmark_cache.get_benchmark_data(
                 market=normalized_market, period="2y",
@@ -981,6 +990,9 @@ class IBDGroupRankService:
                     "symbols_with_prices": 0,
                     "cache_miss_symbols": 0,
                     "spy_cached": False,
+                    "benchmark_cached": False,
+                    "benchmark_symbol": benchmark_symbol,
+                    "market": normalized_market,
                 },
                 symbols_by_group={},
             )
@@ -1043,6 +1055,9 @@ class IBDGroupRankService:
             "spy_cached": True,
             "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
         }
+        if benchmark_role != "primary":
+            stats["benchmark_symbol"] = benchmark_symbol
+            stats["benchmark_role"] = benchmark_role
 
         return GroupRankPrefetchData(
             benchmark_prices=spy_data,
@@ -1052,6 +1067,37 @@ class IBDGroupRankService:
             stats=stats,
             symbols_by_group=symbols_by_group,
         )
+
+    def _get_cached_only_benchmark_data(
+        self,
+        market: str,
+        primary_symbol: str,
+        *,
+        period: str,
+    ) -> tuple[Optional[pd.DataFrame], str, str]:
+        candidates = [primary_symbol]
+        candidate_fn = getattr(self.benchmark_cache, "get_benchmark_candidates", None)
+        if callable(candidate_fn):
+            try:
+                resolved = [str(symbol) for symbol in candidate_fn(market) if symbol]
+                if resolved:
+                    candidates = resolved
+            except Exception:
+                logger.debug("Could not resolve benchmark candidates for market=%s", market, exc_info=True)
+
+        for idx, candidate in enumerate(candidates):
+            role = "primary" if idx == 0 else "fallback"
+            data = self.price_cache.get_cached_only_fresh(candidate, period=period)
+            if data is not None and not data.empty:
+                if role != "primary":
+                    logger.info(
+                        "Using cached fallback benchmark %s for market %s",
+                        candidate,
+                        market,
+                    )
+                return data, candidate, role
+
+        return None, primary_symbol, "primary"
 
     def _delete_rankings_for_range(
         self,

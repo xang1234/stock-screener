@@ -575,6 +575,89 @@ def test_failed_activity_is_sticky_against_later_stage_updates(db_session, monke
     assert hk_market["message"] == "Price refresh failed"
 
 
+def test_failed_group_activity_is_replaced_when_bootstrap_scan_starts(db_session, monkeypatch):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_failed(
+        db_session,
+        market="HK",
+        stage_key="groups",
+        lifecycle="bootstrap",
+        task_name="calculate_daily_group_rankings_with_gapfill",
+        task_id="groups-task",
+        message="Daily group ranking failed: Cache warmup not complete",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="scan",
+        lifecycle="bootstrap",
+        task_name="build_daily_snapshot",
+        task_id="scan-task",
+        current=12,
+        total=100,
+        message="Running market scan",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["HK"], primary="HK", state="running"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
+    assert hk_market["status"] == "running"
+    assert hk_market["stage_key"] == "scan"
+    assert hk_market["stage_label"] == "Scan"
+    assert hk_market["message"] == "Running market scan"
+    assert hk_market["percent"] == 12.0
+
+
+@pytest.mark.parametrize("stage_key", ["universe", "prices"])
+def test_failed_hard_activity_is_not_replaced_when_bootstrap_scan_starts(
+    db_session,
+    monkeypatch,
+    stage_key,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_failed(
+        db_session,
+        market="HK",
+        stage_key=stage_key,
+        lifecycle="bootstrap",
+        task_name=f"{stage_key}_task",
+        task_id=f"{stage_key}-task",
+        message=f"{stage_key.title()} failed",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="HK",
+        stage_key="scan",
+        lifecycle="bootstrap",
+        task_name="build_daily_snapshot",
+        task_id="scan-task",
+        current=12,
+        total=100,
+        message="Running market scan",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=True, enabled=["HK"], primary="HK", state="failed"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
+    assert hk_market["status"] == "failed"
+    assert hk_market["stage_key"] == stage_key
+    assert hk_market["message"] == f"{stage_key.title()} failed"
+
+
 def test_failed_activity_can_replace_completed_record(db_session, monkeypatch):
     from app.services import market_activity_service as module
 

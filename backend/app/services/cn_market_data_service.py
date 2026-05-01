@@ -6,13 +6,21 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import importlib
 import logging
+import signal
+import threading
+import time
 from typing import Any
 
 import pandas as pd
+import requests
 
+from ..config import settings
 from .cn_universe_ingestion_adapter import infer_cn_sector
 
 logger = logging.getLogger(__name__)
+
+_AKSHARE_OHLCV_FAILURE_THRESHOLD = 2
+_AKSHARE_OHLCV_COOLDOWN_SECONDS = 300.0
 
 
 class CnDependencyError(RuntimeError):
@@ -116,6 +124,39 @@ def _suffix_for_exchange(exchange: str) -> str:
     return ".SS"
 
 
+def _call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
+    if timeout_seconds <= 0 or threading.current_thread() is not threading.main_thread():
+        return fetcher()
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return fetcher()
+
+    def _raise_timeout(signum, frame):
+        del signum, frame
+        raise TimeoutError(f"{operation_name} timed out after {timeout_seconds}s")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    started_at = time.monotonic()
+    try:
+        signal.signal(signal.SIGALRM, _raise_timeout)
+        signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+        return fetcher()
+    except TimeoutError as exc:
+        raise requests.exceptions.Timeout(str(exc)) from exc
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        previous_delay, previous_interval = previous_timer
+        if previous_delay > 0 or previous_interval > 0:
+            elapsed = time.monotonic() - started_at
+            restored_delay = max(previous_delay - elapsed, 0.001)
+            signal.setitimer(
+                signal.ITIMER_REAL,
+                restored_delay,
+                previous_interval,
+            )
+
+
 @dataclass(frozen=True)
 class CnDailyPriceRow:
     date: str
@@ -135,10 +176,16 @@ class CnMarketDataService:
         *,
         akshare_module: Any | None = None,
         baostock_module: Any | None = None,
+        timeout_seconds: int | None = None,
     ) -> None:
         self._akshare_module = akshare_module
         self._baostock_module = baostock_module
+        self._timeout_seconds = int(
+            timeout_seconds or settings.universe_source_timeout_seconds
+        )
         self._listing_rows_cache: list[dict[str, Any]] | None = None
+        self._akshare_ohlcv_consecutive_failures = 0
+        self._akshare_ohlcv_disabled_until = 0.0
 
     @property
     def _akshare(self):
@@ -159,15 +206,62 @@ class CnMarketDataService:
         return self._baostock_module
 
     def listing_rows(self, *, as_of: date | str | None = None) -> list[dict[str, Any]]:
-        """Return A-share listing/quote rows from AKShare's Eastmoney bulk surface."""
-        del as_of  # AKShare spot returns the current source snapshot.
+        """Return A-share listing rows from AKShare-backed no-key sources."""
+        del as_of  # CN listing sources return the current source snapshot.
         if self._listing_rows_cache is not None:
             return [dict(row) for row in self._listing_rows_cache]
 
-        frame = self._akshare.stock_zh_a_spot_em()
+        frame = self._listing_frame()
         if frame is None or frame.empty:
             return []
 
+        rows = self._rows_from_listing_frame(frame)
+        self._listing_rows_cache = rows
+        return [dict(row) for row in rows]
+
+    def _listing_frame(self) -> pd.DataFrame | None:
+        spot_error: Exception | None = None
+        try:
+            frame = self._akshare_spot_frame()
+            if frame is not None and not frame.empty:
+                return frame
+        except CnDependencyError:
+            raise
+        except Exception as exc:
+            spot_error = exc
+            logger.warning("AKShare CN spot listing fetch failed: %s", exc)
+
+        fallback_fetcher = getattr(self._akshare, "stock_info_a_code_name", None)
+        if callable(fallback_fetcher):
+            try:
+                frame = _call_with_timeout(
+                    fallback_fetcher,
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name="CN A-share code-name fetch",
+                )
+                if frame is not None and not frame.empty:
+                    logger.info("Using AKShare CN code-name listing fallback")
+                    return frame
+            except Exception as exc:
+                logger.warning("AKShare CN code-name listing fallback failed: %s", exc)
+                if spot_error is None:
+                    raise
+
+        if spot_error is not None:
+            raise spot_error
+        return None
+
+    def _akshare_spot_frame(self) -> pd.DataFrame | None:
+        frame = _call_with_timeout(
+            self._akshare.stock_zh_a_spot_em,
+            timeout_seconds=self._timeout_seconds,
+            operation_name="CN A-share listing fetch",
+        )
+        if frame is None or frame.empty:
+            logger.warning("AKShare CN spot listing fetch returned no rows")
+        return frame
+
+    def _rows_from_listing_frame(self, frame: pd.DataFrame) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for raw in frame.to_dict("records"):
             local_code = _normalize_code(raw.get("代码") or raw.get("code") or raw.get("symbol"))
@@ -203,8 +297,7 @@ class CnMarketDataService:
                     "source_board": _board_for_code(local_code, exchange),
                 }
             )
-        self._listing_rows_cache = rows
-        return [dict(row) for row in rows]
+        return rows
 
     def core_fundamentals(
         self,
@@ -340,23 +433,47 @@ class CnMarketDataService:
         code = _normalize_code(local_code)
         start_token = _as_yyyymmdd(start)
         end_token = _as_yyyymmdd(end or date.today())
-        try:
-            frame = self._akshare.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_token,
-                end_date=end_token,
-                adjust="",
-            )
-            rows = self._daily_rows_from_akshare_frame(frame)
-            if rows:
-                return rows
-        except CnDependencyError:
-            raise
-        except Exception as exc:  # pragma: no cover - network variability
-            logger.warning("AKShare CN OHLCV fetch failed for %s: %s", code, exc)
+        if self._should_try_akshare_ohlcv():
+            try:
+                frame = _call_with_timeout(
+                    lambda: self._akshare.stock_zh_a_hist(
+                        symbol=code,
+                        period="daily",
+                        start_date=start_token,
+                        end_date=end_token,
+                        adjust="",
+                    ),
+                    timeout_seconds=self._timeout_seconds,
+                    operation_name=f"CN OHLCV fetch for {code}",
+                )
+                rows = self._daily_rows_from_akshare_frame(frame)
+                if rows:
+                    self._record_akshare_ohlcv_success()
+                    return rows
+            except CnDependencyError:
+                raise
+            except Exception as exc:  # pragma: no cover - network variability
+                self._record_akshare_ohlcv_failure()
+                logger.warning("AKShare CN OHLCV fetch failed for %s: %s", code, exc)
 
         return self._daily_ohlcv_from_baostock(code, start=start_token, end=end_token)
+
+    def _should_try_akshare_ohlcv(self) -> bool:
+        return time.monotonic() >= self._akshare_ohlcv_disabled_until
+
+    def _record_akshare_ohlcv_success(self) -> None:
+        self._akshare_ohlcv_consecutive_failures = 0
+        self._akshare_ohlcv_disabled_until = 0.0
+
+    def _record_akshare_ohlcv_failure(self) -> None:
+        self._akshare_ohlcv_consecutive_failures += 1
+        if self._akshare_ohlcv_consecutive_failures < _AKSHARE_OHLCV_FAILURE_THRESHOLD:
+            return
+        self._akshare_ohlcv_disabled_until = time.monotonic() + _AKSHARE_OHLCV_COOLDOWN_SECONDS
+        logger.warning(
+            "Temporarily disabling AKShare CN OHLCV after %d consecutive failures; using BaoStock fallback",
+            self._akshare_ohlcv_consecutive_failures,
+        )
 
     @staticmethod
     def _daily_rows_from_akshare_frame(frame: pd.DataFrame | None) -> list[CnDailyPriceRow]:

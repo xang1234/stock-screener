@@ -154,3 +154,134 @@ def test_krx_core_fundamentals_caches_whole_market_frames() -> None:
     assert celltrion["pe_ratio"] == 28.0
     assert stock_module.market_cap_calls == [("20260429", "ALL")]
     assert stock_module.fundamental_calls == [("20260429", "ALL")]
+
+
+def test_krx_listing_rows_falls_back_to_current_listing_finder_when_daily_tickers_empty() -> None:
+    class _FakeStockModule:
+        def __init__(self) -> None:
+            self.ticker_calls: list[tuple[str, str]] = []
+            self.name_calls: list[str] = []
+
+        def get_market_ticker_list(self, as_of: str, *, market: str):
+            self.ticker_calls.append((as_of, market))
+            return []
+
+        def get_market_ticker_name(self, ticker: str):
+            self.name_calls.append(ticker)
+            return f"daily {ticker}"
+
+    class _FakeListingSource:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def fetch(self, market_code: str):
+            self.calls.append(market_code)
+            return pd.DataFrame(
+                [
+                    {
+                        "full_code": "KR7005930003",
+                        "short_code": "005930",
+                        "codeName": "Samsung Electronics",
+                        "marketCode": "STK",
+                    },
+                    {
+                        "full_code": "KR7091990002",
+                        "short_code": "091990",
+                        "codeName": "Celltrion Healthcare",
+                        "marketCode": "KSQ",
+                    },
+                    {
+                        "full_code": "KR7066660001",
+                        "short_code": "066660",
+                        "codeName": "Wrong Board",
+                        "marketCode": "KNX",
+                    },
+                    {
+                        "full_code": "KR7000000000",
+                        "short_code": "",
+                        "codeName": "Blank Code",
+                        "marketCode": "STK",
+                    },
+                ]
+            )
+
+    stock_module = _FakeStockModule()
+    listing_source = _FakeListingSource()
+    service = KrxMarketDataService(
+        stock_module=stock_module,
+        listing_source=listing_source,
+    )
+
+    rows = service.listing_rows(boards=("KOSPI", "KOSDAQ"), as_of=None)
+
+    today_token = date.today().strftime("%Y%m%d")
+    assert stock_module.ticker_calls == [
+        (today_token, "KOSPI"),
+        (today_token, "KOSDAQ"),
+    ]
+    assert stock_module.name_calls == []
+    assert listing_source.calls == ["STK", "KSQ"]
+    assert rows == [
+        {
+            "symbol": "005930.KS",
+            "local_code": "005930",
+            "name": "Samsung Electronics",
+            "exchange": "KOSPI",
+            "sector": "",
+            "industry": "",
+            "market_cap": None,
+            "source_board": "KOSPI",
+            "isin": "KR7005930003",
+        },
+        {
+            "symbol": "091990.KQ",
+            "local_code": "091990",
+            "name": "Celltrion Healthcare",
+            "exchange": "KOSDAQ",
+            "sector": "",
+            "industry": "",
+            "market_cap": None,
+            "source_board": "KOSDAQ",
+            "isin": "KR7091990002",
+        },
+    ]
+
+
+def test_krx_listing_rows_does_not_use_current_listing_finder_for_historical_empty_tickers() -> None:
+    class _FakeStockModule:
+        def __init__(self) -> None:
+            self.ticker_calls: list[tuple[str, str]] = []
+
+        def get_market_ticker_list(self, as_of: str, *, market: str):
+            self.ticker_calls.append((as_of, market))
+            return []
+
+    class _FakeListingSource:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def fetch(self, market_code: str):
+            self.calls.append(market_code)
+            return pd.DataFrame(
+                [
+                    {
+                        "full_code": "KR7005930003",
+                        "short_code": "005930",
+                        "codeName": "Samsung Electronics",
+                        "marketCode": "STK",
+                    },
+                ]
+            )
+
+    stock_module = _FakeStockModule()
+    listing_source = _FakeListingSource()
+    service = KrxMarketDataService(
+        stock_module=stock_module,
+        listing_source=listing_source,
+    )
+
+    rows = service.listing_rows(boards=("KOSPI",), as_of=date(2026, 4, 1))
+
+    assert stock_module.ticker_calls == [("20260401", "KOSPI")]
+    assert listing_source.calls == []
+    assert rows == []

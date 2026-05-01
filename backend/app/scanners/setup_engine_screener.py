@@ -16,6 +16,7 @@ import pandas as pd
 
 from app.analysis.patterns.aggregator import (
     AggregatedPatternOutput,
+    DetectorExecutionTrace,
     SetupEngineAggregator,
 )
 from app.analysis.patterns.config import (
@@ -46,6 +47,10 @@ from app.scanners.criteria.stage_analysis import quick_stage_check
 from app.scanners.setup_engine_scanner import build_setup_engine_payload
 
 logger = logging.getLogger(__name__)
+
+_SLOW_DETECTOR_PHASE_THRESHOLD_MS = 500.0
+_SLOW_DETECTOR_TRACE_FLOOR_MS = 50.0
+_SLOW_DETECTOR_TRACE_LIMIT = 3
 
 
 @register_screener
@@ -196,6 +201,11 @@ class SetupEngineScanner(BaseStockScreener):
                 trace.detector_name, trace.outcome, trace.candidate_count,
                 trace.elapsed_ms, symbol,
             )
+        _log_slow_detector_summary(
+            symbol,
+            agg_output.detector_traces,
+            detectors_ms=detectors_ms,
+        )
 
         # ── Phase B½: context analysis (stage, MA alignment, RS rating) ──
         context = self._compute_context(
@@ -464,3 +474,40 @@ def _count_current_week_sessions(price_data: pd.DataFrame) -> int:
     last_date = price_data.index[-1]
     week_start = (last_date - pd.Timedelta(days=last_date.weekday())).normalize()
     return int((price_data.index >= week_start).sum())
+
+
+def _log_slow_detector_summary(
+    symbol: str,
+    traces: tuple[DetectorExecutionTrace, ...],
+    *,
+    detectors_ms: float,
+    threshold_ms: float = _SLOW_DETECTOR_PHASE_THRESHOLD_MS,
+) -> None:
+    """Log top detector timings when the setup-engine detector phase is slow."""
+    if detectors_ms < threshold_ms or not traces:
+        return
+
+    slow_floor_ms = min(threshold_ms, _SLOW_DETECTOR_TRACE_FLOOR_MS)
+    slow_traces = [
+        trace for trace in traces
+        if trace.elapsed_ms >= slow_floor_ms
+    ]
+    if not slow_traces:
+        return
+
+    top_traces = sorted(
+        slow_traces,
+        key=lambda trace: trace.elapsed_ms,
+        reverse=True,
+    )[:_SLOW_DETECTOR_TRACE_LIMIT]
+    trace_summary = ", ".join(
+        f"{trace.detector_name}={trace.elapsed_ms:.1f}ms/"
+        f"{trace.candidate_count}/{trace.outcome}"
+        for trace in top_traces
+    )
+    logger.info(
+        "SE slow detectors %s: total=%.1fms top=%s",
+        symbol,
+        detectors_ms,
+        trace_summary,
+    )

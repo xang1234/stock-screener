@@ -15,6 +15,15 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+_KR_BOARD_TO_MARKET_CODE = {
+    "KOSPI": "STK",
+    "KOSDAQ": "KSQ",
+}
+_KR_BOARD_TO_SUFFIX = {
+    "KOSPI": ".KS",
+    "KOSDAQ": ".KQ",
+}
+
 
 class KrxDependencyError(RuntimeError):
     """Raised when pykrx is not installed but KR market data is requested."""
@@ -87,8 +96,14 @@ class KrxDailyPriceRow:
 class KrxMarketDataService:
     """Fetch KOSPI/KOSDAQ listings, prices, and core valuation fields."""
 
-    def __init__(self, *, stock_module: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        stock_module: Any | None = None,
+        listing_source: Any | None = None,
+    ) -> None:
         self._stock_module = stock_module
+        self._listing_source = listing_source
         self._market_cap_frames: dict[tuple[str, str], pd.DataFrame | None] = {}
         self._market_fundamental_frames: dict[tuple[str, str], pd.DataFrame | None] = {}
 
@@ -113,7 +128,27 @@ class KrxMarketDataService:
             normalized_board = str(board or "").strip().upper()
             if normalized_board not in {"KOSPI", "KOSDAQ"}:
                 continue
-            tickers = stock.get_market_ticker_list(as_of_token, market=normalized_board)
+            try:
+                tickers = stock.get_market_ticker_list(as_of_token, market=normalized_board)
+            except Exception as exc:  # pragma: no cover - pykrx/network variability
+                logger.warning(
+                    "KRX daily ticker fetch failed for %s on %s: %s",
+                    normalized_board,
+                    as_of_token,
+                    exc,
+                )
+                tickers = []
+            if not tickers:
+                if as_of is None or _as_date(as_of) == date.today():
+                    rows.extend(self._current_listing_rows(normalized_board))
+                else:
+                    logger.warning(
+                        "Skipping current-listing fallback for historical KR as_of=%s board=%s",
+                        as_of_token,
+                        normalized_board,
+                    )
+                continue
+
             market_cap_frame = self._market_cap_frame(as_of_token, normalized_board)
             fundamental_frame = self._market_fundamental_frame(as_of_token, normalized_board)
 
@@ -157,6 +192,55 @@ class KrxMarketDataService:
                 rows.append(row)
 
         return rows
+
+    def _current_listing_rows(self, board: str) -> list[dict[str, Any]]:
+        market_code = _KR_BOARD_TO_MARKET_CODE[board]
+        frame = self._listing_frame(market_code)
+        if frame is None or getattr(frame, "empty", True):
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for _, item in frame.iterrows():
+            row_market_code = str(item.get("marketCode") or "").strip().upper()
+            if row_market_code and row_market_code != market_code:
+                continue
+            raw_ticker = str(item.get("short_code") or "").strip()
+            if not raw_ticker or not raw_ticker.isdigit():
+                continue
+            ticker = raw_ticker.zfill(6)
+            name = str(item.get("codeName") or "").strip()
+            if not name:
+                continue
+            row: dict[str, Any] = {
+                "symbol": f"{ticker}{_KR_BOARD_TO_SUFFIX[board]}",
+                "local_code": ticker,
+                "name": name,
+                "exchange": board,
+                "sector": "",
+                "industry": "",
+                "market_cap": None,
+                "source_board": board,
+            }
+            isin = str(item.get("full_code") or "").strip()
+            if isin:
+                row["isin"] = isin
+            rows.append(row)
+        return rows
+
+    def _listing_frame(self, market_code: str) -> pd.DataFrame | None:
+        try:
+            source = self._listing_source
+            if source is None:
+                from pykrx.website.krx.market.core import 상장종목검색  # type: ignore
+
+                source = 상장종목검색()
+            frame = source.fetch(market_code)
+        except Exception as exc:  # pragma: no cover - pykrx/network variability
+            logger.warning("KRX listing finder fetch failed for %s: %s", market_code, exc)
+            return None
+        if frame is None or getattr(frame, "empty", True):
+            return None
+        return frame
 
     def daily_ohlcv(
         self,

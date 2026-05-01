@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.services.fx_service import (
     FXQuote,
@@ -226,6 +227,37 @@ class TestLookupChain:
         assert quote is not None
         assert quote.rate == 0.127
         fetcher.assert_not_called()
+
+
+class TestPersistence:
+    def test_postgres_persist_uses_atomic_upsert(self):
+        fake_db = MagicMock()
+        fake_bind = MagicMock()
+        fake_bind.dialect.name = "postgresql"
+        fake_db.get_bind.return_value = fake_bind
+        svc = FXService(
+            rate_fetcher=lambda c: None,
+            session_factory=lambda: fake_db,
+            redis_client=None,
+        )
+        quote = FXQuote(
+            from_currency="JPY",
+            to_currency="USD",
+            rate=0.0062,
+            as_of_date=date(2026, 4, 30),
+            source="yfinance",
+        )
+
+        svc._persist_database(quote)
+
+        fake_db.add.assert_not_called()
+        fake_db.execute.assert_called_once()
+        statement = fake_db.execute.call_args.args[0]
+        compiled = str(statement.compile(dialect=postgresql.dialect()))
+        assert "ON CONFLICT ON CONSTRAINT uq_fx_rates_currency_date_source" in compiled
+        assert "DO UPDATE SET rate = excluded.rate" in compiled
+        fake_db.commit.assert_called_once()
+        fake_db.close.assert_called_once()
 
 
 class TestConvertToUSD:

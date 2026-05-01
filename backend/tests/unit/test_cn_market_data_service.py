@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from datetime import date
+import signal
+import time
 
 import pandas as pd
 import pytest
+import requests
 
+import app.services.cn_market_data_service as cn_market_data_module
 from app.services.cn_market_data_service import (
     CnDependencyError,
     CnMarketDataService,
 )
+
+
+_SIGALRM_AVAILABLE = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
 
 
 def test_cn_market_data_service_maps_akshare_spot_rows_to_listing_rows():
@@ -92,6 +99,124 @@ def test_cn_market_data_service_preserves_zero_listing_numeric_fields():
     assert row["dividend_yield"] == 0
 
 
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_fails():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            raise requests.exceptions.ConnectionError("eastmoney disconnected")
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame(
+                [
+                    {"code": "600519", "name": "贵州茅台"},
+                    {"code": "000001", "name": "平安银行"},
+                    {"code": "920118", "name": "太湖雪"},
+                ]
+            )
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert [row["symbol"] for row in rows] == ["600519.SS", "000001.SZ", "920118.BJ"]
+    assert rows[0]["name"] == "贵州茅台"
+    assert rows[0]["market_cap"] is None
+    assert rows[1]["exchange"] == "SZSE"
+    assert rows[2]["exchange"] == "BJSE"
+
+
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_is_empty():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            return pd.DataFrame()
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame([{"code": 688001, "name": "华兴源创"}])
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert rows[0]["symbol"] == "688001.SS"
+    assert rows[0]["board"] == "SSE_STAR"
+
+
+@pytest.mark.skipif(not _SIGALRM_AVAILABLE, reason="SIGALRM timers are unavailable on this platform")
+def test_cn_market_data_service_falls_back_to_code_name_list_when_spot_times_out():
+    class FallbackAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            time.sleep(5)
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+        @staticmethod
+        def stock_info_a_code_name():
+            return pd.DataFrame([{"code": "000001", "name": "平安银行"}])
+
+    service = CnMarketDataService(akshare_module=FallbackAkshare(), timeout_seconds=1)
+    started_at = time.monotonic()
+
+    rows = service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert time.monotonic() - started_at < 3
+    assert rows[0]["symbol"] == "000001.SZ"
+    assert rows[0]["name"] == "平安银行"
+
+
+def test_cn_timeout_helper_restores_existing_signal_timer():
+    if not _SIGALRM_AVAILABLE:
+        pytest.skip("SIGALRM timers are unavailable on this platform")
+
+    import app.services.cn_market_data_service as module
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def temporary_handler(signum, frame):
+        del signum, frame
+
+    try:
+        signal.signal(signal.SIGALRM, temporary_handler)
+        signal.setitimer(signal.ITIMER_REAL, 10.0)
+
+        result = module._call_with_timeout(
+            lambda: "ok",
+            timeout_seconds=1,
+            operation_name="test fetch",
+        )
+
+        restored_delay, restored_interval = signal.getitimer(signal.ITIMER_REAL)
+        assert result == "ok"
+        assert restored_delay > 8.0
+        assert restored_interval == 0.0
+        assert signal.getsignal(signal.SIGALRM) is temporary_handler
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0 or previous_timer[1] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+
+@pytest.mark.skipif(not _SIGALRM_AVAILABLE, reason="SIGALRM timers are unavailable on this platform")
+def test_cn_market_data_service_times_out_listing_fetch():
+    class SlowAkshare:
+        @staticmethod
+        def stock_zh_a_spot_em():
+            time.sleep(5)
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台"}])
+
+    service = CnMarketDataService(akshare_module=SlowAkshare(), timeout_seconds=1)
+    started_at = time.monotonic()
+
+    with pytest.raises(requests.exceptions.Timeout, match="CN A-share listing fetch timed out"):
+        service.listing_rows(as_of=date(2026, 4, 30))
+
+    assert time.monotonic() - started_at < 3
+
+
 def test_cn_market_data_service_skips_baostock_ohlcv_for_beijing_codes():
     class FakeBaoStock:
         def login(self):  # pragma: no cover - should not be called
@@ -129,6 +254,97 @@ def test_cn_market_data_service_maps_akshare_ohlcv_to_yfinance_shape():
     assert result.iloc[0]["Open"] == 0
     assert result.iloc[0]["Volume"] == 0
     assert result.iloc[-1]["Close"] == 105.0
+
+
+def test_cn_market_data_service_wraps_akshare_ohlcv_fetch_in_timeout_helper(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "日期": "2026-04-29",
+                "开盘": 104.0,
+                "最高": 106.0,
+                "最低": 103.0,
+                "收盘": 105.0,
+                "成交量": 234567,
+            },
+        ]
+    )
+    helper_calls = []
+
+    class FakeAkshare:
+        @staticmethod
+        def stock_zh_a_hist(**kwargs):  # pragma: no cover - should be called only by helper
+            raise AssertionError("AKShare OHLCV must be invoked via timeout helper")
+
+    def fake_call_with_timeout(fetcher, *, timeout_seconds: int, operation_name: str):
+        del fetcher
+        helper_calls.append((timeout_seconds, operation_name))
+        return frame
+
+    monkeypatch.setattr(cn_market_data_module, "_call_with_timeout", fake_call_with_timeout)
+    service = CnMarketDataService(akshare_module=FakeAkshare(), timeout_seconds=7)
+
+    result = service.daily_ohlcv_dataframe("600519", period="1mo", end=date(2026, 4, 30))
+
+    assert helper_calls == [(7, "CN OHLCV fetch for 600519")]
+    assert result is not None
+    assert result.iloc[-1]["Close"] == 105.0
+
+
+def test_cn_market_data_service_skips_akshare_after_repeated_ohlcv_transport_failures():
+    class FakeAkshare:
+        calls = 0
+
+        @classmethod
+        def stock_zh_a_hist(cls, **kwargs):
+            cls.calls += 1
+            raise ConnectionError("remote disconnected")
+
+    class FakeLogin:
+        error_code = "0"
+
+    class FakeQuery:
+        error_code = "0"
+        fields = ["date", "open", "high", "low", "close", "volume", "amount"]
+
+        def __init__(self):
+            self._remaining = [
+                ["2026-04-29", "10", "11", "9", "10.5", "1000", "10500"],
+            ]
+
+        def next(self):
+            return bool(self._remaining)
+
+        def get_row_data(self):
+            return self._remaining.pop(0)
+
+    class FakeBaoStock:
+        queries = 0
+
+        @staticmethod
+        def login():
+            return FakeLogin()
+
+        @classmethod
+        def query_history_k_data_plus(cls, *args, **kwargs):
+            cls.queries += 1
+            return FakeQuery()
+
+        @staticmethod
+        def logout():
+            return None
+
+    service = CnMarketDataService(
+        akshare_module=FakeAkshare(),
+        baostock_module=FakeBaoStock(),
+    )
+
+    for _ in range(3):
+        rows = service.daily_ohlcv("002153", start="20260401", end="20260430")
+        assert rows[0].close == 10.5
+
+    assert FakeAkshare.calls == 2
+    assert FakeBaoStock.queries == 3
 
 
 def test_cn_market_data_service_raises_dependency_error_when_akshare_missing(monkeypatch):
