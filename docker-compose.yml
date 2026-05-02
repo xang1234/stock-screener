@@ -84,10 +84,11 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      test: ["CMD-SHELL", "redis-cli --raw INFO persistence | tr -d '\\r' | grep -q '^loading:0$'"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 24
+      start_period: 120s
     restart: unless-stopped
 
   postgres:

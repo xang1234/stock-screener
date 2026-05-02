@@ -52,6 +52,11 @@ celery_app = Celery(
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
     ]
 )
+celery_app.loader.override_backends = {
+    **celery_app.loader.override_backends,
+    "redis": "app.celery_redis_backend:RetryableRedisBackend",
+    "rediss": "app.celery_redis_backend:RetryableRedisBackend",
+}
 
 # Configure Celery
 celery_app.conf.update(
@@ -65,6 +70,18 @@ celery_app.conf.update(
     task_soft_time_limit=82800,  # Soft limit at 23 hours
     worker_prefetch_multiplier=1,  # Don't prefetch tasks
     broker_connection_retry_on_startup=True,  # Retry connecting to broker on startup
+    result_backend_always_retry=True,
+    result_backend_base_sleep_between_retries_ms=100,
+    result_backend_max_sleep_between_retries_ms=5000,
+    result_backend_max_retries=120,
+    result_backend_transport_options={
+        'retry_policy': {
+            'max_retries': 120,
+            'interval_start': 0.2,
+            'interval_step': 0.5,
+            'interval_max': 5.0,
+        },
+    },
 )
 
 _logger = logging.getLogger(__name__)

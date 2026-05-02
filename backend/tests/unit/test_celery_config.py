@@ -2,9 +2,12 @@
 Tests for Celery schedule helpers and related settings validators.
 """
 import pytest
+from celery import Celery
 from pydantic import ValidationError
+from redis.exceptions import BusyLoadingError
 
-from app.celery_app import _offset_schedule
+from app.celery_app import _offset_schedule, celery_app
+from app.celery_redis_backend import RetryableRedisBackend
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +66,76 @@ class TestOffsetSchedule:
         """59 minutes + 121 offset = 180 total = 3 hours exactly."""
         h, m = _offset_schedule(10, 59, 121)
         assert (h, m) == (13, 0)
+
+
+# ---------------------------------------------------------------------------
+# Redis backend resilience
+# ---------------------------------------------------------------------------
+
+class TestRedisBackendRetryConfig:
+    """Tests for Celery Redis backend retry behavior."""
+
+    backend_path = "app.celery_redis_backend:RetryableRedisBackend"
+
+    def test_result_backend_uses_retryable_redis_backend(self):
+        assert celery_app.loader.override_backends["redis"] == self.backend_path
+        assert celery_app.loader.override_backends["rediss"] == self.backend_path
+        assert isinstance(celery_app.backend, RetryableRedisBackend)
+        assert celery_app.conf.result_backend_always_retry is True
+
+    def test_result_backend_uses_retryable_backend_for_tls_redis_url(self):
+        app = Celery(
+            "test_retryable_tls_backend",
+            backend="rediss://localhost:6379/1?ssl_cert_reqs=CERT_NONE",
+        )
+        app.loader.override_backends = {
+            "redis": self.backend_path,
+            "rediss": self.backend_path,
+        }
+
+        assert isinstance(app.backend, RetryableRedisBackend)
+
+    def test_result_backend_treats_busy_loading_as_retryable_explicitly(self):
+        app = Celery("test_retryable_backend_classification")
+        backend = RetryableRedisBackend(app=app, url="redis://localhost:6379/1")
+        backend.connection_errors = tuple(
+            error for error in backend.connection_errors if error is not BusyLoadingError
+        )
+
+        assert backend.exception_safe_to_retry(
+            BusyLoadingError("Redis is loading the dataset in memory")
+        )
+
+    def test_result_backend_retries_busy_loading_during_metadata_read(self, monkeypatch):
+        app = Celery("test_retryable_backend")
+        app.conf.update(
+            result_serializer="json",
+            accept_content=["json"],
+            result_backend_always_retry=True,
+            result_backend_base_sleep_between_retries_ms=1,
+            result_backend_max_sleep_between_retries_ms=1,
+            result_backend_max_retries=3,
+        )
+        backend = RetryableRedisBackend(app=app, url="redis://localhost:6379/1")
+        get_calls = 0
+        set_calls = []
+        sleeps = []
+
+        def fake_get(_key):
+            nonlocal get_calls
+            get_calls += 1
+            if get_calls == 1:
+                raise BusyLoadingError("Redis is loading the dataset in memory")
+            return None
+
+        monkeypatch.setattr(backend, "get", fake_get)
+        monkeypatch.setattr(backend, "set", lambda key, value: set_calls.append((key, value)))
+        monkeypatch.setattr(backend, "_sleep", lambda amount: sleeps.append(amount))
+
+        assert backend.store_result("task-id", "ok", "SUCCESS") == "ok"
+        assert get_calls == 2
+        assert len(set_calls) == 1
+        assert len(sleeps) == 1
 
 
 # ---------------------------------------------------------------------------
