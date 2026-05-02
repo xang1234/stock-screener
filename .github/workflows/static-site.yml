@@ -293,7 +293,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           BRANCH_NAME: ${{ github.ref_name }}
-          FALLBACK_MARKETS: US HK IN JP KR TW
         run: |
           python - <<'PY'
           import json
@@ -306,7 +305,6 @@ jobs:
           repo = os.environ["REPOSITORY"]
           current_run_id = int(os.environ["CURRENT_RUN_ID"])
           branch_name = os.environ["BRANCH_NAME"]
-          markets = os.environ["FALLBACK_MARKETS"].split()
           current_dir = Path("/tmp/static-market-artifacts-current")
           fallback_dir = Path("/tmp/static-market-artifacts-fallback")
           fallback_dir.mkdir(parents=True, exist_ok=True)
@@ -323,6 +321,24 @@ jobs:
                   f"::warning::Unable to download fallback market artifact: {message}",
                   flush=True,
               )
+
+          def command_error_detail(exc, limit=800):
+              details = []
+              for stream_name, stream_value in (("stderr", exc.stderr), ("stdout", exc.stdout)):
+                  text = (stream_value or "").strip()
+                  if not text:
+                      continue
+                  text = " | ".join(text.splitlines())
+                  if len(text) > limit:
+                      text = f"{text[:limit]}..."
+                  details.append(f"{stream_name}: {text}")
+              return f" Details: {'; '.join(details)}" if details else ""
+
+          def market_from_artifact_name(artifact_name):
+              prefix = "static-market-"
+              if not artifact_name.startswith(prefix):
+                  return ""
+              return artifact_name[len(prefix):].upper()
 
           def extract_runs(payload):
               if isinstance(payload, dict):
@@ -420,7 +436,10 @@ jobs:
               )
               runs = extract_runs(pages)
           except subprocess.CalledProcessError as exc:
-              warn(f"GitHub workflow runs API request failed with exit {exc.returncode}.")
+              warn(
+                  "GitHub workflow runs API request failed "
+                  f"with exit {exc.returncode}.{command_error_detail(exc)}"
+              )
               runs = []
           except json.JSONDecodeError as exc:
               warn(f"GitHub workflow runs API response was not valid JSON ({exc}).")
@@ -430,7 +449,7 @@ jobs:
               runs = []
 
           current_markets = collect_current_markets()
-          remaining_markets = set(markets) - current_markets
+          fallback_markets = set()
           if current_markets:
               print(
                   f"Current run already has market artifacts: {', '.join(sorted(current_markets))}.",
@@ -441,9 +460,6 @@ jobs:
               run_id = run.get("id")
               if run_id == current_run_id:
                   continue
-              if not remaining_markets:
-                  break
-
               try:
                   artifact_pages = gh_json(
                       [
@@ -455,7 +471,10 @@ jobs:
                   )
                   artifacts = extract_artifacts(artifact_pages)
               except subprocess.CalledProcessError as exc:
-                  warn(f"Artifact list API request for run {run_id} failed with exit {exc.returncode}.")
+                  warn(
+                      f"Artifact list API request for run {run_id} failed "
+                      f"with exit {exc.returncode}.{command_error_detail(exc)}"
+                  )
                   continue
               except json.JSONDecodeError as exc:
                   warn(f"Artifact list API response for run {run_id} was not valid JSON ({exc}).")
@@ -470,9 +489,11 @@ jobs:
                   if not artifact.get("expired")
               }
 
-              for market in list(remaining_markets):
-                  artifact_name = f"static-market-{market}"
-                  if artifact_name not in artifacts_by_name:
+              for artifact_name in sorted(artifacts_by_name):
+                  market = market_from_artifact_name(artifact_name)
+                  if not market:
+                      continue
+                  if market in current_markets or market in fallback_markets:
                       continue
 
                   target_dir = fallback_dir / artifact_name
@@ -498,18 +519,25 @@ jobs:
                           text=True,
                       )
                   except subprocess.CalledProcessError as exc:
-                      warn(f"{artifact_name} from run {run_id} failed to download with exit {exc.returncode}.")
+                      warn(
+                          f"{artifact_name} from run {run_id} failed to download "
+                          f"with exit {exc.returncode}.{command_error_detail(exc)}"
+                      )
                       continue
 
-                  remaining_markets.remove(market)
+                  fallback_markets.add(market)
                   print(
                       f"Using fallback artifact {artifact_name} from Static Site run {run_id} on {branch_name}.",
                       flush=True,
                   )
 
-          for market in markets:
-              if market in remaining_markets:
-                  print(f"No fallback artifact static-market-{market} found on {branch_name}.")
+          if fallback_markets:
+              print(
+                  f"Downloaded fallback market artifacts: {', '.join(sorted(fallback_markets))}.",
+                  flush=True,
+              )
+          else:
+              print(f"No fallback market artifacts found on {branch_name}.")
           PY
 
       - name: Validate market artifacts

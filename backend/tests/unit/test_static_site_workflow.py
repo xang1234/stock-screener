@@ -61,17 +61,19 @@ def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts
     assert "/tmp/static-market-artifacts-current" in combine_job
     assert "/tmp/static-market-artifacts-fallback" in combine_job
     assert "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
-    assert "FALLBACK_MARKETS: US HK IN JP KR TW" in combine_job
+    assert "FALLBACK_MARKETS" not in combine_job
     assert "github.ref_name" in combine_job
     assert "--paginate" in combine_job
     assert "runs = extract_runs(pages)" in combine_job
-    assert "static-market-{market}" in combine_job
+    assert "market_from_artifact_name" in combine_job
     assert '"gh",' in combine_job
     assert '"run",' in combine_job
     assert '"download",' in combine_job
     assert "actions/runs/{run_id}/artifacts" in combine_job
     assert "artifact.get(\"expired\")" in combine_job
     assert "current_markets" in combine_job
+    assert "command_error_detail" in combine_job
+    assert "exc.stderr" in combine_job
     assert "run.get(\"conclusion\") == \"success\"" not in combine_job
     assert "subprocess.CalledProcessError" in combine_job
     assert "::warning::Unable to download fallback market artifact" in combine_job
@@ -113,11 +115,15 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
                 ]}}]))
             elif args[:3] == ["api", "--paginate", "--slurp"] and "actions/runs/222/artifacts" in args[3]:
                 print(json.dumps([{{"artifacts": [
+                    {{"name": "static-market-HK", "expired": False}},
                     {{"name": "static-market-US", "expired": False}},
                     {{"name": "static-market-TW", "expired": False}}
                 ]}}]))
             elif args[:2] == ["run", "download"]:
                 artifact_name = args[args.index("--name") + 1]
+                if artifact_name == "static-market-HK":
+                    print("download denied for HK", file=sys.stderr)
+                    sys.exit(7)
                 target_dir = pathlib.Path(args[args.index("--dir") + 1])
                 target_dir.mkdir(parents=True, exist_ok=True)
                 (target_dir / "manifest.market.json").write_text(json.dumps({{"market": artifact_name.rsplit("-", 1)[1]}}))
@@ -139,12 +145,11 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
             "REPOSITORY": "xang1234/stock-screener",
             "CURRENT_RUN_ID": "999",
             "BRANCH_NAME": "main",
-            "FALLBACK_MARKETS": "US TW",
         }
     )
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["python", "-c", _fallback_download_script()],
             check=True,
             capture_output=True,
@@ -158,7 +163,9 @@ def test_static_site_fallback_downloader_only_fetches_missing_current_markets(tm
         ]
         assert downloads == [{"artifact": "static-market-TW"}]
         assert not (fallback_dir / "static-market-US").exists()
+        assert not (fallback_dir / "static-market-HK").exists()
         assert (fallback_dir / "static-market-TW" / "manifest.market.json").exists()
+        assert "exit 7. Details: stderr: download denied for HK" in result.stdout
     finally:
         shutil.rmtree(current_dir, ignore_errors=True)
         shutil.rmtree(fallback_dir, ignore_errors=True)
