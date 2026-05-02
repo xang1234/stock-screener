@@ -55,6 +55,7 @@ celery_app = Celery(
 celery_app.loader.override_backends = {
     **celery_app.loader.override_backends,
     "redis": "app.celery_redis_backend:RetryableRedisBackend",
+    "rediss": "app.celery_redis_backend:RetryableRedisBackend",
 }
 
 # Configure Celery

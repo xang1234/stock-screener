@@ -75,13 +75,25 @@ class TestOffsetSchedule:
 class TestRedisBackendRetryConfig:
     """Tests for Celery Redis backend retry behavior."""
 
+    backend_path = "app.celery_redis_backend:RetryableRedisBackend"
+
     def test_result_backend_uses_retryable_redis_backend(self):
-        assert (
-            celery_app.loader.override_backends["redis"]
-            == "app.celery_redis_backend:RetryableRedisBackend"
-        )
+        assert celery_app.loader.override_backends["redis"] == self.backend_path
+        assert celery_app.loader.override_backends["rediss"] == self.backend_path
         assert isinstance(celery_app.backend, RetryableRedisBackend)
         assert celery_app.conf.result_backend_always_retry is True
+
+    def test_result_backend_uses_retryable_backend_for_tls_redis_url(self):
+        app = Celery(
+            "test_retryable_tls_backend",
+            backend="rediss://localhost:6379/1?ssl_cert_reqs=CERT_NONE",
+        )
+        app.loader.override_backends = {
+            "redis": self.backend_path,
+            "rediss": self.backend_path,
+        }
+
+        assert isinstance(app.backend, RetryableRedisBackend)
 
     def test_result_backend_treats_busy_loading_as_retryable_explicitly(self):
         app = Celery("test_retryable_backend_classification")
