@@ -757,3 +757,71 @@ def test_main_rejects_market_in_combine_mode(monkeypatch, tmp_path):
         export_script.main()
 
     assert combine_calls == []
+
+
+def test_main_rejects_fallback_artifacts_without_combine_mode(monkeypatch, tmp_path):
+    combine_calls: list[tuple[object, object, object, bool]] = []
+
+    monkeypatch.setattr(
+        export_script.StaticSiteExportService,
+        "combine_market_artifacts",
+        lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True: combine_calls.append(
+            (artifacts_dir, output_dir, fallback_artifacts_dir, clean)
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--fallback-artifacts-dir",
+            str(tmp_path / "fallback"),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="--fallback-artifacts-dir requires --combine-artifacts-dir"):
+        export_script.main()
+
+    assert combine_calls == []
+
+
+def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
+    combine_calls: list[tuple[object, object, object, bool]] = []
+    output_dir = tmp_path / "out"
+    artifacts_dir = tmp_path / "artifacts"
+    fallback_dir = tmp_path / "fallback"
+
+    monkeypatch.setattr(
+        export_script.StaticSiteExportService,
+        "combine_market_artifacts",
+        lambda artifacts_dir, output_dir, *, fallback_artifacts_dir=None, clean=True: combine_calls.append(
+            (artifacts_dir, output_dir, fallback_artifacts_dir, clean)
+        )
+        or SimpleNamespace(
+            output_dir=output_dir,
+            generated_at="2026-04-05T22:00:00Z",
+            as_of_date="2026-04-05",
+            warnings=(),
+            manifest={},
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(output_dir),
+            "--combine-artifacts-dir",
+            str(artifacts_dir),
+            "--fallback-artifacts-dir",
+            str(fallback_dir),
+            "--no-clean",
+        ],
+    )
+
+    assert export_script.main() == 0
+
+    assert combine_calls == [(artifacts_dir, output_dir, fallback_dir, False)]

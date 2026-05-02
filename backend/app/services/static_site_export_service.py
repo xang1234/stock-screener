@@ -230,6 +230,7 @@ class StaticSiteExportService:
         artifacts_dir: Path,
         output_dir: Path,
         *,
+        fallback_artifacts_dir: Path | None = None,
         clean: bool = True,
     ) -> StaticSiteExportResult:
         artifacts_dir = Path(artifacts_dir)
@@ -245,7 +246,20 @@ class StaticSiteExportService:
             artifacts_dir=artifacts_dir,
             output_dir=output_dir,
             warnings=warnings,
+            allow_empty=True,
         )
+        if fallback_artifacts_dir is not None:
+            fallback_entries, warnings = cls._collect_market_artifacts(
+                artifacts_dir=Path(fallback_artifacts_dir),
+                output_dir=output_dir,
+                warnings=warnings,
+                skip_markets=set(market_entries),
+                allow_empty=True,
+                fallback_source=True,
+            )
+            market_entries.update(fallback_entries)
+        if not market_entries:
+            raise RuntimeError("No market artifacts are available to combine into a static-site bundle")
         missing_markets = [
             market for market in STATIC_SUPPORTED_MARKETS if market not in market_entries
         ]
@@ -446,12 +460,31 @@ class StaticSiteExportService:
         artifacts_dir: Path,
         output_dir: Path,
         warnings: list[str],
+        skip_markets: set[str] | None = None,
+        allow_empty: bool = False,
+        fallback_source: bool = False,
     ) -> tuple[dict[str, dict[str, Any]], list[str]]:
         market_entries: dict[str, dict[str, Any]] = {}
-        metadata_paths = sorted(artifacts_dir.rglob(STATIC_MARKET_METADATA_FILENAME))
+        skipped = skip_markets or set()
+        metadata_paths = sorted(artifacts_dir.rglob(STATIC_MARKET_METADATA_FILENAME)) if artifacts_dir.exists() else []
         for metadata_path in metadata_paths:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
             market = str(payload["market"]).upper()
+            schema_version = payload.get("schema_version")
+            if schema_version != STATIC_SITE_SCHEMA_VERSION:
+                message = (
+                    f"{market} artifact uses schema_version {schema_version!r}; "
+                    f"expected {STATIC_SITE_SCHEMA_VERSION!r}."
+                )
+                if fallback_source:
+                    warnings.append(
+                        f"{market} fallback artifact uses schema_version {schema_version!r}; "
+                        f"expected {STATIC_SITE_SCHEMA_VERSION!r}. Skipping."
+                    )
+                    continue
+                raise RuntimeError(f"Invalid market metadata payload at {metadata_path}: {message}")
+            if market in skipped:
+                continue
             entry = payload.get("entry")
             if not isinstance(entry, dict):
                 raise RuntimeError(f"Invalid market metadata payload at {metadata_path}")
@@ -460,8 +493,12 @@ class StaticSiteExportService:
             shutil.copytree(source_market_dir, target_market_dir, dirs_exist_ok=True)
             market_entries[market] = entry
             warnings.extend(str(item) for item in payload.get("warnings", []))
+            if fallback_source:
+                warnings.append(
+                    f"{market} reused from previous successful static-site workflow run because the current run produced no artifact."
+                )
 
-        if not market_entries:
+        if not market_entries and not allow_empty:
             raise RuntimeError("No market artifacts are available to combine into a static-site bundle")
         return market_entries, warnings
 

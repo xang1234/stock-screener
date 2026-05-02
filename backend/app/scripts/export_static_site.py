@@ -524,6 +524,10 @@ def main() -> int:
         help="Combine previously exported market artifacts from this directory into one static-data bundle.",
     )
     parser.add_argument(
+        "--fallback-artifacts-dir",
+        help="Optional previous-run market artifacts directory used to fill markets missing from --combine-artifacts-dir.",
+    )
+    parser.add_argument(
         "--build-mode",
         choices=(STATIC_BUILD_MODE_PRICE_DELTA, STATIC_BUILD_MODE_FULL),
         default=STATIC_BUILD_MODE_PRICE_DELTA,
@@ -555,12 +559,19 @@ def main() -> int:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --refresh-daily")
     if args.combine_artifacts_dir and args.market:
         raise SystemExit("--combine-artifacts-dir cannot be used together with --market")
+    if args.fallback_artifacts_dir and not args.combine_artifacts_dir:
+        raise SystemExit("--fallback-artifacts-dir requires --combine-artifacts-dir")
 
     refresh_warnings: list[str] = []
     if args.combine_artifacts_dir:
         result = StaticSiteExportService.combine_market_artifacts(
             Path(args.combine_artifacts_dir),
             Path(args.output_dir),
+            fallback_artifacts_dir=(
+                Path(args.fallback_artifacts_dir)
+                if args.fallback_artifacts_dir
+                else None
+            ),
             clean=not args.no_clean,
         )
     else:
