@@ -41,14 +41,14 @@ describe('StaticGroupChartsGrid', () => {
   });
 
   it('shows a no-data message when a loaded chart payload has no bars array', async () => {
-    globalThis.fetch = vi.fn(async () => ({
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
         symbol: 'NVDA',
         stock_data: { symbol: 'NVDA', company_name: 'NVIDIA Corporation' },
       }),
-    }));
+    });
 
     renderGrid();
 
