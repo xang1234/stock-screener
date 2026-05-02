@@ -50,6 +50,13 @@ function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClos
     () => (detail?.stocks || []).map((stock) => stock.symbol).filter(Boolean),
     [detail?.stocks],
   );
+  const chartsTabLabel = chartsEnabled ? (
+    'Charts'
+  ) : (
+    <Tooltip title={`Charts available for top ${CHARTS_TOP_N_GROUPS} groups only`} describeChild>
+      <Box component="span">Charts</Box>
+    </Tooltip>
+  );
   const chartData = useMemo(() => {
     if (!detail?.history) return [];
     return [...detail.history].reverse().map((item) => {
@@ -84,15 +91,12 @@ function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClos
               sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
             >
               <Tab value="overview" label="Overview" />
-              {chartsEnabled ? (
-                <Tab value="charts" label="Charts" />
-              ) : (
-                <Tooltip title={`Charts available for top ${CHARTS_TOP_N_GROUPS} groups only`}>
-                  <span>
-                    <Tab value="charts" label="Charts" disabled />
-                  </span>
-                </Tooltip>
-              )}
+              <Tab
+                value="charts"
+                label={chartsTabLabel}
+                disabled={!chartsEnabled}
+                sx={!chartsEnabled ? { pointerEvents: 'auto' } : undefined}
+              />
             </Tabs>
 
             {activeTab === 'charts' && chartsEnabled ? (

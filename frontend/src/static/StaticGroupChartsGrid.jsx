@@ -52,6 +52,7 @@ function StaticGroupChartCard({ symbol, entry }) {
   const stockData = payload?.stock_data || null;
   const fundamentals = payload?.fundamentals || null;
   const bars = payload?.bars || null;
+  const hasBarsPayload = Array.isArray(bars);
   const generatedAt = payload?.generated_at ? Date.parse(payload.generated_at) : null;
   const lastClose = bars && bars.length > 0 ? bars[bars.length - 1].close : null;
   const groupRank = stockData?.ibd_group_rank ?? null;
@@ -127,9 +128,15 @@ function StaticGroupChartCard({ symbol, entry }) {
             Failed to load chart payload for {symbol}.
           </Alert>
         </Box>
-      ) : isLoading || !bars ? (
+      ) : isLoading ? (
         <Box sx={{ height: CHART_HEIGHT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <CircularProgress size={32} />
+        </Box>
+      ) : !hasBarsPayload ? (
+        <Box sx={{ height: CHART_HEIGHT, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
+          <Alert severity="warning" sx={{ width: '100%' }}>
+            No price data available for {symbol}.
+          </Alert>
         </Box>
       ) : (
         <CandlestickChart
