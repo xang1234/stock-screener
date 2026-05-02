@@ -15,6 +15,7 @@ import {
   Typography,
 } from '@mui/material';
 import { useStaticManifest, fetchStaticJson, resolveStaticMarketEntry } from '../dataClient';
+import { useStaticChartIndex } from '../chartClient';
 import StaticGroupDetailModal from '../StaticGroupDetailModal';
 import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
@@ -65,6 +66,7 @@ function StaticGroupsPage() {
     enabled: Boolean(marketEntry.pages?.groups?.path),
     staleTime: Infinity,
   });
+  const chartIndexQuery = useStaticChartIndex(marketEntry.assets?.charts?.path);
   const [selectedGroup, setSelectedGroup] = useState(null);
 
   if (manifestQuery.isLoading || groupsQuery.isLoading) {
@@ -162,6 +164,7 @@ function StaticGroupsPage() {
       <StaticGroupDetailModal
         group={selectedGroup}
         detail={selectedGroup ? groupDetails[selectedGroup] : null}
+        chartIndex={chartIndexQuery.data}
         open={!!selectedGroup}
         onClose={() => setSelectedGroup(null)}
       />

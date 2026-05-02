@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Dialog,
@@ -6,12 +6,15 @@ import {
   DialogContent,
   Grid,
   IconButton,
+  Tab,
+  Tabs,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -29,8 +32,24 @@ import RankChangeCell from '../components/shared/RankChangeCell';
 import PriceSparkline from '../components/Scan/PriceSparkline';
 import RSSparkline from '../components/Scan/RSSparkline';
 import TickerCell from '../components/common/TickerCell';
+import StaticGroupChartsGrid from './StaticGroupChartsGrid';
 
-function StaticGroupDetailModal({ group, detail, open, onClose }) {
+const CHARTS_TOP_N_GROUPS = 50;
+
+function StaticGroupDetailModal({ group, detail, chartIndex = null, open, onClose }) {
+  const [activeTab, setActiveTab] = useState('overview');
+
+  useEffect(() => {
+    if (open) {
+      setActiveTab('overview');
+    }
+  }, [open, group]);
+
+  const chartsEnabled = (detail?.current_rank ?? Infinity) <= CHARTS_TOP_N_GROUPS;
+  const chartSymbols = useMemo(
+    () => (detail?.stocks || []).map((stock) => stock.symbol).filter(Boolean),
+    [detail?.stocks],
+  );
   const chartData = useMemo(() => {
     if (!detail?.history) return [];
     return [...detail.history].reverse().map((item) => {
@@ -59,6 +78,27 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
           <Typography color="text.secondary">No data available</Typography>
         ) : (
           <Box>
+            <Tabs
+              value={activeTab}
+              onChange={(_, value) => setActiveTab(value)}
+              sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+            >
+              <Tab value="overview" label="Overview" />
+              {chartsEnabled ? (
+                <Tab value="charts" label="Charts" />
+              ) : (
+                <Tooltip title={`Charts available for top ${CHARTS_TOP_N_GROUPS} groups only`}>
+                  <span>
+                    <Tab value="charts" label="Charts" disabled />
+                  </span>
+                </Tooltip>
+              )}
+            </Tabs>
+
+            {activeTab === 'charts' && chartsEnabled ? (
+              <StaticGroupChartsGrid symbols={chartSymbols} chartIndex={chartIndex} />
+            ) : (
+              <Box>
             {/* Current Stats */}
             <Grid container spacing={2} mb={3}>
               <Grid item xs={3}>
@@ -268,6 +308,8 @@ function StaticGroupDetailModal({ group, detail, open, onClose }) {
                   </Table>
                 </TableContainer>
               </>
+            )}
+              </Box>
             )}
           </Box>
         )}
