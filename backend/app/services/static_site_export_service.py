@@ -495,7 +495,7 @@ class StaticSiteExportService:
             warnings.extend(str(item) for item in payload.get("warnings", []))
             if fallback_source:
                 warnings.append(
-                    f"{market} reused from previous successful static-site workflow run because the current run produced no artifact."
+                    f"{market} reused from a previous static-site market artifact because the current run produced no artifact."
                 )
 
         if not market_entries and not allow_empty:

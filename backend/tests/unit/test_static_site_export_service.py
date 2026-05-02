@@ -763,7 +763,7 @@ def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_pat
     assert json.loads((output_dir / "markets" / "hk" / "scan" / "manifest.json").read_text(encoding="utf-8")) == {
         "source": str(fallback_hk_dir)
     }
-    assert "HK reused from previous successful static-site workflow run because the current run produced no artifact." in manifest["warnings"]
+    assert "HK reused from a previous static-site market artifact because the current run produced no artifact." in manifest["warnings"]
     assert not any(warning.startswith("US reused from previous") for warning in manifest["warnings"])
 
 
@@ -805,7 +805,7 @@ def test_combine_market_artifacts_accepts_fallback_when_current_is_empty(tmp_pat
 
     assert result.manifest["supported_markets"] == ["JP"]
     assert (output_dir / "markets" / "jp" / "scan" / "manifest.json").exists()
-    assert "JP reused from previous successful static-site workflow run because the current run produced no artifact." in result.warnings
+    assert "JP reused from a previous static-site market artifact because the current run produced no artifact." in result.warnings
 
 
 def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_path):
