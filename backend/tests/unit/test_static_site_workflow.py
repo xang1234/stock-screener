@@ -53,6 +53,35 @@ def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
     assert "--allow-stale" in seed_step
 
 
+def test_static_site_market_export_skips_artifact_steps_for_closed_market() -> None:
+    build_market_job = _build_market_job()
+    export_step = build_market_job.split("      - name: Export market static data bundle\n", 1)[1].split(
+        "\n      - name: Build daily price bundle",
+        1,
+    )[0]
+    build_price_step = build_market_job.split("      - name: Build daily price bundle\n", 1)[1].split(
+        "\n      - name: Upload daily price assets",
+        1,
+    )[0]
+    upload_price_step = build_market_job.split("      - name: Upload daily price assets\n", 1)[1].split(
+        "\n      - name: Upload market artifact",
+        1,
+    )[0]
+    upload_market_step = build_market_job.split("      - name: Upload market artifact\n", 1)[1].split(
+        "\n\n  combine-and-build:",
+        1,
+    )[0]
+
+    assert "id: export-market" in export_step
+    assert "status=$?" in export_step
+    assert 'if [ "$status" -eq 78 ]; then' in export_step
+    assert "has_artifact=false" in export_step
+    assert "has_artifact=true" in export_step
+    assert "steps.export-market.outputs.has_artifact == 'true'" in build_price_step
+    assert "steps.export-market.outputs.has_artifact == 'true'" in upload_price_step
+    assert "steps.export-market.outputs.has_artifact == 'true'" in upload_market_step
+
+
 def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
     combine_job = _combine_and_build_job()
 

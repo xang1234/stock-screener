@@ -204,8 +204,10 @@ jobs:
             --allow-stale
 
       - name: Export market static data bundle
+        id: export-market
         run: |
           cd backend
+          set +e
           python -m app.scripts.export_static_site \
             --output-dir /tmp/static-data \
             --refresh-daily \
@@ -213,8 +215,20 @@ jobs:
             --skip-universe-refresh \
             --skip-fundamentals-refresh \
             --market "${{ matrix.market }}"
+          status=$?
+          set -e
+          if [ "$status" -eq 78 ]; then
+            echo "Market ${{ matrix.market }} is not a trading day; no current static artifact will be uploaded."
+            echo "has_artifact=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          echo "has_artifact=true" >> "$GITHUB_OUTPUT"
 
       - name: Build daily price bundle
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
         run: |
           cd backend
           python -m app.scripts.build_daily_price_bundle \
@@ -222,6 +236,7 @@ jobs:
             --output-dir /tmp/daily-price
 
       - name: Upload daily price assets
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -238,6 +253,7 @@ jobs:
           gh release upload daily-price-data "$MANIFEST_PATH" --clobber
 
       - name: Upload market artifact
+        if: ${{ steps.export-market.outputs.has_artifact == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: static-market-${{ matrix.market }}
