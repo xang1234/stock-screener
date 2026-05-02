@@ -42,6 +42,7 @@ STATIC_BUILD_MODE_PRICE_DELTA = "price_delta"
 STATIC_BUILD_MODE_FULL = "full"
 STATIC_EXPORT_MARKETS = ("US", "HK", "IN", "JP", "KR", "TW", "CN")
 STATIC_DEFAULT_MARKET = "US"
+STATIC_EXPORT_SKIPPED_EXIT_CODE = 78
 
 
 def _default_output_dir() -> Path:
@@ -502,6 +503,18 @@ def _run_daily_refresh(
     return results, warnings
 
 
+def _market_refresh_skipped_not_trading_day(refresh_results: dict[str, Any], market: str | None) -> bool:
+    if market is None:
+        return False
+    feature_snapshots = refresh_results.get("feature_snapshots", {})
+    if not isinstance(feature_snapshots, dict):
+        return False
+    snapshot = feature_snapshots.get(market.upper())
+    if not isinstance(snapshot, dict):
+        return False
+    return snapshot.get("status") == "skipped" and snapshot.get("reason") == "not_trading_day"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -590,6 +603,12 @@ def main() -> int:
                 print(f"  - {name}: {result_item}")
             for warning in refresh_warnings:
                 print(f"  - warning: {warning}")
+
+            if _market_refresh_skipped_not_trading_day(refresh_results, args.market):
+                print(
+                    f"Static site export skipped for market {args.market} because it is not a trading day."
+                )
+                return STATIC_EXPORT_SKIPPED_EXIT_CODE
 
         service = StaticSiteExportService(SessionLocal)
         result = service.export(

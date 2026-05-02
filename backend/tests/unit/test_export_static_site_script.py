@@ -825,3 +825,53 @@ def test_main_passes_fallback_artifacts_dir_to_combine(monkeypatch, tmp_path):
     assert export_script.main() == 0
 
     assert combine_calls == [(artifacts_dir, output_dir, fallback_dir, False)]
+
+
+def test_main_returns_skip_code_for_market_not_trading_day(monkeypatch, tmp_path, capsys):
+    export_calls: list[object] = []
+
+    monkeypatch.setattr(export_script, "prepare_runtime", lambda: None)
+    monkeypatch.setattr(
+        export_script,
+        "_run_daily_refresh",
+        lambda **_kwargs: (
+            {
+                "feature_snapshots": {
+                    "TW": {
+                        "status": "skipped",
+                        "reason": "not_trading_day",
+                        "market": "TW",
+                        "as_of_date": "2026-05-01",
+                    }
+                }
+            },
+            ["Static export market TW snapshot returned status 'skipped' (not_trading_day)."],
+        ),
+    )
+
+    class ExportShouldNotRun:
+        def __init__(self, *_args, **_kwargs):
+            export_calls.append("constructed")
+
+        def export(self, *_args, **_kwargs):
+            raise AssertionError("market export should not run for not_trading_day")
+
+    monkeypatch.setattr(export_script, "StaticSiteExportService", ExportShouldNotRun)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_static_site.py",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--refresh-daily",
+            "--market",
+            "TW",
+        ],
+    )
+
+    assert export_script.main() == 78
+
+    captured = capsys.readouterr()
+    assert "Static site export skipped for market TW because it is not a trading day." in captured.out
+    assert export_calls == []
