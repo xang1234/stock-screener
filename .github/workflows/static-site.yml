@@ -286,26 +286,29 @@ jobs:
           path: /tmp/static-market-artifacts-current
           merge-multiple: false
 
-      - name: Find latest successful static site fallback run
-        id: fallback-run
+      - name: Download per-market fallback artifacts
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           BRANCH_NAME: ${{ github.ref_name }}
-          WORKFLOW_NAME: ${{ github.event.workflow || 'Static Site' }}
+          FALLBACK_MARKETS: US HK IN JP KR TW
         run: |
           python - <<'PY'
           import json
           import os
+          import shutil
           import subprocess
+          from pathlib import Path
           from urllib.parse import urlencode
 
           repo = os.environ["REPOSITORY"]
           current_run_id = int(os.environ["CURRENT_RUN_ID"])
           branch_name = os.environ["BRANCH_NAME"]
-          workflow_name = os.environ["WORKFLOW_NAME"]
+          markets = os.environ["FALLBACK_MARKETS"].split()
+          fallback_dir = Path("/tmp/static-market-artifacts-fallback")
+          fallback_dir.mkdir(parents=True, exist_ok=True)
           query = urlencode(
               {
                   "branch": branch_name,
@@ -313,11 +316,11 @@ jobs:
                   "per_page": "100",
               }
           )
-          fallback_run_id = ""
+          remaining_markets = set(markets)
 
           def warn(message):
               print(
-                  f"::warning::Unable to discover fallback static-site run: {message}",
+                  f"::warning::Unable to download fallback market artifact: {message}",
                   flush=True,
               )
 
@@ -349,53 +352,139 @@ jobs:
                   "Unexpected GitHub API response shape: response is not an object or list."
               )
 
-          try:
+          def extract_artifacts(payload):
+              if isinstance(payload, dict):
+                  artifacts = payload.get("artifacts")
+                  if not isinstance(artifacts, list):
+                      raise ValueError(
+                          "Unexpected GitHub API response shape: artifacts is not a list."
+                      )
+                  return [artifact for artifact in artifacts if isinstance(artifact, dict)]
+
+              if isinstance(payload, list):
+                  artifacts = []
+                  for page in payload:
+                      if not isinstance(page, dict):
+                          raise ValueError(
+                              "Unexpected GitHub API response shape: page is not an object."
+                          )
+                      page_artifacts = page.get("artifacts", [])
+                      if not isinstance(page_artifacts, list):
+                          raise ValueError(
+                              "Unexpected GitHub API response shape: artifacts is not a list."
+                          )
+                      artifacts.extend(
+                          artifact for artifact in page_artifacts if isinstance(artifact, dict)
+                      )
+                  return artifacts
+
+              raise ValueError(
+                  "Unexpected GitHub API response shape: response is not an object or list."
+              )
+
+          def gh_json(args):
               result = subprocess.run(
-                  [
-                      "gh",
-                      "api",
-                      "--paginate",
-                      "--slurp",
-                      f"repos/{repo}/actions/workflows/static-site.yml/runs?{query}",
-                  ],
+                  ["gh", *args],
                   check=True,
                   capture_output=True,
                   text=True,
               )
-              pages = json.loads(result.stdout)
+              return json.loads(result.stdout)
+
+          try:
+              pages = gh_json(
+                  [
+                      "api",
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repo}/actions/workflows/static-site.yml/runs?{query}",
+                  ]
+              )
               runs = extract_runs(pages)
-              for run in runs:
-                  if run.get("id") == current_run_id:
-                      continue
-                  if run.get("conclusion") == "success":
-                      fallback_run_id = str(run["id"])
-                      break
           except subprocess.CalledProcessError as exc:
-              warn(f"GitHub API request failed with exit {exc.returncode}.")
+              warn(f"GitHub workflow runs API request failed with exit {exc.returncode}.")
+              runs = []
           except json.JSONDecodeError as exc:
-              warn(f"GitHub API response was not valid JSON ({exc}).")
+              warn(f"GitHub workflow runs API response was not valid JSON ({exc}).")
+              runs = []
           except (AttributeError, KeyError, TypeError, ValueError) as exc:
               warn(str(exc))
+              runs = []
 
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"run_id={fallback_run_id}\n")
+          for run in runs:
+              run_id = run.get("id")
+              if run_id == current_run_id:
+                  continue
+              if not remaining_markets:
+                  break
 
-          if fallback_run_id:
-              print(f"Using {workflow_name} fallback run {fallback_run_id} on {branch_name}.")
-          else:
-              print(f"No successful prior {workflow_name} fallback run found on {branch_name}.")
+              try:
+                  artifact_pages = gh_json(
+                      [
+                          "api",
+                          "--paginate",
+                          "--slurp",
+                          f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
+                      ]
+                  )
+                  artifacts = extract_artifacts(artifact_pages)
+              except subprocess.CalledProcessError as exc:
+                  warn(f"Artifact list API request for run {run_id} failed with exit {exc.returncode}.")
+                  continue
+              except json.JSONDecodeError as exc:
+                  warn(f"Artifact list API response for run {run_id} was not valid JSON ({exc}).")
+                  continue
+              except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                  warn(f"Artifact list API response for run {run_id} was invalid: {exc}")
+                  continue
+
+              artifacts_by_name = {
+                  str(artifact.get("name")): artifact
+                  for artifact in artifacts
+                  if not artifact.get("expired")
+              }
+
+              for market in list(remaining_markets):
+                  artifact_name = f"static-market-{market}"
+                  if artifact_name not in artifacts_by_name:
+                      continue
+
+                  target_dir = fallback_dir / artifact_name
+                  if target_dir.exists():
+                      shutil.rmtree(target_dir)
+
+                  try:
+                      subprocess.run(
+                          [
+                              "gh",
+                              "run",
+                              "download",
+                              str(run_id),
+                              "--repo",
+                              repo,
+                              "--name",
+                              artifact_name,
+                              "--dir",
+                              str(target_dir),
+                          ],
+                          check=True,
+                          capture_output=True,
+                          text=True,
+                      )
+                  except subprocess.CalledProcessError as exc:
+                      warn(f"{artifact_name} from run {run_id} failed to download with exit {exc.returncode}.")
+                      continue
+
+                  remaining_markets.remove(market)
+                  print(
+                      f"Using fallback artifact {artifact_name} from Static Site run {run_id} on {branch_name}.",
+                      flush=True,
+                  )
+
+          for market in markets:
+              if market in remaining_markets:
+                  print(f"No fallback artifact static-market-{market} found on {branch_name}.")
           PY
-
-      - name: Download fallback market artifacts
-        if: ${{ steps.fallback-run.outputs.run_id != '' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          run-id: ${{ steps.fallback-run.outputs.run_id }}
-          github-token: ${{ github.token }}
-          pattern: static-market-*
-          path: /tmp/static-market-artifacts-fallback
-          merge-multiple: false
 
       - name: Validate market artifacts
         run: |

@@ -38,20 +38,27 @@ def test_static_site_daily_price_seed_allows_stale_bootstrap() -> None:
     assert "--allow-stale" in seed_step
 
 
-def test_static_site_combine_downloads_current_and_fallback_market_artifacts() -> None:
+def test_static_site_combine_downloads_current_and_per_market_fallback_artifacts() -> None:
     combine_job = _combine_and_build_job()
 
-    assert "Find latest successful static site fallback run" in combine_job
+    assert "Download per-market fallback artifacts" in combine_job
     assert "Download current market artifacts" in combine_job
-    assert "Download fallback market artifacts" in combine_job
     assert "/tmp/static-market-artifacts-current" in combine_job
     assert "/tmp/static-market-artifacts-fallback" in combine_job
     assert "--fallback-artifacts-dir /tmp/static-market-artifacts-fallback" in combine_job
-    assert "github.event.workflow" in combine_job
+    assert "FALLBACK_MARKETS: US HK IN JP KR TW" in combine_job
     assert "github.ref_name" in combine_job
     assert "--paginate" in combine_job
+    assert "runs = extract_runs(pages)" in combine_job
+    assert "static-market-{market}" in combine_job
+    assert '"gh",' in combine_job
+    assert '"run",' in combine_job
+    assert '"download",' in combine_job
+    assert "actions/runs/{run_id}/artifacts" in combine_job
+    assert "artifact.get(\"expired\")" in combine_job
+    assert "run.get(\"conclusion\") == \"success\"" not in combine_job
     assert "subprocess.CalledProcessError" in combine_job
-    assert "::warning::Unable to discover fallback static-site run" in combine_job
+    assert "::warning::Unable to download fallback market artifact" in combine_job
     assert "isinstance(payload, dict)" in combine_job
     assert "isinstance(page, dict)" in combine_job
     assert "Unexpected GitHub API response shape" in combine_job
