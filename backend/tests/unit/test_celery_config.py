@@ -83,6 +83,17 @@ class TestRedisBackendRetryConfig:
         assert isinstance(celery_app.backend, RetryableRedisBackend)
         assert celery_app.conf.result_backend_always_retry is True
 
+    def test_result_backend_treats_busy_loading_as_retryable_explicitly(self):
+        app = Celery("test_retryable_backend_classification")
+        backend = RetryableRedisBackend(app=app, url="redis://localhost:6379/1")
+        backend.connection_errors = tuple(
+            error for error in backend.connection_errors if error is not BusyLoadingError
+        )
+
+        assert backend.exception_safe_to_retry(
+            BusyLoadingError("Redis is loading the dataset in memory")
+        )
+
     def test_result_backend_retries_busy_loading_during_metadata_read(self, monkeypatch):
         app = Celery("test_retryable_backend")
         app.conf.update(

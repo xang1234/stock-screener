@@ -84,7 +84,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --raw INFO persistence | grep -q '^loading:0$'"]
+      test: ["CMD-SHELL", "redis-cli --raw INFO persistence | tr -d '\\r' | grep -q '^loading:0$'"]
       interval: 5s
       timeout: 5s
       retries: 24
