@@ -689,6 +689,189 @@ def test_combine_market_artifacts_builds_manifest_from_subset(tmp_path):
     assert any("TW" in warning for warning in manifest["warnings"])
 
 
+def test_combine_market_artifacts_uses_fallback_only_for_missing_markets(tmp_path):
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    output_dir = tmp_path / "combined"
+
+    current_us_dir = current_dir / "static-market-US" / "markets" / "us"
+    fallback_us_dir = fallback_dir / "static-market-US" / "markets" / "us"
+    fallback_hk_dir = fallback_dir / "static-market-HK" / "markets" / "hk"
+    for market_dir in (current_us_dir, fallback_us_dir, fallback_hk_dir):
+        (market_dir / "scan").mkdir(parents=True)
+        (market_dir / "scan" / "manifest.json").write_text(
+            json.dumps({"source": str(market_dir)}),
+            encoding="utf-8",
+        )
+
+    current_us_entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-04-05",
+        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
+    }
+    fallback_us_entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-04-04",
+        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
+    }
+    fallback_hk_entry = {
+        "market": "HK",
+        "display_name": "Hong Kong",
+        "as_of_date": "2026-04-03",
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+        "pages": {"scan": {"path": "markets/hk/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/hk/charts/index.json", "limit": 200, "symbols_total": 0}},
+    }
+
+    for market_dir, market, entry in (
+        (current_us_dir, "US", current_us_entry),
+        (fallback_us_dir, "US", fallback_us_entry),
+        (fallback_hk_dir, "HK", fallback_hk_entry),
+    ):
+        (market_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+            json.dumps(
+                {
+                    "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                    "generated_at": "2026-04-05T22:00:00Z",
+                    "market": market,
+                    "entry": entry,
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = StaticSiteExportService.combine_market_artifacts(
+        current_dir,
+        output_dir,
+        fallback_artifacts_dir=fallback_dir,
+    )
+
+    manifest = result.manifest
+    assert manifest["supported_markets"] == ["US", "HK"]
+    assert manifest["markets"]["US"]["as_of_date"] == "2026-04-05"
+    assert manifest["markets"]["HK"]["as_of_date"] == "2026-04-03"
+    assert json.loads((output_dir / "markets" / "us" / "scan" / "manifest.json").read_text(encoding="utf-8")) == {
+        "source": str(current_us_dir)
+    }
+    assert json.loads((output_dir / "markets" / "hk" / "scan" / "manifest.json").read_text(encoding="utf-8")) == {
+        "source": str(fallback_hk_dir)
+    }
+    assert "HK reused from previous successful static-site workflow run because the current run produced no artifact." in manifest["warnings"]
+    assert not any(warning.startswith("US reused from previous") for warning in manifest["warnings"])
+
+
+def test_combine_market_artifacts_accepts_fallback_when_current_is_empty(tmp_path):
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    fallback_jp_dir = fallback_dir / "static-market-JP" / "markets" / "jp"
+    output_dir = tmp_path / "combined"
+
+    current_dir.mkdir()
+    (fallback_jp_dir / "scan").mkdir(parents=True)
+    (fallback_jp_dir / "scan" / "manifest.json").write_text('{"ok": true}\n', encoding="utf-8")
+    fallback_entry = {
+        "market": "JP",
+        "display_name": "Japan",
+        "as_of_date": "2026-04-03",
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+        "pages": {"scan": {"path": "markets/jp/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/jp/charts/index.json", "limit": 200, "symbols_total": 0}},
+    }
+    (fallback_jp_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-03T22:00:00Z",
+                "market": "JP",
+                "entry": fallback_entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = StaticSiteExportService.combine_market_artifacts(
+        current_dir,
+        output_dir,
+        fallback_artifacts_dir=fallback_dir,
+    )
+
+    assert result.manifest["supported_markets"] == ["JP"]
+    assert (output_dir / "markets" / "jp" / "scan" / "manifest.json").exists()
+    assert "JP reused from previous successful static-site workflow run because the current run produced no artifact." in result.warnings
+
+
+def test_combine_market_artifacts_rejects_fallback_with_mismatched_schema(tmp_path):
+    current_dir = tmp_path / "current"
+    fallback_dir = tmp_path / "fallback"
+    current_us_dir = current_dir / "static-market-US" / "markets" / "us"
+    fallback_jp_dir = fallback_dir / "static-market-JP" / "markets" / "jp"
+    output_dir = tmp_path / "combined"
+
+    (current_us_dir / "scan").mkdir(parents=True)
+    (current_us_dir / "scan" / "manifest.json").write_text('{"ok": true}\n', encoding="utf-8")
+    (fallback_jp_dir / "scan").mkdir(parents=True)
+    (fallback_jp_dir / "scan" / "manifest.json").write_text('{"ok": true}\n', encoding="utf-8")
+    current_entry = {
+        "market": "US",
+        "display_name": "United States",
+        "as_of_date": "2026-04-05",
+        "features": {"scan": True, "breadth": True, "groups": True, "charts": True},
+        "pages": {"scan": {"path": "markets/us/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/us/charts/index.json", "limit": 200, "symbols_total": 1}},
+    }
+    fallback_entry = {
+        "market": "JP",
+        "display_name": "Japan",
+        "as_of_date": "2026-04-03",
+        "features": {"scan": True, "breadth": False, "groups": False, "charts": False},
+        "pages": {"scan": {"path": "markets/jp/scan/manifest.json"}},
+        "assets": {"charts": {"path": "markets/jp/charts/index.json", "limit": 200, "symbols_total": 0}},
+    }
+    (current_us_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": STATIC_SITE_SCHEMA_VERSION,
+                "generated_at": "2026-04-05T22:00:00Z",
+                "market": "US",
+                "entry": current_entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fallback_jp_dir / STATIC_MARKET_METADATA_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": "static-site-v1",
+                "generated_at": "2026-04-03T22:00:00Z",
+                "market": "JP",
+                "entry": fallback_entry,
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = StaticSiteExportService.combine_market_artifacts(
+        current_dir,
+        output_dir,
+        fallback_artifacts_dir=fallback_dir,
+    )
+
+    assert result.manifest["supported_markets"] == ["US"]
+    assert "JP fallback artifact uses schema_version 'static-site-v1'; expected 'static-site-v2'. Skipping." in result.warnings
+    assert (output_dir / "markets" / "us" / "scan" / "manifest.json").exists()
+    assert not (output_dir / "markets" / "jp").exists()
+
+
 def test_build_manifest_orders_india_between_hk_and_jp():
     market_entries = {
         "US": {

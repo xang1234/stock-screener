@@ -277,21 +277,132 @@ jobs:
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
-      - name: Download market artifacts
+      - name: Download current market artifacts
         id: download-market-artifacts
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: static-market-*
-          path: /tmp/static-market-artifacts
+          path: /tmp/static-market-artifacts-current
+          merge-multiple: false
+
+      - name: Find latest successful static site fallback run
+        id: fallback-run
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          WORKFLOW_NAME: ${{ github.event.workflow || 'Static Site' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from urllib.parse import urlencode
+
+          repo = os.environ["REPOSITORY"]
+          current_run_id = int(os.environ["CURRENT_RUN_ID"])
+          branch_name = os.environ["BRANCH_NAME"]
+          workflow_name = os.environ["WORKFLOW_NAME"]
+          query = urlencode(
+              {
+                  "branch": branch_name,
+                  "status": "completed",
+                  "per_page": "100",
+              }
+          )
+          fallback_run_id = ""
+
+          def warn(message):
+              print(
+                  f"::warning::Unable to discover fallback static-site run: {message}",
+                  flush=True,
+              )
+
+          def extract_runs(payload):
+              if isinstance(payload, dict):
+                  workflow_runs = payload.get("workflow_runs")
+                  if not isinstance(workflow_runs, list):
+                      raise ValueError(
+                          "Unexpected GitHub API response shape: workflow_runs is not a list."
+                      )
+                  return [run for run in workflow_runs if isinstance(run, dict)]
+
+              if isinstance(payload, list):
+                  runs = []
+                  for page in payload:
+                      if not isinstance(page, dict):
+                          raise ValueError(
+                              "Unexpected GitHub API response shape: page is not an object."
+                          )
+                      workflow_runs = page.get("workflow_runs", [])
+                      if not isinstance(workflow_runs, list):
+                          raise ValueError(
+                              "Unexpected GitHub API response shape: workflow_runs is not a list."
+                          )
+                      runs.extend(run for run in workflow_runs if isinstance(run, dict))
+                  return runs
+
+              raise ValueError(
+                  "Unexpected GitHub API response shape: response is not an object or list."
+              )
+
+          try:
+              result = subprocess.run(
+                  [
+                      "gh",
+                      "api",
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repo}/actions/workflows/static-site.yml/runs?{query}",
+                  ],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              pages = json.loads(result.stdout)
+              runs = extract_runs(pages)
+              for run in runs:
+                  if run.get("id") == current_run_id:
+                      continue
+                  if run.get("conclusion") == "success":
+                      fallback_run_id = str(run["id"])
+                      break
+          except subprocess.CalledProcessError as exc:
+              warn(f"GitHub API request failed with exit {exc.returncode}.")
+          except json.JSONDecodeError as exc:
+              warn(f"GitHub API response was not valid JSON ({exc}).")
+          except (AttributeError, KeyError, TypeError, ValueError) as exc:
+              warn(str(exc))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"run_id={fallback_run_id}\n")
+
+          if fallback_run_id:
+              print(f"Using {workflow_name} fallback run {fallback_run_id} on {branch_name}.")
+          else:
+              print(f"No successful prior {workflow_name} fallback run found on {branch_name}.")
+          PY
+
+      - name: Download fallback market artifacts
+        if: ${{ steps.fallback-run.outputs.run_id != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ steps.fallback-run.outputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: static-market-*
+          path: /tmp/static-market-artifacts-fallback
           merge-multiple: false
 
       - name: Validate market artifacts
         run: |
-          mkdir -p /tmp/static-market-artifacts
-          find /tmp/static-market-artifacts -type f -name 'manifest.market.json'
-          if ! find /tmp/static-market-artifacts -type f -name 'manifest.market.json' | grep -q .; then
-            echo "No market artifacts were produced by the matrix build." >&2
+          mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
+          find /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback -type f -name 'manifest.market.json'
+          if ! find /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback -type f -name 'manifest.market.json' | grep -q .; then
+            echo "No current or fallback market artifacts are available." >&2
             exit 1
           fi
 
@@ -300,7 +411,8 @@ jobs:
           cd backend
           python -m app.scripts.export_static_site \
             --output-dir ../frontend/public/static-data \
-            --combine-artifacts-dir /tmp/static-market-artifacts
+            --combine-artifacts-dir /tmp/static-market-artifacts-current \
+            --fallback-artifacts-dir /tmp/static-market-artifacts-fallback
 
       - name: Build static frontend
         env:
