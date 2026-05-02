@@ -307,6 +307,7 @@ jobs:
           current_run_id = int(os.environ["CURRENT_RUN_ID"])
           branch_name = os.environ["BRANCH_NAME"]
           markets = os.environ["FALLBACK_MARKETS"].split()
+          current_dir = Path("/tmp/static-market-artifacts-current")
           fallback_dir = Path("/tmp/static-market-artifacts-fallback")
           fallback_dir.mkdir(parents=True, exist_ok=True)
           query = urlencode(
@@ -316,7 +317,6 @@ jobs:
                   "per_page": "100",
               }
           )
-          remaining_markets = set(markets)
 
           def warn(message):
               print(
@@ -351,6 +351,24 @@ jobs:
               raise ValueError(
                   "Unexpected GitHub API response shape: response is not an object or list."
               )
+
+          def collect_current_markets():
+              current_markets = set()
+              metadata_paths = (
+                  sorted(current_dir.rglob("manifest.market.json"))
+                  if current_dir.exists()
+                  else []
+              )
+              for metadata_path in metadata_paths:
+                  try:
+                      payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                      market = str(payload.get("market", "")).upper()
+                  except (OSError, json.JSONDecodeError, TypeError) as exc:
+                      warn(f"Current artifact metadata at {metadata_path} could not be read ({exc}).")
+                      continue
+                  if market:
+                      current_markets.add(market)
+              return current_markets
 
           def extract_artifacts(payload):
               if isinstance(payload, dict):
@@ -410,6 +428,14 @@ jobs:
           except (AttributeError, KeyError, TypeError, ValueError) as exc:
               warn(str(exc))
               runs = []
+
+          current_markets = collect_current_markets()
+          remaining_markets = set(markets) - current_markets
+          if current_markets:
+              print(
+                  f"Current run already has market artifacts: {', '.join(sorted(current_markets))}.",
+                  flush=True,
+              )
 
           for run in runs:
               run_id = run.get("id")
